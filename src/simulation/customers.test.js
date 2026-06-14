@@ -8,6 +8,7 @@ const baseState = {
     { id: 't2', seats: 2, status: 'empty' },
   ],
   customers: [],
+  queue: [],
   staff: [],
   dishes: [],
   kitchenQueue: [],
@@ -25,16 +26,17 @@ describe('spawnCustomers', () => {
     expect(result.customers[0].state).toBe('arriving');
   });
 
-  it('does not spawn if no free tables', () => {
+  it('queues customers when no free tables', () => {
     const state = {
       ...baseState,
       tables: baseState.tables.map(t => ({ ...t, status: 'occupied' })),
     };
     let result = state;
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 100; i++) {
       result = spawnCustomers(result);
     }
-    expect(result.customers.length).toBe(0);
+    expect(result.queue.length).toBeGreaterThan(0);
+    expect(result.queue[0].state).toBe('queued');
   });
 
   it('does not spawn during closed hours', () => {
@@ -44,6 +46,7 @@ describe('spawnCustomers', () => {
       result = spawnCustomers(result);
     }
     expect(result.customers.length).toBe(0);
+    expect(result.queue.length).toBe(0);
   });
 
   it('includes archetype in spawned customer', () => {
@@ -108,5 +111,41 @@ describe('updateCustomers', () => {
     const result = updateCustomers(state, 1);
     expect(result.customers.length).toBe(0);
     expect(result.tables.find(t => t.id === 't1').status).toBe('dirty');
+  });
+
+  it('seats queued customer when table frees up', () => {
+    const leavingCustomer = {
+      id: 'c2', archetype: 'regular', patience: 0, happiness: 50,
+      state: 'leaving', dishId: null, tableId: 't1', tipAmount: 0,
+      seatTime: null, orderTime: null, eatTime: null,
+    };
+    const queuedCustomer = {
+      id: 'q1', archetype: 'foodie', patience: 150, happiness: 80,
+      state: 'queued', dishId: null, tableId: null, tipAmount: 0,
+      seatTime: null, orderTime: null, eatTime: null,
+    };
+    const state = {
+      ...baseState,
+      customers: [leavingCustomer],
+      queue: [queuedCustomer],
+      tables: baseState.tables.map(t => t.id === 't1' ? { ...t, status: 'occupied' } : t),
+    };
+    const result = updateCustomers(state, 1);
+    expect(result.customers.length).toBeGreaterThanOrEqual(1); // queued may have been seated
+    expect(result.queue.length).toBe(0);
+  });
+
+  it('removes queue customer when patience runs out', () => {
+    const queuedCustomer = {
+      id: 'q1', archetype: 'rusher', patience: 5, happiness: 80,
+      state: 'queued', dishId: null, tableId: null, tipAmount: 0,
+      seatTime: null, orderTime: null, eatTime: null,
+    };
+    const state = { ...baseState, queue: [queuedCustomer] };
+    const result = updateCustomers(state, 10);
+    expect(result.queue.length).toBe(0);
+    // Dead queue mbr becomes a leaving customer (reputation loss)
+    expect(result.customers.length).toBe(1);
+    expect(result.customers[0].state).toBe('leaving');
   });
 });

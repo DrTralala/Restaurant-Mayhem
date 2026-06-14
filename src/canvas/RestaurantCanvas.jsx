@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback } from 'react';
 import { useGameState } from '../state/GameContext';
 import { createCamera } from './camera';
 import { loadSprites } from './sprites';
-import { drawFloorLayer, drawFurnitureLayer, drawStaffLayer, drawCustomerLayer, drawOverlayLayer } from './layers';
+import { drawFloorLayer, drawFurnitureLayer, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer } from './layers';
 import { findClickedEntity } from './interaction';
 
 export default function RestaurantCanvas() {
@@ -30,6 +30,7 @@ export default function RestaurantCanvas() {
     drawFurnitureLayer(ctx, state, camera, sprites);
     drawStaffLayer(ctx, state, camera, sprites);
     drawCustomerLayer(ctx, state, camera, sprites);
+    drawQueueLayer(ctx, state, camera, sprites);
     drawOverlayLayer(ctx, state, camera, sprites, tooltipRef.current);
   }, [state]);
 

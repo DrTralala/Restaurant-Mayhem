@@ -8,6 +8,7 @@ const emptyState = {
   tables: [],
   kitchenStations: [],
   kitchenQueue: [],
+  queue: [],
   customers: [],
   staff: [],
   dishes: [],

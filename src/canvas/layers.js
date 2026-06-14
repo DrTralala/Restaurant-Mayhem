@@ -16,10 +16,52 @@ export function drawFloorLayer(ctx, state, camera) {
   ctx.fillStyle = '#333';
   ctx.fillRect(50, 50, 500, 50);
 
-  // Wall
-  ctx.strokeStyle = '#555';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(50, 50, 500, 450);
+    // Wall
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(50, 50, 500, 450);
+
+    // Door gap in wall (right side)
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(547, 300, 6, 40);
+
+    // Queue area outside the door
+    ctx.fillStyle = '#252530';
+    ctx.fillRect(560, 100, 120, 400);
+    ctx.strokeStyle = '#444';
+    ctx.strokeRect(560, 100, 120, 400);
+    ctx.fillStyle = '#888';
+    ctx.font = '9px monospace';
+    ctx.fillText('QUEUE', 600, 115);
+
+    ctx.restore();
+}
+
+export function drawQueueLayer(ctx, state, camera) {
+  ctx.save();
+  ctx.translate(camera.x, camera.y);
+  ctx.scale(camera.zoom, camera.zoom);
+
+  const archetypeColors = {
+    regular: '#4A90D9',
+    foodie: '#D9A44A',
+    rusher: '#D94A4A',
+    influencer: '#9B4AD9',
+  };
+
+  for (let i = 0; i < state.queue.length; i++) {
+    const q = state.queue[i];
+    const y = 500 - i * 25;
+
+    ctx.fillStyle = archetypeColors[q.archetype] || '#999';
+    ctx.beginPath();
+    ctx.arc(620, y, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '8px monospace';
+    ctx.fillText('waiting', 630, y + 3);
+  }
 
   ctx.restore();
 }

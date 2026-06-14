@@ -17,7 +17,12 @@ export default function UpgradePanel() {
               <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>{u.description}</p>
               <p style={{ fontSize: 12, color: '#f0a500' }}>Lv.{u.level} {maxed ? '(MAX)' : `→ $${nextCost}`}</p>
               <button
-                onClick={() => dispatch({ type: 'BUY_UPGRADE', id: u.id, cost: nextCost })}
+                onClick={() => {
+                  dispatch({ type: 'BUY_UPGRADE', id: u.id, cost: nextCost });
+                  if (u.effects?.type === 'table') {
+                    dispatch({ type: 'ADD_TABLE' });
+                  }
+                }}
                 disabled={maxed || state.restaurant.funds < nextCost}
                 style={{
                   background: (maxed || state.restaurant.funds < nextCost) ? '#333' : '#f0a500',

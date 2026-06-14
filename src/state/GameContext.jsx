@@ -70,6 +70,22 @@ function gameReducer(state, action) {
           s.id === action.id ? { ...s, morale: Math.min(s.morale + 20, 100) } : s
         ),
       };
+    case 'ADD_TABLE': {
+      const newId = `t${state.tables.length + 1}`;
+      const count = state.tables.length;
+      const col = count % 2;
+      const row = Math.floor(count / 2);
+      return {
+        ...state,
+        tables: [...state.tables, {
+          id: newId,
+          seats: 4,
+          status: 'empty',
+          x: 200 + col * 200,
+          y: 200 + row * 200,
+        }],
+      };
+    }
     case 'LOAD_STATE':
       return action.state;
     default:

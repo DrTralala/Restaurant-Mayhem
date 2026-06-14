@@ -25,6 +25,7 @@ export function createInitialState() {
       { id: 'k2', equipmentId: null, x: 200, y: 120 },
     ],
     kitchenQueue: [],
+    queue: [],              // customers waiting outside for a free table
     customers: [],
     staff: [
       {
