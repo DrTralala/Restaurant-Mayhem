@@ -5,6 +5,12 @@ import { loadSprites } from './sprites';
 import { drawFloorLayer, drawFurnitureLayer, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer } from './layers';
 import { findClickedEntity } from './interaction';
 
+const GRID = 20;
+
+function snap(n) {
+  return Math.round(n / GRID) * GRID;
+}
+
 export default function RestaurantCanvas() {
   const canvasRef = useRef(null);
   const cameraRef = useRef(createCamera());
@@ -78,8 +84,8 @@ export default function RestaurantCanvas() {
         tableId: hit.data.id,
         offsetX: world.x - hit.data.x,
         offsetY: world.y - hit.data.y,
-        currentX: hit.data.x,
-        currentY: hit.data.y,
+        currentX: snap(hit.data.x),
+        currentY: snap(hit.data.y),
       };
     }
   };
@@ -87,8 +93,8 @@ export default function RestaurantCanvas() {
   const handleMouseMove = (e) => {
     if (!dragRef.current) return;
     const world = getWorldPos(e);
-    dragRef.current.currentX = world.x - dragRef.current.offsetX;
-    dragRef.current.currentY = world.y - dragRef.current.offsetY;
+    dragRef.current.currentX = snap(world.x - dragRef.current.offsetX);
+    dragRef.current.currentY = snap(world.y - dragRef.current.offsetY);
   };
 
   const handleMouseUp = () => {
@@ -96,8 +102,8 @@ export default function RestaurantCanvas() {
       dispatch({
         type: 'MOVE_TABLE',
         id: dragRef.current.tableId,
-        x: dragRef.current.currentX,
-        y: dragRef.current.currentY,
+        x: snap(dragRef.current.currentX),
+        y: snap(dragRef.current.currentY),
       });
       dragRef.current = null;
     }

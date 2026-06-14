@@ -17,9 +17,9 @@ export function createInitialState() {
     },
     tables: [
       { id: 't1', seats: 2, status: 'empty', x: 200, y: 200 },
-      { id: 't2', seats: 2, status: 'empty', x: 350, y: 200 },
-      { id: 't3', seats: 4, status: 'empty', x: 200, y: 350 },
-      { id: 't4', seats: 4, status: 'empty', x: 350, y: 350 },
+      { id: 't2', seats: 2, status: 'empty', x: 360, y: 200 },
+      { id: 't3', seats: 4, status: 'empty', x: 200, y: 360 },
+      { id: 't4', seats: 4, status: 'empty', x: 360, y: 360 },
     ],
     kitchenStations: [
       { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
