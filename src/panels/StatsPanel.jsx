@@ -47,6 +47,22 @@ export default function StatsPanel() {
         <div style={statBox}>Staff: <strong>{state.staff.length}</strong></div>
         <div style={statBox}>Dishes: <strong>{state.dishes.length}</strong></div>
       </div>
+
+      <button
+        onClick={() => {
+          if (window.confirm('Start a new game? All progress will be lost.')) {
+            localStorage.removeItem('restaurant-sim-save');
+            window.location.reload();
+          }
+        }}
+        style={{
+          marginTop: 16, width: '100%',
+          background: '#633', color: '#d44', border: '1px solid #844',
+          padding: '8px 16px', borderRadius: 4, cursor: 'pointer', fontSize: 13,
+        }}
+      >
+        New Game
+      </button>
     </div>
   );
 }
