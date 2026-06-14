@@ -1,5 +1,6 @@
 export function updateStaff(state, dt) {
   let customers = [...state.customers];
+  let tables = [...state.tables];
 
   const updatedStaff = state.staff.map(s => ({
     ...s,
@@ -8,18 +9,22 @@ export function updateStaff(state, dt) {
 
   const waiters = updatedStaff.filter(s => s.role === 'waiter');
   const hosts = updatedStaff.filter(s => s.role === 'host');
-  const hostSpeedBonus = hosts.length > 0 ? 1 + hosts.length * 0.3 : 1;
 
+  // Hosts: auto-clean dirty tables (1 per host per tick)
+  for (const host of hosts) {
+    const dirtyIdx = tables.findIndex(t => t.status === 'dirty');
+    if (dirtyIdx !== -1) {
+      tables = tables.map((t, i) => i === dirtyIdx ? { ...t, status: 'empty' } : t);
+    }
+  }
+
+  // Waiters: seat waiting customers, take orders from seated ones
   for (const waiter of waiters) {
     const waitingCustomer = customers.find(c => c.state === 'waiting');
     if (waitingCustomer) {
-      const seatTime = (3 / (waiter.skill * 0.5 + 1)) / hostSpeedBonus;
-      if (seatTime <= dt) {
-        customers = customers.map(c =>
-          c.id === waitingCustomer.id ? { ...c, state: 'seated', seatTime: Date.now() } : c
-        );
-        continue;
-      }
+      customers = customers.map(c =>
+        c.id === waitingCustomer.id ? { ...c, state: 'seated', seatTime: Date.now() } : c
+      );
     }
 
     const orderingCustomer = customers.find(c => c.state === 'seated' && !c.dishId);
@@ -35,5 +40,5 @@ export function updateStaff(state, dt) {
     }
   }
 
-  return { ...state, staff: updatedStaff, customers };
+  return { ...state, staff: updatedStaff, customers, tables };
 }

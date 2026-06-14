@@ -8,39 +8,59 @@ export function drawFloorLayer(ctx, state, camera) {
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
 
+  const level = restaurant.expansionLevel || 1;
+  const areaW = 400 + (level - 1) * 150;
+  const areaH = 350 + (level - 1) * 100;
+
   // Dining area
   ctx.fillStyle = '#2d1f0e';
-  ctx.fillRect(50, 100, 500, 400);
+  ctx.fillRect(50, 100, areaW + 100, areaH + 50);
 
-  // Kitchen area
+  // Kitchen area (stretches with expansion)
   ctx.fillStyle = '#333';
-  ctx.fillRect(50, 50, 500, 50);
+  ctx.fillRect(50, 50, areaW + 100, 50);
 
-    // Wall
-    ctx.strokeStyle = '#555';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(50, 50, 500, 450);
+  // Wall
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(50, 50, areaW + 100, areaH + 100);
 
     // Door gap in wall (right side)
+    const doorX = 50 + areaW + 100 - 3;
+    const doorY = areaH / 2 + 80;
     ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(547, 300, 6, 40);
+    ctx.fillRect(doorX, doorY, 6, 40);
+
+    // Cashier stand near the door
+    ctx.fillStyle = '#5a4a3a';
+    ctx.fillRect(doorX - 8, doorY - 20, 14, 20);
+    ctx.fillStyle = '#8a7a6a';
+    ctx.fillRect(doorX - 5, doorY - 18, 8, 16);
+    ctx.fillStyle = '#ccc';
+    ctx.font = '7px monospace';
+    ctx.fillText('$', doorX - 1, doorY - 8);
 
     // Queue area outside the door
-    ctx.fillStyle = '#252530';
-    ctx.fillRect(560, 100, 120, 400);
-    ctx.strokeStyle = '#444';
-    ctx.strokeRect(560, 100, 120, 400);
-    ctx.fillStyle = '#888';
-    ctx.font = '9px monospace';
-    ctx.fillText('QUEUE', 600, 115);
+  const queueX = doorX + 6;
+  ctx.fillStyle = '#252530';
+  ctx.fillRect(queueX, 100, 120, 400);
+  ctx.strokeStyle = '#444';
+  ctx.strokeRect(queueX, 100, 120, 400);
+  ctx.fillStyle = '#888';
+  ctx.font = '9px monospace';
+  ctx.fillText('QUEUE', queueX + 5, 115);
 
-    ctx.restore();
+  ctx.restore();
 }
 
 export function drawQueueLayer(ctx, state, camera) {
   ctx.save();
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
+
+  const level = state.restaurant.expansionLevel || 1;
+  const areaH = 350 + (level - 1) * 100;
+  const doorX = 50 + (400 + (level - 1) * 150) + 100 - 3;
 
   const archetypeColors = {
     regular: '#4A90D9',
@@ -51,16 +71,16 @@ export function drawQueueLayer(ctx, state, camera) {
 
   for (let i = 0; i < state.queue.length; i++) {
     const q = state.queue[i];
-    const y = 500 - i * 25;
+    const y = areaH + 50 - i * 25;
 
     ctx.fillStyle = archetypeColors[q.archetype] || '#999';
     ctx.beginPath();
-    ctx.arc(620, y, 8, 0, Math.PI * 2);
+    ctx.arc(doorX + 50, y, 8, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = '#fff';
     ctx.font = '8px monospace';
-    ctx.fillText('waiting', 630, y + 3);
+    ctx.fillText('waiting', doorX + 62, y + 3);
   }
 
   ctx.restore();

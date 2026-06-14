@@ -24,7 +24,7 @@ describe('updateStaff', () => {
     expect(result.staff[0].morale).toBeLessThan(80);
   });
 
-  it('waiter seats waiting customers', () => {
+  it('waiter seats and takes order from waiting customers in one tick', () => {
     const waiter = { id: 's1', name: 'Anna', role: 'waiter', skill: 5, morale: 80, salary: 150 };
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
@@ -38,7 +38,9 @@ describe('updateStaff', () => {
       dishes: [{ id: 'd1', name: 'Pizza', price: 12, prepTime: 180, quality: 5, popularity: 50, cuisine: 'italian', requiredEquipmentId: null }],
     };
     const result = updateStaff(state, 2);
-    expect(result.customers[0].state).toBe('seated');
+    // Waiter seats AND takes order in same tick
+    expect(result.customers[0].state).toBe('ordering');
+    expect(result.customers[0].dishId).toBe('d1');
   });
 
   it('waiter takes order from seated customer', () => {

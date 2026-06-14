@@ -10,7 +10,7 @@ const ARCHETYPES = ['regular', 'regular', 'regular', 'foodie', 'rusher', 'influe
 export function spawnCustomers(state) {
   if (!isRestaurantOpen(state)) return state;
 
-  const spawnRate = 0.05 + (state.restaurant.reputation - 1) * 0.02;
+  const spawnRate = 0.15 + (state.restaurant.reputation - 1) * 0.02;
   if (Math.random() > spawnRate) return state;
 
   const freeTables = state.tables.filter(t => t.status === 'empty');

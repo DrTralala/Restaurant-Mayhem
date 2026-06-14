@@ -13,6 +13,7 @@ export function createInitialState() {
       totalServed: 0,
       openHour: 10,
       closeHour: 22,
+      expansionLevel: 1,
     },
     tables: [
       { id: 't1', seats: 2, status: 'empty', x: 200, y: 200 },
@@ -21,7 +22,7 @@ export function createInitialState() {
       { id: 't4', seats: 4, status: 'empty', x: 350, y: 350 },
     ],
     kitchenStations: [
-      { id: 'k1', equipmentId: null, x: 100, y: 120 },
+      { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
       { id: 'k2', equipmentId: null, x: 200, y: 120 },
     ],
     kitchenQueue: [],
@@ -35,6 +36,22 @@ export function createInitialState() {
         skill: 3,
         morale: 80,
         salary: 200,
+      },
+      {
+        id: 'starter-waiter',
+        name: 'Anna',
+        role: 'waiter',
+        skill: 3,
+        morale: 80,
+        salary: 150,
+      },
+      {
+        id: 'starter-host',
+        name: 'Luca',
+        role: 'host',
+        skill: 2,
+        morale: 80,
+        salary: 150,
       },
     ],
     dishes: [
@@ -58,7 +75,7 @@ export function createInitialState() {
     upgrades: UPGRADES,
     milestones: MILESTONES,
     recipeSlots: 1,
-    staffSlots: 1,
+    staffSlots: 3,
     completedCustomers: [],
     dailyHistory: [],
     notifications: [],

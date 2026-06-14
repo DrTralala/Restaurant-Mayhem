@@ -38,12 +38,19 @@ export default function StaffPanel() {
     <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 style={{ color: '#f0a500', margin: 0 }}>Staff ({state.staff.length}/{state.staffSlots})</h3>
-        {canHire && (
+        {canHire ? (
           <button onClick={() => setShowHire(!showHire)} style={{
             background: '#f0a500', color: '#111', border: 'none',
             padding: '6px 14px', borderRadius: 4, cursor: 'pointer', fontSize: 13,
           }}>
             + Hire
+          </button>
+        ) : (
+          <button style={{
+            background: '#333', color: '#666', border: 'none',
+            padding: '6px 14px', borderRadius: 4, cursor: 'not-allowed', fontSize: 13,
+          }} disabled>
+            Slots Full
           </button>
         )}
       </div>

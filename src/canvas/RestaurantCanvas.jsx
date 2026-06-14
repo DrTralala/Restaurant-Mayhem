@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback } from 'react';
-import { useGameState } from '../state/GameContext';
-import { createCamera } from './camera';
+import { useGameState, useDispatch } from '../state/GameContext';
+import { createCamera, screenToWorld } from './camera';
 import { loadSprites } from './sprites';
 import { drawFloorLayer, drawFurnitureLayer, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer } from './layers';
 import { findClickedEntity } from './interaction';
@@ -10,8 +10,9 @@ export default function RestaurantCanvas() {
   const cameraRef = useRef(createCamera());
   const spritesRef = useRef(loadSprites());
   const tooltipRef = useRef(null);
-  const dragRef = useRef(null);
+  const dragRef = useRef(null); // { tableId, offsetX, offsetY, currentX, currentY }
   const state = useGameState();
+  const dispatch = useDispatch();
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -19,6 +20,12 @@ export default function RestaurantCanvas() {
     const ctx = canvas.getContext('2d');
     const camera = cameraRef.current;
     const sprites = spritesRef.current;
+    const level = state.restaurant.expansionLevel || 1;
+    const areaW = 400 + (level - 1) * 150 + 100 + 200;
+    const areaH = 350 + (level - 1) * 100 + 200;
+
+    camera.x = (canvas.clientWidth - areaW) / 2;
+    camera.y = (canvas.clientHeight - areaH) / 2;
 
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
@@ -26,12 +33,24 @@ export default function RestaurantCanvas() {
     canvas.style.width = canvas.clientWidth + 'px';
     canvas.style.height = canvas.clientHeight + 'px';
 
-    drawFloorLayer(ctx, state, camera, sprites);
-    drawFurnitureLayer(ctx, state, camera, sprites);
-    drawStaffLayer(ctx, state, camera, sprites);
-    drawCustomerLayer(ctx, state, camera, sprites);
-    drawQueueLayer(ctx, state, camera, sprites);
-    drawOverlayLayer(ctx, state, camera, sprites, tooltipRef.current);
+    // Apply drag position to tables for rendering
+    let renderState = state;
+    if (dragRef.current) {
+      const d = dragRef.current;
+      renderState = {
+        ...state,
+        tables: state.tables.map(t =>
+          t.id === d.tableId ? { ...t, x: d.currentX, y: d.currentY } : t
+        ),
+      };
+    }
+
+    drawFloorLayer(ctx, renderState, camera, sprites);
+    drawFurnitureLayer(ctx, renderState, camera, sprites);
+    drawStaffLayer(ctx, renderState, camera, sprites);
+    drawCustomerLayer(ctx, renderState, camera, sprites);
+    drawQueueLayer(ctx, renderState, camera, sprites);
+    drawOverlayLayer(ctx, renderState, camera, sprites, tooltipRef.current);
   }, [state]);
 
   useEffect(() => {
@@ -42,47 +61,65 @@ export default function RestaurantCanvas() {
     return () => cancelAnimationFrame(animId);
   }, [draw]);
 
+  const getWorldPos = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const camera = cameraRef.current;
+    return screenToWorld(camera, e.clientX - rect.left, e.clientY - rect.top);
+  };
+
+  const handleMouseDown = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const hit = findClickedEntity(state, cameraRef.current, e.clientX - rect.left, e.clientY - rect.top);
+    if (hit?.type === 'table') {
+      const world = getWorldPos(e);
+      dragRef.current = {
+        tableId: hit.data.id,
+        offsetX: world.x - hit.data.x,
+        offsetY: world.y - hit.data.y,
+        currentX: hit.data.x,
+        currentY: hit.data.y,
+      };
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    if (!dragRef.current) return;
+    const world = getWorldPos(e);
+    dragRef.current.currentX = world.x - dragRef.current.offsetX;
+    dragRef.current.currentY = world.y - dragRef.current.offsetY;
+  };
+
+  const handleMouseUp = () => {
+    if (dragRef.current) {
+      dispatch({
+        type: 'MOVE_TABLE',
+        id: dragRef.current.tableId,
+        x: dragRef.current.currentX,
+        y: dragRef.current.currentY,
+      });
+      dragRef.current = null;
+    }
+  };
+
   const handleClick = (e) => {
+    if (dragRef.current) return; // Don't show tooltip after drag
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const hit = findClickedEntity(state, cameraRef.current, e.clientX - rect.left, e.clientY - rect.top);
     tooltipRef.current = hit?.text || null;
   };
 
-  const handleWheel = (e) => {
-    e.preventDefault();
-    const factor = e.deltaY > 0 ? 0.9 : 1.1;
-    cameraRef.current.zoom = Math.max(
-      cameraRef.current.minZoom,
-      Math.min(cameraRef.current.maxZoom, cameraRef.current.zoom * factor)
-    );
-  };
-
-  const handleMouseDown = (e) => {
-    dragRef.current = { x: e.clientX, y: e.clientY };
-  };
-
-  const handleMouseMove = (e) => {
-    if (!dragRef.current) return;
-    cameraRef.current.x += e.clientX - dragRef.current.x;
-    cameraRef.current.y += e.clientY - dragRef.current.y;
-    dragRef.current = { x: e.clientX, y: e.clientY };
-  };
-
-  const handleMouseUp = () => {
-    dragRef.current = null;
-  };
-
   return (
     <canvas
       ref={canvasRef}
-      style={{ flex: 1, width: '100%', height: '100%', cursor: dragRef.current ? 'grabbing' : 'grab' }}
-      onClick={handleClick}
-      onWheel={handleWheel}
+      style={{ flex: 1, width: '100%', height: '100%', cursor: dragRef.current ? 'grabbing' : 'default' }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onClick={handleClick}
     />
   );
 }

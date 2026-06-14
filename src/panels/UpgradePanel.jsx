@@ -38,6 +38,35 @@ export default function UpgradePanel() {
         })}
       </div>
 
+      <h4 style={{ color: '#f0a500', marginTop: 20, marginBottom: 8 }}>Expansion</h4>
+      <div style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, border: '1px solid #0f3460' }}>
+        <strong>Expand Floor</strong>
+        <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
+          Level {state.restaurant.expansionLevel || 1} / 4 — More space for tables and kitchen stations
+        </p>
+        {(() => {
+          const costs = [0, 1000, 3000, 6000];
+          const lvl = state.restaurant.expansionLevel || 1;
+          const cost = lvl < 4 ? costs[lvl] : null;
+          const maxed = lvl >= 4;
+          return (
+            <button
+              onClick={() => dispatch({ type: 'EXPAND' })}
+              disabled={maxed || state.restaurant.funds < (cost || 0)}
+              style={{
+                background: (maxed || state.restaurant.funds < (cost || 0)) ? '#333' : '#f0a500',
+                color: (maxed || state.restaurant.funds < (cost || 0)) ? '#666' : '#111',
+                border: 'none', padding: '6px 14px', borderRadius: 4,
+                cursor: (maxed || state.restaurant.funds < (cost || 0)) ? 'not-allowed' : 'pointer',
+                fontSize: 12, marginTop: 6,
+              }}
+            >
+              {maxed ? 'MAX' : `Expand ($${cost})`}
+            </button>
+          );
+        })()}
+      </div>
+
       <h4 style={{ color: '#f0a500', marginTop: 20, marginBottom: 8 }}>Equipment</h4>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
         {state.equipment.map(eq => {

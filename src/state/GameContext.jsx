@@ -30,14 +30,21 @@ function gameReducer(state, action) {
           u.id === action.id ? { ...u, level: u.level + 1 } : u
         ),
       };
-    case 'BUY_EQUIPMENT':
+    case 'BUY_EQUIPMENT': {
+      const freeStation = state.kitchenStations.find(s => !s.equipmentId);
       return {
         ...state,
         restaurant: { ...state.restaurant, funds: state.restaurant.funds - action.cost },
         equipment: state.equipment.map(e =>
           e.id === action.id ? { ...e, owned: true } : e
         ),
+        kitchenStations: freeStation
+          ? state.kitchenStations.map(s =>
+              s.id === freeStation.id ? { ...s, equipmentId: action.id } : s
+            )
+          : state.kitchenStations,
       };
+    }
     case 'UPGRADE_EQUIPMENT':
       return {
         ...state,
@@ -83,6 +90,34 @@ function gameReducer(state, action) {
           status: 'empty',
           x: 200 + col * 200,
           y: 200 + row * 200,
+        }],
+      };
+    }
+    case 'MOVE_TABLE':
+      return {
+        ...state,
+        tables: state.tables.map(t =>
+          t.id === action.id ? { ...t, x: action.x, y: action.y } : t
+        ),
+      };
+    case 'EXPAND': {
+      const cost = [0, 1000, 3000, 6000][state.restaurant.expansionLevel] || 10000;
+      if (state.restaurant.funds < cost) return state;
+      const newLevel = state.restaurant.expansionLevel + 1;
+      // Add a new kitchen station when expanding
+      const newStationId = `k${state.kitchenStations.length + 1}`;
+      return {
+        ...state,
+        restaurant: {
+          ...state.restaurant,
+          funds: state.restaurant.funds - cost,
+          expansionLevel: newLevel,
+        },
+        kitchenStations: [...state.kitchenStations, {
+          id: newStationId,
+          equipmentId: null,
+          x: 50 + state.kitchenStations.length * 100,
+          y: 120,
         }],
       };
     }
