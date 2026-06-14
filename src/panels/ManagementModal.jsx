@@ -1,20 +1,9 @@
 import { useState } from 'react';
-
-function MenuPanel() {
-  return <div style={{ color: '#ccc', fontFamily: 'monospace' }}><p>Menu panel — coming soon</p></div>;
-}
-function UpgradePanel() {
-  return <div style={{ color: '#ccc', fontFamily: 'monospace' }}><p>Upgrades panel — coming soon</p></div>;
-}
-function StaffPanel() {
-  return <div style={{ color: '#ccc', fontFamily: 'monospace' }}><p>Staff panel — coming soon</p></div>;
-}
-function MilestonePanel() {
-  return <div style={{ color: '#ccc', fontFamily: 'monospace' }}><p>Milestones panel — coming soon</p></div>;
-}
-function StatsPanel() {
-  return <div style={{ color: '#ccc', fontFamily: 'monospace' }}><p>Stats panel — coming soon</p></div>;
-}
+import MenuPanel from './MenuPanel';
+import UpgradePanel from './UpgradePanel';
+import StaffPanel from './StaffPanel';
+import MilestonePanel from './MilestonePanel';
+import StatsPanel from './StatsPanel';
 
 const TABS = [
   { key: 'menu', label: 'Menu' },
