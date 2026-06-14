@@ -16,6 +16,22 @@ export function drawFloorLayer(ctx, state, camera) {
   ctx.fillStyle = '#2d1f0e';
   ctx.fillRect(50, 100, areaW + 100, areaH + 50);
 
+  // Grid lines in dining area
+  ctx.strokeStyle = 'rgba(80,80,80,0.3)';
+  ctx.lineWidth = 0.5;
+  for (let gx = 60; gx < 50 + areaW + 100; gx += 20) {
+    ctx.beginPath();
+    ctx.moveTo(gx, 100);
+    ctx.lineTo(gx, 100 + areaH + 50);
+    ctx.stroke();
+  }
+  for (let gy = 100; gy < 100 + areaH + 50; gy += 20) {
+    ctx.beginPath();
+    ctx.moveTo(60, gy);
+    ctx.lineTo(60 + areaW + 90, gy);
+    ctx.stroke();
+  }
+
   // Kitchen area (stretches with expansion)
   ctx.fillStyle = '#333';
   ctx.fillRect(50, 50, areaW + 100, 50);
@@ -92,14 +108,31 @@ export function drawFurnitureLayer(ctx, state, camera) {
   ctx.scale(camera.zoom, camera.zoom);
 
   for (const table of state.tables) {
-    const color = table.status === 'dirty' ? '#663333'
+    const tx = table.x;
+    const ty = table.y;
+
+    // Table surface (2x2 = 40x40)
+    const tableColor = table.status === 'dirty' ? '#663333'
       : table.status === 'occupied' ? '#4a6741' : '#6b5b3a';
-    ctx.fillStyle = color;
-    ctx.fillRect(table.x, table.y, 60, 40);
+    ctx.fillStyle = tableColor;
+    ctx.fillRect(tx, ty, 40, 40);
+
+    // Chairs (1x1 = 20x20 each)
+    ctx.fillStyle = table.status === 'occupied' ? '#3a572e' : '#5a4a30';
+    // Top
+    ctx.fillRect(tx + 10, ty - 20, 20, 20);
+    // Bottom
+    ctx.fillRect(tx + 10, ty + 40, 20, 20);
+    if (table.seats >= 4) {
+      // Left
+      ctx.fillRect(tx - 20, ty + 10, 20, 20);
+      // Right
+      ctx.fillRect(tx + 40, ty + 10, 20, 20);
+    }
 
     ctx.fillStyle = '#aaa';
-    ctx.font = '10px monospace';
-    ctx.fillText(`Table ${table.id}`, table.x + 8, table.y + 25);
+    ctx.font = '9px monospace';
+    ctx.fillText(`T${table.id}`, tx + 6, ty + 23);
   }
 
   for (const station of state.kitchenStations) {
@@ -164,7 +197,7 @@ export function drawCustomerLayer(ctx, state, camera) {
 
     ctx.fillStyle = archetypeColors[c.archetype] || '#999';
     ctx.beginPath();
-    ctx.arc(table.x + 30, table.y + 20, 8, 0, Math.PI * 2);
+    ctx.arc(table.x + 20, table.y + 20, 7, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = '#fff';

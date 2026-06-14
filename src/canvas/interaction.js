@@ -4,8 +4,8 @@ export function findClickedEntity(state, camera, screenX, screenY) {
   const world = screenToWorld(camera, screenX, screenY);
 
   for (const table of state.tables) {
-    if (world.x >= table.x && world.x <= table.x + 60
-      && world.y >= table.y && world.y <= table.y + 40) {
+    if (world.x >= table.x - 20 && world.x <= table.x + 60
+      && world.y >= table.y - 20 && world.y <= table.y + 60) {
       const customer = state.customers.find(c => c.tableId === table.id);
       return {
         type: 'table',
