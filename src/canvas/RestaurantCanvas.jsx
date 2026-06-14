@@ -30,8 +30,8 @@ export default function RestaurantCanvas() {
     const areaW = 400 + (level - 1) * 150 + 100 + 200;
     const areaH = 350 + (level - 1) * 100 + 200;
 
-    camera.x = (canvas.clientWidth - areaW) / 2;
-    camera.y = (canvas.clientHeight - areaH) / 2;
+    camera.x = (canvas.clientWidth - areaW * camera.zoom) / 2;
+    camera.y = (canvas.clientHeight - areaH * camera.zoom) / 2;
 
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;
@@ -121,11 +121,20 @@ export default function RestaurantCanvas() {
   };
 
   const handleClick = (e) => {
-    if (dragRef.current) return; // Don't show tooltip after drag
+    if (dragRef.current) return;
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const hit = findClickedEntity(state, cameraRef.current, e.clientX - rect.left, e.clientY - rect.top);
     tooltipRef.current = hit?.text || null;
+  };
+
+  const handleWheel = (e) => {
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 0.9 : 1.1;
+    cameraRef.current.zoom = Math.max(
+      cameraRef.current.minZoom,
+      Math.min(cameraRef.current.maxZoom, cameraRef.current.zoom * factor)
+    );
   };
 
   return (
@@ -136,6 +145,7 @@ export default function RestaurantCanvas() {
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onWheel={handleWheel}
       onClick={handleClick}
     />
   );

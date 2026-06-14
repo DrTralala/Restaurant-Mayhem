@@ -85,7 +85,9 @@ export function drawQueueLayer(ctx, state, camera) {
     influencer: '#9B4AD9',
   };
 
-  for (let i = 0; i < state.queue.length; i++) {
+  const MAX_VISIBLE = 8;
+  const visible = Math.min(state.queue.length, MAX_VISIBLE);
+  for (let i = 0; i < visible; i++) {
     const q = state.queue[i];
     const y = areaH + 50 - i * 25;
 
@@ -97,6 +99,14 @@ export function drawQueueLayer(ctx, state, camera) {
     ctx.fillStyle = '#fff';
     ctx.font = '8px monospace';
     ctx.fillText('waiting', doorX + 62, y + 3);
+  }
+
+  if (state.queue.length > MAX_VISIBLE) {
+    const extra = state.queue.length - MAX_VISIBLE;
+    const labelY = areaH + 50 - MAX_VISIBLE * 25 - 14;
+    ctx.fillStyle = '#f0a500';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(`+${extra} more`, doorX + 50, labelY);
   }
 
   ctx.restore();
