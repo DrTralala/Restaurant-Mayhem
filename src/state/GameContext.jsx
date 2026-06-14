@@ -87,13 +87,13 @@ function gameReducer(state, action) {
       const seats = 4;
       const chairIdBase = state.chairs.length + 1;
       const newChairs = [
-        { id: `ch${chairIdBase}`, tableId: newId, x: tx + 10, y: ty - 20 },
-        { id: `ch${chairIdBase + 1}`, tableId: newId, x: tx + 10, y: ty + 40 },
+        { id: `ch${chairIdBase}`, tableId: newId, x: tx + 10, y: ty - 20, rotation: 0 },
+        { id: `ch${chairIdBase + 1}`, tableId: newId, x: tx + 10, y: ty + 40, rotation: 0 },
       ];
       if (seats >= 4) {
         newChairs.push(
-          { id: `ch${chairIdBase + 2}`, tableId: newId, x: tx - 20, y: ty + 10 },
-          { id: `ch${chairIdBase + 3}`, tableId: newId, x: tx + 40, y: ty + 10 },
+          { id: `ch${chairIdBase + 2}`, tableId: newId, x: tx - 20, y: ty + 10, rotation: 0 },
+          { id: `ch${chairIdBase + 3}`, tableId: newId, x: tx + 40, y: ty + 10, rotation: 0 },
         );
       }
       return {
@@ -106,7 +106,7 @@ function gameReducer(state, action) {
       return {
         ...state,
         chairs: state.chairs.map(ch =>
-          ch.id === action.id ? { ...ch, x: action.x, y: action.y } : ch
+          ch.id === action.id ? { ...ch, x: action.x, y: action.y, ...(action.rotation != null ? { rotation: action.rotation } : {}) } : ch
         ),
       };
     case 'MOVE_TABLE':
@@ -114,6 +114,24 @@ function gameReducer(state, action) {
         ...state,
         tables: state.tables.map(t =>
           t.id === action.id ? { ...t, x: action.x, y: action.y } : t
+        ),
+      };
+    case 'DELETE_TABLE':
+      return {
+        ...state,
+        tables: state.tables.filter(t => t.id !== action.id),
+        chairs: state.chairs.filter(ch => ch.tableId !== action.id),
+      };
+    case 'DELETE_CHAIR':
+      return {
+        ...state,
+        chairs: state.chairs.filter(ch => ch.id !== action.id),
+      };
+    case 'ROTATE_CHAIR':
+      return {
+        ...state,
+        chairs: state.chairs.map(ch =>
+          ch.id === action.id ? { ...ch, rotation: ((ch.rotation || 0) + 1) % 4 } : ch
         ),
       };
     case 'EXPAND': {

@@ -132,10 +132,22 @@ export function drawFurnitureLayer(ctx, state, camera) {
     ctx.fillText(`T${table.id}`, tx + 6, ty + 23);
   }
 
-  // Chairs (drawn from chairs array — independently movable)
+  // Chairs (drawn from chairs array — independently movable, rotatable)
   for (const chair of state.chairs) {
     ctx.fillStyle = '#5a4a30';
     ctx.fillRect(chair.x, chair.y, 20, 20);
+    // Rotation indicator: small dot on the facing side
+    ctx.fillStyle = '#8a7a5a';
+    const rot = chair.rotation || 0;
+    const cx = chair.x + 10, cy = chair.y + 10;
+    const dirs = [
+      [0, -8],   // 0: up
+      [8, 0],    // 1: right
+      [0, 8],    // 2: down
+      [-8, 0],   // 3: left
+    ];
+    const [dx, dy] = dirs[rot];
+    ctx.fillRect(cx + dx - 2, cy + dy - 2, 4, 4);
   }
 
   for (const station of state.kitchenStations) {

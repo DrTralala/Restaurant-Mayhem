@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { createCamera, screenToWorld } from './camera';
 import { loadSprites } from './sprites';
@@ -16,9 +16,22 @@ export default function RestaurantCanvas() {
   const cameraRef = useRef(createCamera());
   const spritesRef = useRef(loadSprites());
   const tooltipRef = useRef(null);
-  const dragRef = useRef(null); // { type: 'table'|'chair', id, offsetX, offsetY, currentX, currentY }
   const state = useGameState();
   const dispatch = useDispatch();
+
+  // Context menu state
+  const [menu, setMenu] = useState(null); // { x, y, type, data }
+
+  // Move mode: object follows cursor while LMB held
+  const moveRef = useRef(null); // { type, id, rotation?, x, y }
+  const mouseDownRef = useRef(false);
+
+  const getWorldPos = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const camera = cameraRef.current;
+    return screenToWorld(camera, e.clientX - rect.left, e.clientY - rect.top);
+  };
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -39,22 +52,22 @@ export default function RestaurantCanvas() {
     canvas.style.width = canvas.clientWidth + 'px';
     canvas.style.height = canvas.clientHeight + 'px';
 
-    // Apply drag position during drag
+    // Apply move-mode ghost position
     let renderState = state;
-    if (dragRef.current) {
-      const d = dragRef.current;
-      if (d.type === 'table') {
+    if (moveRef.current) {
+      const m = moveRef.current;
+      if (m.type === 'table') {
         renderState = {
           ...state,
           tables: state.tables.map(t =>
-            t.id === d.id ? { ...t, x: d.currentX, y: d.currentY } : t
+            t.id === m.id ? { ...t, x: m.x, y: m.y } : t
           ),
         };
-      } else if (d.type === 'chair') {
+      } else if (m.type === 'chair') {
         renderState = {
           ...state,
           chairs: state.chairs.map(ch =>
-            ch.id === d.id ? { ...ch, x: d.currentX, y: d.currentY } : ch
+            ch.id === m.id ? { ...ch, x: m.x, y: m.y, rotation: m.rotation ?? ch.rotation } : ch
           ),
         };
       }
@@ -76,56 +89,87 @@ export default function RestaurantCanvas() {
     return () => cancelAnimationFrame(animId);
   }, [draw]);
 
-  const getWorldPos = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const camera = cameraRef.current;
-    return screenToWorld(camera, e.clientX - rect.left, e.clientY - rect.top);
+  // R key to rotate during move
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'r' && moveRef.current?.type === 'chair') {
+        moveRef.current.rotation = ((moveRef.current.rotation ?? 0) + 1) % 4;
+      }
+      if (e.key === 'Escape') {
+        setMenu(null);
+        moveRef.current = null;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // --- Mouse handlers ---
+
+  const handleMouseMove = (e) => {
+    if (moveRef.current && mouseDownRef.current) {
+      const world = getWorldPos(e);
+      moveRef.current.x = snap(world.x);
+      moveRef.current.y = snap(world.y);
+      return;
+    }
+    if (!moveRef.current && e.buttons === 0) {
+      const canvas = canvasRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const hit = findClickedEntity(state, cameraRef.current, e.clientX - rect.left, e.clientY - rect.top);
+      tooltipRef.current = hit?.text || null;
+    }
   };
 
   const handleMouseDown = (e) => {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const hit = findClickedEntity(state, cameraRef.current, e.clientX - rect.left, e.clientY - rect.top);
-      if (hit?.type === 'table' || hit?.type === 'chair') {
-        const world = getWorldPos(e);
-        dragRef.current = {
-          type: hit.type,
-          id: hit.data.id,
-          offsetX: world.x - hit.data.x,
-          offsetY: world.y - hit.data.y,
-          currentX: snap(hit.data.x),
-          currentY: snap(hit.data.y),
-        };
+    if (e.button === 0) mouseDownRef.current = true;
+  };
+
+  const handleMouseUp = (e) => {
+    if (e.button !== 0) return;
+    mouseDownRef.current = false;
+    if (moveRef.current) {
+      const m = moveRef.current;
+      if (m.type === 'chair') {
+        dispatch({
+          type: 'MOVE_CHAIR',
+          id: m.id,
+          x: m.x,
+          y: m.y,
+          rotation: m.rotation,
+        });
+      } else {
+        dispatch({
+          type: 'MOVE_TABLE',
+          id: m.id,
+          x: m.x,
+          y: m.y,
+        });
       }
-  };
-
-  const handleMouseMove = (e) => {
-    if (!dragRef.current) return;
-    const world = getWorldPos(e);
-    dragRef.current.currentX = snap(world.x - dragRef.current.offsetX);
-    dragRef.current.currentY = snap(world.y - dragRef.current.offsetY);
-  };
-
-  const handleMouseUp = () => {
-    if (dragRef.current) {
-      const d = dragRef.current;
-      dispatch({
-        type: d.type === 'chair' ? 'MOVE_CHAIR' : 'MOVE_TABLE',
-        id: d.id,
-        x: snap(d.currentX),
-        y: snap(d.currentY),
-      });
-      dragRef.current = null;
+      moveRef.current = null;
     }
   };
 
   const handleClick = (e) => {
-    if (dragRef.current) return;
+    if (moveRef.current) return;
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const hit = findClickedEntity(state, cameraRef.current, e.clientX - rect.left, e.clientY - rect.top);
-    tooltipRef.current = hit?.text || null;
+
+    if (hit && (hit.type === 'table' || hit.type === 'chair')) {
+      // Show context menu at click position
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        type: hit.type,
+        data: hit.data,
+      });
+      tooltipRef.current = null;
+    } else {
+      // Clicked empty space — dismiss
+      setMenu(null);
+      tooltipRef.current = hit?.text || null;
+    }
   };
 
   const handleWheel = (e) => {
@@ -137,16 +181,76 @@ export default function RestaurantCanvas() {
     );
   };
 
+  // Context menu actions
+  const handleMoveEntity = () => {
+    if (!menu) return;
+    moveRef.current = {
+      type: menu.type,
+      id: menu.data.id,
+      x: menu.data.x,
+      y: menu.data.y,
+      rotation: menu.data.rotation,
+    };
+    setMenu(null);
+  };
+
+  const handleDeleteEntity = () => {
+    if (!menu) return;
+    dispatch({
+      type: menu.type === 'chair' ? 'DELETE_CHAIR' : 'DELETE_TABLE',
+      id: menu.data.id,
+    });
+    setMenu(null);
+  };
+
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ flex: 1, width: '100%', height: '100%', cursor: dragRef.current ? 'grabbing' : 'default' }}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onWheel={handleWheel}
-      onClick={handleClick}
-    />
+    <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <canvas
+        ref={canvasRef}
+        style={{ width: '100%', height: '100%', cursor: moveRef.current ? 'none' : 'default' }}
+        onMouseMove={handleMouseMove}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        onWheel={handleWheel}
+        onClick={handleClick}
+      />
+
+      {/* Context menu */}
+      {menu && (
+        <div style={{
+          position: 'fixed', left: menu.x + 8, top: menu.y + 8, zIndex: 300,
+          background: '#16213e', border: '1px solid #0f3460', borderRadius: 8,
+          padding: 6, display: 'flex', flexDirection: 'column', gap: 4,
+          minWidth: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+        }}>
+          <div style={{ color: '#888', fontSize: 11, padding: '2px 8px', fontFamily: 'monospace' }}>
+            {menu.type === 'table' ? `Table ${menu.data.id}` : `Chair ${menu.data.id}`}
+          </div>
+          <button onClick={handleMoveEntity} style={menuBtn}>
+            Move {menu.type === 'chair' ? '(R=rotate)' : ''}
+          </button>
+          <button onClick={handleDeleteEntity} style={{ ...menuBtn, color: '#d44' }}>
+            Delete
+          </button>
+        </div>
+      )}
+
+      {/* Move mode indicator */}
+      {moveRef.current && (
+        <div style={{
+          position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
+          background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
+          fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        }}>
+          Hold left mouse to drag · Release to place · R to rotate
+        </div>
+      )}
+    </div>
   );
 }
+
+const menuBtn = {
+  background: '#1a1a2e', color: '#ccc', border: '1px solid #333',
+  padding: '6px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12,
+  textAlign: 'left', fontFamily: 'monospace',
+};

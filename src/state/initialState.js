@@ -23,21 +23,21 @@ export function createInitialState() {
     ],
     chairs: [
       // t1 (2-seat)
-      { id: 'ch1', tableId: 't1', x: 210, y: 180 },
-      { id: 'ch2', tableId: 't1', x: 210, y: 240 },
+      { id: 'ch1', tableId: 't1', x: 210, y: 180, rotation: 0 },
+      { id: 'ch2', tableId: 't1', x: 210, y: 240, rotation: 0 },
       // t2 (2-seat)
-      { id: 'ch3', tableId: 't2', x: 370, y: 180 },
-      { id: 'ch4', tableId: 't2', x: 370, y: 240 },
+      { id: 'ch3', tableId: 't2', x: 370, y: 180, rotation: 0 },
+      { id: 'ch4', tableId: 't2', x: 370, y: 240, rotation: 0 },
       // t3 (4-seat)
-      { id: 'ch5', tableId: 't3', x: 210, y: 340 },
-      { id: 'ch6', tableId: 't3', x: 210, y: 400 },
-      { id: 'ch7', tableId: 't3', x: 180, y: 370 },
-      { id: 'ch8', tableId: 't3', x: 240, y: 370 },
+      { id: 'ch5', tableId: 't3', x: 210, y: 340, rotation: 0 },
+      { id: 'ch6', tableId: 't3', x: 210, y: 400, rotation: 0 },
+      { id: 'ch7', tableId: 't3', x: 180, y: 370, rotation: 0 },
+      { id: 'ch8', tableId: 't3', x: 240, y: 370, rotation: 0 },
       // t4 (4-seat)
-      { id: 'ch9', tableId: 't4', x: 370, y: 340 },
-      { id: 'ch10', tableId: 't4', x: 370, y: 400 },
-      { id: 'ch11', tableId: 't4', x: 340, y: 370 },
-      { id: 'ch12', tableId: 't4', x: 400, y: 370 },
+      { id: 'ch9', tableId: 't4', x: 370, y: 340, rotation: 0 },
+      { id: 'ch10', tableId: 't4', x: 370, y: 400, rotation: 0 },
+      { id: 'ch11', tableId: 't4', x: 340, y: 370, rotation: 0 },
+      { id: 'ch12', tableId: 't4', x: 400, y: 370, rotation: 0 },
     ],
     kitchenStations: [
       { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
