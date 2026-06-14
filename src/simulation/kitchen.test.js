@@ -10,6 +10,8 @@ const baseState = {
   restaurant: { gameTime: 0, totalServed: 0 },
   tables: [],
   completedCustomers: [],
+  serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+  foodItems: [],
 };
 
 describe('processKitchen', () => {
@@ -47,7 +49,7 @@ describe('processKitchen', () => {
     expect(result.kitchenQueue.length).toBe(0);
   });
 
-  it('marks order complete when cook time elapsed', () => {
+  it('places food on service table when cook time elapsed', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'ordering', dishId: 'd1', tableId: 't1', tipAmount: 0,
@@ -62,7 +64,9 @@ describe('processKitchen', () => {
       kitchenQueue: [{ customerId: 'c1', dishId: 'd1', stationId: 'k1', startTime: 0, completedAt: null }],
     };
     const result = processKitchen(state);
-    expect(result.customers[0].state).toBe('eating');
+    expect(result.foodItems.length).toBe(1);
+    expect(result.foodItems[0].state).toBe('on_service');
+    expect(result.foodItems[0].customerId).toBe('c1');
   });
 
   it('transitions eating customer to paying after 30 seconds', () => {

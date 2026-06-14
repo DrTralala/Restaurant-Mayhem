@@ -38,5 +38,16 @@ export function findClickedEntity(state, camera, screenX, screenY) {
     }
   }
 
+  for (const st of state.serviceTables) {
+    if (world.x >= st.x && world.x <= st.x + 120
+      && world.y >= st.y && world.y <= st.y + 40) {
+      return {
+        type: 'serviceTable',
+        data: st,
+        text: `Service Counter · ${state.foodItems.filter(f => f.state === 'on_service').length} plates waiting`,
+      };
+    }
+  }
+
   return null;
 }

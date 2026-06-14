@@ -67,6 +67,27 @@ export default function UpgradePanel() {
         })()}
       </div>
 
+      <h4 style={{ color: '#f0a500', marginTop: 20, marginBottom: 8 }}>Service</h4>
+      <div style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, border: '1px solid #0f3460', marginBottom: 12 }}>
+        <strong>Service Counter</strong>
+        <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
+          Long table where cooks place finished food and waiters pick it up. {state.serviceTables.length} installed.
+        </p>
+        <button
+          onClick={() => dispatch({ type: 'BUY_SERVICE_TABLE', cost: 300 })}
+          disabled={state.restaurant.funds < 300}
+          style={{
+            background: state.restaurant.funds < 300 ? '#333' : '#f0a500',
+            color: state.restaurant.funds < 300 ? '#666' : '#111',
+            border: 'none', padding: '6px 14px', borderRadius: 4,
+            cursor: state.restaurant.funds < 300 ? 'not-allowed' : 'pointer',
+            fontSize: 12, marginTop: 6,
+          }}
+        >
+          Buy ($300)
+        </button>
+      </div>
+
       <h4 style={{ color: '#f0a500', marginTop: 20, marginBottom: 8 }}>Equipment</h4>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
         {state.equipment.map(eq => {

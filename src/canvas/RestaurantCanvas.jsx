@@ -40,11 +40,13 @@ export default function RestaurantCanvas() {
     const camera = cameraRef.current;
     const sprites = spritesRef.current;
     const level = state.restaurant.expansionLevel || 1;
-    const areaW = 400 + (level - 1) * 150 + 100 + 200;
-    const areaH = 350 + (level - 1) * 100 + 200;
+    const floorW = 400 + (level - 1) * 150 + 100;  // dining + kitchen width
+    const floorH = 350 + (level - 1) * 100 + 100;  // dining + kitchen height
+    const contentW = floorW + 170;  // wall offset + queue area
+    const contentH = floorH + 60;   // wall offset padding
 
-    camera.x = (canvas.clientWidth - areaW * camera.zoom) / 2;
-    camera.y = (canvas.clientHeight - areaH * camera.zoom) / 2;
+    camera.x = canvas.clientWidth / 2 - (50 + contentW / 2) * camera.zoom;
+    camera.y = canvas.clientHeight / 2 - (50 + contentH / 2) * camera.zoom;
 
     canvas.width = canvas.clientWidth * window.devicePixelRatio;
     canvas.height = canvas.clientHeight * window.devicePixelRatio;

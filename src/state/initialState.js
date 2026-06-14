@@ -45,6 +45,10 @@ export function createInitialState() {
     ],
     kitchenQueue: [],
     queue: [],              // customers waiting outside for a free table
+    foodItems: [],          // food on service tables or delivered to customer tables
+    serviceTables: [
+      { id: 'st1', x: 140, y: 120 },
+    ],
     customers: [],
     staff: [
       {

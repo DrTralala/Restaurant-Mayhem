@@ -10,6 +10,8 @@ const emptyState = {
   kitchenQueue: [],
   queue: [],
   customers: [],
+  foodItems: [],
+  serviceTables: [],
   staff: [],
   dishes: [],
   equipment: [],

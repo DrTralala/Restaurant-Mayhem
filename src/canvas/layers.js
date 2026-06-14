@@ -165,6 +165,27 @@ export function drawFurnitureLayer(ctx, state, camera) {
     }
   }
 
+  // Service tables (long counter between kitchen and dining)
+  for (const st of state.serviceTables) {
+    ctx.fillStyle = '#4a6a4a';
+    ctx.fillRect(st.x, st.y, 120, 40);
+    ctx.fillStyle = '#aaa';
+    ctx.font = '8px monospace';
+    ctx.fillText('SERVICE', st.x + 30, st.y + 24);
+  }
+
+  // Food items
+  for (const food of state.foodItems) {
+    if (food.state === 'to_clean') continue;
+    const dish = state.dishes.find(d => d.id === food.dishId);
+    const label = dish ? dish.name.substring(0, 6) : 'food';
+    ctx.fillStyle = food.state === 'on_service' ? '#f0a500' : '#4a7';
+    ctx.fillRect(food.x, food.y, 24, 12);
+    ctx.fillStyle = '#111';
+    ctx.font = '7px monospace';
+    ctx.fillText(label, food.x + 2, food.y + 10);
+  }
+
   ctx.restore();
 }
 

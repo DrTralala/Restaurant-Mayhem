@@ -1,7 +1,10 @@
+let foodItemCounter = 0;
+
 export function processKitchen(state) {
   let queue = [...state.kitchenQueue];
   let customers = [...state.customers];
   let completed = [...state.completedCustomers];
+  let foodItems = [...state.foodItems];
 
   // Add ordering customers to queue
   const ordering = customers.filter(c => c.state === 'ordering' && !queue.find(q => q.customerId === c.id));
@@ -30,7 +33,7 @@ export function processKitchen(state) {
     }
   }
 
-  // Progress cooking
+  // Progress cooking → place food on service table
   for (const item of queue) {
     if (item.completedAt) continue;
     const dish = state.dishes.find(d => d.id === item.dishId);
@@ -44,18 +47,27 @@ export function processKitchen(state) {
 
     if (elapsed >= cookTime) {
       item.completedAt = state.restaurant.gameTime;
-      customers = customers.map(c =>
-        c.id === item.customerId
-          ? { ...c, state: 'eating', eatTime: state.restaurant.gameTime }
-          : c
-      );
+      // Place food on first available service table
+      const serviceTable = state.serviceTables[0];
+      if (serviceTable) {
+        const foodCol = foodItems.filter(f => f.state === 'on_service').length % 4;
+        foodItems.push({
+          id: `food-${++foodItemCounter}`,
+          dishId: item.dishId,
+          customerId: item.customerId,
+          tableId: customers.find(c => c.id === item.customerId)?.tableId || null,
+          state: 'on_service',
+          x: serviceTable.x + 10 + foodCol * 30,
+          y: serviceTable.y + 10,
+        });
+      }
     }
   }
 
   // Track customers already paying before this tick
   const alreadyPaying = new Set(state.customers.filter(c => c.state === 'paying').map(c => c.id));
 
-  // Eating → paying transition
+  // Eating → paying transition (for customers with delivered food)
   customers = customers.map(c => {
     if (c.state === 'eating' && c.eatTime != null && state.restaurant.gameTime - c.eatTime >= 30) {
       return { ...c, state: 'paying' };
@@ -63,7 +75,7 @@ export function processKitchen(state) {
     return c;
   });
 
-  // Paying → completed (only customers that were already paying before this tick)
+  // Paying → completed (only customers that were already paying)
   const toComplete = customers.filter(c => c.state === 'paying' && alreadyPaying.has(c.id));
   const completedTableIds = new Set(toComplete.map(c => c.tableId).filter(Boolean));
   for (const pc of toComplete) {
@@ -85,13 +97,16 @@ export function processKitchen(state) {
   if (toComplete.length > 0) {
     const completedIds = new Set(toComplete.map(c => c.id));
     customers = customers.filter(c => !completedIds.has(c.id));
+    // Mark delivered food for cleanup (waiter will clean)
+    foodItems = foodItems.map(f =>
+      completedIds.has(f.customerId) ? { ...f, state: 'to_clean' } : f
+    );
   }
 
-  // Free tables that belonged to completed paying customers
   let updatedTables = state.tables;
   if (completedTableIds.size > 0) {
     updatedTables = state.tables.map(t =>
-      completedTableIds.has(t.id) ? { ...t, status: 'empty' } : t
+      completedTableIds.has(t.id) ? { ...t, status: 'dirty' } : t
     );
   }
 
@@ -99,6 +114,7 @@ export function processKitchen(state) {
     ...state,
     kitchenQueue: queue,
     customers,
+    foodItems,
     completedCustomers: completed,
     restaurant: { ...state.restaurant, totalServed: completed.length },
     tables: updatedTables,

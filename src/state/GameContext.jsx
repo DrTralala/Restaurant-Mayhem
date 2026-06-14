@@ -134,6 +134,43 @@ function gameReducer(state, action) {
           ch.id === action.id ? { ...ch, rotation: ((ch.rotation || 0) + 1) % 4 } : ch
         ),
       };
+    case 'BUY_SERVICE_TABLE':
+      return {
+        ...state,
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - action.cost },
+        serviceTables: [...state.serviceTables, {
+          id: `st${state.serviceTables.length + 1}`,
+          x: 140 + state.serviceTables.length * 140,
+          y: 120,
+        }],
+      };
+    case 'MOVE_SERVICE_TABLE':
+      return {
+        ...state,
+        serviceTables: state.serviceTables.map(st =>
+          st.id === action.id ? { ...st, x: action.x, y: action.y } : st
+        ),
+      };
+    case 'DELETE_SERVICE_TABLE':
+      return {
+        ...state,
+        serviceTables: state.serviceTables.filter(st => st.id !== action.id),
+        foodItems: state.foodItems.filter(f => !state.serviceTables.find(st => st.id === action.id && st.id === f.position)),
+      };
+    case 'ADD_FOOD_ITEM':
+      return { ...state, foodItems: [...state.foodItems, action.item] };
+    case 'DELIVER_FOOD':
+      return {
+        ...state,
+        foodItems: state.foodItems.map(f =>
+          f.id === action.id ? { ...f, state: 'delivered', x: action.x, y: action.y } : f
+        ),
+      };
+    case 'CLEAN_FOOD':
+      return {
+        ...state,
+        foodItems: state.foodItems.filter(f => f.id !== action.id),
+      };
     case 'EXPAND': {
       const cost = [0, 1000, 3000, 6000][state.restaurant.expansionLevel] || 10000;
       if (state.restaurant.funds < cost) return state;
