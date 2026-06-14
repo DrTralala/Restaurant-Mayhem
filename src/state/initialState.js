@@ -1,3 +1,7 @@
+import { EQUIPMENT } from '../data/equipment';
+import { UPGRADES } from '../data/upgrades';
+import { MILESTONES } from '../data/milestones';
+
 export function createInitialState() {
   return {
     restaurant: {
@@ -5,7 +9,7 @@ export function createInitialState() {
       funds: 500,
       reputation: 2.0,
       day: 1,
-      gameTime: 0,
+      gameTime: 10 * 3600, // start at 10:00 AM
       totalServed: 0,
       openHour: 10,
       closeHour: 22,
@@ -22,11 +26,36 @@ export function createInitialState() {
     ],
     kitchenQueue: [],
     customers: [],
-    staff: [],
-    dishes: [],
-    equipment: [],
-    upgrades: [],
-    milestones: [],
+    staff: [
+      {
+        id: 'starter-cook',
+        name: 'Marco',
+        role: 'cook',
+        skill: 3,
+        morale: 80,
+        salary: 200,
+      },
+    ],
+    dishes: [
+      {
+        id: 'starter-toast',
+        name: 'Toasted Bread',
+        base: 'Bread',
+        method: 'Toasted',
+        price: 8,
+        prepTime: 60,
+        quality: 1,
+        popularity: 50,
+        cuisine: 'generic',
+        requiredEquipmentId: 'eq1',
+        unlocked: true,
+      },
+    ],
+    equipment: EQUIPMENT.map(e =>
+      e.id === 'eq1' ? { ...e, owned: true } : e
+    ),
+    upgrades: UPGRADES,
+    milestones: MILESTONES,
     recipeSlots: 1,
     staffSlots: 1,
     completedCustomers: [],
