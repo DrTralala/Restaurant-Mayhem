@@ -3,6 +3,18 @@ import { screenToWorld } from './camera';
 export function findClickedEntity(state, camera, screenX, screenY) {
   const world = screenToWorld(camera, screenX, screenY);
 
+  // Chairs first — they sit inside table hitboxes
+  for (const chair of state.chairs) {
+    if (world.x >= chair.x && world.x <= chair.x + 20
+      && world.y >= chair.y && world.y <= chair.y + 20) {
+      return {
+        type: 'chair',
+        data: chair,
+        text: `Chair · Table ${chair.tableId}`,
+      };
+    }
+  }
+
   for (const table of state.tables) {
     if (world.x >= table.x - 20 && world.x <= table.x + 60
       && world.y >= table.y - 20 && world.y <= table.y + 60) {

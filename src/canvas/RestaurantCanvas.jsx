@@ -16,7 +16,7 @@ export default function RestaurantCanvas() {
   const cameraRef = useRef(createCamera());
   const spritesRef = useRef(loadSprites());
   const tooltipRef = useRef(null);
-  const dragRef = useRef(null); // { tableId, offsetX, offsetY, currentX, currentY }
+  const dragRef = useRef(null); // { type: 'table'|'chair', id, offsetX, offsetY, currentX, currentY }
   const state = useGameState();
   const dispatch = useDispatch();
 
@@ -39,16 +39,25 @@ export default function RestaurantCanvas() {
     canvas.style.width = canvas.clientWidth + 'px';
     canvas.style.height = canvas.clientHeight + 'px';
 
-    // Apply drag position to tables for rendering
+    // Apply drag position during drag
     let renderState = state;
     if (dragRef.current) {
       const d = dragRef.current;
-      renderState = {
-        ...state,
-        tables: state.tables.map(t =>
-          t.id === d.tableId ? { ...t, x: d.currentX, y: d.currentY } : t
-        ),
-      };
+      if (d.type === 'table') {
+        renderState = {
+          ...state,
+          tables: state.tables.map(t =>
+            t.id === d.id ? { ...t, x: d.currentX, y: d.currentY } : t
+          ),
+        };
+      } else if (d.type === 'chair') {
+        renderState = {
+          ...state,
+          chairs: state.chairs.map(ch =>
+            ch.id === d.id ? { ...ch, x: d.currentX, y: d.currentY } : ch
+          ),
+        };
+      }
     }
 
     drawFloorLayer(ctx, renderState, camera, sprites);
@@ -78,16 +87,17 @@ export default function RestaurantCanvas() {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const hit = findClickedEntity(state, cameraRef.current, e.clientX - rect.left, e.clientY - rect.top);
-    if (hit?.type === 'table') {
-      const world = getWorldPos(e);
-      dragRef.current = {
-        tableId: hit.data.id,
-        offsetX: world.x - hit.data.x,
-        offsetY: world.y - hit.data.y,
-        currentX: snap(hit.data.x),
-        currentY: snap(hit.data.y),
-      };
-    }
+      if (hit?.type === 'table' || hit?.type === 'chair') {
+        const world = getWorldPos(e);
+        dragRef.current = {
+          type: hit.type,
+          id: hit.data.id,
+          offsetX: world.x - hit.data.x,
+          offsetY: world.y - hit.data.y,
+          currentX: snap(hit.data.x),
+          currentY: snap(hit.data.y),
+        };
+      }
   };
 
   const handleMouseMove = (e) => {
@@ -99,11 +109,12 @@ export default function RestaurantCanvas() {
 
   const handleMouseUp = () => {
     if (dragRef.current) {
+      const d = dragRef.current;
       dispatch({
-        type: 'MOVE_TABLE',
-        id: dragRef.current.tableId,
-        x: snap(dragRef.current.currentX),
-        y: snap(dragRef.current.currentY),
+        type: d.type === 'chair' ? 'MOVE_CHAIR' : 'MOVE_TABLE',
+        id: d.id,
+        x: snap(d.currentX),
+        y: snap(d.currentY),
       });
       dragRef.current = null;
     }

@@ -82,17 +82,33 @@ function gameReducer(state, action) {
       const count = state.tables.length;
       const col = count % 2;
       const row = Math.floor(count / 2);
+      const tx = 200 + col * 200;
+      const ty = 200 + row * 200;
+      const seats = 4;
+      const chairIdBase = state.chairs.length + 1;
+      const newChairs = [
+        { id: `ch${chairIdBase}`, tableId: newId, x: tx + 10, y: ty - 20 },
+        { id: `ch${chairIdBase + 1}`, tableId: newId, x: tx + 10, y: ty + 40 },
+      ];
+      if (seats >= 4) {
+        newChairs.push(
+          { id: `ch${chairIdBase + 2}`, tableId: newId, x: tx - 20, y: ty + 10 },
+          { id: `ch${chairIdBase + 3}`, tableId: newId, x: tx + 40, y: ty + 10 },
+        );
+      }
       return {
         ...state,
-        tables: [...state.tables, {
-          id: newId,
-          seats: 4,
-          status: 'empty',
-          x: 200 + col * 200,
-          y: 200 + row * 200,
-        }],
+        tables: [...state.tables, { id: newId, seats, status: 'empty', x: tx, y: ty }],
+        chairs: [...state.chairs, ...newChairs],
       };
     }
+    case 'MOVE_CHAIR':
+      return {
+        ...state,
+        chairs: state.chairs.map(ch =>
+          ch.id === action.id ? { ...ch, x: action.x, y: action.y } : ch
+        ),
+      };
     case 'MOVE_TABLE':
       return {
         ...state,
@@ -129,7 +145,12 @@ function gameReducer(state, action) {
 }
 
 export function GameProvider({ children }) {
-  const [state, dispatch] = useReducer(gameReducer, null, () => loadState() || createInitialState());
+  const [state, dispatch] = useReducer(gameReducer, null, () => {
+    const saved = loadState();
+    const fresh = createInitialState();
+    if (saved && saved.version === fresh.version) return saved;
+    return fresh;
+  });
   const stateRef = useRef(state);
   stateRef.current = state;
 

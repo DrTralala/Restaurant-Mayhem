@@ -21,6 +21,24 @@ export function createInitialState() {
       { id: 't3', seats: 4, status: 'empty', x: 200, y: 360 },
       { id: 't4', seats: 4, status: 'empty', x: 360, y: 360 },
     ],
+    chairs: [
+      // t1 (2-seat)
+      { id: 'ch1', tableId: 't1', x: 210, y: 180 },
+      { id: 'ch2', tableId: 't1', x: 210, y: 240 },
+      // t2 (2-seat)
+      { id: 'ch3', tableId: 't2', x: 370, y: 180 },
+      { id: 'ch4', tableId: 't2', x: 370, y: 240 },
+      // t3 (4-seat)
+      { id: 'ch5', tableId: 't3', x: 210, y: 340 },
+      { id: 'ch6', tableId: 't3', x: 210, y: 400 },
+      { id: 'ch7', tableId: 't3', x: 180, y: 370 },
+      { id: 'ch8', tableId: 't3', x: 240, y: 370 },
+      // t4 (4-seat)
+      { id: 'ch9', tableId: 't4', x: 370, y: 340 },
+      { id: 'ch10', tableId: 't4', x: 370, y: 400 },
+      { id: 'ch11', tableId: 't4', x: 340, y: 370 },
+      { id: 'ch12', tableId: 't4', x: 400, y: 370 },
+    ],
     kitchenStations: [
       { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
       { id: 'k2', equipmentId: null, x: 200, y: 120 },
@@ -81,5 +99,6 @@ export function createInitialState() {
     notifications: [],
     speed: 1,
     paused: false,
+    version: 2,
   };
 }

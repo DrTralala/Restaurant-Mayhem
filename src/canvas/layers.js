@@ -117,22 +117,15 @@ export function drawFurnitureLayer(ctx, state, camera) {
     ctx.fillStyle = tableColor;
     ctx.fillRect(tx, ty, 40, 40);
 
-    // Chairs (1x1 = 20x20 each)
-    ctx.fillStyle = table.status === 'occupied' ? '#3a572e' : '#5a4a30';
-    // Top
-    ctx.fillRect(tx + 10, ty - 20, 20, 20);
-    // Bottom
-    ctx.fillRect(tx + 10, ty + 40, 20, 20);
-    if (table.seats >= 4) {
-      // Left
-      ctx.fillRect(tx - 20, ty + 10, 20, 20);
-      // Right
-      ctx.fillRect(tx + 40, ty + 10, 20, 20);
-    }
-
     ctx.fillStyle = '#aaa';
     ctx.font = '9px monospace';
     ctx.fillText(`T${table.id}`, tx + 6, ty + 23);
+  }
+
+  // Chairs (drawn from chairs array — independently movable)
+  for (const chair of state.chairs) {
+    ctx.fillStyle = '#5a4a30';
+    ctx.fillRect(chair.x, chair.y, 20, 20);
   }
 
   for (const station of state.kitchenStations) {
