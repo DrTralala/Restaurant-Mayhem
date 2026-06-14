@@ -35,15 +35,15 @@ export default function RestaurantCanvas() {
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || canvas.clientWidth === 0) return;
     const ctx = canvas.getContext('2d');
     const camera = cameraRef.current;
     const sprites = spritesRef.current;
     const level = state.restaurant.expansionLevel || 1;
-    const floorW = 400 + (level - 1) * 150 + 100;  // dining + kitchen width
-    const floorH = 350 + (level - 1) * 100 + 100;  // dining + kitchen height
-    const contentW = floorW + 170;  // wall offset + queue area
-    const contentH = floorH + 60;   // wall offset padding
+    const floorW = 400 + (level - 1) * 150 + 100;
+    const floorH = 350 + (level - 1) * 100 + 100;
+    const contentW = floorW + 170;
+    const contentH = floorH + 60;
 
     camera.x = canvas.clientWidth / 2 - (50 + contentW / 2) * camera.zoom;
     camera.y = canvas.clientHeight / 2 - (50 + contentH / 2) * camera.zoom;
@@ -54,33 +54,38 @@ export default function RestaurantCanvas() {
     canvas.style.width = canvas.clientWidth + 'px';
     canvas.style.height = canvas.clientHeight + 'px';
 
-    // Apply move-mode ghost position
-    let renderState = state;
-    if (moveRef.current) {
-      const m = moveRef.current;
-      if (m.type === 'table') {
-        renderState = {
-          ...state,
-          tables: state.tables.map(t =>
-            t.id === m.id ? { ...t, x: m.x, y: m.y } : t
-          ),
-        };
-      } else if (m.type === 'chair') {
-        renderState = {
-          ...state,
-          chairs: state.chairs.map(ch =>
-            ch.id === m.id ? { ...ch, x: m.x, y: m.y, rotation: m.rotation ?? ch.rotation } : ch
-          ),
-        };
+    try {
+      let renderState = state;
+      if (moveRef.current) {
+        const m = moveRef.current;
+        if (m.type === 'table') {
+          renderState = {
+            ...state,
+            tables: state.tables.map(t =>
+              t.id === m.id ? { ...t, x: m.x, y: m.y } : t
+            ),
+          };
+        } else if (m.type === 'chair') {
+          renderState = {
+            ...state,
+            chairs: state.chairs.map(ch =>
+              ch.id === m.id ? { ...ch, x: m.x, y: m.y, rotation: m.rotation ?? ch.rotation } : ch
+            ),
+          };
+        }
       }
-    }
 
-    drawFloorLayer(ctx, renderState, camera, sprites);
-    drawFurnitureLayer(ctx, renderState, camera, sprites);
-    drawStaffLayer(ctx, renderState, camera, sprites);
-    drawCustomerLayer(ctx, renderState, camera, sprites);
-    drawQueueLayer(ctx, renderState, camera, sprites);
-    drawOverlayLayer(ctx, renderState, camera, sprites, tooltipRef.current);
+      drawFloorLayer(ctx, renderState, camera, sprites);
+      drawFurnitureLayer(ctx, renderState, camera, sprites);
+      drawStaffLayer(ctx, renderState, camera, sprites);
+      drawCustomerLayer(ctx, renderState, camera, sprites);
+      drawQueueLayer(ctx, renderState, camera, sprites);
+      drawOverlayLayer(ctx, renderState, camera, sprites, tooltipRef.current);
+    } catch (err) {
+      ctx.fillStyle = '#a33';
+      ctx.font = '14px monospace';
+      ctx.fillText('Render error: ' + err.message, 20, 40);
+    }
   }, [state]);
 
   useEffect(() => {
@@ -206,7 +211,7 @@ export default function RestaurantCanvas() {
   };
 
   return (
-    <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+    <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
         style={{ width: '100%', height: '100%', cursor: moveRef.current ? 'none' : 'default' }}
