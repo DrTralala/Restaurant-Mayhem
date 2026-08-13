@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRestaurantWorld, getQueuePosition, getDefaultStaffPosition } from './world';
+import { getRestaurantWorld, getQueuePosition, getCashierWorkPosition, getDefaultStaffPosition } from './world';
 
 describe('restaurant world geometry', () => {
   it('uses a larger base floor suitable for 1080p layouts', () => {
@@ -34,5 +34,14 @@ describe('restaurant world geometry', () => {
     expect(cook.y).toBeLessThan(waiter.y);
     expect(host.x).toBeGreaterThan(waiter.x);
     expect(waiter.y).toBeGreaterThan(100);
+  });
+
+  it('places cashiers one grid cell behind the cashier station', () => {
+    const station = { x: 800, y: 120, w: 80, h: 40 };
+    const state = { cashierStations: [station] };
+
+    expect(getCashierWorkPosition(station)).toEqual({ x: 840, y: 100 });
+    expect(getDefaultStaffPosition('cashier', 0, state)).toEqual({ x: 840, y: 100 });
+    expect(getDefaultStaffPosition('cashier_waiter', 0, state)).toEqual({ x: 840, y: 100 });
   });
 });

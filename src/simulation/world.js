@@ -60,13 +60,18 @@ export function getQueuePosition(state, index = 0) {
   };
 }
 
+export function getCashierWorkPosition(station) {
+  return { x: station.x + station.w / 2, y: station.y - GRID_SIZE };
+}
+
 export function getDefaultStaffPosition(role, index = 0, state = {}) {
   const world = getRestaurantWorld(state.restaurant || {});
   if (role === 'cook') return { x: world.floorX + 40 + index * 45, y: world.kitchenY + 25 };
   if (role === 'host') return { x: world.doorX - 35 - index * 20, y: world.doorY + 20 };
-  if (role === 'cashier_waiter') {
+  if (role === 'cashier' || role === 'cashier_waiter') {
     const station = state.cashierStations?.[0];
-    return station ? { x: station.x - 20, y: station.y + station.h / 2 } : { x: world.doorX - 90, y: world.diningY + 40 };
+    if (station) return getCashierWorkPosition(station);
+    if (role === 'cashier_waiter') return { x: world.doorX - 90, y: world.diningY + 40 };
   }
   return { x: world.floorX + world.floorW / 2 + index * 25, y: world.diningY + world.areaH / 2 };
 }

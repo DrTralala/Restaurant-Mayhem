@@ -36,7 +36,24 @@ describe('updateStaff', () => {
     const result = updateStaff(state, 0);
 
     expect(result.staff[0].task).toMatchObject({ type: 'take_payment', customerId: 'c1' });
+    expect(result.staff[0].path.at(-1)).toEqual({ x: 42, y: 5 });
     expect(result.customers[1].state).toBe('paying');
+  });
+
+  it('does not claim payment while another character occupies the cashier work point', () => {
+    const cashier = { id: 'cw1', name: 'Elena', role: 'cashier_waiter', morale: 80, x: 760, y: 140 };
+    const blocker = { id: 'w1', name: 'Anna', role: 'waiter', morale: 80, x: 840, y: 100 };
+    const state = {
+      ...baseState,
+      staff: [cashier, blocker],
+      customers: [{ id: 'c1', state: 'paying', x: 780, y: 140, dishId: 'd1', tableId: 't1', patience: 100 }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.customers[0].state).toBe('paying');
   });
 
   it('cashier completes payment and sends the customer towards an exit', () => {

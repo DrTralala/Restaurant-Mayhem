@@ -1,6 +1,6 @@
 import { findAdjacentOpenCells, findPath, worldToCell } from './pathfinding';
 import { ensureStaffRuntime, hasArrived, moveCharacterAlongPath, moveCharacterTowards, moveStaffAlongPath } from './movement';
-import { getDoorPosition, getDoors, getQueuePosition } from './world';
+import { getCashierWorkPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
 
 function occupiedCharacterCells(staff, customers, excludeId) {
   return new Set([...staff, ...customers]
@@ -132,12 +132,18 @@ function assignTask({ state, staff, customers, queue, tables, foodItems, kitchen
       .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0))[0];
     const cashier = state.cashierStations?.[0];
     if (paying && cashier) {
-      const target = paying.checkoutPosition || { x: cashier.x - 20, y: cashier.y + cashier.h / 2 };
-      const path = findPath(state, worldToCell(staff), worldToCell(target));
-      return {
-        staff: { ...staff, path, task: { type: 'take_payment', customerId: paying.id } },
-        claimedCustomerId: paying.id,
-      };
+      const workCell = worldToCell(getCashierWorkPosition(cashier));
+      const staffCell = worldToCell(staff);
+      const occupiedCells = occupiedCharacterCells(state.staff || [], state.customers || [], staff.id);
+      const path = findPath(state, staffCell, workCell, { occupiedCells });
+      const workPointAvailable = !occupiedCells.has(`${workCell.x},${workCell.y}`);
+      const canReachWorkPoint = path.length || (staffCell.x === workCell.x && staffCell.y === workCell.y);
+      if (workPointAvailable && canReachWorkPoint) {
+        return {
+          staff: { ...staff, path, task: { type: 'take_payment', customerId: paying.id } },
+          claimedCustomerId: paying.id,
+        };
+      }
     }
   }
 
