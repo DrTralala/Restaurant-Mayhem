@@ -727,6 +727,58 @@ describe('updateStaff', () => {
     expect(result.foodItems[0]).toEqual(food);
   });
 
+  it('does not release stale task food carried by another worker', () => {
+    const food = { id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1', state: 'carried' };
+    const state = {
+      ...baseState,
+      staff: [
+        {
+          id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
+          task: { type: 'deliver_food', foodId: 'f1', customerId: 'missing' }, carryingFoodId: null,
+        },
+        {
+          id: 'w2', role: 'waiter', morale: 80, x: 400, y: 400, path: [{ x: 10, y: 10 }],
+          task: { type: 'deliver_food', foodId: 'f1', customerId: 'c1' }, carryingFoodId: 'f1',
+        },
+      ],
+      customers: [{ id: 'c1', state: 'ordering', happiness: 80, dishId: 'd1', tableId: 't1' }],
+      foodItems: [food],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: null });
+    expect(result.staff[1]).toMatchObject({ carryingFoodId: 'f1' });
+    expect(result.foodItems[0]).toEqual(food);
+  });
+
+  it('preserves the current worker unrelated carrier when cancelling stale delivery', () => {
+    const taskFood = { id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1', state: 'on_service' };
+    const ownFood = { id: 'f2', dishId: 'd2', customerId: 'c2', tableId: 't2', state: 'carried' };
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
+        task: { type: 'deliver_food', foodId: 'f1', customerId: 'c1' }, carryingFoodId: 'f2',
+      }],
+      customers: [
+        { id: 'c1', state: 'ordering', happiness: 80, dishId: 'd1', tableId: 't1' },
+        { id: 'c2', state: 'ordering', happiness: 80, dishId: 'd2', tableId: 't2' },
+      ],
+      foodItems: [taskFood, ownFood],
+      tables: [
+        { id: 't1', status: 'occupied', x: 200, y: 200 },
+        { id: 't2', status: 'occupied', x: 360, y: 200 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: 'f2' });
+    expect(result.foodItems).toEqual([taskFood, ownFood]);
+  });
+
   // --- Task 5: Food cleanup ---
 
   it('waiter cleans to_clean food on arrival', () => {

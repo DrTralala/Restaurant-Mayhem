@@ -69,6 +69,40 @@ describe('runTick', () => {
     expect(result.foodItems).toEqual([expect.objectContaining({ id: 'f1', state: 'to_clean' })]);
   });
 
+  it("preserves another worker's carried food through stale delivery cancellation", () => {
+    const food = {
+      id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1',
+      state: 'carried', x: 150, y: 130,
+    };
+    const state = {
+      ...emptyState,
+      customers: [{
+        id: 'c1', state: 'ordering', happiness: 80, patience: 100,
+        dishId: 'd1', tableId: 't1', x: 200, y: 200, path: [],
+      }],
+      tables: [{ id: 't1', status: 'occupied', seats: 2, x: 200, y: 200 }],
+      foodItems: [food],
+      staff: [
+        {
+          id: 'w1', role: 'waiter', morale: 80, salary: 150,
+          x: 180, y: 220, path: [], carryingFoodId: null,
+          task: { type: 'deliver_food', foodId: 'f1', customerId: 'missing' },
+        },
+        {
+          id: 'w2', role: 'waiter', morale: 80, salary: 150,
+          x: 400, y: 400, path: [{ x: 10, y: 10 }], carryingFoodId: 'f1',
+          task: { type: 'deliver_food', foodId: 'f1', customerId: 'c1' },
+        },
+      ],
+    };
+
+    const result = runTick(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: null });
+    expect(result.staff[1]).toMatchObject({ carryingFoodId: 'f1' });
+    expect(result.foodItems).toEqual([food]);
+  });
+
   it('routes a fresh-game customer through seating, service, cashier, and departure', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     let state = createInitialState();

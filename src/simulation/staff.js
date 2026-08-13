@@ -311,10 +311,17 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
       && staff.carryingFoodId === food.id
       && food.customerId === customer.id;
     if (!canDeliver) {
+      const ownsTaskFood = staff.carryingFoodId === staff.task.foodId;
+      const anotherWorkerOwnsTaskFood = state.staff.some(candidate =>
+        candidate.id !== staff.id && candidate.carryingFoodId === staff.task.foodId
+      );
       return {
-        staff: { ...staff, carryingFoodId: null },
+        staff: ownsTaskFood ? { ...staff, carryingFoodId: null } : staff,
         customers, queue, tables, kitchenQueue,
-        foodItems: foodItems.map(candidate => candidate.id === staff.task.foodId && candidate.state === 'carried'
+        foodItems: foodItems.map(candidate => ownsTaskFood
+          && !anotherWorkerOwnsTaskFood
+          && candidate.id === staff.task.foodId
+          && candidate.state === 'carried'
           ? { ...candidate, state: 'to_clean' }
           : candidate),
       };
