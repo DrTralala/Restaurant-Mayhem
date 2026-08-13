@@ -103,6 +103,28 @@ describe('spawnCustomers', () => {
     expect(new Set(result.queue.map(customer => customer.partyId)).size).toBe(1);
     expect(result.queue.map(customer => customer.gender)).toEqual(['male', 'female']);
   });
+
+  it('stops arrivals when eight parties are queued', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const queue = Array.from({ length: 8 }, (_, index) => ({ id: `q${index}`, partyId: `p${index}` }));
+
+    const result = spawnCustomers({ ...baseState, queue }, 1);
+
+    expect(result.queue).toHaveLength(8);
+  });
+
+  it('applies configured marketing and ambient-lighting effects', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.04);
+    const upgrades = [
+      { level: 2, effects: { type: 'customerRate', value: 0.02 } },
+      { level: 2, effects: { type: 'happiness', value: 5 } },
+    ];
+
+    const result = spawnCustomers({ ...baseState, upgrades }, 1);
+
+    expect(result.queue).toHaveLength(1);
+    expect(result.queue[0].happiness).toBe(90);
+  });
 });
 
 describe('updateCustomers', () => {
@@ -229,6 +251,35 @@ describe('updateCustomers', () => {
     // Dead queue mbr becomes a leaving customer (reputation loss)
     expect(result.customers.length).toBe(1);
     expect(result.customers[0].state).toBe('leaving');
+  });
+
+  it('accelerates queued patience loss as the number of parties grows', () => {
+    const queue = Array.from({ length: 6 }, (_, index) => ({
+      id: `q${index}`, partyId: `p${index}`, state: 'queued', patience: 100, happiness: 80,
+    }));
+
+    const result = updateCustomers({ ...baseState, queue }, 2);
+
+    expect(result.queue[0].patience).toBe(97);
+  });
+
+  it('does not reduce patience while a customer is eating', () => {
+    const customer = { id: 'c1', state: 'eating', patience: 100, happiness: 80 };
+
+    const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+
+    expect(result.customers[0].patience).toBe(100);
+  });
+
+  it('lowers reputation once for each abandoning customer', () => {
+    const customer = { id: 'c1', state: 'waiting', patience: 1, happiness: 80 };
+
+    const abandoned = updateCustomers({ ...baseState, customers: [customer] }, 2);
+    const updatedAgain = updateCustomers(abandoned, 2);
+
+    expect(abandoned.restaurant.reputation).toBe(2.98);
+    expect(abandoned.customers[0].reputationApplied).toBe(true);
+    expect(updatedAgain.restaurant.reputation).toBe(2.98);
   });
 
   it('spawn never assigns tableId or adds directly to customers', () => {

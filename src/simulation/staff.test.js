@@ -78,6 +78,28 @@ describe('updateStaff', () => {
     expect(result.restaurant.totalServed).toBe(4);
   });
 
+  it('happy payment increases reputation with configured gain effects', () => {
+    const cashier = {
+      id: 'cw1', role: 'cashier_waiter', morale: 80, x: 780, y: 140,
+      path: [], task: { type: 'take_payment', customerId: 'c1' },
+    };
+    const state = {
+      ...baseState,
+      staff: [cashier],
+      customers: [{ id: 'c1', state: 'paying', happiness: 80, dishId: 'd1', tableId: 't1' }],
+      dishes: [{ id: 'd1', price: 12 }],
+      completedCustomers: [],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      restaurant: { ...baseState.restaurant, reputation: 4.9 },
+      upgrades: [{ level: 2, effects: { type: 'reputationGain', value: 0.01 } }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.restaurant.reputation).toBeCloseTo(4.91836);
+    expect(result.completedCustomers[0].tip).toBe(2.4);
+  });
+
   it('dual-role cashier-waiter takes orders when no payment is waiting', () => {
     const cashier = { id: 'cw1', name: 'Elena', role: 'cashier_waiter', morale: 80, x: 300, y: 300 };
     const state = {
@@ -357,6 +379,27 @@ describe('updateStaff', () => {
     expect(result.customers[0].dishId).toBe('d1');
     expect(result.customers[0].orderTime).toBe(100);
     expect(result.staff[0].task).toBeNull();
+  });
+
+  it('selects a better-value dish over an overpriced popular dish', () => {
+    const waiter = {
+      id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220,
+      path: [], task: { type: 'take_order', customerId: 'c1' },
+    };
+    const state = {
+      ...baseState,
+      staff: [waiter],
+      customers: [{ id: 'c1', state: 'seated', dishId: null, tableId: 't1', patience: 100 }],
+      tables: [{ id: 't1', seats: 2, status: 'occupied', x: 200, y: 220 }],
+      dishes: [
+        { id: 'good-value', popularity: 70, quality: 7, price: 20 },
+        { id: 'overpriced', popularity: 90, quality: 8, price: 100 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers[0].dishId).toBe('good-value');
   });
 
   // --- Adapted existing tests ---

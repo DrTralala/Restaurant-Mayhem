@@ -2,6 +2,7 @@ import { isRestaurantOpen } from './clock';
 import { findPath, worldToCell } from './pathfinding';
 import { moveCharacterAlongPath } from './movement';
 import { getDoorPosition, getDoors, getQueuePosition } from './world';
+import { clampReputation, getQueuePatienceMultiplier, getUpgradeEffect } from './balance';
 
 let customerIdCounter = 0;
 let partyIdCounter = 0;
@@ -21,10 +22,12 @@ function chooseParty() {
 export function spawnCustomers(state, dt = 1) {
   if (!isRestaurantOpen(state)) return state;
 
-  const marketingLevel = (state.upgrades || []).find(upgrade => upgrade.effects?.type === 'customerRate')?.level || 0;
+  const queuedParties = new Set((state.queue || []).map((customer, index) => customer.partyId ?? customer.id ?? index)).size;
+  if (queuedParties >= 8) return state;
+
   const spawnRatePerSecond = 0.018
     + (state.restaurant.reputation - 1) * 0.004
-    + marketingLevel * 0.002;
+    + getUpgradeEffect(state, 'customerRate');
   const spawnProbability = 1 - Math.exp(-spawnRatePerSecond * Math.max(0, dt));
   if (Math.random() > spawnProbability) return state;
 
@@ -41,7 +44,7 @@ export function spawnCustomers(state, dt = 1) {
       archetype,
       gender: Math.random() < 0.5 ? 'male' : 'female',
       patience: patienceMap[archetype],
-      happiness: 80,
+      happiness: 80 + getUpgradeEffect(state, 'happiness'),
       state: 'queued',
       dishId: null,
       tableId: null,
@@ -60,11 +63,16 @@ export function spawnCustomers(state, dt = 1) {
 }
 
 export function updateCustomers(state, dt) {
+  const patienceStates = new Set(['arriving', 'waiting', 'guided', 'seated', 'ordering', 'paying']);
+  let abandonmentCount = 0;
   let updatedCustomers = state.customers.map(c => {
-    const newPatience = Math.max(0, c.patience - dt);
+    const newPatience = patienceStates.has(c.state)
+      ? Math.max(0, c.patience - dt)
+      : c.patience;
 
-    if (newPatience <= 0 && c.state !== 'leaving') {
-      return { ...c, patience: 0, state: 'leaving', happiness: Math.max(0, c.happiness - 30) };
+    if (newPatience <= 0 && patienceStates.has(c.state)) {
+      if (!c.reputationApplied) abandonmentCount += 1;
+      return { ...c, patience: 0, state: 'leaving', happiness: Math.max(0, c.happiness - 30), reputationApplied: true };
     }
 
     let newState = c.state;
@@ -75,10 +83,11 @@ export function updateCustomers(state, dt) {
     return { ...c, patience: newPatience, state: newState };
   });
 
-  // Update queue: decrement patience, remove those who run out
+  // Update queue: apply party pressure to patience, then remove those who run out.
+  const queuePatienceMultiplier = getQueuePatienceMultiplier(state.queue);
   let updatedQueue = state.queue.map(q => ({
     ...q,
-    patience: Math.max(0, q.patience - dt),
+    patience: Math.max(0, q.patience - dt * queuePatienceMultiplier),
   }));
 
   // Separate queue members whose patience expired
@@ -87,11 +96,13 @@ export function updateCustomers(state, dt) {
 
   // If dead queue members exist, add them as leaving customers (reputation penalty)
   if (deadQueue.length > 0) {
+    abandonmentCount += deadQueue.filter(customer => !customer.reputationApplied).length;
     updatedCustomers = [...updatedCustomers, ...deadQueue.map(q => ({
       ...q,
       state: 'leaving',
       happiness: Math.max(0, q.happiness - 30),
       tableId: null,
+      reputationApplied: true,
     }))];
   }
 
@@ -176,6 +187,12 @@ export function updateCustomers(state, dt) {
 
   return {
     ...state,
+    restaurant: abandonmentCount > 0
+      ? {
+          ...state.restaurant,
+          reputation: clampReputation(state.restaurant.reputation - abandonmentCount * 0.02),
+        }
+      : state.restaurant,
     customers: updatedCustomers,
     queue: updatedQueue,
     tables: updatedTables,

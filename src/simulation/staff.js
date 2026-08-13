@@ -1,6 +1,7 @@
 import { findAdjacentOpenCells, findPath, worldToCell } from './pathfinding';
 import { ensureStaffRuntime, hasArrived, moveCharacterAlongPath, moveCharacterTowards, moveStaffAlongPath } from './movement';
 import { getCashierWorkPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
+import { clampReputation, getDishValueScore, getTipRate, getUpgradeEffect } from './balance';
 
 function occupiedCharacterCells(staff, customers, excludeId) {
   return new Set([...staff, ...customers]
@@ -52,7 +53,7 @@ function findReachableTable(state, tables, staff, partySize = 1) {
 
 function bestDish(dishes) {
   if (!dishes || !dishes.length) return null;
-  return dishes.reduce((best, d) => d.popularity > (best?.popularity || 0) ? d : best, dishes[0]);
+  return dishes.reduce((best, dish) => getDishValueScore(dish) > getDishValueScore(best) ? dish : best, dishes[0]);
 }
 
 function getParty(members, lead) {
@@ -223,10 +224,13 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
 
   if (staff.task.type === 'take_payment') {
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
-    if (!customer) return { staff, customers, queue, tables, foodItems, kitchenQueue };
+    if (!customer || customer.state !== 'paying') return { staff, customers, queue, tables, foodItems, kitchenQueue };
     const dish = state.dishes.find(candidate => candidate.id === customer.dishId);
     const price = dish?.price || 0;
-    const tip = Math.round(price * 0.20 * 100) / 100;
+    const happiness = Number.isFinite(customer.happiness) ? customer.happiness : 80;
+    const tip = Math.round(price * getTipRate(happiness) * 100) / 100;
+    const reputationGainEffect = getUpgradeEffect(state, 'reputationGain');
+    const reputationGain = (0.01 + happiness / 10000) * (1 + reputationGainEffect);
     const payment = {
       customerId: customer.id,
       day: state.restaurant.day || Math.floor(state.restaurant.gameTime / 86400) + 1,
@@ -244,7 +248,11 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
       foodItems: foodItems.map(food => food.customerId === customer.id ? { ...food, state: 'to_clean' } : food),
       tables: tables.map(table => table.id === customer.tableId && !remainingAtTable ? { ...table, status: 'dirty' } : table),
       completedCustomers: [...(state.completedCustomers || []), payment],
-      restaurant: { ...state.restaurant, totalServed: (state.restaurant.totalServed || 0) + 1 },
+      restaurant: {
+        ...state.restaurant,
+        totalServed: (state.restaurant.totalServed || 0) + 1,
+        reputation: clampReputation(state.restaurant.reputation + reputationGain),
+      },
     };
   }
 
