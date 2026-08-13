@@ -7,6 +7,7 @@ export function createInitialState() {
     restaurant: {
       name: 'My Restaurant',
       funds: 600,
+      dailyRevenue: 0,
       reputation: 2.0,
       day: 1,
       gameTime: 10 * 3600, // start at 10:00 AM
@@ -111,7 +112,7 @@ export function createInitialState() {
     upgrades: UPGRADES,
     milestones: MILESTONES,
     recipeSlots: 1,
-    staffSlots: 3,
+    staffSlots: 6,
     completedCustomers: [],
     dailyHistory: [],
     notifications: [],

@@ -8,7 +8,7 @@ export const EQUIPMENT = [
 
 export function getEquipmentLevelMultipliers(level) {
   return {
-    speedMultiplier: 1 - (level - 1) * 0.05,
+    speedMultiplier: 1 + (level - 1) * 0.1,
     qualityBonus: (level - 1) * 0.05,
   };
 }

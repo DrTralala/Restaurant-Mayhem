@@ -19,34 +19,51 @@ function makeState(overrides = {}) {
       { id: 's3', name: 'Luca', role: 'host', skill: 2, morale: 80, salary: 150 },
       { id: 's4', name: 'Mario', role: 'cook', skill: 4, morale: 80, salary: 200 },
     ],
-    staffSlots: 3,
+    staffSlots: 6,
     restaurant: { funds: 500 },
     ...overrides,
   };
 }
 
 describe('StaffPanel', () => {
-  it('shows + Hire button even when staff.length > staffSlots', () => {
-    const state = makeState(); // 4 staff, 3 slots
+  it('disables hiring when all six staff slots are used', () => {
+    const base = makeState();
+    const state = makeState({
+      staff: [
+        ...base.staff,
+        { id: 's5', name: 'Sofia', role: 'waiter', skill: 2, morale: 80, salary: 150 },
+        { id: 's6', name: 'Elena', role: 'host', skill: 2, morale: 80, salary: 150 },
+      ],
+    });
     useGameState.mockReturnValue(state);
     useDispatch.mockReturnValue(vi.fn());
 
     render(<StaffPanel />);
 
-    expect(screen.getByText('+ Hire')).toBeInTheDocument();
-    expect(screen.queryByText('Slots Full')).not.toBeInTheDocument();
+    expect(screen.getByText('+ Hire')).toBeDisabled();
   });
 
-  it('shows header Staff (current) without slots', () => {
+  it('shows current staff usage against available slots', () => {
     const base = makeState();
-    const state = makeState({ staff: [base.staff[0]], staffSlots: 3 });
+    const state = makeState({ staff: [base.staff[0]] });
     useGameState.mockReturnValue(state);
     useDispatch.mockReturnValue(vi.fn());
 
     render(<StaffPanel />);
 
-    expect(screen.getByText('Staff (1)')).toBeInTheDocument();
-    expect(screen.queryByText(/Staff \(1\/3\)/)).not.toBeInTheDocument();
+    expect(screen.getByText('Staff (1/6)')).toBeInTheDocument();
+  });
+
+  it('disables hire controls that are unaffordable', () => {
+    useGameState.mockReturnValue(makeState({ restaurant: { funds: 175 } }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+    fireEvent.click(screen.getByText('+ Hire'));
+
+    expect(screen.getByText('Cook')).toBeDisabled();
+    expect(screen.getByText('Waiter')).toBeEnabled();
+    expect(screen.getByText('Host')).toBeEnabled();
   });
 
   it('dispatches HIRE_STAFF when clicking a role hire button', () => {

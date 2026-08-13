@@ -44,13 +44,14 @@ export default function MenuPanel() {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <input
-              type="number" value={dish.price} min={1}
+              type="number" value={dish.price} min={1} max={100}
               onChange={e => dispatch({ type: 'UPDATE_DISH', id: dish.id, changes: { price: Number(e.target.value) } })}
               style={{ background: '#111', color: '#ccc', border: '1px solid #333', padding: '4px 8px', borderRadius: 4, width: 80 }}
               title="Edit price"
             />
             <button
-              onClick={() => dispatch({ type: 'UPDATE_DISH', id: dish.id, changes: { quality: Math.min(dish.quality + 1, 10) } })}
+              onClick={() => dispatch({ type: 'UPGRADE_DISH_QUALITY', id: dish.id })}
+              disabled={dish.quality >= 10 || state.restaurant.funds < 50}
               style={{ background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}
             >
               + Quality ($50)

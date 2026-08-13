@@ -1,6 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { GameProvider, useDispatch, useGameState } from './GameContext';
+import { createInitialState } from './initialState';
 
 function StaffNameHarness() {
   const state = useGameState();
@@ -46,12 +47,40 @@ function ItemHarness() {
       <span data-testid="table-count">{state.tables.length}</span>
       <span data-testid="chair-count">{state.chairs.length}</span>
       <span data-testid="door-count">{state.doors.length}</span>
-      <button onClick={() => dispatch({ type: 'BUY_TABLE', cost: 300 })}>Buy table</button>
-      <button onClick={() => dispatch({ type: 'BUY_CHAIR', cost: 50 })}>Buy chair</button>
+      <button onClick={() => dispatch({ type: 'BUY_TABLE', cost: 1 })}>Buy table</button>
+      <button onClick={() => dispatch({ type: 'BUY_CHAIR', cost: 1 })}>Buy chair</button>
       <button onClick={() => dispatch({ type: 'SELL_ITEMS', items: [{ type: 'chair', id: 'ch1' }] })}>Sell chair</button>
-      <button onClick={() => dispatch({ type: 'BUY_DOOR', cost: 400 })}>Buy door</button>
+      <button onClick={() => dispatch({ type: 'BUY_DOOR', cost: 1 })}>Buy door</button>
     </>
   );
+}
+
+function ReducerHarness({ current }) {
+  const state = useGameState();
+  const dispatch = useDispatch();
+  current.state = state;
+  current.dispatch = dispatch;
+  return null;
+}
+
+function renderReducer(overrides = {}) {
+  const initial = createInitialState();
+  const saved = {
+    ...initial,
+    ...overrides,
+    restaurant: { ...initial.restaurant, ...(overrides.restaurant || {}) },
+  };
+  localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
+  const current = {};
+  render(<GameProvider><ReducerHarness current={current} /></GameProvider>);
+  return {
+    dispatch(action) {
+      act(() => current.dispatch(action));
+    },
+    get state() {
+      return current.state;
+    },
+  };
 }
 
 describe('GameProvider staff actions', () => {
@@ -125,5 +154,137 @@ describe('GameProvider furniture actions', () => {
 
     expect(screen.getByTestId('funds')).toHaveTextContent('200');
     expect(screen.getByTestId('door-count')).toHaveTextContent('2');
+  });
+});
+
+describe('GameProvider guarded economy actions', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('uses the selected upgrade state to derive its cost and maximum level', () => {
+    const game = renderReducer({ restaurant: { funds: 1000 } });
+
+    game.dispatch({ type: 'BUY_UPGRADE', id: 'u3', cost: 1 });
+
+    expect(game.state.restaurant.funds).toBe(600);
+    expect(game.state.upgrades.find(upgrade => upgrade.id === 'u3').level).toBe(1);
+
+    const maxedUpgrades = game.state.upgrades.map(upgrade =>
+      upgrade.id === 'u3' ? { ...upgrade, level: upgrade.costs.length } : upgrade);
+    game.dispatch({ type: 'LOAD_STATE', state: { ...game.state, upgrades: maxedUpgrades } });
+    game.dispatch({ type: 'BUY_UPGRADE', id: 'u3', cost: -1000 });
+    expect(game.state.restaurant.funds).toBe(600);
+    expect(game.state.upgrades.find(upgrade => upgrade.id === 'u3').level).toBe(4);
+  });
+
+  it('only buys equipment when it exists, is unowned, is affordable, and has a free station', () => {
+    const game = renderReducer({ restaurant: { funds: 500 } });
+
+    game.dispatch({ type: 'BUY_EQUIPMENT', id: 'missing', cost: 0 });
+    expect(game.state.restaurant.funds).toBe(500);
+
+    game.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq2', cost: 0 });
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.equipment.find(equipment => equipment.id === 'eq2').owned).toBe(true);
+    expect(game.state.kitchenStations.find(station => station.id === 'k2').equipmentId).toBe('eq2');
+
+    game.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq2', cost: -500 });
+    expect(game.state.restaurant.funds).toBe(0);
+  });
+
+  it('rejects equipment purchases without enough funds or a free station', () => {
+    const noFunds = renderReducer({ restaurant: { funds: 499 } });
+    noFunds.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq2', cost: 0 });
+    expect(noFunds.state.equipment.find(equipment => equipment.id === 'eq2').owned).toBe(false);
+    expect(noFunds.state.restaurant.funds).toBe(499);
+
+    const fullKitchen = renderReducer({
+      restaurant: { funds: 500 },
+      kitchenStations: [
+        { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
+        { id: 'k2', equipmentId: 'eq3', x: 200, y: 120 },
+      ],
+    });
+    fullKitchen.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq2', cost: 0 });
+    expect(fullKitchen.state.equipment.find(equipment => equipment.id === 'eq2').owned).toBe(false);
+    expect(fullKitchen.state.restaurant.funds).toBe(500);
+  });
+
+  it('updates equipment level multipliers using the canonical upgrade cost', () => {
+    const game = renderReducer({ restaurant: { funds: 100 } });
+
+    game.dispatch({ type: 'UPGRADE_EQUIPMENT', id: 'eq1', cost: 0 });
+
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.equipment.find(equipment => equipment.id === 'eq1')).toMatchObject({
+      level: 2,
+      speedMultiplier: 1.1,
+      qualityBonus: 0.05,
+    });
+  });
+
+  it('stops hiring at the staff slot limit and when salary is unaffordable', () => {
+    const game = renderReducer({ restaurant: { funds: 300 } });
+    const makeStaff = id => ({ id, name: id, role: 'waiter', skill: 1, morale: 80, salary: 150 });
+
+    game.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('fifth') });
+    game.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('sixth') });
+    game.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('seventh') });
+
+    expect(game.state.staff).toHaveLength(6);
+    expect(game.state.restaurant.funds).toBe(0);
+
+    const unaffordable = renderReducer({ restaurant: { funds: 149 } });
+    unaffordable.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('fifth') });
+    expect(unaffordable.state.staff).toHaveLength(4);
+    expect(unaffordable.state.restaurant.funds).toBe(149);
+
+    const invalidSalary = renderReducer({ restaurant: { funds: 1000 } });
+    invalidSalary.dispatch({
+      type: 'HIRE_STAFF',
+      staff: { ...makeStaff('invalid'), salary: Number.POSITIVE_INFINITY },
+    });
+    expect(invalidSalary.state.staff).toHaveLength(4);
+    expect(invalidSalary.state.restaurant.funds).toBe(1000);
+  });
+
+  it('does not let staff development or service counters overdraw funds', () => {
+    const training = renderReducer({ restaurant: { funds: 100 } });
+    training.dispatch({ type: 'TRAIN_STAFF', id: 'starter-cook', cost: 0 });
+    expect(training.state.restaurant.funds).toBe(0);
+    expect(training.state.staff.find(staff => staff.id === 'starter-cook').skill).toBe(4);
+
+    training.dispatch({ type: 'GIVE_BONUS', id: 'starter-cook', cost: -100 });
+    expect(training.state.restaurant.funds).toBe(0);
+    expect(training.state.staff.find(staff => staff.id === 'starter-cook').morale).toBe(80);
+
+    const service = renderReducer({ restaurant: { funds: 299 } });
+    service.dispatch({ type: 'BUY_SERVICE_TABLE', cost: 0 });
+    expect(service.state.restaurant.funds).toBe(299);
+    expect(service.state.serviceTables).toHaveLength(1);
+  });
+
+  it('enforces recipe slots, price limits, and paid dish quality', () => {
+    const game = renderReducer({ restaurant: { funds: 50 } });
+    const extraDish = { ...game.state.dishes[0], id: 'extra-dish' };
+
+    game.dispatch({ type: 'ADD_DISH', dish: extraDish });
+    expect(game.state.dishes).toHaveLength(1);
+
+    game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: -20, quality: 10 } });
+    expect(game.state.dishes[0]).toMatchObject({ price: 1, quality: 1 });
+
+    game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 101 } });
+    expect(game.state.dishes[0].price).toBe(100);
+
+    game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: 0 });
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.dishes[0].quality).toBe(2);
+
+    game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: -50 });
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.dishes[0].quality).toBe(2);
+
+    game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: Number.POSITIVE_INFINITY } });
+    expect(game.state.dishes[0].price).toBe(100);
   });
 });

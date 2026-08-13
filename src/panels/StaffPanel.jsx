@@ -16,6 +16,7 @@ export default function StaffPanel() {
   const [showHire, setShowHire] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
+  const staffFull = state.staff.length >= state.staffSlots;
 
   const handleHire = (role) => {
     const usedNames = new Set(state.staff.map(staff => staff.name.toLowerCase()));
@@ -24,6 +25,7 @@ export default function StaffPanel() {
     const name = namePool[Math.floor(Math.random() * namePool.length)];
     const skill = 1 + Math.floor(Math.random() * 3);
     const salary = role === 'cook' ? 200 : 150;
+    if (staffFull || state.restaurant.funds < salary) return;
     dispatch({
       type: 'HIRE_STAFF',
       staff: {
@@ -59,8 +61,8 @@ export default function StaffPanel() {
   return (
     <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h3 style={{ color: '#f0a500', margin: 0 }}>Staff ({state.staff.length})</h3>
-        <button onClick={() => setShowHire(!showHire)} style={{
+        <h3 style={{ color: '#f0a500', margin: 0 }}>Staff ({state.staff.length}/{state.staffSlots})</h3>
+        <button onClick={() => setShowHire(!showHire)} disabled={staffFull} style={{
           background: '#f0a500', color: '#111', border: 'none',
           padding: '6px 14px', borderRadius: 4, cursor: 'pointer', fontSize: 13,
         }}>
@@ -72,7 +74,8 @@ export default function StaffPanel() {
         <div style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, marginBottom: 12 }}>
           <h4 style={{ marginBottom: 8 }}>Hire Staff</h4>
           {ROLES.map(role => (
-            <button key={role} onClick={() => handleHire(role)} style={{
+            <button key={role} onClick={() => handleHire(role)}
+              disabled={staffFull || state.restaurant.funds < (role === 'cook' ? 200 : 150)} style={{
               background: '#333', color: '#ccc', border: '1px solid #555',
               padding: '8px 14px', borderRadius: 4, cursor: 'pointer', marginRight: 8, marginBottom: 4,
             }}>

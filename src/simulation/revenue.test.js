@@ -2,6 +2,30 @@ import { describe, it, expect } from 'vitest';
 import { calculateRevenue } from './revenue';
 
 describe('calculateRevenue', () => {
+  it('adds completed payments to funds and daily revenue', () => {
+    const state = {
+      restaurant: { funds: 100, dailyRevenue: 5 },
+      completedCustomers: [{ customerId: 'c1', revenue: 14.40 }],
+    };
+
+    const result = calculateRevenue(state);
+
+    expect(result.restaurant.funds).toBeCloseTo(114.40);
+    expect(result.restaurant.dailyRevenue).toBeCloseTo(19.40);
+    expect(result.completedCustomers).toEqual([]);
+  });
+
+  it('defaults missing daily revenue to zero', () => {
+    const state = {
+      restaurant: { funds: 100 },
+      completedCustomers: [{ customerId: 'c1', revenue: 14.40 }],
+    };
+
+    const result = calculateRevenue(state);
+
+    expect(result.restaurant.dailyRevenue).toBeCloseTo(14.40);
+  });
+
   it('computes revenue from completed customers', () => {
     const state = {
       restaurant: { funds: 100, reputation: 3.0, gameTime: 0 },

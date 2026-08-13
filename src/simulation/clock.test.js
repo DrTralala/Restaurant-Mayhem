@@ -14,6 +14,78 @@ describe('advanceClock', () => {
     const result = advanceClock(state, 1);
     expect(result.restaurant.day).toBe(2);
   });
+
+  it('does not run payroll when time moves backwards', () => {
+    const state = {
+      restaurant: { funds: 1000, dailyRevenue: 200, gameTime: 86400, day: 2 },
+      staff: [{ salary: 100 }],
+      dailyHistory: [],
+      notifications: [],
+    };
+
+    const result = advanceClock(state, -1);
+
+    expect(result.restaurant).toMatchObject({ funds: 1000, dailyRevenue: 200, day: 2 });
+    expect(result.dailyHistory).toEqual([]);
+    expect(result.notifications).toEqual([]);
+  });
+
+  it('closes the day with revenue, payroll, profit, and a notification', () => {
+    const state = {
+      restaurant: {
+        funds: 1000,
+        dailyRevenue: 200,
+        gameTime: 86399,
+        day: 1,
+        openHour: 10,
+        closeHour: 22,
+      },
+      staff: [
+        { id: 'cook', salary: 200 },
+        { id: 'waiter', salary: 150 },
+        { id: 'host', salary: 150 },
+        { id: 'cashier', salary: 150 },
+      ],
+      dailyHistory: [],
+      notifications: [],
+    };
+
+    const result = advanceClock(state, 1);
+
+    expect(result.restaurant).toMatchObject({
+      funds: 350,
+      dailyRevenue: 0,
+      day: 2,
+    });
+    expect(result.dailyHistory).toEqual([
+      { day: 1, revenue: 200, payroll: 650, profit: -450 },
+    ]);
+    expect(result.notifications).toHaveLength(1);
+    expect(result.notifications[0].message).toContain('Day 1');
+  });
+
+  it('deducts valid payroll once for each crossed midnight', () => {
+    const state = {
+      restaurant: { funds: 1000, dailyRevenue: 75, gameTime: 86399, day: 4 },
+      staff: [
+        { salary: 100 },
+        { salary: -20 },
+        { salary: Number.POSITIVE_INFINITY },
+      ],
+      dailyHistory: [],
+      notifications: [],
+    };
+
+    const result = advanceClock(state, 86401);
+
+    expect(result.restaurant.funds).toBe(800);
+    expect(result.restaurant.day).toBe(6);
+    expect(result.dailyHistory).toEqual([
+      { day: 4, revenue: 75, payroll: 100, profit: -25 },
+      { day: 5, revenue: 0, payroll: 100, profit: -100 },
+    ]);
+    expect(result.notifications).toHaveLength(2);
+  });
 });
 
 describe('isRestaurantOpen', () => {
