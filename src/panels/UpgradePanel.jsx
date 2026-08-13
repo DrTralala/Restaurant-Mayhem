@@ -1,4 +1,5 @@
 import { useGameState, useDispatch } from '../state/GameContext';
+import { getEquipmentLevelMultipliers } from '../data/equipment';
 
 export default function UpgradePanel() {
   const state = useGameState();
@@ -89,12 +90,17 @@ export default function UpgradePanel() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
         {state.equipment.map(eq => {
           const owned = eq.owned;
+          const multipliers = Number.isInteger(eq.level) && eq.level >= 1
+            ? getEquipmentLevelMultipliers(eq.level)
+            : getEquipmentLevelMultipliers(1);
+          const speedMultiplier = Number.isFinite(eq.speedMultiplier) ? eq.speedMultiplier : multipliers.speedMultiplier;
+          const qualityBonus = Number.isFinite(eq.qualityBonus) ? eq.qualityBonus : multipliers.qualityBonus;
           const nextCost = owned ? (eq.upgradeCosts[eq.level - 1] || 0) : eq.purchaseCost;
           const maxed = owned && eq.level >= 10;
           return (
             <div key={eq.id} style={{ background: owned ? '#1a2e1a' : '#1a1a2e', borderRadius: 8, padding: 12, border: `1px solid ${owned ? '#2a5a2a' : '#0f3460'}` }}>
               <strong>{eq.name}</strong>
-              <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>Speed: {(eq.speedMultiplier * 100).toFixed(0)}% · Quality: +{(eq.qualityBonus * 100).toFixed(0)}%</p>
+              <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>Speed: {(speedMultiplier * 100).toFixed(0)}% · Quality: +{(qualityBonus * 100).toFixed(0)}%</p>
               <p style={{ fontSize: 12, color: '#f0a500' }}>{owned ? `Lv.${eq.level}` : 'Not owned'} {maxed ? '(MAX)' : `→ $${nextCost}`}</p>
               <button
                 onClick={() => {

@@ -66,6 +66,15 @@ describe('StaffPanel', () => {
     expect(screen.getByText('Host')).toBeEnabled();
   });
 
+  it('disables the primary hire control when no role is affordable', () => {
+    useGameState.mockReturnValue(makeState({ restaurant: { funds: 149 } }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    expect(screen.getByText('+ Hire')).toBeDisabled();
+  });
+
   it('dispatches HIRE_STAFF when clicking a role hire button', () => {
     const dispatch = vi.fn();
     useGameState.mockReturnValue(makeState());

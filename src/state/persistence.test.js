@@ -73,4 +73,36 @@ describe('hydrateState', () => {
     expect(['male', 'female']).toContain(hydrated.queue[0].gender);
     expect(hydrateState(saved, fresh)).toEqual(hydrated);
   });
+
+  it('normalises equipment multipliers from saved levels', () => {
+    const fresh = {
+      version: 2,
+      restaurant: { funds: 500 },
+      staff: [], customers: [], queue: [],
+      equipment: [
+        { id: 'eq1', level: 1, speedMultiplier: 1, qualityBonus: 0, owned: true },
+        { id: 'eq2', level: 1, speedMultiplier: 1, qualityBonus: 0, owned: false },
+      ],
+    };
+    const saved = {
+      version: 2,
+      restaurant: { funds: 900 },
+      equipment: [
+        { id: 'eq1', level: 4, speedMultiplier: 0.85, qualityBonus: null, owned: true },
+        { id: 'eq2', level: 'bad', owned: false },
+      ],
+    };
+
+    const hydrated = hydrateState(saved, fresh);
+
+    expect(hydrated.version).toBe(2);
+    expect(hydrated.equipment[0].level).toBe(4);
+    expect(hydrated.equipment[0].speedMultiplier).toBeCloseTo(1.3);
+    expect(hydrated.equipment[0].qualityBonus).toBeCloseTo(0.15);
+    expect(hydrated.equipment[1]).toMatchObject({
+      level: 1,
+      speedMultiplier: 1,
+      qualityBonus: 0,
+    });
+  });
 });

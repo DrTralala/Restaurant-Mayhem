@@ -109,6 +109,25 @@ describe('GameProvider staff actions', () => {
 
     expect(screen.getByText('$240')).toBeInTheDocument();
   });
+
+  it('rejects invalid salary adjustments and missing staff targets', () => {
+    const game = renderReducer();
+
+    game.dispatch({ type: 'SET_STAFF_SALARY', id: 'starter-cook', salary: -1 });
+    game.dispatch({ type: 'SET_STAFF_SALARY', id: 'starter-cook', salary: Number.POSITIVE_INFINITY });
+    game.dispatch({ type: 'SET_STAFF_SALARY', id: 'missing', salary: 250 });
+
+    expect(game.state.staff.find(staff => staff.id === 'starter-cook').salary).toBe(200);
+    expect(game.state.staff).toHaveLength(4);
+  });
+
+  it('preserves raise-only salary adjustment semantics', () => {
+    const game = renderReducer();
+
+    game.dispatch({ type: 'SET_STAFF_SALARY', id: 'starter-cook', salary: 190 });
+
+    expect(game.state.staff.find(staff => staff.id === 'starter-cook').salary).toBe(200);
+  });
 });
 
 describe('GameProvider furniture actions', () => {
@@ -238,13 +257,18 @@ describe('GameProvider guarded economy actions', () => {
     expect(unaffordable.state.staff).toHaveLength(4);
     expect(unaffordable.state.restaurant.funds).toBe(149);
 
-    const invalidSalary = renderReducer({ restaurant: { funds: 1000 } });
-    invalidSalary.dispatch({
+    const forgedSalary = renderReducer({ restaurant: { funds: 150 } });
+    forgedSalary.dispatch({ type: 'HIRE_STAFF', staff: { ...makeStaff('forged'), salary: 0 } });
+    expect(forgedSalary.state.restaurant.funds).toBe(0);
+    expect(forgedSalary.state.staff.at(-1).salary).toBe(150);
+
+    const unknownRole = renderReducer({ restaurant: { funds: 1000 } });
+    unknownRole.dispatch({
       type: 'HIRE_STAFF',
-      staff: { ...makeStaff('invalid'), salary: Number.POSITIVE_INFINITY },
+      staff: { ...makeStaff('invalid'), role: 'manager', salary: 0 },
     });
-    expect(invalidSalary.state.staff).toHaveLength(4);
-    expect(invalidSalary.state.restaurant.funds).toBe(1000);
+    expect(unknownRole.state.staff).toHaveLength(4);
+    expect(unknownRole.state.restaurant.funds).toBe(1000);
   });
 
   it('does not let staff development or service counters overdraw funds', () => {
@@ -286,5 +310,39 @@ describe('GameProvider guarded economy actions', () => {
 
     game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: Number.POSITIVE_INFINITY } });
     expect(game.state.dishes[0].price).toBe(100);
+  });
+
+  it('canonicalises valid dish creation and rejects malformed dishes', () => {
+    const initial = createInitialState();
+    const game = renderReducer({ dishes: [], recipeSlots: 3 });
+    const validDish = {
+      ...initial.dishes[0],
+      id: 'new-dish',
+      price: 100.6,
+      quality: 10,
+    };
+
+    game.dispatch({ type: 'ADD_DISH', dish: validDish });
+    expect(game.state.dishes).toEqual([{ ...validDish, price: 100, quality: 1 }]);
+
+    game.dispatch({ type: 'ADD_DISH', dish: { ...validDish, id: 'bad-price', price: Number.NaN } });
+    game.dispatch({ type: 'ADD_DISH', dish: { ...validDish, id: 'bad-quality', quality: Number.NaN } });
+    game.dispatch({ type: 'ADD_DISH', dish: { ...validDish, id: 'zero-quality', quality: 0 } });
+    game.dispatch({ type: 'ADD_DISH', dish: { ...validDish, id: '' } });
+
+    expect(game.state.dishes).toHaveLength(1);
+  });
+
+  it('normalises fractional quality before enforcing the paid maximum', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      restaurant: { funds: 50 },
+      dishes: [{ ...initial.dishes[0], quality: 9.5 }],
+    });
+
+    game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast' });
+
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.dishes[0].quality).toBe(10);
   });
 });

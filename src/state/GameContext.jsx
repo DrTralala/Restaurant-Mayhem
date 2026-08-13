@@ -8,6 +8,8 @@ const DISH_QUALITY_COST = 50;
 const TRAINING_COST = 100;
 const BONUS_COST = 50;
 const SERVICE_TABLE_COST = 300;
+const STARTING_DISH_QUALITY = 1;
+const STAFF_SALARIES = { cook: 200, waiter: 150, host: 150 };
 
 function canAfford(state, cost) {
   return Number.isFinite(cost)
@@ -27,9 +29,22 @@ function gameReducer(state, action) {
       return { ...state, speed: action.speed };
     case 'TOGGLE_PAUSE':
       return { ...state, paused: !state.paused };
-    case 'ADD_DISH':
-      if (!action.dish || state.dishes.length >= state.recipeSlots) return state;
-      return { ...state, dishes: [...state.dishes, action.dish] };
+    case 'ADD_DISH': {
+      const dish = action.dish;
+      if (!dish || state.dishes.length >= state.recipeSlots
+        || typeof dish.id !== 'string' || !dish.id
+        || typeof dish.name !== 'string' || !dish.name.trim()
+        || !Number.isFinite(dish.price) || !Number.isFinite(dish.quality)
+        || dish.quality < STARTING_DISH_QUALITY) return state;
+      return {
+        ...state,
+        dishes: [...state.dishes, {
+          ...dish,
+          price: Math.min(100, Math.max(1, Math.round(dish.price))),
+          quality: STARTING_DISH_QUALITY,
+        }],
+      };
+    }
     case 'REMOVE_DISH':
       return { ...state, dishes: state.dishes.filter(d => d.id !== action.id) };
     case 'UPDATE_DISH': {
@@ -50,13 +65,14 @@ function gameReducer(state, action) {
     }
     case 'UPGRADE_DISH_QUALITY': {
       const dish = state.dishes.find(candidate => candidate.id === action.id);
-      if (!dish || !Number.isFinite(dish.quality) || dish.quality >= 10
+      const quality = Math.min(10, Math.max(0, Math.floor(dish?.quality)));
+      if (!dish || !Number.isFinite(dish.quality) || quality >= 10
         || !canAfford(state, DISH_QUALITY_COST)) return state;
       return {
         ...state,
         restaurant: { ...state.restaurant, funds: state.restaurant.funds - DISH_QUALITY_COST },
         dishes: state.dishes.map(candidate => candidate.id === dish.id
-          ? { ...candidate, quality: candidate.quality + 1 }
+          ? { ...candidate, quality: quality + 1 }
           : candidate),
       };
     }
@@ -106,13 +122,13 @@ function gameReducer(state, action) {
       };
     }
     case 'HIRE_STAFF': {
-      const salary = action.staff?.salary;
+      const salary = STAFF_SALARIES[action.staff?.role];
       if (!action.staff || state.staff.length >= state.staffSlots
-        || !Number.isFinite(salary) || salary < 0 || !canAfford(state, salary)) return state;
+        || salary == null || !canAfford(state, salary)) return state;
       return {
         ...state,
         restaurant: { ...state.restaurant, funds: state.restaurant.funds - salary },
-        staff: [...state.staff, action.staff],
+        staff: [...state.staff, { ...action.staff, salary }],
       };
     }
     case 'FIRE_STAFF':
@@ -124,13 +140,16 @@ function gameReducer(state, action) {
           s.id === action.id ? { ...s, name: action.name } : s
         ),
       };
-    case 'SET_STAFF_SALARY':
+    case 'SET_STAFF_SALARY': {
+      const staff = state.staff.find(candidate => candidate.id === action.id);
+      if (!staff || !Number.isFinite(action.salary) || action.salary < staff.salary) return state;
       return {
         ...state,
         staff: state.staff.map(s =>
           s.id === action.id ? { ...s, salary: action.salary } : s
         ),
       };
+    }
     case 'TRAIN_STAFF': {
       const staff = state.staff.find(candidate => candidate.id === action.id);
       if (!staff || !Number.isFinite(staff.skill) || staff.skill >= 10

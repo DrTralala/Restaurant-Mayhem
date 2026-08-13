@@ -20,12 +20,15 @@ export default function RecipeCreator({ onClose }) {
     ? state.equipment.find(e => e.id === requiredEquipmentId)
     : null;
 
-  const canCreate = equipment?.owned && dishName.trim() && price > 0 && state.recipeSlots > state.dishes.length;
+  const numericPrice = Number(price);
+  const validPrice = Number.isInteger(numericPrice) && numericPrice >= 1 && numericPrice <= 100;
+  const canCreate = equipment?.owned && dishName.trim() && validPrice && state.recipeSlots > state.dishes.length;
 
   const handleCreate = () => {
     if (!canCreate) {
       if (!equipment?.owned) setError(`You need to own a ${equipment?.name || 'required equipment'} first.`);
       else if (state.dishes.length >= state.recipeSlots) setError('No recipe slots available. Complete milestones to unlock more.');
+      else if (!validPrice) setError('Price must be a whole number from $1 to $100.');
       return;
     }
 
@@ -34,7 +37,7 @@ export default function RecipeCreator({ onClose }) {
       name: dishName.trim() || `${method} ${base}`,
       base,
       method,
-      price: Number(price),
+      price: numericPrice,
       prepTime: 120 + Math.floor(Math.random() * 120),
       quality: 1,
       popularity: 30 + Math.floor(Math.random() * 30),
@@ -73,8 +76,9 @@ export default function RecipeCreator({ onClose }) {
       </div>
 
       <div style={{ marginBottom: 8 }}>
-        <label>Dish Name:</label>
+        <label htmlFor="dish-name">Dish Name:</label>
         <input
+          id="dish-name"
           value={dishName}
           onChange={e => setDishName(e.target.value)}
           placeholder={`${method} ${base}`}
@@ -83,9 +87,10 @@ export default function RecipeCreator({ onClose }) {
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <label>Price: $</label>
+        <label htmlFor="dish-price">Price: $</label>
         <input
-          type="number" value={price} min={1}
+          id="dish-price"
+          type="number" value={price} min={1} max={100} step={1}
           onChange={e => setPrice(e.target.value)}
           style={{ ...inputStyle, width: 80, marginLeft: 4 }}
         />

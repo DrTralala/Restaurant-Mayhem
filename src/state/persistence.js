@@ -1,5 +1,6 @@
 const SAVE_KEY = 'restaurant-sim-save';
 import { inferGender } from '../canvas/characterAppearance';
+import { getEquipmentLevelMultipliers } from '../data/equipment';
 
 export function saveState(state) {
   try {
@@ -22,7 +23,7 @@ export function loadState() {
 }
 
 export function hydrateState(saved, fresh) {
-  return {
+  const hydrated = {
     ...fresh,
     ...saved,
     restaurant: {
@@ -42,4 +43,23 @@ export function hydrateState(saved, fresh) {
       gender: inferGender(character),
     })),
   };
+
+  if (saved.equipment || fresh.equipment) {
+    hydrated.equipment = (saved.equipment || fresh.equipment).map((equipment, index) => {
+      const fallback = fresh.equipment?.find(candidate => candidate.id === equipment?.id)
+        || fresh.equipment?.[index]
+        || {};
+      const level = Number.isInteger(equipment?.level) && equipment.level >= 1
+        ? equipment.level
+        : (Number.isInteger(fallback.level) && fallback.level >= 1 ? fallback.level : 1);
+      return {
+        ...fallback,
+        ...equipment,
+        level,
+        ...getEquipmentLevelMultipliers(level),
+      };
+    });
+  }
+
+  return hydrated;
 }

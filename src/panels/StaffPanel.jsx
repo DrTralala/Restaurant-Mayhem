@@ -17,6 +17,7 @@ export default function StaffPanel() {
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
   const staffFull = state.staff.length >= state.staffSlots;
+  const canAffordAnyRole = state.restaurant.funds >= 150;
 
   const handleHire = (role) => {
     const usedNames = new Set(state.staff.map(staff => staff.name.toLowerCase()));
@@ -62,7 +63,7 @@ export default function StaffPanel() {
     <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 style={{ color: '#f0a500', margin: 0 }}>Staff ({state.staff.length}/{state.staffSlots})</h3>
-        <button onClick={() => setShowHire(!showHire)} disabled={staffFull} style={{
+        <button onClick={() => setShowHire(!showHire)} disabled={staffFull || !canAffordAnyRole} style={{
           background: '#f0a500', color: '#111', border: 'none',
           padding: '6px 14px', borderRadius: 4, cursor: 'pointer', fontSize: 13,
         }}>
