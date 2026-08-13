@@ -41,14 +41,14 @@ describe('createInitialState', () => {
     expect(createInitialState().doors).toEqual([{ id: 'door1', y: 340 }]);
   });
 
-  it('starts with a top-right cashier station and a dual-role cashier-waitress', () => {
+  it('starts with one cook and three generic waiters', () => {
     const state = createInitialState();
 
-    expect(state.cashierStations).toEqual([
-      expect.objectContaining({ id: 'cashier1', x: 800, y: 120 }),
-    ]);
-    expect(state.staff).toContainEqual(expect.objectContaining({
-      name: 'Elena', role: 'cashier_waiter', gender: 'female',
-    }));
+    expect(state.version).toBe(3);
+    expect(state.staff.map(staff => staff.role)).toEqual(['cook', 'waiter', 'waiter', 'waiter']);
+    expect(state.cashierStations[0]).toMatchObject({
+      id: 'cashier1',
+      assignedStaffId: 'starter-cashier-waiter',
+    });
   });
 });

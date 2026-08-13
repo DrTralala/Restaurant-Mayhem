@@ -1,7 +1,7 @@
 import { cellToWorld } from './pathfinding';
 import { getDefaultStaffPosition } from './world';
 
-const ROLE_SPEED = { host: 65, waiter: 75, cashier_waiter: 72, cashier: 60, cook: 55 };
+const ROLE_SPEED = { waiter: 75, cook: 55 };
 
 export function ensureStaffRuntime(staff, state) {
   return (staff || []).map((s, index) => {

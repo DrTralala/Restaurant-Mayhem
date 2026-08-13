@@ -10,7 +10,7 @@ const TRAINING_COST = 100;
 const BONUS_COST = 50;
 const SERVICE_TABLE_COST = 300;
 const STARTING_DISH_QUALITY = 1;
-const STAFF_SALARIES = { cook: 200, waiter: 150, host: 150 };
+const STAFF_SALARIES = { cook: 200, waiter: 150 };
 const EXPANSION_COSTS = [0, 1000, 3000, 6000];
 
 function canAfford(state, cost) {

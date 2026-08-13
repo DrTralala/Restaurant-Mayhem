@@ -67,11 +67,5 @@ export function getCashierWorkPosition(station) {
 export function getDefaultStaffPosition(role, index = 0, state = {}) {
   const world = getRestaurantWorld(state.restaurant || {});
   if (role === 'cook') return { x: world.floorX + 40 + index * 45, y: world.kitchenY + 25 };
-  if (role === 'host') return { x: world.doorX - 35 - index * 20, y: world.doorY + 20 };
-  if (role === 'cashier' || role === 'cashier_waiter') {
-    const station = state.cashierStations?.[0];
-    if (station) return getCashierWorkPosition(station);
-    if (role === 'cashier_waiter') return { x: world.doorX - 90, y: world.diningY + 40 };
-  }
   return { x: world.floorX + world.floorW / 2 + index * 25, y: world.diningY + world.areaH / 2 };
 }

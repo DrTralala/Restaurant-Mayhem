@@ -21,9 +21,7 @@ export default function StaffDetailsPanel({ staff, dispatch, onClose }) {
 
   useEffect(() => setSalary(staff.salary), [staff.id, staff.salary]);
 
-  const role = staff.role === 'cashier_waiter'
-    ? 'Cashier + Waiter'
-    : staff.role.charAt(0).toUpperCase() + staff.role.slice(1);
+  const role = staff.role.charAt(0).toUpperCase() + staff.role.slice(1);
   const task = taskLabels[staff.task?.type] || 'Available';
 
   return (

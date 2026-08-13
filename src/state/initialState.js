@@ -41,7 +41,9 @@ export function createInitialState() {
       { id: 'ch12', tableId: 't4', x: 400, y: 370, rotation: 3 },
     ],
     doors: [{ id: 'door1', y: 340 }],
-    cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+    cashierStations: [{
+      id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'starter-cashier-waiter',
+    }],
     kitchenStations: [
       { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
       { id: 'k2', equipmentId: null, x: 200, y: 120 },
@@ -76,7 +78,7 @@ export function createInitialState() {
         id: 'starter-host',
         name: 'Luca',
         gender: 'male',
-        role: 'host',
+        role: 'waiter',
         skill: 2,
         morale: 80,
         salary: 150,
@@ -85,7 +87,7 @@ export function createInitialState() {
         id: 'starter-cashier-waiter',
         name: 'Elena',
         gender: 'female',
-        role: 'cashier_waiter',
+        role: 'waiter',
         skill: 2,
         morale: 80,
         salary: 150,
@@ -118,6 +120,6 @@ export function createInitialState() {
     notifications: [],
     speed: 1,
     paused: false,
-    version: 2,
+    version: 3,
   };
 }

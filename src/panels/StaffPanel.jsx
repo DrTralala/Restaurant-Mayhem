@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { getNameGender } from '../canvas/characterAppearance';
 
-const ROLES = ['cook', 'waiter', 'host'];
+const ROLES = ['cook', 'waiter'];
 const NAMES = ['Marco', 'Anna', 'Luca', 'Sofia', 'Giovanni', 'Isabella', 'Mario', 'Elena'];
 
 const smallBtn = {
@@ -104,7 +104,7 @@ export default function StaffPanel() {
             ) : (
               <strong>{s.name}</strong>
             )}
-            <span style={{ color: '#888' }}>{s.role === 'cashier_waiter' ? 'cashier + waiter' : s.role} · ${s.salary}/day</span>
+            <span style={{ color: '#888' }}>{s.role} · ${s.salary}/day</span>
           </div>
           <div style={{ fontSize: 12, margin: '4px 0' }}>
             Skill: {'█'.repeat(s.skill)}{'░'.repeat(10 - s.skill)}

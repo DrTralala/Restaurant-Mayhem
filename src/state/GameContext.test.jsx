@@ -86,6 +86,15 @@ function renderReducer(overrides = {}) {
 describe('GameProvider staff actions', () => {
   beforeEach(() => localStorage.clear());
 
+  it('uses fresh state when a saved state has an older version', () => {
+    const saved = { ...createInitialState(), version: 2, restaurant: { funds: 999 } };
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
+
+    render(<GameProvider><ItemHarness /></GameProvider>);
+
+    expect(screen.getByTestId('funds')).toHaveTextContent('600');
+  });
+
   it('renames only the selected staff member', () => {
     render(
       <GameProvider>

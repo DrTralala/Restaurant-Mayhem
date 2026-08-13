@@ -16,7 +16,7 @@ function makeState(overrides = {}) {
     staff: [
       { id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 },
       { id: 's2', name: 'Anna', role: 'waiter', skill: 3, morale: 80, salary: 150 },
-      { id: 's3', name: 'Luca', role: 'host', skill: 2, morale: 80, salary: 150 },
+      { id: 's3', name: 'Luca', role: 'waiter', skill: 2, morale: 80, salary: 150 },
       { id: 's4', name: 'Mario', role: 'cook', skill: 4, morale: 80, salary: 200 },
     ],
     staffSlots: 6,
@@ -32,7 +32,7 @@ describe('StaffPanel', () => {
       staff: [
         ...base.staff,
         { id: 's5', name: 'Sofia', role: 'waiter', skill: 2, morale: 80, salary: 150 },
-        { id: 's6', name: 'Elena', role: 'host', skill: 2, morale: 80, salary: 150 },
+        { id: 's6', name: 'Elena', role: 'waiter', skill: 2, morale: 80, salary: 150 },
       ],
     });
     useGameState.mockReturnValue(state);
@@ -63,7 +63,7 @@ describe('StaffPanel', () => {
 
     expect(screen.getByText('Cook')).toBeDisabled();
     expect(screen.getByText('Waiter')).toBeEnabled();
-    expect(screen.getByText('Host')).toBeEnabled();
+    expect(screen.queryByText('Host')).not.toBeInTheDocument();
   });
 
   it('disables the primary hire control when no role is affordable', () => {
