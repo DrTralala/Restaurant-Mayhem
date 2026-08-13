@@ -6,7 +6,7 @@ export function createInitialState() {
   return {
     restaurant: {
       name: 'My Restaurant',
-      funds: 500,
+      funds: 600,
       reputation: 2.0,
       day: 1,
       gameTime: 10 * 3600, // start at 10:00 AM
@@ -23,22 +23,24 @@ export function createInitialState() {
     ],
     chairs: [
       // t1 (2-seat)
-      { id: 'ch1', tableId: 't1', x: 210, y: 180, rotation: 0 },
+      { id: 'ch1', tableId: 't1', x: 210, y: 180, rotation: 2 },
       { id: 'ch2', tableId: 't1', x: 210, y: 240, rotation: 0 },
       // t2 (2-seat)
-      { id: 'ch3', tableId: 't2', x: 370, y: 180, rotation: 0 },
+      { id: 'ch3', tableId: 't2', x: 370, y: 180, rotation: 2 },
       { id: 'ch4', tableId: 't2', x: 370, y: 240, rotation: 0 },
       // t3 (4-seat)
-      { id: 'ch5', tableId: 't3', x: 210, y: 340, rotation: 0 },
+      { id: 'ch5', tableId: 't3', x: 210, y: 340, rotation: 2 },
       { id: 'ch6', tableId: 't3', x: 210, y: 400, rotation: 0 },
-      { id: 'ch7', tableId: 't3', x: 180, y: 370, rotation: 0 },
-      { id: 'ch8', tableId: 't3', x: 240, y: 370, rotation: 0 },
+      { id: 'ch7', tableId: 't3', x: 180, y: 370, rotation: 1 },
+      { id: 'ch8', tableId: 't3', x: 240, y: 370, rotation: 3 },
       // t4 (4-seat)
-      { id: 'ch9', tableId: 't4', x: 370, y: 340, rotation: 0 },
+      { id: 'ch9', tableId: 't4', x: 370, y: 340, rotation: 2 },
       { id: 'ch10', tableId: 't4', x: 370, y: 400, rotation: 0 },
-      { id: 'ch11', tableId: 't4', x: 340, y: 370, rotation: 0 },
-      { id: 'ch12', tableId: 't4', x: 400, y: 370, rotation: 0 },
+      { id: 'ch11', tableId: 't4', x: 340, y: 370, rotation: 1 },
+      { id: 'ch12', tableId: 't4', x: 400, y: 370, rotation: 3 },
     ],
+    doors: [{ id: 'door1', y: 340 }],
+    cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
     kitchenStations: [
       { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
       { id: 'k2', equipmentId: null, x: 200, y: 120 },
@@ -54,6 +56,7 @@ export function createInitialState() {
       {
         id: 'starter-cook',
         name: 'Marco',
+        gender: 'male',
         role: 'cook',
         skill: 3,
         morale: 80,
@@ -61,7 +64,8 @@ export function createInitialState() {
       },
       {
         id: 'starter-waiter',
-        name: 'Anna',
+        name: 'Sofia',
+        gender: 'female',
         role: 'waiter',
         skill: 3,
         morale: 80,
@@ -70,7 +74,17 @@ export function createInitialState() {
       {
         id: 'starter-host',
         name: 'Luca',
+        gender: 'male',
         role: 'host',
+        skill: 2,
+        morale: 80,
+        salary: 150,
+      },
+      {
+        id: 'starter-cashier-waiter',
+        name: 'Elena',
+        gender: 'female',
+        role: 'cashier_waiter',
         skill: 2,
         morale: 80,
         salary: 150,
@@ -82,7 +96,7 @@ export function createInitialState() {
         name: 'Toasted Bread',
         base: 'Bread',
         method: 'Toasted',
-        price: 8,
+        price: 12,
         prepTime: 60,
         quality: 1,
         popularity: 50,

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { spawnCustomers, updateCustomers } from './customers';
 
 const baseState = {
@@ -16,17 +16,32 @@ const baseState = {
 };
 
 describe('spawnCustomers', () => {
-  it('creates customers when restaurant is open and tables free', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('scales spawning probability by elapsed time instead of animation frames', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.01);
+
+    const frameResult = spawnCustomers(baseState, 0.016);
+    const oneSecondResult = spawnCustomers(baseState, 1);
+
+    expect(frameResult.queue).toHaveLength(0);
+    expect(oneSecondResult.queue).toHaveLength(1);
+  });
+
+  it('spawns customers into queue when restaurant is open', () => {
     const state = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 } };
     let result = state;
     for (let i = 0; i < 200; i++) {
       result = spawnCustomers(result);
     }
-    expect(result.customers.length).toBeGreaterThan(0);
-    expect(result.customers[0].state).toBe('arriving');
+    expect(result.queue.length).toBeGreaterThan(0);
+    expect(result.queue[0].state).toBe('queued');
+    expect(result.queue[0].tableId).toBeNull();
+    expect(result.customers.length).toBe(0);
   });
 
   it('queues customers when no free tables', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     const state = {
       ...baseState,
       tables: baseState.tables.map(t => ({ ...t, status: 'occupied' })),
@@ -54,10 +69,39 @@ describe('spawnCustomers', () => {
     let result = state;
     for (let i = 0; i < 200; i++) {
       result = spawnCustomers(result);
-      if (result.customers.length > 0) break;
+      if (result.queue.length > 0) break;
     }
     const archetypes = ['regular', 'foodie', 'rusher', 'influencer'];
-    expect(archetypes).toContain(result.customers[0].archetype);
+    expect(archetypes).toContain(result.queue[0].archetype);
+  });
+
+  it('assigns a gender to spawned customers', () => {
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.75);
+
+    const result = spawnCustomers(baseState, 1);
+
+    expect(result.queue[0].gender).toBe('female');
+  });
+
+  it('spawns couples as linked customers who queue together', () => {
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.5)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.2)
+      .mockReturnValueOnce(0.8);
+
+    const result = spawnCustomers(baseState, 1);
+
+    expect(result.queue).toHaveLength(2);
+    expect(result.queue.map(customer => customer.partyType)).toEqual(['couple', 'couple']);
+    expect(result.queue.map(customer => customer.partySize)).toEqual([2, 2]);
+    expect(new Set(result.queue.map(customer => customer.partyId)).size).toBe(1);
+    expect(result.queue.map(customer => customer.gender)).toEqual(['male', 'female']);
   });
 });
 
@@ -84,6 +128,24 @@ describe('updateCustomers', () => {
     expect(result.customers[0].state).toBe('waiting');
   });
 
+  it('moves paying customers into a single-file checkout queue', () => {
+    const state = {
+      ...baseState,
+      chairs: [], kitchenStations: [], serviceTables: [],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      customers: [
+        { id: 'c1', state: 'paying', x: 400, y: 300, patience: 100, paymentQueuedAt: 10 },
+        { id: 'c2', state: 'paying', x: 420, y: 300, patience: 100, paymentQueuedAt: 20 },
+      ],
+    };
+
+    const result = updateCustomers(state, 0);
+
+    expect(result.customers[0].checkoutPosition).toEqual({ x: 780, y: 140 });
+    expect(result.customers[1].checkoutPosition).toEqual({ x: 760, y: 140 });
+    expect(result.customers.every(customer => customer.path.length > 0)).toBe(true);
+  });
+
   it('sets leaving state and reduces happiness when patience runs out', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 5, happiness: 80,
@@ -97,7 +159,7 @@ describe('updateCustomers', () => {
     expect(result.customers[0].happiness).toBeLessThan(80);
   });
 
-  it('removes leaving customers and frees tables', () => {
+  it('keeps leaving customers visible while they walk towards an exit', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 0, happiness: 50,
       state: 'leaving', dishId: null, tableId: 't1', tipAmount: 0,
@@ -109,11 +171,13 @@ describe('updateCustomers', () => {
       tables: baseState.tables.map(t => t.id === 't1' ? { ...t, status: 'occupied' } : t),
     };
     const result = updateCustomers(state, 1);
-    expect(result.customers.length).toBe(0);
+    expect(result.customers).toHaveLength(1);
+    expect(result.customers[0]).toMatchObject({ state: 'leaving', exitDoorId: 'door1' });
+    expect(result.customers[0].path.length).toBeGreaterThan(0);
     expect(result.tables.find(t => t.id === 't1').status).toBe('dirty');
   });
 
-  it('seats queued customer when table frees up', () => {
+  it('does not auto-seat queued customer when table frees (host controls seating)', () => {
     const leavingCustomer = {
       id: 'c2', archetype: 'regular', patience: 0, happiness: 50,
       state: 'leaving', dishId: null, tableId: 't1', tipAmount: 0,
@@ -131,8 +195,26 @@ describe('updateCustomers', () => {
       tables: baseState.tables.map(t => t.id === 't1' ? { ...t, status: 'occupied' } : t),
     };
     const result = updateCustomers(state, 1);
-    expect(result.customers.length).toBeGreaterThanOrEqual(1); // queued may have been seated
-    expect(result.queue.length).toBe(0);
+    expect(result.customers.length).toBe(1);
+    expect(result.queue.length).toBe(1);
+    expect(result.tables.find(t => t.id === 't1').status).toBe('dirty');
+  });
+
+  it('uses separate doors for simultaneous departures when available', () => {
+    const customers = [
+      { id: 'c1', state: 'leaving', x: 400, y: 300, patience: 0, happiness: 80 },
+      { id: 'c2', state: 'leaving', x: 420, y: 300, patience: 0, happiness: 80 },
+    ];
+    const state = {
+      ...baseState,
+      customers,
+      doors: [{ id: 'door1', y: 300 }, { id: 'door2', y: 420 }],
+      chairs: [], kitchenStations: [], serviceTables: [],
+    };
+
+    const result = updateCustomers(state, 0);
+
+    expect(new Set(result.customers.map(customer => customer.exitDoorId))).toEqual(new Set(['door1', 'door2']));
   });
 
   it('removes queue customer when patience runs out', () => {
@@ -147,5 +229,17 @@ describe('updateCustomers', () => {
     // Dead queue mbr becomes a leaving customer (reputation loss)
     expect(result.customers.length).toBe(1);
     expect(result.customers[0].state).toBe('leaving');
+  });
+
+  it('spawn never assigns tableId or adds directly to customers', () => {
+    const state = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 } };
+    let result = state;
+    for (let i = 0; i < 200; i++) {
+      result = spawnCustomers(result);
+    }
+    expect(result.customers.length).toBe(0);
+    for (const q of result.queue) {
+      expect(q.tableId).toBeNull();
+    }
   });
 });

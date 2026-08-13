@@ -1,7 +1,22 @@
 import { screenToWorld } from './camera';
+import { getTableNumber } from './tableLabels';
+import { getDefaultStaffPosition } from '../simulation/world';
 
 export function findClickedEntity(state, camera, screenX, screenY) {
   const world = screenToWorld(camera, screenX, screenY);
+
+  for (const [index, staff] of state.staff.entries()) {
+    const position = Number.isFinite(staff.x) && Number.isFinite(staff.y)
+      ? staff
+      : getDefaultStaffPosition(staff.role, index, state);
+    if (Math.hypot(world.x - position.x, world.y - position.y) <= 12) {
+      return {
+        type: 'staff',
+        data: staff,
+        text: `${staff.name} · ${staff.role} · ${Math.round(staff.morale)}% morale`,
+      };
+    }
+  }
 
   // Chairs first — they sit inside table hitboxes
   for (const chair of state.chairs) {
@@ -10,7 +25,7 @@ export function findClickedEntity(state, camera, screenX, screenY) {
       return {
         type: 'chair',
         data: chair,
-        text: `Chair · Table ${chair.tableId}`,
+        text: `Chair · Table ${getTableNumber(chair.tableId)}`,
       };
     }
   }
@@ -22,7 +37,7 @@ export function findClickedEntity(state, camera, screenX, screenY) {
       return {
         type: 'table',
         data: table,
-        text: `Table ${table.id} · ${table.seats} seats · ${table.status}${customer ? ' · ' + customer.archetype : ''}`,
+        text: `Table ${getTableNumber(table.id)} · ${table.seats} seats · ${table.status}${customer ? ' · ' + customer.archetype : ''}`,
       };
     }
   }

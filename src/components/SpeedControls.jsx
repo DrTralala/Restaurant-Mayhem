@@ -7,13 +7,13 @@ const btnStyle = {
   color: '#ccc', padding: '4px 12px', cursor: 'pointer', fontSize: '13px',
 };
 
-export default function SpeedControls() {
+export default function SpeedControls({ onFit }) {
   const state = useGameState();
   const dispatch = useDispatch();
 
   return (
     <div style={{
-      display: 'flex', gap: 4, padding: '4px 16px', background: '#16213e',
+      display: 'flex', gap: 4, padding: '4px 16px', background: '#000000',
       borderTop: '1px solid #0f3460', justifyContent: 'center', alignItems: 'center',
     }}>
       <button
@@ -31,6 +31,7 @@ export default function SpeedControls() {
           {s}x
         </button>
       ))}
+      <button onClick={onFit} style={btnStyle}>Fit</button>
     </div>
   );
 }

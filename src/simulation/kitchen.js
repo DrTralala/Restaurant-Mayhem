@@ -6,8 +6,24 @@ export function processKitchen(state) {
   let completed = [...state.completedCustomers];
   let foodItems = [...state.foodItems];
 
+  // Remove queue items for customers that no longer exist or are leaving
+  const activeCustomerIds = new Set(customers.filter(c => c.state !== 'leaving').map(c => c.id));
+  queue = queue.filter(q => activeCustomerIds.has(q.customerId));
+
+  // Convert food for leaving/absent customers to to_clean so cleaning tasks handle it
+  const leavingIds = new Set(customers.filter(c => c.state === 'leaving').map(c => c.id));
+  const allCustomerIds = new Set(customers.map(c => c.id));
+  foodItems = foodItems.map(f => {
+    if (f.state === 'to_clean') return f;
+    const orphan = !allCustomerIds.has(f.customerId) || leavingIds.has(f.customerId);
+    if (orphan && (f.state === 'on_service' || f.state === 'carried' || f.state === 'delivered')) {
+      return { ...f, state: 'to_clean' };
+    }
+    return f;
+  });
+
   // Add ordering customers to queue
-  const ordering = customers.filter(c => c.state === 'ordering' && !queue.find(q => q.customerId === c.id));
+  const ordering = customers.filter(c => c.state === 'ordering' && !queue.find(q => q.customerId === c.id) && !foodItems.find(f => f.customerId === c.id));
   for (const customer of ordering) {
     const dish = state.dishes.find(d => d.id === customer.dishId);
     if (!dish) continue;
@@ -27,15 +43,23 @@ export function processKitchen(state) {
         customerId: customer.id,
         dishId: dish.id,
         stationId: station.id,
-        startTime: state.restaurant.gameTime,
+        startTime: null,
         completedAt: null,
       });
     }
   }
 
   // Progress cooking → place food on service table
+  let nextQueue = [];
   for (const item of queue) {
-    if (item.completedAt) continue;
+    if (item.completedAt) {
+      nextQueue.push(item);
+      continue;
+    }
+    if (item.startTime === null) {
+      nextQueue.push(item);
+      continue;
+    }
     const dish = state.dishes.find(d => d.id === item.dishId);
     const station = state.kitchenStations.find(s => s.id === item.stationId);
     const equipment = station?.equipmentId
@@ -46,7 +70,7 @@ export function processKitchen(state) {
     const elapsed = state.restaurant.gameTime - item.startTime;
 
     if (elapsed >= cookTime) {
-      item.completedAt = state.restaurant.gameTime;
+      nextQueue.push({ ...item, completedAt: state.restaurant.gameTime });
       // Place food on first available service table
       const serviceTable = state.serviceTables[0];
       if (serviceTable) {
@@ -61,54 +85,22 @@ export function processKitchen(state) {
           y: serviceTable.y + 10,
         });
       }
+    } else {
+      nextQueue.push(item);
     }
   }
-
-  // Track customers already paying before this tick
-  const alreadyPaying = new Set(state.customers.filter(c => c.state === 'paying').map(c => c.id));
+  queue = nextQueue;
 
   // Eating → paying transition (for customers with delivered food)
   customers = customers.map(c => {
     if (c.state === 'eating' && c.eatTime != null && state.restaurant.gameTime - c.eatTime >= 30) {
-      return { ...c, state: 'paying' };
+      return { ...c, state: 'paying', paymentQueuedAt: state.restaurant.gameTime, path: [] };
     }
     return c;
   });
 
-  // Paying → completed (only customers that were already paying)
-  const toComplete = customers.filter(c => c.state === 'paying' && alreadyPaying.has(c.id));
-  const completedTableIds = new Set(toComplete.map(c => c.tableId).filter(Boolean));
-  for (const pc of toComplete) {
-    const dish = state.dishes.find(d => d.id === pc.dishId);
-    const price = dish?.price || 0;
-    const tip = price * 0.15;
-    completed.push({
-      customerId: pc.id,
-      day: state.restaurant.day || Math.floor(state.restaurant.gameTime / 86400) + 1,
-      dishId: pc.dishId,
-      revenue: price + tip,
-      tip,
-      totalPaid: price + tip,
-    });
-  }
-
-  // Clean completed queue items and completed customers
+  // Payment completion is handled by a cashier or dual-role cashier-waiter.
   queue = queue.filter(q => !q.completedAt);
-  if (toComplete.length > 0) {
-    const completedIds = new Set(toComplete.map(c => c.id));
-    customers = customers.filter(c => !completedIds.has(c.id));
-    // Mark delivered food for cleanup (waiter will clean)
-    foodItems = foodItems.map(f =>
-      completedIds.has(f.customerId) ? { ...f, state: 'to_clean' } : f
-    );
-  }
-
-  let updatedTables = state.tables;
-  if (completedTableIds.size > 0) {
-    updatedTables = state.tables.map(t =>
-      completedTableIds.has(t.id) ? { ...t, status: 'dirty' } : t
-    );
-  }
 
   return {
     ...state,
@@ -116,7 +108,7 @@ export function processKitchen(state) {
     customers,
     foodItems,
     completedCustomers: completed,
-    restaurant: { ...state.restaurant, totalServed: completed.length },
-    tables: updatedTables,
+    restaurant: state.restaurant,
+    tables: state.tables,
   };
 }

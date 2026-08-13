@@ -1,57 +1,61 @@
 import { isRestaurantOpen } from './clock';
+import { findPath, worldToCell } from './pathfinding';
+import { moveCharacterAlongPath } from './movement';
+import { getDoorPosition, getDoors, getQueuePosition } from './world';
 
 let customerIdCounter = 0;
+let partyIdCounter = 0;
 function nextCustomerId() {
   return `c${++customerIdCounter}`;
 }
 
 const ARCHETYPES = ['regular', 'regular', 'regular', 'foodie', 'rusher', 'influencer'];
 
-export function spawnCustomers(state) {
+function chooseParty() {
+  const roll = Math.random();
+  if (roll < 0.45) return { type: 'solo', size: 1 };
+  if (roll < 0.80) return { type: 'couple', size: 2 };
+  return { type: 'family', size: 4 };
+}
+
+export function spawnCustomers(state, dt = 1) {
   if (!isRestaurantOpen(state)) return state;
 
-  const spawnRate = 0.15 + (state.restaurant.reputation - 1) * 0.02;
-  if (Math.random() > spawnRate) return state;
+  const marketingLevel = (state.upgrades || []).find(upgrade => upgrade.effects?.type === 'customerRate')?.level || 0;
+  const spawnRatePerSecond = 0.018
+    + (state.restaurant.reputation - 1) * 0.004
+    + marketingLevel * 0.002;
+  const spawnProbability = 1 - Math.exp(-spawnRatePerSecond * Math.max(0, dt));
+  if (Math.random() > spawnProbability) return state;
 
-  const freeTables = state.tables.filter(t => t.status === 'empty');
-  const patienceMap = { regular: 120, foodie: 200, rusher: 60, influencer: 150 };
+  const patienceMap = { regular: 240, foodie: 330, rusher: 150, influencer: 270 };
+  const party = chooseParty();
+  const partyId = `p${++partyIdCounter}`;
   const archetype = ARCHETYPES[Math.floor(Math.random() * ARCHETYPES.length)];
-  const patienceBase = patienceMap[archetype];
-
-  const newCustomer = {
-    id: nextCustomerId(),
-    archetype,
-    patience: patienceBase,
-    happiness: 80,
-    state: 'arriving',
-    dishId: null,
-    tableId: null,
-    tipAmount: 0,
-    seatTime: null,
-    orderTime: null,
-    eatTime: null,
-  };
-
-  if (freeTables.length > 0 && state.queue.length === 0) {
-    const freeTable = freeTables[Math.floor(Math.random() * freeTables.length)];
-    newCustomer.tableId = freeTable.id;
-    newCustomer.state = 'arriving';
-
-    const updatedTables = state.tables.map(t =>
-      t.id === freeTable.id ? { ...t, status: 'occupied' } : t
-    );
-
+  const newCustomers = Array.from({ length: party.size }, () => {
     return {
-      ...state,
-      customers: [...state.customers, newCustomer],
-      tables: updatedTables,
+      id: nextCustomerId(),
+      partyId,
+      partyType: party.type,
+      partySize: party.size,
+      archetype,
+      gender: Math.random() < 0.5 ? 'male' : 'female',
+      patience: patienceMap[archetype],
+      happiness: 80,
+      state: 'queued',
+      dishId: null,
+      tableId: null,
+      chairId: null,
+      tipAmount: 0,
+      seatTime: null,
+      orderTime: null,
+      eatTime: null,
     };
-  }
+  });
 
-  // No free table: customer queues outside
   return {
     ...state,
-    queue: [...state.queue, { ...newCustomer, state: 'queued' }],
+    queue: [...state.queue, ...newCustomers],
   };
 }
 
@@ -91,41 +95,89 @@ export function updateCustomers(state, dt) {
     }))];
   }
 
-  // Remove leaving customers and free their tables
-  // Only remove customers that were already leaving BEFORE this tick
-  const alreadyLeaving = state.customers.filter(c => c.state === 'leaving');
-  const leavingIds = new Set(alreadyLeaving.map(c => c.id));
+  const cashier = state.cashierStations?.[0];
+  if (cashier) {
+    const payingCustomers = updatedCustomers
+      .filter(customer => customer.state === 'paying')
+      .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0));
+    const positions = new Map(payingCustomers.map((customer, index) => [customer.id, {
+      x: cashier.x - 20 - index * 20,
+      y: cashier.y + cashier.h / 2,
+    }]));
+    updatedCustomers = updatedCustomers.map(customer => {
+      const checkoutPosition = positions.get(customer.id);
+      if (!checkoutPosition) return customer;
+      const current = Number.isFinite(customer.x) && Number.isFinite(customer.y)
+        ? customer
+        : { ...customer, x: checkoutPosition.x - 80, y: checkoutPosition.y + 80 };
+      const path = Math.hypot(current.x - checkoutPosition.x, current.y - checkoutPosition.y) <= 2
+        ? []
+        : findPath(state, worldToCell(current), worldToCell(checkoutPosition));
+      return { ...current, checkoutPosition, path };
+    });
+  }
 
+  // Free tables as soon as their last customer begins leaving, while retaining
+  // those customers so their walk to the exit remains visible.
+  const leavingTableIds = new Set(updatedCustomers.filter(c => c.state === 'leaving').map(c => c.tableId).filter(Boolean));
   let updatedTables = state.tables;
-  if (leavingIds.size > 0) {
-    const leavingTableIds = new Set(alreadyLeaving.map(c => c.tableId).filter(Boolean));
-    updatedCustomers = updatedCustomers.filter(c => !leavingIds.has(c.id));
+  if (leavingTableIds.size > 0) {
     updatedTables = state.tables.map(t =>
-      leavingTableIds.has(t.id) ? { ...t, status: 'dirty' } : t
+      leavingTableIds.has(t.id) && !updatedCustomers.some(customer => customer.tableId === t.id && customer.state !== 'leaving')
+        ? { ...t, status: 'dirty' }
+        : t
     );
   }
 
-  // Seat queued customers into freed tables
-  const freeTables = updatedTables.filter(t => t.status === 'empty');
-  let remainingQueue = [...updatedQueue];
-
-  for (const table of freeTables) {
-    if (remainingQueue.length === 0) break;
-    const nextInLine = remainingQueue.shift();
-    updatedCustomers = [...updatedCustomers, {
-      ...nextInLine,
-      state: 'arriving',
-      tableId: table.id,
-    }];
-    updatedTables = updatedTables.map(t =>
-      t.id === table.id ? { ...t, status: 'occupied' } : t
-    );
+  const doors = getDoors(state);
+  const claimedDoors = new Map();
+  for (const customer of updatedCustomers) {
+    if (customer.state === 'leaving' && customer.exitDoorId) {
+      claimedDoors.set(customer.exitDoorId, (claimedDoors.get(customer.exitDoorId) || 0) + 1);
+    }
   }
+
+  updatedCustomers = updatedCustomers.map((customer, index, allCustomers) => {
+    if (customer.state !== 'leaving') return customer;
+    let leaving = customer;
+    if (!Number.isFinite(leaving.x) || !Number.isFinite(leaving.y)) {
+      const table = state.tables.find(candidate => candidate.id === leaving.tableId);
+      const queueIndex = state.queue.findIndex(candidate => candidate.id === leaving.id);
+      const fallback = table && Number.isFinite(table.x) && Number.isFinite(table.y)
+        ? { x: table.x + 20, y: table.y + 20 }
+        : queueIndex >= 0
+          ? getQueuePosition(state, queueIndex)
+          : getDoorPosition(state, getDoors(state)[0]).inside;
+      leaving = { ...leaving, ...fallback };
+    }
+    if (!leaving.exitDoorId || !leaving.path?.length) {
+      const door = [...doors].sort((a, b) => {
+        const loadDifference = (claimedDoors.get(a.id) || 0) - (claimedDoors.get(b.id) || 0);
+        return loadDifference || Math.abs(a.y - leaving.y) - Math.abs(b.y - leaving.y);
+      })[0];
+      const destination = getDoorPosition(state, door).outside;
+      const path = findPath(state, worldToCell(leaving), worldToCell(destination));
+      if (!leaving.exitDoorId) claimedDoors.set(door.id, (claimedDoors.get(door.id) || 0) + 1);
+      leaving = { ...leaving, exitDoorId: door.id, path };
+    }
+    const others = [
+      ...(state.staff || []),
+      ...allCustomers.filter((candidate, candidateIndex) => candidateIndex !== index),
+    ];
+    return moveCharacterAlongPath(leaving, dt, others, 55);
+  });
+
+  const doorPositions = new Map(doors.map(door => [door.id, getDoorPosition(state, door)]));
+  updatedCustomers = updatedCustomers.filter(customer => {
+    if (customer.state !== 'leaving' || customer.path?.length) return true;
+    const destination = doorPositions.get(customer.exitDoorId)?.outside;
+    return !destination || Math.hypot(customer.x - destination.x, customer.y - destination.y) > 2;
+  });
 
   return {
     ...state,
     customers: updatedCustomers,
-    queue: remainingQueue,
+    queue: updatedQueue,
     tables: updatedTables,
   };
 }

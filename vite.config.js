@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { repositorySavePlugin } from './devSavePlugin';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), repositorySavePlugin()],
   test: {
     environment: 'jsdom',
     globals: true,

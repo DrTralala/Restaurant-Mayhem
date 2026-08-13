@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import MenuPanel from './MenuPanel';
 import UpgradePanel from './UpgradePanel';
+import ItemsPanel from './ItemsPanel';
 import StaffPanel from './StaffPanel';
 import MilestonePanel from './MilestonePanel';
 import StatsPanel from './StatsPanel';
@@ -8,6 +9,7 @@ import StatsPanel from './StatsPanel';
 const TABS = [
   { key: 'menu', label: 'Menu' },
   { key: 'upgrades', label: 'Upgrades' },
+  { key: 'items', label: 'Items' },
   { key: 'staff', label: 'Staff' },
   { key: 'milestones', label: 'Milestones' },
   { key: 'stats', label: 'Stats' },
@@ -63,6 +65,7 @@ export default function ManagementModal({ isOpen, onClose }) {
         <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
           {tab === 'menu' && <MenuPanel />}
           {tab === 'upgrades' && <UpgradePanel />}
+          {tab === 'items' && <ItemsPanel />}
           {tab === 'staff' && <StaffPanel />}
           {tab === 'milestones' && <MilestonePanel />}
           {tab === 'stats' && <StatsPanel />}

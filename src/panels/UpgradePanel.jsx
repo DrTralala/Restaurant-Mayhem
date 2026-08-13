@@ -19,9 +19,6 @@ export default function UpgradePanel() {
               <button
                 onClick={() => {
                   dispatch({ type: 'BUY_UPGRADE', id: u.id, cost: nextCost });
-                  if (u.effects?.type === 'table') {
-                    dispatch({ type: 'ADD_TABLE' });
-                  }
                 }}
                 disabled={maxed || state.restaurant.funds < nextCost}
                 style={{

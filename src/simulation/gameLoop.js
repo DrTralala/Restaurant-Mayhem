@@ -11,7 +11,7 @@ export function runTick(state, dt) {
   const effectiveDt = dt * state.speed;
 
   let s = advanceClock(state, effectiveDt);
-  s = spawnCustomers(s);
+  s = spawnCustomers(s, effectiveDt);
   s = updateCustomers(s, effectiveDt);
   s = updateStaff(s, effectiveDt);
   s = processKitchen(s);

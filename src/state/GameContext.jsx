@@ -1,6 +1,7 @@
 import { createContext, useContext, useReducer, useEffect, useRef } from 'react';
 import { createInitialState } from './initialState';
-import { loadState, saveState } from './persistence';
+import { hydrateState, loadState, saveState } from './persistence';
+import { ITEM_PRICES, ITEM_SELL_RATIO } from '../data/items';
 
 const GameContext = createContext(null);
 const DispatchContext = createContext(null);
@@ -61,6 +62,20 @@ function gameReducer(state, action) {
       };
     case 'FIRE_STAFF':
       return { ...state, staff: state.staff.filter(s => s.id !== action.id) };
+    case 'RENAME_STAFF':
+      return {
+        ...state,
+        staff: state.staff.map(s =>
+          s.id === action.id ? { ...s, name: action.name } : s
+        ),
+      };
+    case 'SET_STAFF_SALARY':
+      return {
+        ...state,
+        staff: state.staff.map(s =>
+          s.id === action.id ? { ...s, salary: action.salary } : s
+        ),
+      };
     case 'TRAIN_STAFF':
       return {
         ...state,
@@ -87,19 +102,99 @@ function gameReducer(state, action) {
       const seats = 4;
       const chairIdBase = state.chairs.length + 1;
       const newChairs = [
-        { id: `ch${chairIdBase}`, tableId: newId, x: tx + 10, y: ty - 20, rotation: 0 },
+        { id: `ch${chairIdBase}`, tableId: newId, x: tx + 10, y: ty - 20, rotation: 2 },
         { id: `ch${chairIdBase + 1}`, tableId: newId, x: tx + 10, y: ty + 40, rotation: 0 },
       ];
       if (seats >= 4) {
         newChairs.push(
-          { id: `ch${chairIdBase + 2}`, tableId: newId, x: tx - 20, y: ty + 10, rotation: 0 },
-          { id: `ch${chairIdBase + 3}`, tableId: newId, x: tx + 40, y: ty + 10, rotation: 0 },
+          { id: `ch${chairIdBase + 2}`, tableId: newId, x: tx - 20, y: ty + 10, rotation: 1 },
+          { id: `ch${chairIdBase + 3}`, tableId: newId, x: tx + 40, y: ty + 10, rotation: 3 },
         );
       }
       return {
         ...state,
         tables: [...state.tables, { id: newId, seats, status: 'empty', x: tx, y: ty }],
         chairs: [...state.chairs, ...newChairs],
+      };
+    }
+    case 'BUY_TABLE': {
+      if (state.restaurant.funds < action.cost) return state;
+      const nextNumber = Math.max(0, ...state.tables.map(table => Number(table.id.match(/^t(\d+)$/)?.[1]) || 0)) + 1;
+      const count = state.tables.length;
+      return {
+        ...state,
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - action.cost },
+        tables: [...state.tables, {
+          id: `t${nextNumber}`, seats: 4, status: 'empty',
+          x: 200 + (count % 2) * 200,
+          y: 200 + Math.floor(count / 2) * 200,
+        }],
+      };
+    }
+    case 'BUY_CHAIR': {
+      if (state.restaurant.funds < action.cost) return state;
+      const table = [...state.tables].reverse().find(candidate =>
+        state.chairs.filter(chair => chair.tableId === candidate.id).length < candidate.seats);
+      if (!table) return state;
+      const existing = state.chairs.filter(chair => chair.tableId === table.id);
+      const positions = [
+        { x: table.x + 10, y: table.y - 20, rotation: 2 },
+        { x: table.x + 10, y: table.y + 40, rotation: 0 },
+        { x: table.x - 20, y: table.y + 10, rotation: 1 },
+        { x: table.x + 40, y: table.y + 10, rotation: 3 },
+      ];
+      const nextNumber = Math.max(0, ...state.chairs.map(chair => Number(chair.id.match(/^ch(\d+)$/)?.[1]) || 0)) + 1;
+      return {
+        ...state,
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - action.cost },
+        chairs: [...state.chairs, { id: `ch${nextNumber}`, tableId: table.id, ...positions[existing.length] }],
+      };
+    }
+    case 'BUY_DOOR': {
+      if (state.restaurant.funds < action.cost) return state;
+      const doors = state.doors || [];
+      const defaultY = 340;
+      const offsets = [100, -100, 200, -200, 300, -300];
+      const y = offsets
+        .map(offset => defaultY + offset)
+        .find(candidate => candidate >= 80 && candidate <= 600 && !doors.some(door => Math.abs(door.y - candidate) < 60));
+      if (y == null) return state;
+      const nextNumber = Math.max(0, ...doors.map(door => Number(door.id.match(/^door(\d+)$/)?.[1]) || 0)) + 1;
+      return {
+        ...state,
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - action.cost },
+        doors: [...doors, { id: `door${nextNumber}`, y }],
+      };
+    }
+    case 'MOVE_ITEMS': {
+      const tableMoves = new Map(action.items.filter(item => item.type === 'table').map(item => [item.id, item]));
+      const chairMoves = new Map(action.items.filter(item => item.type === 'chair').map(item => [item.id, item]));
+      return {
+        ...state,
+        tables: state.tables.map(table => tableMoves.has(table.id) ? { ...table, x: tableMoves.get(table.id).x, y: tableMoves.get(table.id).y } : table),
+        chairs: state.chairs.map(chair => chairMoves.has(chair.id) ? { ...chair, x: chairMoves.get(chair.id).x, y: chairMoves.get(chair.id).y } : chair),
+      };
+    }
+    case 'SELL_ITEMS': {
+      const selectedTableIds = new Set(action.items
+        .filter(item => item.type === 'table')
+        .map(item => item.id)
+        .filter(id => state.tables.some(table => table.id === id && table.status === 'empty')));
+      const selectedChairIds = new Set(action.items
+        .filter(item => item.type === 'chair')
+        .map(item => item.id)
+        .filter(id => {
+          const chair = state.chairs.find(candidate => candidate.id === id);
+          const table = chair && state.tables.find(candidate => candidate.id === chair.tableId);
+          return chair && table?.status === 'empty' && !state.customers.some(customer => customer.chairId === id);
+        }));
+      const removedChairs = state.chairs.filter(chair => selectedChairIds.has(chair.id) || selectedTableIds.has(chair.tableId));
+      const refund = Math.round((selectedTableIds.size * ITEM_PRICES.table + removedChairs.length * ITEM_PRICES.chair) * ITEM_SELL_RATIO);
+      return {
+        ...state,
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds + refund },
+        tables: state.tables.filter(table => !selectedTableIds.has(table.id)),
+        chairs: state.chairs.filter(chair => !selectedChairIds.has(chair.id) && !selectedTableIds.has(chair.tableId)),
       };
     }
     case 'MOVE_CHAIR':
@@ -203,7 +298,7 @@ export function GameProvider({ children }) {
   const [state, dispatch] = useReducer(gameReducer, null, () => {
     const saved = loadState();
     const fresh = createInitialState();
-    if (saved && saved.version === fresh.version) return saved;
+    if (saved && saved.version === fresh.version) return hydrateState(saved, fresh);
     return fresh;
   });
   const stateRef = useRef(state);

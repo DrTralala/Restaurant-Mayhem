@@ -1,3 +1,5 @@
+import '@testing-library/jest-dom';
+
 const store = new Map();
 
 globalThis.localStorage = {
