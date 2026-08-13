@@ -701,9 +701,9 @@ describe('updateStaff', () => {
 
     const result = updateStaff(state, 0);
 
-    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: 'f1' });
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: null });
     expect(result.customers[0]).toEqual(customer);
-    expect(result.foodItems[0]).toEqual(food);
+    expect(result.foodItems[0]).toEqual({ ...food, state: 'to_clean' });
   });
 
   it('cancels delivery when the task food is not carried', () => {
@@ -722,7 +722,7 @@ describe('updateStaff', () => {
 
     const result = updateStaff(state, 0);
 
-    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: 'f1' });
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: null });
     expect(result.customers[0]).toEqual(customer);
     expect(result.foodItems[0]).toEqual(food);
   });

@@ -78,6 +78,61 @@ describe('processKitchen', () => {
     expect(withToaster.kitchenQueue[0].stationId).toBe('toast-station');
   });
 
+  it('reassigns an incompatible version-2 queue item before cooking can progress', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      kitchenStations: [
+        { id: 'oven-station', equipmentId: 'oven' },
+        { id: 'toast-station', equipmentId: 'toaster' },
+      ],
+      customers: [{ id: 'c1', state: 'ordering', dishId: 'toast', tableId: 't1' }],
+      dishes: [{ id: 'toast', name: 'Toast', prepTime: 60, requiredEquipmentId: 'toaster' }],
+      equipment: [{ id: 'toaster', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
+      kitchenQueue: [{
+        customerId: 'c1', dishId: 'toast', stationId: 'oven-station',
+        startTime: 0, completedAt: null,
+      }],
+    };
+
+    const result = processKitchen(state);
+
+    expect(result.foodItems).toHaveLength(0);
+    expect(result.kitchenQueue).toEqual([{
+      customerId: 'c1', dishId: 'toast', stationId: 'toast-station',
+      startTime: null, completedAt: null,
+    }]);
+  });
+
+  it('retains incompatible version-2 work unstarted when no matching station is available', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      kitchenStations: [{ id: 'oven-station', equipmentId: 'oven' }],
+      customers: [{ id: 'c1', state: 'ordering', dishId: 'toast', tableId: 't1' }],
+      dishes: [{ id: 'toast', name: 'Toast', prepTime: 60, requiredEquipmentId: 'toaster' }],
+      equipment: [{ id: 'toaster', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
+      kitchenQueue: [{
+        customerId: 'c1', dishId: 'toast', stationId: 'oven-station',
+        startTime: 0, completedAt: null,
+      }],
+    };
+
+    const firstResult = processKitchen(state);
+    const secondResult = processKitchen({
+      ...firstResult,
+      restaurant: { ...firstResult.restaurant, gameTime: 200 },
+    });
+
+    expect(firstResult.foodItems).toHaveLength(0);
+    expect(firstResult.kitchenQueue).toEqual([{
+      customerId: 'c1', dishId: 'toast', stationId: null,
+      startTime: null, completedAt: null,
+    }]);
+    expect(secondResult.foodItems).toHaveLength(0);
+    expect(secondResult.kitchenQueue).toHaveLength(1);
+  });
+
   it('combines equipment and global speed effects to complete cooking sooner', () => {
     const state = {
       ...baseState,

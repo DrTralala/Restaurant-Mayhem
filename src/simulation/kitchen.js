@@ -41,6 +41,34 @@ export function processKitchen(state) {
   const activeCustomerIds = new Set(customers.filter(c => c.state !== 'leaving').map(c => c.id));
   queue = queue.filter(q => activeCustomerIds.has(q.customerId));
 
+  // Repair version-2 queue entries that reference a station incompatible with
+  // their dish before they can progress or place food.
+  const occupiedStationIds = new Set(queue
+    .filter(item => {
+      if (item.completedAt) return false;
+      const dish = state.dishes.find(candidate => candidate.id === item.dishId);
+      const station = state.kitchenStations.find(candidate => candidate.id === item.stationId);
+      return !dish?.requiredEquipmentId || station?.equipmentId === dish.requiredEquipmentId;
+    })
+    .map(item => item.stationId)
+    .filter(Boolean));
+  queue = queue.map(item => {
+    const dish = state.dishes.find(candidate => candidate.id === item.dishId);
+    const station = state.kitchenStations.find(candidate => candidate.id === item.stationId);
+    if (!dish?.requiredEquipmentId || station?.equipmentId === dish.requiredEquipmentId) return item;
+
+    const replacement = state.kitchenStations.find(candidate =>
+      candidate.equipmentId === dish.requiredEquipmentId && !occupiedStationIds.has(candidate.id)
+    );
+    if (replacement) occupiedStationIds.add(replacement.id);
+    return {
+      ...item,
+      stationId: replacement?.id || null,
+      startTime: null,
+      completedAt: null,
+    };
+  });
+
   // Convert food for leaving/absent customers to to_clean so cleaning tasks handle it
   const leavingIds = new Set(customers.filter(c => c.state === 'leaving').map(c => c.id));
   const allCustomerIds = new Set(customers.map(c => c.id));
