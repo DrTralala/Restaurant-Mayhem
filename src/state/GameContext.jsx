@@ -3,6 +3,7 @@ import { createInitialState } from './initialState';
 import { hydrateState, loadState, saveState } from './persistence';
 import { ITEM_PRICES, ITEM_SELL_RATIO } from '../data/items';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
+import { clampReputation } from '../simulation/balance';
 
 const DISH_QUALITY_COST = 50;
 const TRAINING_COST = 100;
@@ -10,6 +11,7 @@ const BONUS_COST = 50;
 const SERVICE_TABLE_COST = 300;
 const STARTING_DISH_QUALITY = 1;
 const STAFF_SALARIES = { cook: 200, waiter: 150, host: 150 };
+const EXPANSION_COSTS = [0, 1000, 3000, 6000];
 
 function canAfford(state, cost) {
   return Number.isFinite(cost)
@@ -81,9 +83,13 @@ function gameReducer(state, action) {
       const cost = upgrade?.costs?.[upgrade.level];
       if (!upgrade || !Number.isInteger(upgrade.level) || upgrade.level < 0
         || upgrade.level >= upgrade.costs.length || !canAfford(state, cost)) return state;
+      const reputation = upgrade.effects?.type === 'reputation'
+        ? clampReputation(state.restaurant.reputation
+          + (Number.isFinite(upgrade.effects.value) ? upgrade.effects.value : 0))
+        : state.restaurant.reputation;
       return {
         ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - cost },
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - cost, reputation },
         upgrades: state.upgrades.map(u =>
           u.id === action.id ? { ...u, level: u.level + 1 } : u
         ),
@@ -332,12 +338,19 @@ function gameReducer(state, action) {
           st.id === action.id ? { ...st, x: action.x, y: action.y } : st
         ),
       };
-    case 'DELETE_SERVICE_TABLE':
+    case 'DELETE_SERVICE_TABLE': {
+      const serviceTable = state.serviceTables.find(table => table.id === action.id);
+      if (!serviceTable) return state;
+      const hasFood = state.foodItems.some(food => food.serviceTableId === serviceTable.id
+        || (!food.serviceTableId
+          && food.x >= serviceTable.x && food.x < serviceTable.x + 120
+          && food.y >= serviceTable.y && food.y < serviceTable.y + 40));
+      if (hasFood) return state;
       return {
         ...state,
         serviceTables: state.serviceTables.filter(st => st.id !== action.id),
-        foodItems: state.foodItems.filter(f => !state.serviceTables.find(st => st.id === action.id && st.id === f.position)),
       };
+    }
     case 'ADD_FOOD_ITEM':
       return { ...state, foodItems: [...state.foodItems, action.item] };
     case 'DELIVER_FOOD':
@@ -353,8 +366,9 @@ function gameReducer(state, action) {
         foodItems: state.foodItems.filter(f => f.id !== action.id),
       };
     case 'EXPAND': {
-      const cost = [0, 1000, 3000, 6000][state.restaurant.expansionLevel] || 10000;
-      if (state.restaurant.funds < cost) return state;
+      const level = state.restaurant.expansionLevel;
+      const cost = EXPANSION_COSTS[level];
+      if (!Number.isInteger(level) || level < 1 || cost == null || !canAfford(state, cost)) return state;
       const newLevel = state.restaurant.expansionLevel + 1;
       // Add a new kitchen station when expanding
       const newStationId = `k${state.kitchenStations.length + 1}`;

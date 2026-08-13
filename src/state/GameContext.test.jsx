@@ -195,6 +195,47 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.upgrades.find(upgrade => upgrade.id === 'u3').level).toBe(4);
   });
 
+  it('applies configured reputation upgrade effects without relying on upgrade identity', () => {
+    const reputationUpgrade = {
+      id: 'custom-decor',
+      name: 'Wall Art',
+      level: 0,
+      costs: [150],
+      effects: { type: 'reputation', value: 0.1 },
+    };
+    const game = renderReducer({
+      restaurant: { funds: 150, reputation: 2 },
+      upgrades: [reputationUpgrade],
+    });
+
+    game.dispatch({ type: 'BUY_UPGRADE', id: 'custom-decor' });
+
+    expect(game.state.restaurant).toMatchObject({ funds: 0, reputation: 2.1 });
+    expect(game.state.upgrades[0].level).toBe(1);
+
+    const capped = renderReducer({
+      restaurant: { funds: 150, reputation: 4.95 },
+      upgrades: [reputationUpgrade],
+    });
+    capped.dispatch({ type: 'BUY_UPGRADE', id: 'custom-decor' });
+    expect(capped.state.restaurant.reputation).toBe(5);
+  });
+
+  it('ignores malformed reputation effect values while completing a valid purchase', () => {
+    const game = renderReducer({
+      restaurant: { funds: 150, reputation: 2 },
+      upgrades: [{
+        id: 'broken-decor', level: 0, costs: [150],
+        effects: { type: 'reputation', value: Number.NaN },
+      }],
+    });
+
+    game.dispatch({ type: 'BUY_UPGRADE', id: 'broken-decor' });
+
+    expect(game.state.restaurant).toMatchObject({ funds: 0, reputation: 2 });
+    expect(game.state.upgrades[0].level).toBe(1);
+  });
+
   it('only buys equipment when it exists, is unowned, is affordable, and has a free station', () => {
     const game = renderReducer({ restaurant: { funds: 500 } });
 
@@ -287,6 +328,21 @@ describe('GameProvider guarded economy actions', () => {
     expect(service.state.serviceTables).toHaveLength(1);
   });
 
+  it('uses the canonical expansion cost and rejects expansion at the configured maximum', () => {
+    const game = renderReducer({ restaurant: { funds: 20000, expansionLevel: 3 } });
+    const initialStationCount = game.state.kitchenStations.length;
+
+    game.dispatch({ type: 'EXPAND', cost: 1 });
+
+    expect(game.state.restaurant).toMatchObject({ funds: 14000, expansionLevel: 4 });
+    expect(game.state.kitchenStations).toHaveLength(initialStationCount + 1);
+
+    game.dispatch({ type: 'EXPAND', cost: 1 });
+
+    expect(game.state.restaurant).toMatchObject({ funds: 14000, expansionLevel: 4 });
+    expect(game.state.kitchenStations).toHaveLength(initialStationCount + 1);
+  });
+
   it('enforces recipe slots, price limits, and paid dish quality', () => {
     const game = renderReducer({ restaurant: { funds: 50 } });
     const extraDish = { ...game.state.dishes[0], id: 'extra-dish' };
@@ -344,5 +400,43 @@ describe('GameProvider guarded economy actions', () => {
 
     expect(game.state.restaurant.funds).toBe(0);
     expect(game.state.dishes[0].quality).toBe(10);
+  });
+});
+
+describe('GameProvider service counter actions', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('prevents deleting a counter referenced by a food item ID', () => {
+    const game = renderReducer({
+      serviceTables: [
+        { id: 'st1', x: 140, y: 120 },
+        { id: 'st2', x: 400, y: 120 },
+      ],
+      foodItems: [{
+        id: 'food-1', serviceTableId: 'st1', state: 'on_service', x: 410, y: 130,
+      }],
+    });
+
+    game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
+
+    expect(game.state.serviceTables.map(table => table.id)).toEqual(['st1', 'st2']);
+    expect(game.state.foodItems).toHaveLength(1);
+  });
+
+  it('uses geometry for legacy food without a counter ID while allowing unoccupied deletion', () => {
+    const game = renderReducer({
+      serviceTables: [
+        { id: 'st1', x: 140, y: 120 },
+        { id: 'st2', x: 400, y: 120 },
+      ],
+      foodItems: [{ id: 'legacy-food', state: 'on_service', x: 150, y: 130 }],
+    });
+
+    game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
+    expect(game.state.serviceTables.map(table => table.id)).toEqual(['st1', 'st2']);
+
+    game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st2' });
+    expect(game.state.serviceTables.map(table => table.id)).toEqual(['st1']);
+    expect(game.state.foodItems).toHaveLength(1);
   });
 });

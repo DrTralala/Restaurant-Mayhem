@@ -23,6 +23,10 @@ export function loadState() {
 }
 
 export function hydrateState(saved, fresh) {
+  const staff = (saved.staff || fresh.staff || []).map(character => ({
+    ...character,
+    gender: inferGender(character),
+  }));
   const hydrated = {
     ...fresh,
     ...saved,
@@ -30,10 +34,7 @@ export function hydrateState(saved, fresh) {
       ...fresh.restaurant,
       ...(saved.restaurant || {}),
     },
-    staff: (saved.staff || fresh.staff || []).map(character => ({
-      ...character,
-      gender: inferGender(character),
-    })),
+    staff,
     customers: (saved.customers || fresh.customers || []).map(character => ({
       ...character,
       gender: inferGender(character),
@@ -43,6 +44,23 @@ export function hydrateState(saved, fresh) {
       gender: inferGender(character),
     })),
   };
+
+  if ('staffSlots' in saved || 'staffSlots' in fresh) {
+    hydrated.staffSlots = Math.max(fresh.staffSlots || 0, staff.length, saved.staffSlots || 0);
+  }
+
+  if (saved.dishes || fresh.dishes) {
+    hydrated.dishes = (saved.dishes || fresh.dishes).map((dish, index) => {
+      const fallbackPrice = fresh.dishes?.find(candidate => candidate.id === dish?.id)?.price
+        ?? fresh.dishes?.[index]?.price
+        ?? 1;
+      const price = Number.isFinite(dish?.price) ? dish.price : fallbackPrice;
+      return {
+        ...dish,
+        price: Math.min(100, Math.max(1, Math.round(price))),
+      };
+    });
+  }
 
   if (saved.equipment || fresh.equipment) {
     hydrated.equipment = (saved.equipment || fresh.equipment).map((equipment, index) => {

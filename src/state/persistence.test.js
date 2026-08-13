@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { saveState, loadState, hydrateState } from './persistence';
+import { createInitialState } from './initialState';
 
 beforeEach(() => {
   localStorage.clear();
@@ -104,5 +105,45 @@ describe('hydrateState', () => {
       speedMultiplier: 1,
       qualityBonus: 0,
     });
+  });
+
+  it('normalises version-2 dish prices while preserving valid dish data', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      version: 2,
+      dishes: [
+        { id: 'valid', name: 'Valid', price: 37, marker: 'preserved' },
+        { id: 'rounded', name: 'Rounded', price: 37.6 },
+        { id: 'low', name: 'Low', price: -20 },
+        { id: 'high', name: 'High', price: 101 },
+        { ...fresh.dishes[0], price: Number.POSITIVE_INFINITY },
+        { id: 'nan', name: 'NaN', price: Number.NaN },
+        { id: 'null', name: 'Null', price: null },
+        { id: 'string', name: 'String', price: '12' },
+      ],
+    };
+
+    const hydrated = hydrateState(saved, fresh);
+
+    expect(hydrated.version).toBe(2);
+    expect(hydrated.dishes.map(dish => dish.price)).toEqual([37, 38, 1, 100, 12, 1, 1, 1]);
+    expect(hydrated.dishes[0]).toMatchObject({ name: 'Valid', marker: 'preserved' });
+  });
+
+  it('hydrates staff capacity to the fresh default, current headcount, or larger saved capacity', () => {
+    const fresh = createInitialState();
+    const legacy = hydrateState({ ...fresh, staffSlots: 3 }, fresh);
+    const crowdedStaff = [...fresh.staff, ...Array.from({ length: 3 }, (_, index) => ({
+      id: `extra-${index}`,
+      name: `Extra ${index}`,
+    }))];
+    const crowded = hydrateState({ ...fresh, staff: crowdedStaff, staffSlots: 3 }, fresh);
+    const expanded = hydrateState({ ...fresh, staffSlots: 9 }, fresh);
+
+    expect(legacy.staffSlots).toBe(6);
+    expect(crowded.staffSlots).toBe(7);
+    expect(expanded.staffSlots).toBe(9);
+    expect(legacy.version).toBe(2);
   });
 });
