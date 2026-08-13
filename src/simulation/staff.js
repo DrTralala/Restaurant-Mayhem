@@ -164,7 +164,11 @@ function assignTask({ state, staff, customers, queue, tables, foodItems, kitchen
 
     const readyFood = foodItems.find(f => f.state === 'on_service' && (!claimedFoodIds || !claimedFoodIds.has(f.id)));
     if (readyFood) {
-      const serviceTable = state.serviceTables[0];
+      const serviceTable = state.serviceTables.find(table => table.id === readyFood.serviceTableId)
+        || state.serviceTables.find(table =>
+          readyFood.x >= table.x && readyFood.x < table.x + 120
+          && readyFood.y >= table.y && readyFood.y < table.y + 40
+        );
       if (serviceTable) {
         const path = targetForRect(state, { x: serviceTable.x, y: serviceTable.y, w: 120, h: 40 }, staff);
         if (path.length) {
@@ -215,6 +219,8 @@ function assignTask({ state, staff, customers, queue, tables, foodItems, kitchen
 
 function resolveTask({ state, staff, customers, queue, tables, foodItems, kitchenQueue }) {
   if (staff.task.type === 'take_order') {
+    const customer = customers.find(candidate => candidate.id === staff.task.customerId);
+    if (!customer || customer.state !== 'seated') return { staff, customers, queue, tables, foodItems, kitchenQueue };
     const dish = bestDish(state.dishes);
     return {
       staff, queue, tables, foodItems, kitchenQueue,
@@ -297,11 +303,30 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
   }
 
   if (staff.task.type === 'deliver_food') {
+    const customer = customers.find(candidate => candidate.id === staff.task.customerId);
+    const food = foodItems.find(candidate => candidate.id === staff.task.foodId);
+    const canDeliver = customer
+      && customer.state !== 'leaving'
+      && food?.state === 'carried'
+      && staff.carryingFoodId === food.id
+      && food.customerId === customer.id;
+    if (!canDeliver) return { staff, customers, queue, tables, foodItems, kitchenQueue };
+    const dish = state.dishes.find(candidate => candidate.id === food.dishId);
+    const equipment = dish?.requiredEquipmentId
+      ? state.equipment?.find(candidate => candidate.id === dish.requiredEquipmentId)
+      : null;
+    const happinessBonus = Math.round(
+      ((dish?.quality ?? 1) - 1) * 2
+      + getUpgradeEffect(state, 'qualityBonus') * 100
+      + (equipment?.qualityBonus || 0) * 100
+    );
     return {
       staff: { ...staff, carryingFoodId: null },
       queue, tables, kitchenQueue,
       foodItems: foodItems.map(f => f.id === staff.task.foodId ? { ...f, state: 'delivered' } : f),
-      customers: customers.map(c => c.id === staff.task.customerId ? { ...c, state: 'eating', eatTime: state.restaurant.gameTime } : c),
+      customers: customers.map(c => c.id === staff.task.customerId
+        ? { ...c, state: 'eating', eatTime: state.restaurant.gameTime, happiness: Math.min(100, (c.happiness ?? 80) + happinessBonus) }
+        : c),
     };
   }
 

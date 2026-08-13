@@ -51,6 +51,51 @@ describe('processKitchen', () => {
     expect(result.kitchenQueue.length).toBe(0);
   });
 
+  it('only assigns toast to a station containing the required toaster', () => {
+    const customer = {
+      id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
+      state: 'ordering', dishId: 'toast', tableId: 't1', tipAmount: 0,
+      seatTime: null, orderTime: 0, eatTime: null,
+    };
+    const state = {
+      ...baseState,
+      customers: [customer],
+      dishes: [{ id: 'toast', name: 'Toast', prepTime: 60, requiredEquipmentId: 'toaster' }],
+      equipment: [{ id: 'toaster', name: 'Toaster', level: 1, speedMultiplier: 1, qualityBonus: 0, owned: true }],
+    };
+
+    const withoutToaster = processKitchen({
+      ...state,
+      kitchenStations: [{ id: 'empty', equipmentId: null }],
+    });
+    const withToaster = processKitchen({
+      ...state,
+      kitchenStations: [{ id: 'empty', equipmentId: null }, { id: 'toast-station', equipmentId: 'toaster' }],
+    });
+
+    expect(withoutToaster.kitchenQueue).toHaveLength(0);
+    expect(withToaster.kitchenQueue).toHaveLength(1);
+    expect(withToaster.kitchenQueue[0].stationId).toBe('toast-station');
+  });
+
+  it('combines equipment and global speed effects to complete cooking sooner', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 91 },
+      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      dishes: [{ id: 'd1', prepTime: 120, requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1.2, qualityBonus: 0 }],
+      upgrades: [{ level: 1, effects: { type: 'globalSpeed', value: 0.1 } }],
+      kitchenQueue: [{ customerId: 'c1', dishId: 'd1', stationId: 'k1', startTime: 0, completedAt: null }],
+    };
+
+    const result = processKitchen(state);
+
+    // 120 / (1.2 * 1.1) = 90.91 seconds.
+    expect(result.kitchenQueue).toHaveLength(0);
+    expect(result.foodItems).toHaveLength(1);
+  });
+
   it('places food on service table when cook time elapsed', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
@@ -69,6 +114,90 @@ describe('processKitchen', () => {
     expect(result.foodItems.length).toBe(1);
     expect(result.foodItems[0].state).toBe('on_service');
     expect(result.foodItems[0].customerId).toBe('c1');
+  });
+
+  it('places completed food on the second counter when the first counter has four items', () => {
+    const existingFood = Array.from({ length: 4 }, (_, index) => ({
+      id: `existing-${index}`, dishId: 'd1', customerId: 'c1', tableId: 't1',
+      serviceTableId: 'st1', state: 'on_service', x: 150 + index * 30, y: 130,
+    }));
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 60 },
+      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      dishes: [{ id: 'd1', prepTime: 60, requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
+      kitchenQueue: [{ customerId: 'c1', dishId: 'd1', stationId: 'k1', startTime: 0, completedAt: null }],
+      serviceTables: [
+        { id: 'st1', x: 140, y: 120 },
+        { id: 'st2', x: 400, y: 120 },
+      ],
+      foodItems: existingFood,
+    };
+
+    const result = processKitchen(state);
+    const completedFood = result.foodItems.find(food => !food.id.startsWith('existing-'));
+
+    expect(result.foodItems).toHaveLength(5);
+    expect(completedFood).toMatchObject({ serviceTableId: 'st2', x: 410, y: 130 });
+    expect(result.kitchenQueue).toHaveLength(0);
+  });
+
+  it('counts version-2 service food without a recorded counter against counter capacity', () => {
+    const existingFood = Array.from({ length: 4 }, (_, index) => ({
+      id: `legacy-${index}`, dishId: 'd1', customerId: 'c1', tableId: 't1',
+      state: 'on_service', x: 150 + index * 30, y: 130,
+    }));
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 60 },
+      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      dishes: [{ id: 'd1', prepTime: 60, requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
+      kitchenQueue: [{ customerId: 'c1', dishId: 'd1', stationId: 'k1', startTime: 0, completedAt: null }],
+      serviceTables: [
+        { id: 'st1', x: 140, y: 120 },
+        { id: 'st2', x: 400, y: 120 },
+      ],
+      foodItems: existingFood,
+    };
+
+    const result = processKitchen(state);
+
+    expect(result.foodItems.slice(0, 4).every(food => food.serviceTableId === 'st1')).toBe(true);
+    expect(result.foodItems[4].serviceTableId).toBe('st2');
+  });
+
+  it('retains completed work without duplicating food while every counter is full', () => {
+    const existingFood = Array.from({ length: 8 }, (_, index) => ({
+      id: `existing-${index}`, dishId: 'd1', customerId: 'c1', tableId: 't1',
+      serviceTableId: index < 4 ? 'st1' : 'st2', state: 'on_service', x: 0, y: 0,
+    }));
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 60 },
+      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      dishes: [{ id: 'd1', prepTime: 60, requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
+      kitchenQueue: [{ customerId: 'c1', dishId: 'd1', stationId: 'k1', startTime: 0, completedAt: null }],
+      serviceTables: [
+        { id: 'st1', x: 140, y: 120 },
+        { id: 'st2', x: 400, y: 120 },
+      ],
+      foodItems: existingFood,
+    };
+
+    const firstResult = processKitchen(state);
+    const secondResult = processKitchen({
+      ...firstResult,
+      restaurant: { ...firstResult.restaurant, gameTime: 61 },
+    });
+
+    expect(firstResult.foodItems).toHaveLength(8);
+    expect(firstResult.kitchenQueue).toHaveLength(1);
+    expect(firstResult.kitchenQueue[0].completedAt).toBe(60);
+    expect(secondResult.foodItems).toHaveLength(8);
+    expect(secondResult.kitchenQueue).toHaveLength(1);
   });
 
   it('cooking does not progress when startTime is null', () => {

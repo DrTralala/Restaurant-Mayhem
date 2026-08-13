@@ -486,6 +486,28 @@ describe('updateStaff', () => {
     expect(result.staff[0].path.length).toBeGreaterThan(0);
   });
 
+  it("waiter paths to the ready food's recorded service counter", () => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 700, y: 500 }],
+      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+      foodItems: [{
+        id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1',
+        serviceTableId: 'st2', state: 'on_service', x: 410, y: 130,
+      }],
+      serviceTables: [
+        { id: 'st1', x: 140, y: 120 },
+        { id: 'st2', x: 400, y: 120 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toMatchObject({ type: 'pickup_food', foodId: 'f1' });
+    expect(result.staff[0].path.at(-1)).toEqual({ x: 26, y: 8 });
+  });
+
   it('waiter completes food pickup on arrival at service table', () => {
     const waiter = {
       id: 's1', name: 'Anna', role: 'waiter', skill: 5, morale: 80, salary: 150,
@@ -576,6 +598,133 @@ describe('updateStaff', () => {
     expect(result.staff[0].task).toBeNull();
     expect(result.customers[0].state).toBe('eating');
     expect(result.customers[0].eatTime).toBe(100);
+  });
+
+  it('adds dish, upgrade, and equipment quality to happiness on delivery', () => {
+    const waiter = {
+      id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
+      task: { type: 'deliver_food', foodId: 'f1', customerId: 'c1' },
+      carryingFoodId: 'f1',
+    };
+    const state = {
+      ...baseState,
+      staff: [waiter],
+      customers: [{ id: 'c1', state: 'ordering', happiness: 50, dishId: 'd1', tableId: 't1' }],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+      foodItems: [{ id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1', state: 'carried' }],
+      dishes: [{ id: 'd1', quality: 5, requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1.3, qualityBonus: 0.15 }],
+      upgrades: [{ level: 2, effects: { type: 'qualityBonus', value: 0.05 } }],
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+    };
+
+    const result = updateStaff(state, 0);
+
+    // round((5 - 1) * 2 + 0.10 * 100 + 0.15 * 100) = 33.
+    expect(result.customers[0]).toMatchObject({ state: 'eating', happiness: 83 });
+  });
+
+  it('caps delivery happiness at 100', () => {
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
+        task: { type: 'deliver_food', foodId: 'f1', customerId: 'c1' }, carryingFoodId: 'f1',
+      }],
+      customers: [{ id: 'c1', state: 'ordering', happiness: 95, dishId: 'd1', tableId: 't1' }],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+      foodItems: [{ id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1', state: 'carried' }],
+      dishes: [{ id: 'd1', quality: 5, requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers[0].happiness).toBe(100);
+  });
+
+  it('cancels a stale take_order task when the customer is no longer seated', () => {
+    const customer = { id: 'c1', state: 'paying', dishId: 'd1', tableId: 't1', happiness: 80 };
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
+        task: { type: 'take_order', customerId: 'c1' },
+      }],
+      customers: [customer],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+      dishes: [{ id: 'd2', popularity: 100, quality: 10, price: 1 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.customers[0]).toEqual(customer);
+  });
+
+  it('cancels a stale take_payment task without creating revenue', () => {
+    const customer = { id: 'c1', state: 'eating', dishId: 'd1', tableId: 't1', happiness: 80 };
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'cashier', role: 'cashier', morale: 80, x: 780, y: 140, path: [],
+        task: { type: 'take_payment', customerId: 'c1' },
+      }],
+      customers: [customer],
+      dishes: [{ id: 'd1', price: 12 }],
+      completedCustomers: [],
+      restaurant: { ...baseState.restaurant, totalServed: 4 },
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.customers[0]).toEqual(customer);
+    expect(result.completedCustomers).toEqual([]);
+    expect(result.restaurant.totalServed).toBe(4);
+  });
+
+  it('cancels delivery when the target customer is leaving', () => {
+    const customer = { id: 'c1', state: 'leaving', happiness: 40, dishId: 'd1', tableId: 't1' };
+    const food = { id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1', state: 'carried' };
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
+        task: { type: 'deliver_food', foodId: 'f1', customerId: 'c1' }, carryingFoodId: 'f1',
+      }],
+      customers: [customer],
+      foodItems: [food],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: 'f1' });
+    expect(result.customers[0]).toEqual(customer);
+    expect(result.foodItems[0]).toEqual(food);
+  });
+
+  it('cancels delivery when the task food is not carried', () => {
+    const customer = { id: 'c1', state: 'ordering', happiness: 80, dishId: 'd1', tableId: 't1' };
+    const food = { id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1', state: 'on_service' };
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
+        task: { type: 'deliver_food', foodId: 'f1', customerId: 'c1' }, carryingFoodId: 'f1',
+      }],
+      customers: [customer],
+      foodItems: [food],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: 'f1' });
+    expect(result.customers[0]).toEqual(customer);
+    expect(result.foodItems[0]).toEqual(food);
   });
 
   // --- Task 5: Food cleanup ---

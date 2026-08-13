@@ -1,10 +1,41 @@
+import { getUpgradeEffect } from './balance';
+
 let foodItemCounter = 0;
+
+function placeFoodOnServiceTable(state, foodItems, customers, item) {
+  const serviceTable = state.serviceTables.find(table =>
+    foodItems.filter(food => food.state === 'on_service' && food.serviceTableId === table.id).length < 4
+  );
+  if (!serviceTable) return false;
+
+  const foodCol = foodItems.filter(food => food.state === 'on_service' && food.serviceTableId === serviceTable.id).length;
+  foodItems.push({
+    id: `food-${++foodItemCounter}`,
+    dishId: item.dishId,
+    customerId: item.customerId,
+    tableId: customers.find(c => c.id === item.customerId)?.tableId || null,
+    serviceTableId: serviceTable.id,
+    state: 'on_service',
+    x: serviceTable.x + 10 + foodCol * 30,
+    y: serviceTable.y + 10,
+  });
+  return true;
+}
 
 export function processKitchen(state) {
   let queue = [...state.kitchenQueue];
   let customers = [...state.customers];
   let completed = [...state.completedCustomers];
   let foodItems = [...state.foodItems];
+
+  foodItems = foodItems.map(food => {
+    if (food.state !== 'on_service' || food.serviceTableId) return food;
+    const serviceTable = state.serviceTables.find(table =>
+      food.x >= table.x && food.x < table.x + 120
+      && food.y >= table.y && food.y < table.y + 40
+    );
+    return serviceTable ? { ...food, serviceTableId: serviceTable.id } : food;
+  });
 
   // Remove queue items for customers that no longer exist or are leaving
   const activeCustomerIds = new Set(customers.filter(c => c.state !== 'leaving').map(c => c.id));
@@ -35,7 +66,8 @@ export function processKitchen(state) {
     if (!equipmentOk) continue;
 
     const station = state.kitchenStations.find(s =>
-      !queue.find(q => q.stationId === s.id && !q.completedAt)
+      (!dish.requiredEquipmentId || s.equipmentId === dish.requiredEquipmentId)
+      && !queue.find(q => q.stationId === s.id && !q.completedAt)
     );
 
     if (station) {
@@ -53,7 +85,9 @@ export function processKitchen(state) {
   let nextQueue = [];
   for (const item of queue) {
     if (item.completedAt) {
-      nextQueue.push(item);
+      if (!placeFoodOnServiceTable(state, foodItems, customers, item)) {
+        nextQueue.push(item);
+      }
       continue;
     }
     if (item.startTime === null) {
@@ -66,24 +100,14 @@ export function processKitchen(state) {
       ? state.equipment.find(e => e.id === station.equipmentId)
       : null;
     const speedMultiplier = equipment?.speedMultiplier || 1;
-    const cookTime = (dish?.prepTime || 60) / speedMultiplier;
+    const globalSpeedEffect = getUpgradeEffect(state, 'globalSpeed');
+    const cookTime = (dish?.prepTime || 60) / (speedMultiplier * (1 + globalSpeedEffect));
     const elapsed = state.restaurant.gameTime - item.startTime;
 
     if (elapsed >= cookTime) {
-      nextQueue.push({ ...item, completedAt: state.restaurant.gameTime });
-      // Place food on first available service table
-      const serviceTable = state.serviceTables[0];
-      if (serviceTable) {
-        const foodCol = foodItems.filter(f => f.state === 'on_service').length % 4;
-        foodItems.push({
-          id: `food-${++foodItemCounter}`,
-          dishId: item.dishId,
-          customerId: item.customerId,
-          tableId: customers.find(c => c.id === item.customerId)?.tableId || null,
-          state: 'on_service',
-          x: serviceTable.x + 10 + foodCol * 30,
-          y: serviceTable.y + 10,
-        });
+      const completedItem = { ...item, completedAt: state.restaurant.gameTime };
+      if (!placeFoodOnServiceTable(state, foodItems, customers, completedItem)) {
+        nextQueue.push(completedItem);
       }
     } else {
       nextQueue.push(item);
@@ -100,8 +124,6 @@ export function processKitchen(state) {
   });
 
   // Payment completion is handled by a cashier or dual-role cashier-waiter.
-  queue = queue.filter(q => !q.completedAt);
-
   return {
     ...state,
     kitchenQueue: queue,
