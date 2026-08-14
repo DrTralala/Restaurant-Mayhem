@@ -222,7 +222,7 @@ describe('updateCustomers', () => {
     expect(result.tables.find(t => t.id === 't1').status).toBe('dirty');
   });
 
-  it('does not auto-seat queued customer when table frees (host controls seating)', () => {
+  it('does not auto-seat queued customer when table frees (waiter controls seating)', () => {
     const leavingCustomer = {
       id: 'c2', archetype: 'regular', patience: 0, happiness: 50,
       state: 'leaving', dishId: null, tableId: 't1', tipAmount: 0,

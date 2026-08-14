@@ -332,7 +332,7 @@ describe('drawCustomerLayer', () => {
 
   it('renders guided customer at dynamic x/y even without tableId', () => {
     const customers = [
-      { id: 'c1', archetype: 'regular', state: 'guided', x: 850, y: 370, guideHostId: 'h1' },
+      { id: 'c1', archetype: 'regular', state: 'guided', x: 850, y: 370, guideStaffId: 'w1' },
     ];
     const state = { customers, tables: [], restaurant: {} };
     const ctx = recordCtx();
@@ -388,7 +388,7 @@ describe('drawCustomerLayer', () => {
   it('renders guided customer by x/y even when tableId is also set', () => {
     // guided customer has tableId assigned but hasn't been seated yet
     const customers = [
-      { id: 'c1', archetype: 'regular', state: 'guided', x: 850, y: 370, tableId: 't1', guideHostId: 'h1' },
+      { id: 'c1', archetype: 'regular', state: 'guided', x: 850, y: 370, tableId: 't1', guideStaffId: 'w1' },
     ];
     const tables = [{ id: 't1', x: 200, y: 200, status: 'reserved', seats: 2 }];
     const state = { customers, tables, restaurant: {} };

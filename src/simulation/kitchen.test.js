@@ -231,13 +231,18 @@ describe('processKitchen', () => {
 
   it('retains completed work without duplicating food while every counter is full', () => {
     const existingFood = Array.from({ length: 8 }, (_, index) => ({
-      id: `existing-${index}`, dishId: 'd1', customerId: 'c1', tableId: 't1',
+      id: `existing-${index}`, dishId: 'd1', customerId: `filler-${index}`, tableId: `filler-table-${index}`,
       serviceTableId: index < 4 ? 'st1' : 'st2', state: 'on_service', x: 0, y: 0,
     }));
     const state = {
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 60 },
-      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      customers: [
+        { id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' },
+        ...existingFood.map(food => ({
+          id: food.customerId, state: 'eating', dishId: 'd1', tableId: food.tableId,
+        })),
+      ],
       dishes: [{ id: 'd1', prepTime: 60, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
       kitchenQueue: [{ customerId: 'c1', dishId: 'd1', stationId: 'k1', startTime: 0, completedAt: null }],
@@ -255,9 +260,18 @@ describe('processKitchen', () => {
     });
 
     expect(firstResult.foodItems).toHaveLength(8);
+    expect(firstResult.foodItems.every(food => food.state === 'on_service')).toBe(true);
+    expect(firstResult.foodItems.filter(food => food.serviceTableId === 'st1')).toHaveLength(4);
+    expect(firstResult.foodItems.filter(food => food.serviceTableId === 'st2')).toHaveLength(4);
+    expect(new Set(firstResult.foodItems.map(food => food.customerId)).size)
+      .toBe(firstResult.foodItems.length);
     expect(firstResult.kitchenQueue).toHaveLength(1);
     expect(firstResult.kitchenQueue[0].completedAt).toBe(60);
     expect(secondResult.foodItems).toHaveLength(8);
+    expect(secondResult.foodItems.every(food => food.state === 'on_service')).toBe(true);
+    expect(secondResult.foodItems.map(food => food.id)).toEqual(firstResult.foodItems.map(food => food.id));
+    expect(secondResult.foodItems.filter(food => food.serviceTableId === 'st1')).toHaveLength(4);
+    expect(secondResult.foodItems.filter(food => food.serviceTableId === 'st2')).toHaveLength(4);
     expect(secondResult.kitchenQueue).toHaveLength(1);
   });
 

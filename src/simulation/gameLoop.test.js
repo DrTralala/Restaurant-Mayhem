@@ -44,6 +44,33 @@ describe('runTick', () => {
     expect(result.restaurant.gameTime).toBe(110); // 100 + 5 * 2
   });
 
+  it('keeps a fresh-game roster and economy invariant through a deterministic arrival tick', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const initial = createInitialState();
+    const state = runTick({
+      ...initial,
+      queue: [{
+        id: 'invariant-customer', partyId: 'invariant-party', partySize: 1,
+        partyType: 'solo', archetype: 'regular', gender: 'female', patience: 1000,
+        happiness: 80, state: 'queued', dishId: null, tableId: null, chairId: null,
+      }],
+    }, 1);
+
+    expect(state.staff.filter(staff => staff.role === 'waiter')).toHaveLength(3);
+    expect(state.staff.filter(staff => staff.role === 'host' || staff.role === 'cashier_waiter'))
+      .toHaveLength(0);
+    expect(state.cashierStations.filter(station => station.assignedStaffId)).toHaveLength(1);
+    expect(state.restaurant.funds).toBeGreaterThanOrEqual(0);
+    expect(new Set(state.foodItems.map(food => food.customerId)).size)
+      .toBeLessThanOrEqual(state.foodItems.length);
+
+    expect(state.customers[0]).toMatchObject({
+      id: 'invariant-customer', state: 'guided', guideStaffId: expect.any(String), tableId: 't1',
+    });
+    expect(state.staff.find(staff => staff.id === state.customers[0].guideStaffId))
+      .toMatchObject({ role: 'waiter' });
+  });
+
   it('releases stale carried food for cleanup without leaving a carrier reference', () => {
     const state = {
       ...emptyState,
@@ -103,22 +130,142 @@ describe('runTick', () => {
     expect(result.foodItems).toEqual([food]);
   });
 
-  it('routes a fresh-game customer through seating, service, cashier, and departure', () => {
+  it('routes a fresh-game customer through seating, exact-counter pickup, delivery, cashier, and departure', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
+    const customerId = 'integration-customer';
     let state = createInitialState();
     state = {
       ...state,
       queue: [{
-        id: 'integration-customer', partyId: 'integration-party', partySize: 1,
+        id: customerId, partyId: 'integration-party', partySize: 1,
         partyType: 'solo', archetype: 'regular', gender: 'male', patience: 1000,
         happiness: 80, state: 'queued', dishId: null, tableId: null, chairId: null,
       }],
     };
 
+    const milestones = {
+      seated: false,
+      cooking: false,
+      onService: false,
+      pickup: false,
+      carried: false,
+      delivered: false,
+      eating: false,
+      paying: false,
+      paymentTask: false,
+      leaving: false,
+    };
+    let seatedPosition = null;
+    let pickupServiceTableId = null;
+    let delivery = null;
+    let payment = null;
+
     for (let second = 0; second < 600 && state.restaurant.totalServed === 0; second += 1) {
       state = runTick(state, 1);
+      const customer = state.customers.find(candidate => candidate.id === customerId);
+      const food = state.foodItems.find(candidate => candidate.customerId === customerId);
+      const queueItem = state.kitchenQueue.find(item => item.customerId === customerId);
+
+      if (customer?.state === 'seated') {
+        milestones.seated = true;
+        const chair = state.chairs.find(candidate => candidate.id === customer.chairId);
+        const table = state.tables.find(candidate => candidate.id === customer.tableId);
+        expect(chair).toBeDefined();
+        expect(table).toBeDefined();
+        expect(customer.x).toBe(chair.x + 10);
+        expect(customer.y).toBe(chair.y + 10);
+        seatedPosition = { chairId: chair.id, x: customer.x, y: customer.y, tableX: table.x, tableY: table.y };
+      }
+
+      if (queueItem?.startTime != null) milestones.cooking = true;
+
+      if (food?.state === 'on_service') {
+        milestones.onService = true;
+        expect(food.serviceTableId).toBe('st1');
+      }
+
+      const pickupStaff = state.staff.find(staff =>
+        staff.task?.type === 'pickup_food' && staff.task.foodId === food?.id);
+      if (pickupStaff) {
+        milestones.pickup = true;
+        pickupServiceTableId = food.serviceTableId;
+        expect(pickupServiceTableId).toBe('st1');
+      }
+
+      if (food?.state === 'carried') {
+        milestones.carried = true;
+        expect(state.staff).toEqual(expect.arrayContaining([
+          expect.objectContaining({ carryingFoodId: food.id }),
+        ]));
+      }
+
+      if (food?.state === 'delivered') {
+        if (!milestones.delivered) {
+          milestones.delivered = true;
+          delivery = { ...food };
+          expect(food).toMatchObject({ state: 'delivered', tableId: 't1', x: 208, y: 208 });
+          expect(customer).toMatchObject({ state: 'eating', tableId: 't1' });
+        }
+      }
+
+      if (customer?.state === 'eating') milestones.eating = true;
+
+      if (customer?.state === 'paying') {
+        milestones.paying = true;
+        if (customer.cashierStationId) {
+          const station = state.cashierStations.find(candidate =>
+            candidate.id === customer.cashierStationId);
+          expect(station?.assignedStaffId).toBeDefined();
+          expect(state.staff.find(staff => staff.id === station.assignedStaffId))
+            .toMatchObject({ role: 'waiter' });
+        }
+      }
+
+      const paymentStaff = state.staff.find(staff =>
+        staff.task?.type === 'take_payment' && staff.task.customerId === customerId);
+      if (paymentStaff) {
+        milestones.paymentTask = true;
+        expect(state.cashierStations).toContainEqual(expect.objectContaining({
+          id: paymentStaff.task.stationId,
+          assignedStaffId: paymentStaff.id,
+        }));
+      }
+
+      if (state.restaurant.totalServed === 1 && !payment) {
+        payment = {
+          funds: state.restaurant.funds,
+          dailyRevenue: state.restaurant.dailyRevenue,
+        };
+      }
+      if (customer?.state === 'leaving') milestones.leaving = true;
+
+      expect(new Set(state.foodItems.map(item => item.customerId)).size)
+        .toBe(state.foodItems.length);
     }
 
+    expect(milestones).toEqual({
+      seated: true,
+      cooking: true,
+      onService: true,
+      pickup: true,
+      carried: true,
+      delivered: true,
+      eating: true,
+      paying: true,
+      paymentTask: true,
+      leaving: true,
+    });
+    expect(seatedPosition).toEqual(expect.objectContaining({ chairId: expect.any(String) }));
+    expect(seatedPosition.x).not.toBe(seatedPosition.tableX);
+    expect(seatedPosition.y).not.toBe(seatedPosition.tableY);
+    expect(pickupServiceTableId).toBe('st1');
+    expect(delivery).toMatchObject({ customerId, tableId: 't1', x: 208, y: 208 });
     expect(state.restaurant.totalServed).toBe(1);
+    expect(payment).toEqual({ funds: 614.4, dailyRevenue: 14.4 });
+    expect(state.customers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: customerId, state: 'leaving', departureReason: 'served' }),
+    ]));
+    expect(state.cashierStations.filter(station => station.assignedStaffId)).toHaveLength(1);
+    expect(state.staff.filter(staff => staff.role === 'waiter')).toHaveLength(3);
   });
 });

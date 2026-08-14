@@ -46,9 +46,11 @@ describe('createInitialState', () => {
 
     expect(state.version).toBe(3);
     expect(state.staff.map(staff => staff.role)).toEqual(['cook', 'waiter', 'waiter', 'waiter']);
-    expect(state.cashierStations[0]).toMatchObject({
-      id: 'cashier1',
-      assignedStaffId: 'starter-cashier-waiter',
-    });
+    expect(state.cashierStations).toHaveLength(1);
+    expect(state.cashierStations[0]).toMatchObject({ id: 'cashier1' });
+    expect(state.staff.find(staff => staff.id === state.cashierStations[0].assignedStaffId))
+      .toMatchObject({ role: 'waiter' });
+    expect(state.staff.filter(staff => staff.role === 'host' || staff.role === 'cashier_waiter'))
+      .toHaveLength(0);
   });
 });
