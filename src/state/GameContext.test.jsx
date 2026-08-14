@@ -185,6 +185,70 @@ describe('GameProvider furniture actions', () => {
   });
 });
 
+describe('GameProvider authoritative placement actions', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('charges the catalogue price and assigns a free waiter to a cashier station', () => {
+    const game = renderReducer();
+
+    game.dispatch({
+      type: 'PLACE_ITEM',
+      itemType: 'cashierTable',
+      x: 600,
+      y: 300,
+      rotation: 0,
+      cost: 1,
+    });
+
+    expect(game.state.restaurant.funds).toBe(300);
+    expect(game.state.cashierStations.at(-1)).toMatchObject({
+      id: 'cashier2',
+      x: 600,
+      y: 300,
+      w: 80,
+      h: 40,
+      assignedStaffId: 'starter-waiter',
+    });
+    expect(game.state.staff).toHaveLength(4);
+  });
+
+  it('creates an unassigned cashier station when no waiter is available', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      staff: initial.staff.filter(staff => staff.role !== 'waiter'),
+    });
+
+    game.dispatch({
+      type: 'PLACE_ITEM',
+      itemType: 'cashierTable',
+      x: 600,
+      y: 300,
+      rotation: 0,
+    });
+
+    expect(game.state.restaurant.funds).toBe(300);
+    expect(game.state.cashierStations.at(-1)).not.toHaveProperty('assignedStaffId');
+    expect(game.state.staff).toHaveLength(1);
+  });
+
+  it('clears cashier assignments when firing staff', () => {
+    const game = renderReducer({
+      cashierStations: [
+        { id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'starter-waiter' },
+        { id: 'cashier2', x: 600, y: 300, w: 80, h: 40, assignedStaffId: 'starter-waiter' },
+      ],
+    });
+
+    game.dispatch({ type: 'FIRE_STAFF', id: 'starter-waiter' });
+
+    expect(game.state.staff.some(staff => staff.id === 'starter-waiter')).toBe(false);
+    expect(game.state.cashierStations).toEqual([
+      { id: 'cashier1', x: 800, y: 120, w: 80, h: 40 },
+      { id: 'cashier2', x: 600, y: 300, w: 80, h: 40 },
+    ]);
+  });
+});
+
 describe('GameProvider guarded economy actions', () => {
   beforeEach(() => localStorage.clear());
 

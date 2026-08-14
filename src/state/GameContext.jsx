@@ -2,13 +2,16 @@ import { createContext, useContext, useReducer, useEffect, useRef } from 'react'
 import { createInitialState } from './initialState';
 import { hydrateState, loadState, saveState } from './persistence';
 import { ITEM_PRICES, ITEM_SELL_RATIO } from '../data/items';
+import { getPlaceable } from '../data/placeables';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { clampReputation } from '../simulation/balance';
+import { assignWaiterToStation } from '../simulation/cashiers';
+import { getNextNumericId, validatePlacement } from '../simulation/placement';
+import { getRestaurantWorld } from '../simulation/world';
 
 const DISH_QUALITY_COST = 50;
 const TRAINING_COST = 100;
 const BONUS_COST = 50;
-const SERVICE_TABLE_COST = 300;
 const STARTING_DISH_QUALITY = 1;
 const STAFF_SALARIES = { cook: 200, waiter: 150 };
 const EXPANSION_COSTS = [0, 1000, 3000, 6000];
@@ -18,6 +21,151 @@ function canAfford(state, cost) {
     && cost >= 0
     && Number.isFinite(state.restaurant.funds)
     && state.restaurant.funds >= cost;
+}
+
+function getLegacyPlacement(state, action, itemType) {
+  if (itemType === 'table') {
+    const tables = Array.isArray(state.tables) ? state.tables : [];
+    const count = tables.length;
+    return {
+      itemType,
+      x: action.x ?? 200 + (count % 2) * 200,
+      y: action.y ?? 200 + Math.floor(count / 2) * 200,
+      rotation: action.rotation ?? 0,
+    };
+  }
+
+  if (itemType === 'chair') {
+    const tables = Array.isArray(state.tables) ? state.tables : [];
+    const chairs = Array.isArray(state.chairs) ? state.chairs : [];
+    const table = [...tables].reverse().find(candidate =>
+      chairs.filter(chair => chair.tableId === candidate.id).length < candidate.seats);
+    if (!table) return null;
+
+    const existing = chairs.filter(chair => chair.tableId === table.id);
+    const positions = [
+      { x: table.x + 10, y: table.y - 20, rotation: 2 },
+      { x: table.x + 10, y: table.y + 40, rotation: 0 },
+      { x: table.x - 20, y: table.y + 10, rotation: 1 },
+      { x: table.x + 40, y: table.y + 10, rotation: 3 },
+    ];
+    const position = positions[existing.length];
+    if (!position) return null;
+    return {
+      itemType,
+      x: action.x ?? position.x,
+      y: action.y ?? position.y,
+      rotation: action.rotation ?? position.rotation,
+    };
+  }
+
+  if (itemType === 'door') {
+    const doors = Array.isArray(state.doors) ? state.doors : [];
+    const world = getRestaurantWorld(state.restaurant || {});
+    const defaultY = 340;
+    const offsets = [100, -100, 200, -200, 300, -300];
+    const y = offsets
+      .map(offset => defaultY + offset)
+      .find(candidate => candidate >= 80 && candidate <= 600
+        && !doors.some(door => Math.abs(door.y - candidate) < 60));
+    if (y == null) return null;
+    return {
+      itemType,
+      x: action.x ?? world.doorX,
+      y: action.y ?? y,
+      rotation: action.rotation ?? 0,
+    };
+  }
+
+  if (itemType === 'serviceTable') {
+    const serviceTables = Array.isArray(state.serviceTables) ? state.serviceTables : [];
+    return {
+      itemType,
+      x: action.x ?? 140 + serviceTables.length * 140,
+      y: action.y ?? 120,
+      rotation: action.rotation ?? 0,
+    };
+  }
+
+  return null;
+}
+
+function placeLegacyItem(state, action, itemType) {
+  const placement = getLegacyPlacement(state, action, itemType);
+  return placement ? placeItem(state, placement) : state;
+}
+
+function placeItem(state, action) {
+  const item = getPlaceable(action.itemType);
+  const placement = {
+    itemType: action.itemType,
+    x: action.x,
+    y: action.y,
+    rotation: action.rotation ?? 0,
+  };
+  const result = item && validatePlacement(state, placement);
+  if (!item || !result?.valid || !canAfford(state, item.price)) return state;
+
+  const nextState = {
+    ...state,
+    restaurant: { ...state.restaurant, funds: state.restaurant.funds - item.price },
+  };
+
+  if (action.itemType === 'table') {
+    const id = getNextNumericId(state.tables, 't');
+    return {
+      ...nextState,
+      tables: [...state.tables, { id, seats: 4, status: 'empty', x: placement.x, y: placement.y }],
+    };
+  }
+
+  if (action.itemType === 'chair') {
+    const id = getNextNumericId(state.chairs, 'ch');
+    return {
+      ...nextState,
+      chairs: [...state.chairs, {
+        id,
+        tableId: result.tableId,
+        x: placement.x,
+        y: placement.y,
+        rotation: placement.rotation,
+      }],
+    };
+  }
+
+  if (action.itemType === 'door') {
+    const doors = state.doors || [];
+    const id = getNextNumericId(doors, 'door');
+    return {
+      ...nextState,
+      doors: [...doors, { id, y: placement.y }],
+    };
+  }
+
+  if (action.itemType === 'serviceTable') {
+    const serviceTables = state.serviceTables || [];
+    const id = getNextNumericId(serviceTables, 'st');
+    return {
+      ...nextState,
+      serviceTables: [...serviceTables, { id, x: placement.x, y: placement.y }],
+    };
+  }
+
+  if (action.itemType === 'cashierTable') {
+    const cashierStations = state.cashierStations || [];
+    const id = getNextNumericId(cashierStations, 'cashier');
+    const station = { id, x: placement.x, y: placement.y, w: 80, h: 40 };
+    return {
+      ...nextState,
+      cashierStations: assignWaiterToStation(
+        [...cashierStations, station],
+        state.staff,
+        id,
+      ),
+    };
+  }
+
+  return state;
 }
 
 const GameContext = createContext(null);
@@ -138,7 +286,15 @@ function gameReducer(state, action) {
       };
     }
     case 'FIRE_STAFF':
-      return { ...state, staff: state.staff.filter(s => s.id !== action.id) };
+      return {
+        ...state,
+        staff: state.staff.filter(s => s.id !== action.id),
+        cashierStations: (state.cashierStations || []).map(station => {
+          if (station.assignedStaffId !== action.id) return station;
+          const { assignedStaffId, ...unassigned } = station;
+          return unassigned;
+        }),
+      };
     case 'RENAME_STAFF':
       return {
         ...state,
@@ -206,57 +362,16 @@ function gameReducer(state, action) {
       };
     }
     case 'BUY_TABLE': {
-      const cost = ITEM_PRICES.table;
-      if (!canAfford(state, cost)) return state;
-      const nextNumber = Math.max(0, ...state.tables.map(table => Number(table.id.match(/^t(\d+)$/)?.[1]) || 0)) + 1;
-      const count = state.tables.length;
-      return {
-        ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - cost },
-        tables: [...state.tables, {
-          id: `t${nextNumber}`, seats: 4, status: 'empty',
-          x: 200 + (count % 2) * 200,
-          y: 200 + Math.floor(count / 2) * 200,
-        }],
-      };
+      return placeLegacyItem(state, action, 'table');
     }
     case 'BUY_CHAIR': {
-      const cost = ITEM_PRICES.chair;
-      if (!canAfford(state, cost)) return state;
-      const table = [...state.tables].reverse().find(candidate =>
-        state.chairs.filter(chair => chair.tableId === candidate.id).length < candidate.seats);
-      if (!table) return state;
-      const existing = state.chairs.filter(chair => chair.tableId === table.id);
-      const positions = [
-        { x: table.x + 10, y: table.y - 20, rotation: 2 },
-        { x: table.x + 10, y: table.y + 40, rotation: 0 },
-        { x: table.x - 20, y: table.y + 10, rotation: 1 },
-        { x: table.x + 40, y: table.y + 10, rotation: 3 },
-      ];
-      const nextNumber = Math.max(0, ...state.chairs.map(chair => Number(chair.id.match(/^ch(\d+)$/)?.[1]) || 0)) + 1;
-      return {
-        ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - cost },
-        chairs: [...state.chairs, { id: `ch${nextNumber}`, tableId: table.id, ...positions[existing.length] }],
-      };
+      return placeLegacyItem(state, action, 'chair');
     }
     case 'BUY_DOOR': {
-      const cost = ITEM_PRICES.door;
-      if (!canAfford(state, cost)) return state;
-      const doors = state.doors || [];
-      const defaultY = 340;
-      const offsets = [100, -100, 200, -200, 300, -300];
-      const y = offsets
-        .map(offset => defaultY + offset)
-        .find(candidate => candidate >= 80 && candidate <= 600 && !doors.some(door => Math.abs(door.y - candidate) < 60));
-      if (y == null) return state;
-      const nextNumber = Math.max(0, ...doors.map(door => Number(door.id.match(/^door(\d+)$/)?.[1]) || 0)) + 1;
-      return {
-        ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - cost },
-        doors: [...doors, { id: `door${nextNumber}`, y }],
-      };
+      return placeLegacyItem(state, action, 'door');
     }
+    case 'PLACE_ITEM':
+      return placeItem(state, action);
     case 'MOVE_ITEMS': {
       const tableMoves = new Map(action.items.filter(item => item.type === 'table').map(item => [item.id, item]));
       const chairMoves = new Map(action.items.filter(item => item.type === 'chair').map(item => [item.id, item]));
@@ -321,16 +436,7 @@ function gameReducer(state, action) {
         ),
       };
     case 'BUY_SERVICE_TABLE':
-      if (!canAfford(state, SERVICE_TABLE_COST)) return state;
-      return {
-        ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - SERVICE_TABLE_COST },
-        serviceTables: [...state.serviceTables, {
-          id: `st${state.serviceTables.length + 1}`,
-          x: 140 + state.serviceTables.length * 140,
-          y: 120,
-        }],
-      };
+      return placeLegacyItem(state, action, 'serviceTable');
     case 'MOVE_SERVICE_TABLE':
       return {
         ...state,
