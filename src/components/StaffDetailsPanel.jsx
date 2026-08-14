@@ -24,7 +24,7 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
   const role = staff.role.charAt(0).toUpperCase() + staff.role.slice(1);
   const assignedStation = cashierStations?.find(station => station.assignedStaffId === staff.id);
   const task = taskLabels[staff.task?.type]
-    || (assignedStation ? 'Staffing cashier' : 'Available');
+    || (staff.role === 'waiter' && assignedStation ? 'Staffing cashier' : 'Available');
 
   return (
     <aside style={{

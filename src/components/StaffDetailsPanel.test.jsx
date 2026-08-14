@@ -31,6 +31,21 @@ describe('StaffDetailsPanel', () => {
       .toHaveTextContent('Current task: Staffing cashier');
   });
 
+  it('does not show a cashier assignment for a non-waiter', () => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, name: 'Marco', role: 'cook', task: null }}
+        cashierStations={[{ id: 'cashier1', assignedStaffId: staff.id }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Available').parentElement)
+      .toHaveTextContent('Current task: Available');
+    expect(screen.queryByText('Staffing cashier')).not.toBeInTheDocument();
+  });
+
   it('keeps an active cleaning task authoritative over a cashier assignment', () => {
     render(
       <StaffDetailsPanel
