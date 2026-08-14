@@ -5,6 +5,7 @@ import { drawStaffLayer } from './layers';
 import { calculateFitCamera } from './camera';
 import { useDispatch, useGameState } from '../state/GameContext';
 import { findClickedEntity } from './interaction';
+import { getRestaurantWorld } from '../simulation/world';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
@@ -45,6 +46,36 @@ const state = {
   equipment: [],
   dishes: [],
 };
+
+const placementState = {
+  ...state,
+  tables: [],
+  chairs: [],
+  doors: [{ id: 'door1', y: 340 }],
+  kitchenStations: [],
+  serviceTables: [],
+  cashierStations: [],
+};
+
+const validPlacementCases = [
+  { itemType: 'table', x: 600, y: 300 },
+  {
+    itemType: 'chair',
+    x: 210,
+    y: 180,
+    state: {
+      ...placementState,
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 200 }],
+    },
+  },
+  {
+    itemType: 'door',
+    x: getRestaurantWorld(placementState.restaurant).doorX,
+    y: 440,
+  },
+  { itemType: 'serviceTable', x: 600, y: 120 },
+  { itemType: 'cashierTable', x: 600, y: 300 },
+];
 
 describe('RestaurantCanvas object movement', () => {
   beforeEach(() => {
@@ -100,6 +131,36 @@ describe('RestaurantCanvas object movement', () => {
     }));
     expect(complete).toHaveBeenCalled();
   });
+
+  for (const { itemType, x, y, state: caseState = placementState } of validPlacementCases) {
+    it(`previews and confirms a valid ${itemType} placement`, () => {
+      const dispatch = vi.fn();
+      const complete = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      useGameState.mockReturnValue(caseState);
+      const { container } = render(
+        <RestaurantCanvas
+          managementOpen={false}
+          placementRequest={{ itemType }}
+          onPlacementComplete={complete}
+        />,
+      );
+      const canvas = container.querySelector('canvas');
+
+      fireEvent.mouseMove(canvas, { clientX: x, clientY: y, buttons: 0 });
+
+      expect(screen.getByText(new RegExp(`Place ${itemType}`))).toBeInTheDocument();
+      expect(screen.queryByText(/Invalid:/)).not.toBeInTheDocument();
+
+      fireEvent.click(canvas, { clientX: x, clientY: y });
+
+      expect(dispatch).toHaveBeenCalledWith({
+        type: 'PLACE_ITEM', itemType, x, y, rotation: 0,
+      });
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(new RegExp(`Place ${itemType}`))).not.toBeInTheDocument();
+    });
+  }
 
   it('keeps an invalid placement active without dispatching on left click', () => {
     const dispatch = vi.fn();

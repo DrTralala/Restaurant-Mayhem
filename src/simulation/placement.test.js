@@ -17,8 +17,11 @@ const state = {
 };
 
 it('exposes canonical prices and footprints', () => {
-  expect(getPlaceable('cashierTable')).toMatchObject({ price: 300, width: 80, height: 40 });
+  expect(getPlaceable('table')).toMatchObject({ price: 300, width: 40, height: 40 });
   expect(getPlaceable('chair')).toMatchObject({ price: 50, width: 20, height: 20, rotatable: true });
+  expect(getPlaceable('door')).toMatchObject({ price: 400, width: 6, height: 40 });
+  expect(getPlaceable('serviceTable')).toMatchObject({ price: 300, width: 120, height: 40 });
+  expect(getPlaceable('cashierTable')).toMatchObject({ price: 300, width: 80, height: 40 });
 });
 
 it('snaps chairs to the ten-pixel grid and doors to the right wall', () => {

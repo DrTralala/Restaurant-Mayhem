@@ -189,6 +189,93 @@ describe('GameProvider furniture actions', () => {
 describe('GameProvider authoritative placement actions', () => {
   beforeEach(() => localStorage.clear());
 
+  const authoritativePlacementCases = [
+    {
+      itemType: 'table',
+      cost: 300,
+      action: { x: 600, y: 300, rotation: 0, cost: 1 },
+      assertPlacement(state) {
+        expect(state.tables.at(-1)).toMatchObject({
+          id: 't5', seats: 4, status: 'empty', x: 600, y: 300,
+        });
+      },
+    },
+    {
+      itemType: 'chair',
+      cost: 50,
+      overrides: {
+        tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 200 }],
+        chairs: [],
+      },
+      action: { x: 210, y: 180, rotation: 2, cost: 1 },
+      assertPlacement(state) {
+        expect(state.chairs.at(-1)).toMatchObject({
+          id: 'ch1', tableId: 't1', x: 210, y: 180, rotation: 2,
+        });
+      },
+    },
+    {
+      itemType: 'door',
+      cost: 400,
+      action: {
+        x: getRestaurantWorld(createInitialState().restaurant).doorX,
+        y: 441,
+        rotation: 0,
+        cost: 1,
+      },
+      assertPlacement(state) {
+        expect(state.doors.at(-1)).toEqual({ id: 'door2', y: 440 });
+      },
+    },
+    {
+      itemType: 'serviceTable',
+      cost: 300,
+      action: { x: 400, y: 120, rotation: 0, cost: 1 },
+      assertPlacement(state) {
+        expect(state.serviceTables.at(-1)).toEqual({ id: 'st2', x: 400, y: 120 });
+      },
+    },
+    {
+      itemType: 'cashierTable',
+      cost: 300,
+      action: { x: 600, y: 300, rotation: 0, cost: 1 },
+      assertPlacement(state) {
+        expect(state.cashierStations.at(-1)).toMatchObject({
+          id: 'cashier2', x: 600, y: 300, w: 80, h: 40,
+        });
+      },
+    },
+  ];
+
+  for (const { itemType, cost, overrides, action, assertPlacement } of authoritativePlacementCases) {
+    it(`places a valid ${itemType} through the reducer at its catalogue price`, () => {
+      const game = renderReducer(overrides);
+
+      game.dispatch({ type: 'PLACE_ITEM', itemType, ...action });
+
+      expect(game.state.restaurant.funds).toBe(600 - cost);
+      assertPlacement(game.state);
+    });
+  }
+
+  it('rejects an overlapping placement without charging funds or adding the item', () => {
+    const game = renderReducer({ restaurant: { funds: 300 } });
+    const before = game.state;
+
+    game.dispatch({
+      type: 'PLACE_ITEM',
+      itemType: 'table',
+      x: 200,
+      y: 200,
+      rotation: 0,
+      cost: 1,
+    });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(300);
+    expect(game.state.tables).toHaveLength(4);
+  });
+
   it('charges the catalogue price and assigns a free waiter to a cashier station', () => {
     const game = renderReducer();
 
