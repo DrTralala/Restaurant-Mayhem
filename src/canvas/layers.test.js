@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer } from './layers';
+import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawQueueLayer } from './layers';
 
 function recordCtx(extraCanvas = {}) {
   const calls = { arcs: [], texts: [], rects: [], fills: [], moves: [], lines: [], strokes: [] };
@@ -254,15 +254,16 @@ describe('drawStaffLayer', () => {
     expect(ctx._calls.arcs[0].y).toBe(75);
   });
 
-  it('shows task label when s.task.type exists', () => {
-    const staff = [
-      { id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80, task: { type: 'take_order', customerId: 'c1' } },
-    ];
-    const state = { staff, restaurant: { expansionLevel: 1 } };
+  it('does not render staff task text on the main canvas', () => {
+    const state = {
+      staff: [{ id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80, task: { type: 'take_order' } }],
+      restaurant: { expansionLevel: 1 },
+    };
     const ctx = recordCtx();
+
     drawStaffLayer(ctx, state, camera);
-    const taskTexts = ctx._calls.texts.filter(t => t.text && t.text.includes('take_order'));
-    expect(taskTexts.length).toBe(1);
+
+    expect(ctx._calls.texts.some(call => call.text === 'take_order')).toBe(false);
   });
 
   it('does not show task label when staff has no task', () => {
@@ -274,6 +275,32 @@ describe('drawStaffLayer', () => {
     drawStaffLayer(ctx, state, camera);
     const taskTexts = ctx._calls.texts.filter(t => t.text && t.text.includes('take_order'));
     expect(taskTexts.length).toBe(0);
+  });
+
+  it('animates a stationary cleaning cloth without moving the staff member or striding', () => {
+    const state = {
+      staff: [{
+        id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80,
+        path: [], task: { type: 'clean_table', tableId: 't1' },
+      }],
+      restaurant: { expansionLevel: 1 },
+    };
+    const start = recordCtx();
+    const later = recordCtx();
+    const reducedStart = recordCtx();
+    const reducedLater = recordCtx();
+
+    drawStaffLayer(start, state, camera, { timeMs: 0, reducedMotion: false });
+    drawStaffLayer(later, state, camera, { timeMs: 200, reducedMotion: false });
+    drawStaffLayer(reducedStart, state, camera, { timeMs: 0, reducedMotion: true });
+    drawStaffLayer(reducedLater, state, camera, { timeMs: 200, reducedMotion: true });
+
+    expect(start._calls.arcs[0]).toEqual(later._calls.arcs[0]);
+    expect(start._calls.lines).not.toEqual(later._calls.lines);
+    expect(start._calls.lines.at(-1)).not.toEqual(later._calls.lines.at(-1));
+    expect(start._calls.lines.slice(3, 5)).toEqual(later._calls.lines.slice(3, 5));
+    expect(reducedStart._calls.lines).toEqual(reducedLater._calls.lines);
+    expect(reducedStart._calls.rects).toEqual(reducedLater._calls.rects);
   });
 
   it('shows carried-food marker when s.carryingFoodId is set', () => {
@@ -355,6 +382,7 @@ describe('drawCustomerLayer', () => {
 
     expect(ctx._calls.rects).toContainEqual({ x: 211, y: 223, w: 18, h: 12 });
     expect(ctx._calls.strokes).toContainEqual({ colour: '#e66a9c' });
+    expect(ctx._calls.texts.some(call => call.text === 'ordering')).toBe(false);
   });
 
   it('renders guided customer by x/y even when tableId is also set', () => {
@@ -408,5 +436,20 @@ describe('drawCustomerLayer', () => {
     const ctx = recordCtx();
     drawCustomerLayer(ctx, state, camera);
     expect(ctx._calls.arcs.length).toBe(0);
+  });
+});
+
+describe('drawQueueLayer', () => {
+  it('does not render the literal queue state', () => {
+    const state = {
+      queue: Array.from({ length: 9 }, (_, index) => ({ id: `c${index}`, state: 'waiting' })),
+      restaurant: { expansionLevel: 1 },
+    };
+    const ctx = recordCtx();
+
+    drawQueueLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts.some(call => call.text === 'waiting')).toBe(false);
+    expect(ctx._calls.texts.some(call => call.text === '+1 more')).toBe(true);
   });
 });

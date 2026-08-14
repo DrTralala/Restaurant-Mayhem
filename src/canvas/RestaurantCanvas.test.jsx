@@ -99,7 +99,11 @@ describe('RestaurantCanvas object movement', () => {
 
   it('opens a right-side detail panel when staff are clicked', () => {
     const staff = { id: 's1', name: 'Sofia', role: 'waiter', morale: 79.6, salary: 150, skill: 3 };
-    useGameState.mockReturnValue({ ...state, staff: [staff] });
+    useGameState.mockReturnValue({
+      ...state,
+      staff: [staff],
+      cashierStations: [{ id: 'cashier1', assignedStaffId: staff.id }],
+    });
     findClickedEntity.mockReturnValue({ type: 'staff', data: staff, text: 'Sofia' });
     const { container } = render(<RestaurantCanvas managementOpen={false} />);
 
@@ -107,6 +111,7 @@ describe('RestaurantCanvas object movement', () => {
 
     expect(screen.getByRole('heading', { name: 'Sofia' })).toBeInTheDocument();
     expect(screen.getByText('80%')).toBeInTheDocument();
+    expect(screen.getByText('Staffing cashier')).toBeInTheDocument();
   });
 
   it('passes animation time and reduced-motion preference to character layers', () => {

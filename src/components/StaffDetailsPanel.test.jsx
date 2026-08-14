@@ -17,6 +17,34 @@ describe('StaffDetailsPanel', () => {
     expect(screen.getByText('Taking order')).toBeInTheDocument();
   });
 
+  it('shows a cashier assignment for an idle waiter', () => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, task: null }}
+        cashierStations={[{ id: 'cashier1', assignedStaffId: staff.id }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Staffing cashier').parentElement)
+      .toHaveTextContent('Current task: Staffing cashier');
+  });
+
+  it('keeps an active cleaning task authoritative over a cashier assignment', () => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, task: { type: 'clean_table' } }}
+        cashierStations={[{ id: 'cashier1', assignedStaffId: staff.id }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Cleaning table').parentElement)
+      .toHaveTextContent('Current task: Cleaning table');
+  });
+
   it('applies a selected raise and can fire the employee', () => {
     const dispatch = vi.fn();
     render(<StaffDetailsPanel staff={staff} dispatch={dispatch} onClose={vi.fn()} />);

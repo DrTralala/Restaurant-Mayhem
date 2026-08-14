@@ -402,6 +402,7 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
       {selectedStaff && (
         <StaffDetailsPanel
           staff={selectedStaff}
+          cashierStations={state.cashierStations}
           dispatch={dispatch}
           onClose={() => setSelectedStaffId(null)}
         />

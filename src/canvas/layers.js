@@ -6,10 +6,16 @@ function animationOffset(id = '') {
   return [...String(id)].reduce((total, character) => total + character.charCodeAt(0), 0) * 0.17;
 }
 
-function drawStickFigure(ctx, x, y, color, { seated = false, walking = false, timeMs = 0, reducedMotion = false, id = '' } = {}) {
-  const stride = walking && !reducedMotion
+function drawStickFigure(ctx, x, y, color, { seated = false, walking = false, cleaning = false, timeMs = 0, reducedMotion = false, id = '' } = {}) {
+  const stride = walking && !cleaning && !reducedMotion
     ? Math.sin(timeMs * 0.012 + animationOffset(id)) * 4
     : 0;
+  const wipe = cleaning && !reducedMotion
+    ? Math.sin(timeMs * 0.012 + animationOffset(id)) * 5
+    : 0;
+  const leftHandX = cleaning ? x + 3 + wipe : x - 8;
+  const rightHandX = cleaning ? x + 9 + wipe : x + 8;
+  const handY = cleaning ? y + 12 : y + 10;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
   ctx.lineWidth = 2;
@@ -22,9 +28,9 @@ function drawStickFigure(ctx, x, y, color, { seated = false, walking = false, ti
   ctx.moveTo(x, y + 4);
   ctx.lineTo(x, y + 14);
   ctx.moveTo(x, y + 7);
-  ctx.lineTo(x - 8, y + 10 + stride);
+  ctx.lineTo(leftHandX, handY + stride);
   ctx.moveTo(x, y + 7);
-  ctx.lineTo(x + 8, y + 10 - stride);
+  ctx.lineTo(rightHandX, handY - stride);
   ctx.moveTo(x, y + 14);
   ctx.lineTo(x - 6, seated ? y + 15 : y + 22 - stride);
   ctx.moveTo(x, y + 14);
@@ -32,8 +38,17 @@ function drawStickFigure(ctx, x, y, color, { seated = false, walking = false, ti
   ctx.stroke();
 
   // Hands remain visible at small canvas scales.
-  ctx.fillRect(x - 9, y + 10, 2, 2);
-  ctx.fillRect(x + 7, y + 10, 2, 2);
+  ctx.fillRect(leftHandX - 1, handY, 2, 2);
+  ctx.fillRect(rightHandX - 1, handY, 2, 2);
+
+  if (cleaning) {
+    ctx.strokeStyle = '#f3e6bd';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(leftHandX - 1, handY + 3);
+    ctx.lineTo(rightHandX + 2, handY + 3);
+    ctx.stroke();
+  }
 }
 
 function drawMenu(ctx, x, y) {
@@ -134,9 +149,6 @@ export function drawQueueLayer(ctx, state, camera, renderOptions = {}) {
       reducedMotion: renderOptions.reducedMotion,
     });
 
-    ctx.fillStyle = '#fff';
-    ctx.font = '8px monospace';
-    ctx.fillText('waiting', pos.x + 12, pos.y + 3);
   }
 
   if (state.queue.length > MAX_VISIBLE) {
@@ -247,6 +259,7 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
     drawStickFigure(ctx, x, y, palette.figure, {
       id: s.id,
       walking: Boolean(s.path?.length),
+      cleaning: s.task?.type === 'clean_table' && !s.path?.length,
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
     });
@@ -260,12 +273,6 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
     ctx.fillText(s.name, x, y - 14 - nearbyNames * 10);
     ctx.textAlign = 'start';
     renderedStaff.push({ x, y });
-
-    if (s.task && s.task.type) {
-      ctx.fillStyle = '#f0a500';
-      ctx.font = '7px monospace';
-      ctx.fillText(s.task.type, x - 12, y + 22);
-    }
 
     if (s.carryingFoodId) {
       ctx.fillStyle = '#f0a500';
@@ -319,10 +326,6 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       reducedMotion: renderOptions.reducedMotion,
     });
     if (deciding) drawMenu(ctx, cx, cy);
-
-    ctx.fillStyle = '#fff';
-    ctx.font = '8px monospace';
-    ctx.fillText(c.state, cx - 12, cy + 14);
   }
 
   ctx.restore();

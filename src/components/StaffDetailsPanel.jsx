@@ -16,13 +16,15 @@ const actionButton = {
   cursor: 'pointer', fontFamily: 'monospace', fontSize: 12,
 };
 
-export default function StaffDetailsPanel({ staff, dispatch, onClose }) {
+export default function StaffDetailsPanel({ staff, cashierStations, dispatch, onClose }) {
   const [salary, setSalary] = useState(staff.salary);
 
   useEffect(() => setSalary(staff.salary), [staff.id, staff.salary]);
 
   const role = staff.role.charAt(0).toUpperCase() + staff.role.slice(1);
-  const task = taskLabels[staff.task?.type] || 'Available';
+  const assignedStation = cashierStations?.find(station => station.assignedStaffId === staff.id);
+  const task = taskLabels[staff.task?.type]
+    || (assignedStation ? 'Staffing cashier' : 'Available');
 
   return (
     <aside style={{
