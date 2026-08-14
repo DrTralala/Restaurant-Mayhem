@@ -2,6 +2,7 @@ import { findAdjacentOpenCells, findPath, worldToCell } from './pathfinding';
 import { ensureStaffRuntime, hasArrived, moveCharacterAlongPath, moveCharacterTowards, moveStaffAlongPath } from './movement';
 import { getCashierWorkPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
 import { clampReputation, getDishValueScore, getTipRate, getUpgradeEffect } from './balance';
+import { getAssignedCashierStation } from './cashiers';
 
 function occupiedCharacterCells(staff, customers, excludeId) {
   return new Set([...staff, ...customers]
@@ -40,13 +41,41 @@ function targetForRect(state, rect, staff) {
   return [];
 }
 
-function findReachableTable(state, tables, staff, partySize = 1) {
+function getAvailableChairs(tableId, customers = [], activeGuideTasks = [], chairs = []) {
+  const occupiedChairIds = new Set(customers
+    .filter(customer => customer.state !== 'leaving' && customer.chairId)
+    .map(customer => customer.chairId));
+  const reservedChairIds = new Set(activeGuideTasks
+    .filter(task => task.tableId === tableId)
+    .flatMap(task => task.reservedChairIds || task.chairIds || []));
+
+  return chairs.filter(chair => chair.tableId === tableId
+    && !occupiedChairIds.has(chair.id)
+    && !reservedChairIds.has(chair.id));
+}
+
+function getActiveGuideTasks(staff, excludeStaffId = null) {
+  return (staff || [])
+    .filter(candidate => candidate.id !== excludeStaffId && candidate.task?.type === 'guide_customer')
+    .map(candidate => candidate.task);
+}
+
+function findReachableTable(state, tables, staff, partySize = 1, activeGuideTasks = []) {
   for (const table of tables) {
     if (table.status !== 'empty') continue;
+    const availableChairs = getAvailableChairs(
+      table.id,
+      state.customers || [],
+      activeGuideTasks,
+      state.chairs || [],
+    );
+    const distinctChairs = availableChairs.filter((chair, index, chairs) =>
+      chairs.findIndex(candidate => candidate.id === chair.id) === index,
+    );
     const chairCount = (state.chairs || []).filter(chair => chair.tableId === table.id).length;
-    if ((table.seats || chairCount) < partySize || (partySize > 1 && chairCount < partySize)) continue;
+    if ((table.seats || chairCount) < partySize || distinctChairs.length < partySize) continue;
     const path = targetForTable(state, table, staff);
-    if (path.length) return { table, path };
+    if (path.length) return { table, path, chairs: distinctChairs.slice(0, partySize) };
   }
   return null;
 }
@@ -62,93 +91,50 @@ function getParty(members, lead) {
   return members.filter(member => member.partyId === lead.partyId);
 }
 
+function getPartySize(party, lead) {
+  return Math.max(party.length, Number.isFinite(lead?.partySize) ? lead.partySize : 0);
+}
+
 function taskCustomerIds(task) {
   return task.customerIds || (task.customerId ? [task.customerId] : []);
 }
 
 function assignTask({ state, staff, customers, queue, tables, foodItems, kitchenQueue, claimedCustomerIds, claimedFoodIds }) {
-  if (staff.role === 'host') {
-    const waiting = customers.find(c => c.state === 'waiting' && (!claimedCustomerIds || !claimedCustomerIds.has(c.id)));
-    if (waiting) {
-      const party = getParty(customers.filter(c => c.state === 'waiting'), waiting);
-      const reachable = findReachableTable(state, tables, staff, party.length);
-      if (reachable) {
-        const { table, path } = reachable;
-          return {
-            staff: { ...staff, path, task: { type: 'guide_customer', customerId: waiting.id, customerIds: party.map(c => c.id), partyId: waiting.partyId, tableId: table.id } },
-            customers: customers.map(c => party.some(member => member.id === c.id) ? { ...c, state: 'guided', guideHostId: staff.id, x: staff.x, y: staff.y } : c),
-            tables: tables.map(t => t.id === table.id ? { ...t, status: 'reserved' } : t),
-            claimedCustomerIds: party.map(c => c.id),
-          };
-      }
-    }
-    if (queue.length > 0) {
-      const queued = queue[0];
-      const party = getParty(queue, queued);
-      const reachable = findReachableTable(state, tables, staff, party.length);
-      if (reachable) {
-        const { table, path } = reachable;
-          const door = [...getDoors(state)].sort((a, b) => Math.abs(a.y - staff.y) - Math.abs(b.y - staff.y))[0];
-          const outside = getDoorPosition(state, door).outside;
-          const newCustomers = party.map((customer, index) => ({
-            ...customer,
-            state: 'guided', guideHostId: staff.id,
-            x: outside.x + index * 18, y: outside.y + index * 18,
-            tableId: table.id,
-            path: [...findPath(state, worldToCell(outside), worldToCell(staff)), ...path],
-          }));
-          return {
-            staff: { ...staff, path, task: { type: 'guide_customer', customerId: queued.id, customerIds: party.map(c => c.id), partyId: queued.partyId, tableId: table.id } },
-            customers: [...customers, ...newCustomers],
-            queue: queue.filter(q => !party.some(member => member.id === q.id)),
-            tables: tables.map(t => t.id === table.id ? { ...t, status: 'reserved' } : t),
-            claimedCustomerIds: party.map(c => c.id),
-          };
-      }
-    }
-    const dirty = tables.find(t => t.status === 'dirty');
-    if (dirty) {
-      const path = targetForTable(state, dirty, staff);
-      if (path.length) {
-        return {
-          staff: { ...staff, path, task: { type: 'clean_table', tableId: dirty.id } },
-        };
-      }
-    }
-    const dirtyFood = foodItems.find(f => f.state === 'to_clean' && (!claimedFoodIds || !claimedFoodIds.has(f.id)));
-    if (dirtyFood) {
-      const path = targetForRect(state, { x: dirtyFood.x - 10, y: dirtyFood.y - 10, w: 20, h: 20 }, staff);
-      if (path.length) {
-        return {
-          staff: { ...staff, path, task: { type: 'clean_food', foodId: dirtyFood.id } },
-          claimedFoodId: dirtyFood.id,
-        };
-      }
-    }
-  }
+  const cashierStation = staff.role === 'waiter'
+    ? getAssignedCashierStation(state.cashierStations, staff.id)
+    : null;
 
-  if (staff.role === 'cashier' || staff.role === 'cashier_waiter') {
+  if (cashierStation) {
     const paying = customers
       .filter(customer => customer.state === 'paying' && (!claimedCustomerIds || !claimedCustomerIds.has(customer.id)))
-      .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0))[0];
-    const cashier = state.cashierStations?.[0];
-    if (paying && cashier) {
-      const workCell = worldToCell(getCashierWorkPosition(cashier));
-      const staffCell = worldToCell(staff);
-      const occupiedCells = occupiedCharacterCells(state.staff || [], state.customers || [], staff.id);
-      const path = findPath(state, staffCell, workCell, { occupiedCells });
-      const workPointAvailable = !occupiedCells.has(`${workCell.x},${workCell.y}`);
-      const canReachWorkPoint = path.length || (staffCell.x === workCell.x && staffCell.y === workCell.y);
-      if (workPointAvailable && canReachWorkPoint) {
-        return {
-          staff: { ...staff, path, task: { type: 'take_payment', customerId: paying.id } },
-          claimedCustomerId: paying.id,
-        };
-      }
+      .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0));
+    const payingCustomer = paying.find(customer => customer.cashierStationId === cashierStation.id)
+      || paying.find(customer => customer.cashierStationId == null);
+    const workCell = worldToCell(getCashierWorkPosition(cashierStation));
+    const staffCell = worldToCell(staff);
+    const occupiedCells = occupiedCharacterCells(state.staff || [], state.customers || [], staff.id);
+    const path = findPath(state, staffCell, workCell, { occupiedCells });
+    const workPointAvailable = !occupiedCells.has(`${workCell.x},${workCell.y}`);
+    const canReachWorkPoint = path.length || (staffCell.x === workCell.x && staffCell.y === workCell.y);
+
+    if (payingCustomer && workPointAvailable && canReachWorkPoint) {
+      return {
+        staff: { ...staff, path, task: { type: 'take_payment', customerId: payingCustomer.id, stationId: cashierStation.id } },
+        customers: payingCustomer.cashierStationId == null
+          ? customers.map(customer => customer.id === payingCustomer.id
+            ? { ...customer, cashierStationId: cashierStation.id }
+            : customer)
+          : customers,
+        claimedCustomerId: payingCustomer.id,
+      };
     }
+
+    return {
+      staff: { ...staff, path: canReachWorkPoint ? path : [] },
+    };
   }
 
-  if (staff.role === 'waiter' || staff.role === 'cashier_waiter') {
+  if (staff.role === 'waiter') {
     if (staff.carryingFoodId) {
       const food = foodItems.find(f => f.id === staff.carryingFoodId);
       if (food) {
@@ -164,11 +150,7 @@ function assignTask({ state, staff, customers, queue, tables, foodItems, kitchen
 
     const readyFood = foodItems.find(f => f.state === 'on_service' && (!claimedFoodIds || !claimedFoodIds.has(f.id)));
     if (readyFood) {
-      const serviceTable = state.serviceTables.find(table => table.id === readyFood.serviceTableId)
-        || state.serviceTables.find(table =>
-          readyFood.x >= table.x && readyFood.x < table.x + 120
-          && readyFood.y >= table.y && readyFood.y < table.y + 40
-        );
+      const serviceTable = (state.serviceTables || []).find(table => table.id === readyFood.serviceTableId);
       if (serviceTable) {
         const path = targetForRect(state, { x: serviceTable.x, y: serviceTable.y, w: 120, h: 40 }, staff);
         if (path.length) {
@@ -183,6 +165,98 @@ function assignTask({ state, staff, customers, queue, tables, foodItems, kitchen
       const path = table ? targetForTable(state, table, staff) : [];
       if (path.length || (table && Math.hypot(staff.x - table.x, staff.y - table.y) <= 40)) {
         return { staff: { ...staff, path, task: { type: 'take_order', customerId: orderingCustomer.id } }, claimedCustomerId: orderingCustomer.id };
+      }
+    }
+
+    const waiting = customers.find(c => c.state === 'waiting' && (!claimedCustomerIds || !claimedCustomerIds.has(c.id)));
+    if (waiting) {
+      const party = getParty(customers.filter(c => c.state === 'waiting'), waiting);
+      const partySize = getPartySize(party, waiting);
+      if (party.length < partySize) return null;
+      const reachable = findReachableTable(
+        { ...state, customers },
+        tables,
+        staff,
+        partySize,
+        getActiveGuideTasks(state.staff),
+      );
+      if (reachable) {
+        const { table, path, chairs } = reachable;
+        const partyIds = party.map(c => c.id);
+        return {
+          staff: {
+            ...staff,
+            path,
+            task: {
+              type: 'guide_customer',
+              customerId: waiting.id,
+              customerIds: partyIds,
+              partyId: waiting.partyId,
+              tableId: table.id,
+              reservedChairIds: chairs.map(chair => chair.id),
+            },
+          },
+          customers: customers.map(c => party.some(member => member.id === c.id)
+            ? { ...c, state: 'guided', guideStaffId: staff.id, chairId: null, x: staff.x, y: staff.y }
+            : c),
+          tables: tables.map(t => t.id === table.id ? { ...t, status: 'reserved' } : t),
+          claimedCustomerIds: partyIds,
+        };
+      }
+    }
+
+    if (queue.length > 0) {
+      const queued = queue[0];
+      const party = getParty(queue, queued);
+      const partySize = getPartySize(party, queued);
+      if (party.length < partySize) return null;
+      const reachable = findReachableTable(
+        { ...state, customers },
+        tables,
+        staff,
+        partySize,
+        getActiveGuideTasks(state.staff),
+      );
+      if (reachable) {
+        const { table, path, chairs } = reachable;
+        const door = [...getDoors(state)].sort((a, b) => Math.abs(a.y - staff.y) - Math.abs(b.y - staff.y))[0];
+        const outside = getDoorPosition(state, door).outside;
+        const partyIds = party.map(c => c.id);
+        const newCustomers = party.map((customer, index) => ({
+          ...customer,
+          state: 'guided', guideStaffId: staff.id, chairId: null,
+          x: outside.x + index * 18, y: outside.y + index * 18,
+          tableId: table.id,
+          path: [...findPath(state, worldToCell(outside), worldToCell(staff)), ...path],
+        }));
+        return {
+          staff: {
+            ...staff,
+            path,
+            task: {
+              type: 'guide_customer',
+              customerId: queued.id,
+              customerIds: partyIds,
+              partyId: queued.partyId,
+              tableId: table.id,
+              reservedChairIds: chairs.map(chair => chair.id),
+            },
+          },
+          customers: [...customers, ...newCustomers],
+          queue: queue.filter(q => !party.some(member => member.id === q.id)),
+          tables: tables.map(t => t.id === table.id ? { ...t, status: 'reserved' } : t),
+          claimedCustomerIds: partyIds,
+        };
+      }
+    }
+
+    const dirty = tables.find(t => t.status === 'dirty');
+    if (dirty) {
+      const path = targetForTable(state, dirty, staff);
+      if (path.length) {
+        return {
+          staff: { ...staff, path, task: { type: 'clean_table', tableId: dirty.id } },
+        };
       }
     }
 
@@ -273,7 +347,29 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
     const table = tables.find(t => t.id === staff.task.tableId);
     const seatTime = state.restaurant.gameTime;
     const ids = taskCustomerIds(staff.task);
-    const chairs = (state.chairs || []).filter(chair => chair.tableId === table?.id);
+    const availableChairs = getAvailableChairs(
+      table?.id,
+      customers,
+      getActiveGuideTasks(state.staff, staff.id),
+      state.chairs || [],
+    );
+    const reservedChairIds = new Set(staff.task.reservedChairIds || staff.task.chairIds || []);
+    const chairs = [
+      ...availableChairs.filter(chair => reservedChairIds.has(chair.id)),
+      ...availableChairs.filter(chair => !reservedChairIds.has(chair.id)),
+    ].filter((chair, index, allChairs) => allChairs.findIndex(candidate => candidate.id === chair.id) === index);
+
+    if (!table || ids.length === 0 || chairs.length < ids.length) {
+      return {
+        staff, foodItems, kitchenQueue,
+        queue: queue.filter(q => !ids.includes(q.id)),
+        tables: tables.map(t => t.id === staff.task.tableId ? { ...t, status: 'empty' } : t),
+        customers: customers.map(c => ids.includes(c.id)
+          ? { ...c, state: 'leaving', guideStaffId: null, chairId: null, path: [], exitDoorId: null }
+          : c),
+      };
+    }
+
     return {
       staff, foodItems, kitchenQueue,
       queue: queue.filter(q => !ids.includes(q.id)),
@@ -285,10 +381,10 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
         return {
           ...c,
           state: 'seated', tableId: table?.id || c.tableId,
-          chairId: chair?.id || null,
-          x: chair ? chair.x + 10 : (table?.x || 0) + 20,
-          y: chair ? chair.y + 10 : (table?.y || 0) + 20,
-          guideHostId: null, seatTime,
+          chairId: chairs[index].id,
+          x: chairs[index].x + 10,
+          y: chairs[index].y + 10,
+          guideStaffId: null, seatTime,
         };
       }),
     };
@@ -393,7 +489,7 @@ export function updateStaff(state, dt) {
   }));
 
   // Cancel tasks whose customer disappeared while being guided. Without this,
-  // the host reaches the destination and creates a permanently occupied table.
+  // the guiding staff reaches the destination and creates a permanently occupied table.
   for (let i = 0; i < staff.length; i += 1) {
     const current = staff[i];
     if (current.task?.type !== 'guide_customer') continue;
@@ -403,7 +499,13 @@ export function updateStaff(state, dt) {
         ? { ...table, status: 'empty' }
         : table);
       customers = customers.map(customer => ids.includes(customer.id) && customer.state !== 'leaving'
-        ? { ...customer, state: 'leaving', happiness: Math.max(0, customer.happiness - 30) }
+        ? {
+            ...customer,
+            state: 'leaving',
+            guideStaffId: null,
+            chairId: null,
+            happiness: Math.max(0, customer.happiness - 30),
+          }
         : customer);
       staff[i] = { ...current, task: null, path: [] };
     }
@@ -419,7 +521,7 @@ export function updateStaff(state, dt) {
     if (s.task && s.task.type === 'guide_customer' && !hasArrived(s)) {
       const ids = taskCustomerIds(s.task);
       customers = customers.map((c, customerIndex, allCustomers) => {
-        if (c.guideHostId !== s.id) return c;
+        if (c.guideStaffId !== s.id) return c;
         const memberIndex = Math.max(0, ids.indexOf(c.id));
         const preceding = memberIndex > 0
           ? allCustomers.find(candidate => candidate.id === ids[memberIndex - 1])

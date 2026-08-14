@@ -21,8 +21,8 @@ describe('updateStaff', () => {
     expect(result.staff).toEqual([]);
   });
 
-  it('assigns the front paying customer to a dual-role cashier-waiter', () => {
-    const cashier = { id: 'cw1', name: 'Elena', role: 'cashier_waiter', morale: 80, x: 760, y: 140 };
+  it('assigns the front paying customer to an assigned cashier waiter', () => {
+    const cashier = { id: 'cw1', name: 'Elena', role: 'waiter', morale: 80, x: 760, y: 140 };
     const state = {
       ...baseState,
       staff: [cashier],
@@ -30,24 +30,24 @@ describe('updateStaff', () => {
         { id: 'c1', state: 'paying', x: 780, y: 140, checkoutPosition: { x: 780, y: 140 }, dishId: 'd1', tableId: 't1', patience: 100 },
         { id: 'c2', state: 'paying', x: 700, y: 160, dishId: 'd1', tableId: 't1', patience: 100 },
       ],
-      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
     };
 
     const result = updateStaff(state, 0);
 
-    expect(result.staff[0].task).toMatchObject({ type: 'take_payment', customerId: 'c1' });
+    expect(result.staff[0].task).toMatchObject({ type: 'take_payment', customerId: 'c1', stationId: 'cashier1' });
     expect(result.staff[0].path.at(-1)).toEqual({ x: 42, y: 5 });
     expect(result.customers[1].state).toBe('paying');
   });
 
   it('does not claim payment while another character occupies the cashier work point', () => {
-    const cashier = { id: 'cw1', name: 'Elena', role: 'cashier_waiter', morale: 80, x: 760, y: 140 };
+    const cashier = { id: 'cw1', name: 'Elena', role: 'waiter', morale: 80, x: 760, y: 140 };
     const blocker = { id: 'w1', name: 'Anna', role: 'waiter', morale: 80, x: 840, y: 100 };
     const state = {
       ...baseState,
       staff: [cashier, blocker],
       customers: [{ id: 'c1', state: 'paying', x: 780, y: 140, dishId: 'd1', tableId: 't1', patience: 100 }],
-      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
     };
 
     const result = updateStaff(state, 0);
@@ -58,8 +58,8 @@ describe('updateStaff', () => {
 
   it('cashier completes payment and sends the customer towards an exit', () => {
     const cashier = {
-      id: 'cw1', name: 'Elena', role: 'cashier_waiter', morale: 80, x: 780, y: 140,
-      path: [], task: { type: 'take_payment', customerId: 'c1' },
+      id: 'cw1', name: 'Elena', role: 'waiter', morale: 80, x: 780, y: 140,
+      path: [], task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1' },
     };
     const state = {
       ...baseState,
@@ -67,7 +67,7 @@ describe('updateStaff', () => {
       customers: [{ id: 'c1', state: 'paying', x: 780, y: 140, checkoutPosition: { x: 780, y: 140 }, dishId: 'd1', tableId: 't1', patience: 100 }],
       dishes: [{ id: 'd1', price: 12 }],
       completedCustomers: [],
-      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
       restaurant: { ...baseState.restaurant, totalServed: 3 },
     };
 
@@ -80,8 +80,8 @@ describe('updateStaff', () => {
 
   it('happy payment increases reputation with configured gain effects', () => {
     const cashier = {
-      id: 'cw1', role: 'cashier_waiter', morale: 80, x: 780, y: 140,
-      path: [], task: { type: 'take_payment', customerId: 'c1' },
+      id: 'cw1', role: 'waiter', morale: 80, x: 780, y: 140,
+      path: [], task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1' },
     };
     const state = {
       ...baseState,
@@ -89,7 +89,7 @@ describe('updateStaff', () => {
       customers: [{ id: 'c1', state: 'paying', happiness: 80, dishId: 'd1', tableId: 't1' }],
       dishes: [{ id: 'd1', price: 12 }],
       completedCustomers: [],
-      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
       restaurant: { ...baseState.restaurant, reputation: 4.9 },
       upgrades: [{ level: 2, effects: { type: 'reputationGain', value: 0.01 } }],
     };
@@ -100,20 +100,22 @@ describe('updateStaff', () => {
     expect(result.completedCustomers[0].tip).toBe(2.4);
   });
 
-  it('dual-role cashier-waiter takes orders when no payment is waiting', () => {
-    const cashier = { id: 'cw1', name: 'Elena', role: 'cashier_waiter', morale: 80, x: 300, y: 300 };
+  it('assigned cashier waiter stays at the station when no payment is waiting', () => {
+    const cashier = { id: 'cw1', name: 'Elena', role: 'waiter', morale: 80, x: 300, y: 300 };
     const state = {
       ...baseState,
       staff: [cashier],
       customers: [{ id: 'c1', state: 'seated', dishId: null, tableId: 't1', patience: 100 }],
       tables: [{ id: 't1', seats: 2, status: 'occupied', x: 200, y: 220 }],
       chairs: [],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
       dishes: [{ id: 'd1', popularity: 50 }],
     };
 
     const result = updateStaff(state, 0);
 
-    expect(result.staff[0].task).toMatchObject({ type: 'take_order', customerId: 'c1' });
+    expect(result.staff[0].task).toBeNull();
+    expect(result.staff[0].path.at(-1)).toEqual({ x: 42, y: 5 });
   });
 
   it('reduces morale slowly over time', () => {
@@ -125,8 +127,8 @@ describe('updateStaff', () => {
 
   // --- New arrival-based tests (Task 4) ---
 
-  it('host starts guiding a waiting customer and reserves table', () => {
-    const host = { id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150, x: 860, y: 360 };
+  it('waiter starts guiding a waiting customer and reserves table', () => {
+    const waiter = { id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150, x: 860, y: 360 };
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'waiting', dishId: null, tableId: null, tipAmount: 0,
@@ -134,9 +136,10 @@ describe('updateStaff', () => {
     };
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       customers: [customer],
       tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 220 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
     };
     const result = updateStaff(state, 1);
@@ -145,12 +148,45 @@ describe('updateStaff', () => {
     expect(result.staff[0].task.customerId).toBe('c1');
     expect(result.staff[0].task.tableId).toBe('t1');
     expect(result.customers[0].state).toBe('guided');
-    expect(result.customers[0].guideHostId).toBe('h1');
+    expect(result.customers[0].guideStaffId).toBe('h1');
     expect(result.tables[0].status).toBe('reserved');
   });
 
+  it('does not guide a party when the table has fewer distinct chairs than members', () => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 860, y: 360, morale: 80 }],
+      queue: [{ id: 'q1', partyId: 'p1', partySize: 2, state: 'queued', patience: 100 }],
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 220 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.queue).toHaveLength(1);
+  });
+
+  it('keeps an assigned cashier waiter out of general waiter work while idle', () => {
+    const waiter = { id: 'w1', role: 'waiter', x: 300, y: 300, morale: 80 };
+    const state = {
+      ...baseState,
+      staff: [waiter],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'w1' }],
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1', dishId: null }],
+      tables: [{ id: 't1', seats: 2, status: 'occupied', x: 200, y: 220 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+      dishes: [{ id: 'd1', popularity: 50 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.staff[0].path.at(-1)).toEqual({ x: 42, y: 5 });
+  });
+
   it('guides a queued customer to a reachable table when the first empty table is blocked', () => {
-    const host = { id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150, x: 800, y: 300 };
+    const waiter = { id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150, x: 800, y: 300 };
     const queued = {
       id: 'q1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'queued', dishId: null, tableId: null, tipAmount: 0,
@@ -163,13 +199,17 @@ describe('updateStaff', () => {
     ];
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       queue: [queued],
       tables: [
         { id: 't1', seats: 2, status: 'empty', x: 200, y: 200 },
         { id: 't2', seats: 2, status: 'empty', x: 400, y: 300 },
       ],
-      chairs: blockedCells.map(([x, y], index) => ({ id: `ch${index}`, x, y })),
+      chairs: [
+        ...blockedCells.map(([x, y], index) => ({ id: `ch${index}`, tableId: 't1', x, y })),
+        { id: 't2ch1', tableId: 't2', x: 410, y: 280 },
+        { id: 't2ch2', tableId: 't2', x: 410, y: 340 },
+      ],
     };
 
     const result = updateStaff(state, 1);
@@ -180,11 +220,11 @@ describe('updateStaff', () => {
   });
 
   it('brings queued customers through a doorway instead of teleporting them inside', () => {
-    const host = { id: 'h1', name: 'Luca', role: 'host', morale: 80, x: 860, y: 360 };
+    const waiter = { id: 'h1', name: 'Luca', role: 'waiter', morale: 80, x: 860, y: 360 };
     const queued = { id: 'q1', state: 'queued', patience: 100, happiness: 80, tableId: null };
     const state = {
       ...baseState,
-      staff: [host], queue: [queued],
+      staff: [waiter], queue: [queued],
       doors: [{ id: 'door1', y: 340 }],
       tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 220 }],
       chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
@@ -196,19 +236,19 @@ describe('updateStaff', () => {
     expect(result.customers[0].path.length).toBeGreaterThan(0);
   });
 
-  it('host completes seating on arrival', () => {
-    const host = {
-      id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150,
+  it('waiter completes seating on arrival', () => {
+    const waiter = {
+      id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
       x: 180, y: 220, path: [], task: { type: 'guide_customer', customerId: 'c1', tableId: 't1' },
     };
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'guided', dishId: null, tableId: 't1', tipAmount: 0,
-      seatTime: null, orderTime: null, eatTime: null, guideHostId: 'h1', x: 860, y: 360,
+      seatTime: null, orderTime: null, eatTime: null, guideStaffId: 'h1', x: 860, y: 360,
     };
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       customers: [customer],
       tables: [{ id: 't1', seats: 2, status: 'reserved', x: 200, y: 220 }],
       chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
@@ -216,7 +256,7 @@ describe('updateStaff', () => {
     };
     const result = updateStaff(state, 1);
     expect(result.customers[0].state).toBe('seated');
-    expect(result.customers[0].guideHostId).toBeNull();
+    expect(result.customers[0].guideStaffId).toBeNull();
     expect(result.customers[0].seatTime).toBe(100);
     expect(result.customers[0].chairId).toBe('ch1');
     expect(result.tables[0].status).toBe('occupied');
@@ -224,19 +264,19 @@ describe('updateStaff', () => {
   });
 
   it('seats every member of a party on a chair at the same suitable table', () => {
-    const host = {
-      id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150,
+    const waiter = {
+      id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
       x: 180, y: 220, path: [], task: { type: 'guide_customer', customerIds: ['c1', 'c2'], partyId: 'p1', tableId: 't1' },
     };
     const customers = ['c1', 'c2'].map((id, index) => ({
       id, partyId: 'p1', partyType: 'couple', partySize: 2,
       archetype: 'regular', patience: 100, happiness: 80,
       state: 'guided', dishId: null, tableId: 't1', tipAmount: 0,
-      seatTime: null, orderTime: null, eatTime: null, guideHostId: 'h1', x: 860 + index * 10, y: 360,
+       seatTime: null, orderTime: null, eatTime: null, guideStaffId: 'h1', x: 860 + index * 10, y: 360,
     }));
     const state = {
       ...baseState,
-      staff: [host], customers,
+      staff: [waiter], customers,
       tables: [{ id: 't1', seats: 2, status: 'reserved', x: 200, y: 220 }],
       chairs: [
         { id: 'ch1', tableId: 't1', x: 210, y: 180 },
@@ -255,14 +295,14 @@ describe('updateStaff', () => {
   });
 
   it('cancels a stale guide task and releases its reserved table', () => {
-    const host = {
-      id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150,
+    const waiter = {
+      id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
       x: 800, y: 300, path: [{ x: 20, y: 20 }],
       task: { type: 'guide_customer', customerId: 'missing', tableId: 't1' },
     };
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       tables: [{ id: 't1', seats: 2, status: 'reserved', x: 200, y: 220 }],
     };
 
@@ -274,14 +314,14 @@ describe('updateStaff', () => {
   });
 
   it('cancels guidance when the target party is already leaving', () => {
-    const host = {
-      id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150,
+    const waiter = {
+      id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
       x: 800, y: 300, path: [{ x: 20, y: 20 }],
       task: { type: 'guide_customer', customerId: 'c1', customerIds: ['c1'], tableId: 't1' },
     };
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       customers: [{ id: 'c1', state: 'leaving', tableId: 't1', patience: 0, happiness: 50 }],
       tables: [{ id: 't1', seats: 2, status: 'reserved', x: 200, y: 220 }],
     };
@@ -293,14 +333,14 @@ describe('updateStaff', () => {
   });
 
   it('keeps a party together when one member abandons guidance', () => {
-    const host = {
-      id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150,
+    const waiter = {
+      id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
       x: 800, y: 300, path: [{ x: 20, y: 20 }],
       task: { type: 'guide_customer', customerIds: ['c1', 'c2'], partyId: 'p1', tableId: 't1' },
     };
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       customers: [
         { id: 'c1', partyId: 'p1', state: 'leaving', tableId: 't1', patience: 0, happiness: 50 },
         { id: 'c2', partyId: 'p1', state: 'guided', tableId: 't1', patience: 20, happiness: 80 },
@@ -315,14 +355,14 @@ describe('updateStaff', () => {
     expect(result.tables[0].status).toBe('empty');
   });
 
-  it('host cleans dirty table on arrival', () => {
-    const host = {
-      id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150,
+  it('waiter cleans dirty table on arrival', () => {
+    const waiter = {
+      id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
       x: 180, y: 220, path: [], task: { type: 'clean_table', tableId: 't1' },
     };
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
     };
@@ -466,7 +506,7 @@ describe('updateStaff', () => {
     };
     const foodItem = {
       id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1',
-      state: 'on_service', x: 150, y: 130,
+      state: 'on_service', serviceTableId: 'st1', x: 150, y: 130,
     };
     const state = {
       ...baseState,
@@ -520,7 +560,7 @@ describe('updateStaff', () => {
     };
     const foodItem = {
       id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1',
-      state: 'on_service', x: 150, y: 130,
+      state: 'on_service', serviceTableId: 'st1', x: 150, y: 130,
     };
     const state = {
       ...baseState,
@@ -668,12 +708,13 @@ describe('updateStaff', () => {
     const state = {
       ...baseState,
       staff: [{
-        id: 'cashier', role: 'cashier', morale: 80, x: 780, y: 140, path: [],
-        task: { type: 'take_payment', customerId: 'c1' },
+        id: 'cashier', role: 'waiter', morale: 80, x: 780, y: 140, path: [],
+        task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1' },
       }],
       customers: [customer],
       dishes: [{ id: 'd1', price: 12 }],
       completedCustomers: [],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier' }],
       restaurant: { ...baseState.restaurant, totalServed: 4 },
     };
 
@@ -818,19 +859,19 @@ describe('updateStaff', () => {
     expect(result.staff[0].path.length).toBeGreaterThan(0);
   });
 
-  it('host also cleans to_clean food', () => {
-    const host = { id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150, x: 800, y: 500 };
+  it('waiter also cleans to_clean food', () => {
+    const waiter = { id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150, x: 800, y: 500 };
     const foodItem = {
       id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1',
       state: 'to_clean', x: 220, y: 220,
     };
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       foodItems: [foodItem],
     };
     const result = updateStaff(state, 2);
-    // Host prioritises other tasks; with no customers or dirty tables, should clean food
+    // With no customers or dirty tables, the waiter should clean food.
     expect(result.staff[0].task).not.toBeNull();
     expect(result.staff[0].task.type).toBe('clean_food');
     expect(result.staff[0].task.foodId).toBe('f1');
@@ -904,7 +945,7 @@ describe('updateStaff', () => {
     };
     const foodItem = {
       id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1',
-      state: 'on_service', x: 150, y: 130,
+      state: 'on_service', serviceTableId: 'st1', x: 150, y: 130,
     };
     const dishes = [{ id: 'd1', name: 'Pizza', price: 12, prepTime: 180, quality: 5, popularity: 80, cuisine: 'italian', requiredEquipmentId: null }];
     const state = {
@@ -965,8 +1006,8 @@ describe('updateStaff', () => {
 
   // --- Existing tests preserved ---
 
-  it('host guides queued customer from queue, removes from queue, and reserves table', () => {
-    const host = { id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150, x: 860, y: 360 };
+  it('waiter guides queued customer from queue, removes from queue, and reserves table', () => {
+    const waiter = { id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150, x: 860, y: 360 };
     const queuedCustomer = {
       id: 'q1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'queued', dishId: null, tableId: null, tipAmount: 0,
@@ -974,16 +1015,17 @@ describe('updateStaff', () => {
     };
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       queue: [queuedCustomer],
       tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 220 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
     };
     const result = updateStaff(state, 1);
     expect(result.queue.length).toBe(0);
     expect(result.customers.length).toBe(1);
     expect(result.customers[0].state).toBe('guided');
-    expect(result.customers[0].guideHostId).toBe('h1');
+    expect(result.customers[0].guideStaffId).toBe('h1');
     expect(result.customers[0].tableId).toBe('t1');
     expect(result.staff[0].task).not.toBeNull();
     expect(result.staff[0].task.type).toBe('guide_customer');
@@ -991,9 +1033,9 @@ describe('updateStaff', () => {
     expect(result.tables[0].status).toBe('reserved');
   });
 
-  it('guided customer follows host x/y during movement', () => {
-    const host = {
-      id: 'h1', name: 'Luca', role: 'host', skill: 5, morale: 80, salary: 150,
+  it('guided customer follows waiter x/y during movement', () => {
+    const waiter = {
+      id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
       x: 100, y: 100, path: [{ x: 10, y: 5 }],
       task: { type: 'guide_customer', customerId: 'c1', tableId: 't1' },
     };
@@ -1001,21 +1043,21 @@ describe('updateStaff', () => {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'guided', dishId: null, tableId: 't1', tipAmount: 0,
       seatTime: null, orderTime: null, eatTime: null,
-      guideHostId: 'h1', x: 100, y: 100,
+      guideStaffId: 'h1', x: 100, y: 100,
     };
     const state = {
       ...baseState,
-      staff: [host],
+      staff: [waiter],
       customers: [customer],
       tables: [{ id: 't1', seats: 2, status: 'reserved', x: 200, y: 220 }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
     };
     const result = updateStaff(state, 1);
-    expect(result.staff[0].x).toBeCloseTo(165, -1);
+    expect(result.staff[0].x).toBeCloseTo(175, -1);
     expect(result.staff[0].y).toBeCloseTo(100, -1);
-    expect(result.customers[0].x).toBeCloseTo(165 - 12, -1);
+    expect(result.customers[0].x).toBeCloseTo(175 - 12, -1);
     expect(result.customers[0].y).toBeCloseTo(100 + 12, -1);
-    expect(result.customers[0].guideHostId).toBe('h1');
+    expect(result.customers[0].guideStaffId).toBe('h1');
     expect(result.customers[0].state).toBe('guided');
   });
 

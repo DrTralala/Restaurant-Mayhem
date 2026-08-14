@@ -106,15 +106,43 @@ export function updateCustomers(state, dt) {
     }))];
   }
 
-  const cashier = state.cashierStations?.[0];
-  if (cashier) {
-    const payingCustomers = updatedCustomers
-      .filter(customer => customer.state === 'paying')
-      .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0));
-    const positions = new Map(payingCustomers.map((customer, index) => [customer.id, {
-      x: cashier.x - 20 - index * 20,
-      y: cashier.y + cashier.h / 2,
-    }]));
+  const cashierStations = Array.isArray(state.cashierStations) ? state.cashierStations : [];
+  const staffedCashierStations = cashierStations.filter(station =>
+    (state.staff || []).some(staff => staff.id === station.assignedStaffId && staff.role === 'waiter'),
+  );
+  const fallbackCashierStation = staffedCashierStations[0] || cashierStations[0];
+  const stationById = new Map(cashierStations.map(station => [station.id, station]));
+  const payingCustomers = updatedCustomers.filter(customer => customer.state === 'paying');
+
+  if (payingCustomers.length > 0 && fallbackCashierStation) {
+    updatedCustomers = updatedCustomers.map(customer => {
+      if (customer.state !== 'paying') return customer;
+      const assignedStation = stationById.get(customer.cashierStationId);
+      if (assignedStation || !fallbackCashierStation) return customer;
+      return { ...customer, cashierStationId: fallbackCashierStation.id };
+    });
+
+    const payingByStation = new Map();
+    for (const customer of updatedCustomers) {
+      if (customer.state !== 'paying' || !stationById.has(customer.cashierStationId)) continue;
+      const group = payingByStation.get(customer.cashierStationId) || [];
+      group.push(customer);
+      payingByStation.set(customer.cashierStationId, group);
+    }
+
+    const positions = new Map();
+    for (const [stationId, customersAtStation] of payingByStation) {
+      const station = stationById.get(stationId);
+      customersAtStation
+        .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0))
+        .forEach((customer, queueIndex) => {
+          positions.set(customer.id, {
+            x: station.x - 20 - queueIndex * 20,
+            y: station.y + station.h / 2,
+          });
+        });
+    }
+
     updatedCustomers = updatedCustomers.map(customer => {
       const checkoutPosition = positions.get(customer.id);
       if (!checkoutPosition) return customer;

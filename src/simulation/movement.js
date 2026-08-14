@@ -6,7 +6,7 @@ const ROLE_SPEED = { waiter: 75, cook: 55 };
 export function ensureStaffRuntime(staff, state) {
   return (staff || []).map((s, index) => {
     const hasCoord = Number.isFinite(s.x) && Number.isFinite(s.y);
-    const pos = hasCoord ? { x: s.x, y: s.y } : getDefaultStaffPosition(s.role, index, state);
+    const pos = hasCoord ? { x: s.x, y: s.y } : getDefaultStaffPosition(s.role, index, state, s.id);
     return { ...s, x: pos.x, y: pos.y, path: s.path || [], task: s.task || null };
   });
 }
