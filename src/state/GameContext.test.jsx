@@ -2,6 +2,7 @@ import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { GameProvider, useDispatch, useGameState } from './GameContext';
 import { createInitialState } from './initialState';
+import { getRestaurantWorld } from '../simulation/world';
 
 function StaffNameHarness() {
   const state = useGameState();
@@ -229,6 +230,22 @@ describe('GameProvider authoritative placement actions', () => {
     expect(game.state.restaurant.funds).toBe(300);
     expect(game.state.cashierStations.at(-1)).not.toHaveProperty('assignedStaffId');
     expect(game.state.staff).toHaveLength(1);
+  });
+
+  it('stores a snapped y coordinate for an authoritative door placement', () => {
+    const initial = createInitialState();
+    const game = renderReducer();
+    const { doorX } = getRestaurantWorld(initial.restaurant);
+
+    game.dispatch({
+      type: 'PLACE_ITEM',
+      itemType: 'door',
+      x: doorX,
+      y: 441,
+      rotation: 0,
+    });
+
+    expect(game.state.doors.at(-1)).toEqual({ id: 'door2', y: 440 });
   });
 
   it('clears cashier assignments when firing staff', () => {

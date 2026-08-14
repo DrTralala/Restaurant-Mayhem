@@ -6,7 +6,7 @@ import { getPlaceable } from '../data/placeables';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { clampReputation } from '../simulation/balance';
 import { assignWaiterToStation } from '../simulation/cashiers';
-import { getNextNumericId, validatePlacement } from '../simulation/placement';
+import { getNextNumericId, snapPlacement, validatePlacement } from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
 
 const DISH_QUALITY_COST = 50;
@@ -97,12 +97,18 @@ function placeLegacyItem(state, action, itemType) {
 
 function placeItem(state, action) {
   const item = getPlaceable(action.itemType);
-  const placement = {
+  const requestedPlacement = {
     itemType: action.itemType,
     x: action.x,
     y: action.y,
     rotation: action.rotation ?? 0,
   };
+  const snappedDoor = action.itemType === 'door'
+    ? snapPlacement(action.itemType, requestedPlacement, state)
+    : null;
+  const placement = snappedDoor
+    ? { ...requestedPlacement, y: snappedDoor.y }
+    : requestedPlacement;
   const result = item && validatePlacement(state, placement);
   if (!item || !result?.valid || !canAfford(state, item.price)) return state;
 
