@@ -168,11 +168,14 @@ function assignTask({ state, staff, customers, queue, tables, foodItems, kitchen
       }
     }
 
-    const waiting = customers.find(c => c.state === 'waiting' && (!claimedCustomerIds || !claimedCustomerIds.has(c.id)));
-    if (waiting) {
+    const waitingPartyIds = new Set();
+    for (const waiting of customers.filter(c => c.state === 'waiting' && (!claimedCustomerIds || !claimedCustomerIds.has(c.id)))) {
+      const partyKey = waiting.partyId || waiting.id;
+      if (waitingPartyIds.has(partyKey)) continue;
+      waitingPartyIds.add(partyKey);
       const party = getParty(customers.filter(c => c.state === 'waiting'), waiting);
       const partySize = getPartySize(party, waiting);
-      if (party.length < partySize) return null;
+      if (party.length < partySize) continue;
       const reachable = findReachableTable(
         { ...state, customers },
         tables,
@@ -205,11 +208,14 @@ function assignTask({ state, staff, customers, queue, tables, foodItems, kitchen
       }
     }
 
-    if (queue.length > 0) {
-      const queued = queue[0];
+    const queuedPartyIds = new Set();
+    for (const queued of queue) {
+      const partyKey = queued.partyId || queued.id;
+      if (queuedPartyIds.has(partyKey)) continue;
+      queuedPartyIds.add(partyKey);
       const party = getParty(queue, queued);
       const partySize = getPartySize(party, queued);
-      if (party.length < partySize) return null;
+      if (party.length < partySize) continue;
       const reachable = findReachableTable(
         { ...state, customers },
         tables,
@@ -365,7 +371,7 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
         queue: queue.filter(q => !ids.includes(q.id)),
         tables: tables.map(t => t.id === staff.task.tableId ? { ...t, status: 'empty' } : t),
         customers: customers.map(c => ids.includes(c.id)
-          ? { ...c, state: 'leaving', guideStaffId: null, chairId: null, path: [], exitDoorId: null }
+          ? { ...c, state: 'leaving', tableId: null, guideStaffId: null, chairId: null, path: [], exitDoorId: null }
           : c),
       };
     }
@@ -498,15 +504,20 @@ export function updateStaff(state, dt) {
       tables = tables.map(table => table.id === current.task.tableId && table.status === 'reserved'
         ? { ...table, status: 'empty' }
         : table);
-      customers = customers.map(customer => ids.includes(customer.id) && customer.state !== 'leaving'
-        ? {
-            ...customer,
-            state: 'leaving',
-            guideStaffId: null,
-            chairId: null,
-            happiness: Math.max(0, customer.happiness - 30),
-          }
-        : customer);
+      customers = customers.map(customer => {
+        if (!ids.includes(customer.id)) return customer;
+        if (customer.state === 'leaving') {
+          return { ...customer, tableId: null, guideStaffId: null, chairId: null };
+        }
+        return {
+          ...customer,
+          state: 'leaving',
+          tableId: null,
+          guideStaffId: null,
+          chairId: null,
+          happiness: Math.max(0, customer.happiness - 30),
+        };
+      });
       staff[i] = { ...current, task: null, path: [] };
     }
   }

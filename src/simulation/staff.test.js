@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { updateStaff } from './staff';
+import { updateCustomers } from './customers';
 
 const baseState = {
   staff: [],
@@ -167,6 +168,39 @@ describe('updateStaff', () => {
     expect(result.queue).toHaveLength(1);
   });
 
+  it('skips an incomplete waiting party and guides an eligible queued customer', () => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 860, y: 360, morale: 80 }],
+      customers: [{ id: 'waiting1', partyId: 'waiting-party', partySize: 2, state: 'waiting', patience: 100 }],
+      queue: [{ id: 'queued1', partyId: 'queued-party', partySize: 1, state: 'queued', patience: 100 }],
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 220 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toMatchObject({ type: 'guide_customer', customerId: 'queued1' });
+    expect(result.customers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'waiting1', state: 'waiting' }),
+      expect.objectContaining({ id: 'queued1', state: 'guided', tableId: 't1' }),
+    ]));
+  });
+
+  it('skips an incomplete queued party and starts lower-priority cleaning', () => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 860, y: 360, morale: 80 }],
+      queue: [{ id: 'queued1', partyId: 'queued-party', partySize: 2, state: 'queued', patience: 100 }],
+      tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toMatchObject({ type: 'clean_table', tableId: 't1' });
+    expect(result.queue).toEqual(state.queue);
+  });
+
   it('keeps an assigned cashier waiter out of general waiter work while idle', () => {
     const waiter = { id: 'w1', role: 'waiter', x: 300, y: 300, morale: 80 };
     const state = {
@@ -263,6 +297,28 @@ describe('updateStaff', () => {
     expect(result.staff[0].task).toBeNull();
   });
 
+  it('clears a queued customer table reservation when chairs disappear during guidance', () => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 860, y: 360, morale: 80 }],
+      queue: [{ id: 'queued1', partyId: 'queued-party', partySize: 1, state: 'queued', patience: 100, happiness: 80 }],
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 220 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+    };
+    const guided = updateStaff(state, 0);
+    const invalidated = updateStaff({
+      ...guided,
+      staff: guided.staff.map(waiter => ({ ...waiter, path: [] })),
+      chairs: [],
+    }, 0);
+
+    expect(invalidated.customers[0]).toMatchObject({ state: 'leaving', tableId: null });
+    expect(invalidated.tables[0].status).toBe('empty');
+
+    const customerUpdated = updateCustomers(invalidated, 0);
+    expect(customerUpdated.tables[0].status).toBe('empty');
+  });
+
   it('seats every member of a party on a chair at the same suitable table', () => {
     const waiter = {
       id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
@@ -329,6 +385,7 @@ describe('updateStaff', () => {
     const result = updateStaff(state, 1);
 
     expect(result.staff[0].task).toBeNull();
+    expect(result.customers[0].tableId).toBeNull();
     expect(result.tables[0].status).toBe('empty');
   });
 
@@ -352,6 +409,7 @@ describe('updateStaff', () => {
 
     expect(result.staff[0].task).toBeNull();
     expect(result.customers.every(customer => customer.state === 'leaving')).toBe(true);
+    expect(result.customers.every(customer => customer.tableId === null)).toBe(true);
     expect(result.tables[0].status).toBe('empty');
   });
 
