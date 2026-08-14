@@ -53,6 +53,22 @@ it('rejects a cashier table whose work cell is blocked by adjacent furniture', (
   })).toMatchObject({ valid: false, reason: 'cashier-work-cell' });
 });
 
+it('rejects a cashier table whose open work cell is unreachable', () => {
+  const enclosed = {
+    ...state,
+    chairs: [
+      ...state.chairs,
+      { id: 'work-top', tableId: 't1', x: 640, y: 260, rotation: 0 },
+      { id: 'work-left', tableId: 't1', x: 620, y: 280, rotation: 0 },
+      { id: 'work-right', tableId: 't1', x: 660, y: 280, rotation: 0 },
+    ],
+  };
+
+  expect(validatePlacement(enclosed, {
+    itemType: 'cashierTable', x: 600, y: 300, rotation: 0,
+  })).toMatchObject({ valid: false, reason: 'cashier-work-cell' });
+});
+
 it('requires a purchasable chair to be adjacent to a table with an open seat', () => {
   expect(validatePlacement(state, { itemType: 'chair', x: 210, y: 240, rotation: 0 })).toMatchObject({ valid: true, tableId: 't1' });
   expect(validatePlacement(state, { itemType: 'chair', x: 600, y: 300, rotation: 0 }).valid).toBe(false);

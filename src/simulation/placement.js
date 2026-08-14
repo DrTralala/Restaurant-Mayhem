@@ -1,5 +1,6 @@
 import { getPlaceable } from '../data/placeables';
-import { GRID_SIZE, getCashierWorkPosition, getDoors, getRestaurantWorld } from './world';
+import { findPath, worldToCell } from './pathfinding';
+import { GRID_SIZE, getCashierWorkPosition, getDoorPosition, getDoors, getRestaurantWorld } from './world';
 
 function invalid(reason) {
   return { valid: false, reason };
@@ -150,9 +151,21 @@ export function validatePlacement(state = {}, placement = {}) {
   }
 
   if (requestedPlacement.itemType === 'cashierTable') {
-    const workCell = getGridCellRect(getCashierWorkPosition(rect));
+    const workPosition = getCashierWorkPosition(rect);
+    const workCell = getGridCellRect(workPosition);
+    const workTarget = worldToCell(workPosition);
+    const stateWithCandidate = {
+      ...currentState,
+      cashierStations: [...(currentState.cashierStations || []), rect],
+    };
+    const workCellReachable = getDoors(currentState).some(door => {
+      const start = worldToCell(getDoorPosition(currentState, door).inside);
+      return (start.x === workTarget.x && start.y === workTarget.y)
+        || findPath(stateWithCandidate, start, workTarget).length > 0;
+    });
     if (!isWithinFloor(world, workCell, requestedPlacement.itemType)
-      || existingFurniture.some(existing => rectangleIntersects(workCell, existing))) {
+      || existingFurniture.some(existing => rectangleIntersects(workCell, existing))
+      || !workCellReachable) {
       return invalid('cashier-work-cell');
     }
   }
