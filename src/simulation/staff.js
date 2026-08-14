@@ -420,7 +420,8 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
     const anotherWorkerOwnsFood = food && state.staff.some(candidate =>
       candidate.id !== staff.id && candidate.carryingFoodId === food.id
     );
-    if (!food || food.state !== 'on_service' || !serviceTable || anotherWorkerOwnsFood) {
+    const carriesAnotherFood = staff.carryingFoodId != null && staff.carryingFoodId !== food?.id;
+    if (!food || food.state !== 'on_service' || !serviceTable || anotherWorkerOwnsFood || carriesAnotherFood) {
       return {
         staff: { ...completedStaff, carryingFoodId: staff.carryingFoodId ?? null },
         queue, tables, customers, kitchenQueue, foodItems,

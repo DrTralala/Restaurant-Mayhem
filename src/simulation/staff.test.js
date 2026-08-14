@@ -700,6 +700,31 @@ describe('updateStaff', () => {
     expect(result.foodItems[0]).toEqual(food);
   });
 
+  it('does not claim a second plate while already carrying another item', () => {
+    const readyFood = {
+      id: 'f1', customerId: 'c1', tableId: 't1', serviceTableId: 'st1',
+      state: 'on_service', x: 150, y: 130,
+    };
+    const carriedFood = {
+      id: 'f2', customerId: 'c2', tableId: 't2',
+      state: 'carried', x: 120, y: 120,
+    };
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', x: 120, y: 120, path: [],
+        task: { type: 'pickup_food', foodId: 'f1' }, carryingFoodId: 'f2',
+      }],
+      foodItems: [readyFood, carriedFood],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: 'f2' });
+    expect(result.foodItems).toEqual([readyFood, carriedFood]);
+  });
+
   it('does not claim food from a missing service counter', () => {
     const food = { id: 'f1', customerId: 'c1', tableId: 't1', serviceTableId: 'missing', state: 'on_service' };
     const state = {
