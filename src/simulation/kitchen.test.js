@@ -173,13 +173,16 @@ describe('processKitchen', () => {
 
   it('places completed food on the second counter when the first counter has four items', () => {
     const existingFood = Array.from({ length: 4 }, (_, index) => ({
-      id: `existing-${index}`, dishId: 'd1', customerId: 'c1', tableId: 't1',
+      id: `existing-${index}`, dishId: 'd1', customerId: 'other', tableId: 't1',
       serviceTableId: 'st1', state: 'on_service', x: 150 + index * 30, y: 130,
     }));
     const state = {
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 60 },
-      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      customers: [
+        { id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' },
+        { id: 'other', state: 'eating', dishId: 'd1', tableId: 't1' },
+      ],
       dishes: [{ id: 'd1', prepTime: 60, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
       kitchenQueue: [{ customerId: 'c1', dishId: 'd1', stationId: 'k1', startTime: 0, completedAt: null }],
@@ -200,13 +203,16 @@ describe('processKitchen', () => {
 
   it('counts version-2 service food without a recorded counter against counter capacity', () => {
     const existingFood = Array.from({ length: 4 }, (_, index) => ({
-      id: `legacy-${index}`, dishId: 'd1', customerId: 'c1', tableId: 't1',
+      id: `legacy-${index}`, dishId: 'd1', customerId: 'other', tableId: 't1',
       state: 'on_service', x: 150 + index * 30, y: 130,
     }));
     const state = {
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 60 },
-      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      customers: [
+        { id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' },
+        { id: 'other', state: 'eating', dishId: 'd1', tableId: 't1' },
+      ],
       dishes: [{ id: 'd1', prepTime: 60, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
       kitchenQueue: [{ customerId: 'c1', dishId: 'd1', stationId: 'k1', startTime: 0, completedAt: null }],
@@ -253,6 +259,30 @@ describe('processKitchen', () => {
     expect(firstResult.kitchenQueue[0].completedAt).toBe(60);
     expect(secondResult.foodItems).toHaveLength(8);
     expect(secondResult.kitchenQueue).toHaveLength(1);
+  });
+
+  it('retains a repeated completed queue item without creating a second service plate', () => {
+    const existingFood = {
+      id: 'existing', dishId: 'd1', customerId: 'c1', tableId: 't1',
+      serviceTableId: 'st1', state: 'carried', x: 200, y: 200,
+    };
+    const completedItem = {
+      customerId: 'c1', dishId: 'd1', stationId: 'k1', startTime: 0, completedAt: 60,
+    };
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 61 },
+      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      dishes: [{ id: 'd1', prepTime: 60, requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1, qualityBonus: 0 }],
+      kitchenQueue: [completedItem],
+      foodItems: [existingFood],
+    };
+
+    const result = processKitchen(state);
+
+    expect(result.foodItems).toEqual([existingFood]);
+    expect(result.kitchenQueue).toEqual([completedItem]);
   });
 
   it('cooking does not progress when startTime is null', () => {

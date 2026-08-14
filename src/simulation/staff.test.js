@@ -413,20 +413,48 @@ describe('updateStaff', () => {
     expect(result.tables[0].status).toBe('empty');
   });
 
-  it('waiter cleans dirty table on arrival', () => {
-    const waiter = {
-      id: 'h1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
-      x: 180, y: 220, path: [], task: { type: 'clean_table', tableId: 't1' },
-    };
+  it('holds a waiter at a dirty table for two seconds', () => {
     const state = {
       ...baseState,
-      staff: [waiter],
+      staff: [{ id: 'w1', role: 'waiter', x: 180, y: 220, path: [], task: { type: 'clean_table', tableId: 't1' } }],
       tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
     };
-    const result = updateStaff(state, 1);
-    expect(result.tables[0].status).toBe('empty');
+
+    const started = updateStaff(state, 0);
+    expect(started.tables[0].status).toBe('dirty');
+    expect(started.staff[0].task).toMatchObject({ type: 'clean_table', cleaningStartedAt: 100 });
+    expect(started.staff[0].path).toEqual([]);
+
+    const stillCleaning = updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 101.9 } }, 0);
+    expect(stillCleaning.tables[0].status).toBe('dirty');
+    expect(stillCleaning.staff[0].task).toMatchObject({ type: 'clean_table', cleaningStartedAt: 100 });
+    expect(stillCleaning.staff[0].path).toEqual([]);
+
+    const finished = updateStaff({ ...stillCleaning, restaurant: { ...stillCleaning.restaurant, gameTime: 102 } }, 0);
+    expect(finished.tables[0].status).toBe('empty');
+    expect(finished.staff[0].task).toBeNull();
+  });
+
+  it('cancels cleaning safely when the target table is no longer dirty', () => {
+    const tables = [
+      { id: 't1', seats: 2, status: 'occupied', x: 200, y: 220 },
+      { id: 't2', seats: 2, status: 'dirty', x: 360, y: 220 },
+    ];
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', x: 180, y: 220, path: [],
+        task: { type: 'clean_table', tableId: 't1', cleaningStartedAt: 100 },
+      }],
+      tables,
+      restaurant: { ...baseState.restaurant, gameTime: 102 },
+    };
+
+    const result = updateStaff(state, 0);
+
     expect(result.staff[0].task).toBeNull();
+    expect(result.tables).toEqual(tables);
   });
 
   it('waiter does not complete order until arrival', () => {
@@ -627,11 +655,63 @@ describe('updateStaff', () => {
       customers: [customer],
       tables: [{ id: 't1', seats: 2, status: 'occupied', x: 200, y: 200 }],
       foodItems: [foodItem],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
     };
     const result = updateStaff(state, 1);
     expect(result.foodItems[0].state).toBe('carried');
     expect(result.staff[0].carryingFoodId).toBe('f1');
     expect(result.staff[0].task).toBeNull();
+  });
+
+  it('does not claim food that another waiter has already carried', () => {
+    const food = { id: 'f1', customerId: 'c1', tableId: 't1', serviceTableId: 'st1', state: 'carried' };
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 120, y: 120, path: [], task: { type: 'pickup_food', foodId: 'f1' } }],
+      foodItems: [food],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: null });
+    expect(result.foodItems[0]).toEqual(food);
+  });
+
+  it('does not claim on-service food owned by another waiter', () => {
+    const food = {
+      id: 'f1', customerId: 'c1', tableId: 't1', serviceTableId: 'st1',
+      state: 'on_service', x: 300, y: 300,
+    };
+    const state = {
+      ...baseState,
+      staff: [
+        { id: 'w1', role: 'waiter', x: 120, y: 120, path: [], task: { type: 'pickup_food', foodId: 'f1' } },
+        { id: 'w2', role: 'waiter', x: 300, y: 300, path: [{ x: 20, y: 20 }], carryingFoodId: 'f1' },
+      ],
+      foodItems: [food],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: null });
+    expect(result.staff[1].carryingFoodId).toBe('f1');
+    expect(result.foodItems[0]).toEqual(food);
+  });
+
+  it('does not claim food from a missing service counter', () => {
+    const food = { id: 'f1', customerId: 'c1', tableId: 't1', serviceTableId: 'missing', state: 'on_service' };
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 120, y: 120, path: [], task: { type: 'pickup_food', foodId: 'f1' } }],
+      foodItems: [food],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingFoodId: null });
+    expect(result.foodItems[0]).toEqual(food);
   });
 
   // --- Task 5: Waiter food delivery ---
@@ -666,6 +746,24 @@ describe('updateStaff', () => {
     expect(result.staff[0].path.length).toBeGreaterThan(0);
   });
 
+  it('keeps carried food coordinates synchronised with its moving waiter', () => {
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', x: 120, y: 120, path: [{ x: 10, y: 10 }],
+        task: { type: 'deliver_food', foodId: 'f1', customerId: 'c1' }, carryingFoodId: 'f1',
+      }],
+      customers: [{ id: 'c1', state: 'ordering', dishId: 'd1', tableId: 't1' }],
+      tables: [{ id: 't1', status: 'occupied', x: 300, y: 300 }],
+      foodItems: [{ id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1', state: 'carried', x: 150, y: 130 }],
+    };
+
+    const result = updateStaff(state, 0.5);
+
+    expect(result.staff[0]).toMatchObject({ carryingFoodId: 'f1' });
+    expect(result.foodItems[0]).toMatchObject({ state: 'carried', x: result.staff[0].x, y: result.staff[0].y });
+  });
+
   it('waiter completes food delivery on arrival, customer starts eating', () => {
     const waiter = {
       id: 's1', name: 'Anna', role: 'waiter', skill: 5, morale: 80, salary: 150,
@@ -692,6 +790,7 @@ describe('updateStaff', () => {
     };
     const result = updateStaff(state, 1);
     expect(result.foodItems[0].state).toBe('delivered');
+    expect(result.foodItems[0]).toMatchObject({ x: 208, y: 208 });
     expect(result.staff[0].carryingFoodId).toBeNull();
     expect(result.staff[0].task).toBeNull();
     expect(result.customers[0].state).toBe('eating');
@@ -827,7 +926,10 @@ describe('updateStaff', () => {
   });
 
   it('does not release stale task food carried by another worker', () => {
-    const food = { id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1', state: 'carried' };
+    const food = {
+      id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1',
+      state: 'carried', x: 400, y: 400,
+    };
     const state = {
       ...baseState,
       staff: [
@@ -854,7 +956,10 @@ describe('updateStaff', () => {
 
   it('preserves the current worker unrelated carrier when cancelling stale delivery', () => {
     const taskFood = { id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1', state: 'on_service' };
-    const ownFood = { id: 'f2', dishId: 'd2', customerId: 'c2', tableId: 't2', state: 'carried' };
+    const ownFood = {
+      id: 'f2', dishId: 'd2', customerId: 'c2', tableId: 't2',
+      state: 'carried', x: 180, y: 220,
+    };
     const state = {
       ...baseState,
       staff: [{

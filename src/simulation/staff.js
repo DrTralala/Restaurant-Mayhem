@@ -298,19 +298,21 @@ function assignTask({ state, staff, customers, queue, tables, foodItems, kitchen
 }
 
 function resolveTask({ state, staff, customers, queue, tables, foodItems, kitchenQueue }) {
+  const completedStaff = { ...staff, task: null };
+
   if (staff.task.type === 'take_order') {
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
-    if (!customer || customer.state !== 'seated') return { staff, customers, queue, tables, foodItems, kitchenQueue };
+    if (!customer || customer.state !== 'seated') return { staff: completedStaff, customers, queue, tables, foodItems, kitchenQueue };
     const dish = bestDish(state.dishes);
     return {
-      staff, queue, tables, foodItems, kitchenQueue,
+      staff: completedStaff, queue, tables, foodItems, kitchenQueue,
       customers: customers.map(c => c.id === staff.task.customerId ? { ...c, state: 'ordering', dishId: dish ? dish.id : null, orderTime: state.restaurant.gameTime } : c),
     };
   }
 
   if (staff.task.type === 'take_payment') {
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
-    if (!customer || customer.state !== 'paying') return { staff, customers, queue, tables, foodItems, kitchenQueue };
+    if (!customer || customer.state !== 'paying') return { staff: completedStaff, customers, queue, tables, foodItems, kitchenQueue };
     const dish = state.dishes.find(candidate => candidate.id === customer.dishId);
     const price = dish?.price || 0;
     const happiness = Number.isFinite(customer.happiness) ? customer.happiness : 80;
@@ -327,7 +329,7 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
     };
     const remainingAtTable = customers.some(candidate => candidate.id !== customer.id && candidate.tableId === customer.tableId && candidate.state !== 'leaving');
     return {
-      staff, queue, kitchenQueue,
+      staff: completedStaff, queue, kitchenQueue,
       customers: customers.map(candidate => candidate.id === customer.id
         ? { ...candidate, state: 'leaving', departureReason: 'served', path: [], exitDoorId: null, checkoutPosition: null }
         : candidate),
@@ -343,8 +345,21 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
   }
 
   if (staff.task.type === 'clean_table') {
+    const table = tables.find(candidate => candidate.id === staff.task.tableId);
+    if (!table || table.status !== 'dirty') {
+      return { staff: { ...completedStaff, path: [] }, queue, foodItems, customers, kitchenQueue, tables };
+    }
+    if (staff.task.cleaningStartedAt == null) {
+      return {
+        staff: { ...staff, path: [], task: { ...staff.task, cleaningStartedAt: state.restaurant.gameTime } },
+        tables, customers, queue, foodItems, kitchenQueue,
+      };
+    }
+    if (state.restaurant.gameTime - staff.task.cleaningStartedAt < 2) {
+      return { staff: { ...staff, path: [] }, queue, foodItems, customers, kitchenQueue, tables };
+    }
     return {
-      staff, queue, foodItems, customers, kitchenQueue,
+      staff: { ...completedStaff, path: [] }, queue, foodItems, customers, kitchenQueue,
       tables: tables.map(t => t.id === staff.task.tableId ? { ...t, status: 'empty' } : t),
     };
   }
@@ -367,7 +382,7 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
 
     if (!table || ids.length === 0 || chairs.length < ids.length) {
       return {
-        staff, foodItems, kitchenQueue,
+        staff: completedStaff, foodItems, kitchenQueue,
         queue: queue.filter(q => !ids.includes(q.id)),
         tables: tables.map(t => t.id === staff.task.tableId ? { ...t, status: 'empty' } : t),
         customers: customers.map(c => ids.includes(c.id)
@@ -377,7 +392,7 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
     }
 
     return {
-      staff, foodItems, kitchenQueue,
+      staff: completedStaff, foodItems, kitchenQueue,
       queue: queue.filter(q => !ids.includes(q.id)),
       tables: tables.map(t => t.id === staff.task.tableId ? { ...t, status: 'occupied' } : t),
       customers: customers.map(c => {
@@ -397,28 +412,45 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
   }
 
   if (staff.task.type === 'pickup_food') {
+    const foodIndex = foodItems.findIndex(candidate => candidate.id === staff.task.foodId);
+    const food = foodItems[foodIndex];
+    const serviceTable = food
+      ? (state.serviceTables || []).find(candidate => candidate.id === food.serviceTableId)
+      : null;
+    const anotherWorkerOwnsFood = food && state.staff.some(candidate =>
+      candidate.id !== staff.id && candidate.carryingFoodId === food.id
+    );
+    if (!food || food.state !== 'on_service' || !serviceTable || anotherWorkerOwnsFood) {
+      return {
+        staff: { ...completedStaff, carryingFoodId: staff.carryingFoodId ?? null },
+        queue, tables, customers, kitchenQueue, foodItems,
+      };
+    }
     return {
-      staff: { ...staff, carryingFoodId: staff.task.foodId },
+      staff: { ...completedStaff, carryingFoodId: food.id },
       queue, tables, customers, kitchenQueue,
-      foodItems: foodItems.map(f => f.id === staff.task.foodId ? { ...f, state: 'carried' } : f),
+      foodItems: foodItems.map((candidate, index) => index === foodIndex ? { ...candidate, state: 'carried' } : candidate),
     };
   }
 
   if (staff.task.type === 'deliver_food') {
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
-    const food = foodItems.find(candidate => candidate.id === staff.task.foodId);
+    const foodIndex = foodItems.findIndex(candidate => candidate.id === staff.task.foodId);
+    const food = foodItems[foodIndex];
+    const table = tables.find(candidate => candidate.id === food?.tableId);
     const canDeliver = customer
       && customer.state !== 'leaving'
       && food?.state === 'carried'
       && staff.carryingFoodId === food.id
-      && food.customerId === customer.id;
+      && food.customerId === customer.id
+      && table;
     if (!canDeliver) {
       const ownsTaskFood = staff.carryingFoodId === staff.task.foodId;
       const anotherWorkerOwnsTaskFood = state.staff.some(candidate =>
         candidate.id !== staff.id && candidate.carryingFoodId === staff.task.foodId
       );
       return {
-        staff: ownsTaskFood ? { ...staff, carryingFoodId: null } : staff,
+        staff: { ...staff, task: null, carryingFoodId: ownsTaskFood ? null : staff.carryingFoodId },
         customers, queue, tables, kitchenQueue,
         foodItems: foodItems.map(candidate => ownsTaskFood
           && !anotherWorkerOwnsTaskFood
@@ -438,9 +470,11 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
       + (equipment?.qualityBonus || 0) * 100
     );
     return {
-      staff: { ...staff, carryingFoodId: null },
+      staff: { ...staff, task: null, carryingFoodId: null },
       queue, tables, kitchenQueue,
-      foodItems: foodItems.map(f => f.id === staff.task.foodId ? { ...f, state: 'delivered' } : f),
+      foodItems: foodItems.map((candidate, index) => index === foodIndex
+        ? { ...candidate, state: 'delivered', x: table.x + 8, y: table.y + 8 }
+        : candidate),
       customers: customers.map(c => c.id === staff.task.customerId
         ? { ...c, state: 'eating', eatTime: state.restaurant.gameTime, happiness: Math.min(100, (c.happiness ?? 80) + happinessBonus) }
         : c),
@@ -449,14 +483,14 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
 
   if (staff.task.type === 'clean_food') {
     return {
-      staff, queue, tables, customers, kitchenQueue,
+      staff: completedStaff, queue, tables, customers, kitchenQueue,
       foodItems: foodItems.filter(f => f.id !== staff.task.foodId),
     };
   }
 
   if (staff.task.type === 'cook_order') {
     return {
-      staff, queue, tables, customers, foodItems,
+      staff: completedStaff, queue, tables, customers, foodItems,
       kitchenQueue: kitchenQueue.map(q =>
         q.stationId === staff.task.stationId && q.customerId === staff.task.customerId && q.startTime === null
           ? { ...q, startTime: state.restaurant.gameTime }
@@ -465,7 +499,7 @@ function resolveTask({ state, staff, customers, queue, tables, foodItems, kitche
     };
   }
 
-  return { staff, customers, queue, tables, foodItems, kitchenQueue };
+  return { staff: completedStaff, customers, queue, tables, foodItems, kitchenQueue };
 }
 
 export function updateStaff(state, dt) {
@@ -567,7 +601,7 @@ export function updateStaff(state, dt) {
       if (resolved.kitchenQueue) kitchenQueue = resolved.kitchenQueue;
       if (resolved.completedCustomers) completedCustomers = resolved.completedCustomers;
       if (resolved.restaurant) restaurant = resolved.restaurant;
-      staff[i] = { ...resolved.staff, task: null };
+      staff[i] = resolved.staff;
       continue;
     }
 
@@ -584,6 +618,11 @@ export function updateStaff(state, dt) {
       if (result.claimedFoodId) claimedFoodIds.add(result.claimedFoodId);
     }
   }
+
+  foodItems = foodItems.map(food => {
+    const carrier = staff.find(candidate => candidate.carryingFoodId === food.id);
+    return carrier ? { ...food, x: carrier.x, y: carrier.y } : food;
+  });
 
   return { ...state, restaurant, staff, customers, queue, tables, foodItems, kitchenQueue, completedCustomers };
 }

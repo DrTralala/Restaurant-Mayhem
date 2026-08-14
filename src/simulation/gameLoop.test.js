@@ -72,7 +72,7 @@ describe('runTick', () => {
   it("preserves another worker's carried food through stale delivery cancellation", () => {
     const food = {
       id: 'f1', dishId: 'd1', customerId: 'c1', tableId: 't1',
-      state: 'carried', x: 150, y: 130,
+      state: 'carried', x: 400, y: 400,
     };
     const state = {
       ...emptyState,

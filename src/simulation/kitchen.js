@@ -3,6 +3,11 @@ import { getUpgradeEffect } from './balance';
 let foodItemCounter = 0;
 
 function placeFoodOnServiceTable(state, foodItems, customers, item) {
+  if (foodItems.some(food =>
+    food.customerId === item.customerId
+    && ['on_service', 'carried', 'delivered'].includes(food.state)
+  )) return false;
+
   const serviceTable = state.serviceTables.find(table =>
     foodItems.filter(food => food.state === 'on_service' && food.serviceTableId === table.id).length < 4
   );
