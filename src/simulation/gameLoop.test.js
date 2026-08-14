@@ -44,31 +44,36 @@ describe('runTick', () => {
     expect(result.restaurant.gameTime).toBe(110); // 100 + 5 * 2
   });
 
-  it('keeps a fresh-game roster and economy invariant through a deterministic arrival tick', () => {
+  it('keeps a fresh-game roster and food invariant through a deterministic journey tick', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     const initial = createInitialState();
-    const state = runTick({
+    let state = {
       ...initial,
       queue: [{
         id: 'invariant-customer', partyId: 'invariant-party', partySize: 1,
         partyType: 'solo', archetype: 'regular', gender: 'female', patience: 1000,
         happiness: 80, state: 'queued', dishId: null, tableId: null, chairId: null,
       }],
-    }, 1);
+    };
+
+    for (let second = 0; second < 300 && state.foodItems.length === 0; second += 1) {
+      state = runTick(state, 1);
+    }
 
     expect(state.staff.filter(staff => staff.role === 'waiter')).toHaveLength(3);
     expect(state.staff.filter(staff => staff.role === 'host' || staff.role === 'cashier_waiter'))
       .toHaveLength(0);
     expect(state.cashierStations.filter(station => station.assignedStaffId)).toHaveLength(1);
     expect(state.restaurant.funds).toBeGreaterThanOrEqual(0);
+    expect(state.foodItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ customerId: 'invariant-customer' }),
+    ]));
     expect(new Set(state.foodItems.map(food => food.customerId)).size)
-      .toBeLessThanOrEqual(state.foodItems.length);
+      .toBe(state.foodItems.length);
 
-    expect(state.customers[0]).toMatchObject({
-      id: 'invariant-customer', state: 'guided', guideStaffId: expect.any(String), tableId: 't1',
-    });
-    expect(state.staff.find(staff => staff.id === state.customers[0].guideStaffId))
-      .toMatchObject({ role: 'waiter' });
+    expect(state.customers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'invariant-customer' }),
+    ]));
   });
 
   it('releases stale carried food for cleanup without leaving a carrier reference', () => {

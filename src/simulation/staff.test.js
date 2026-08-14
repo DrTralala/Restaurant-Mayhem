@@ -153,6 +153,28 @@ describe('updateStaff', () => {
     expect(result.tables[0].status).toBe('reserved');
   });
 
+  it('does not seat a waiting customer or fall back to the table centre when no chairs exist', () => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 860, y: 360, morale: 80 }],
+      customers: [{
+        id: 'c1', state: 'waiting', patience: 100, happiness: 80,
+        tableId: null, chairId: null, x: 860, y: 360,
+      }],
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 220 }],
+      chairs: [],
+    };
+
+    const result = updateStaff(state, 1);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.customers[0]).toMatchObject({
+      id: 'c1', state: 'waiting', tableId: null, chairId: null, x: 860, y: 360,
+    });
+    expect(result.customers[0]).not.toMatchObject({ x: 200, y: 220 });
+    expect(result.tables[0].status).toBe('empty');
+  });
+
   it('does not guide a party when the table has fewer distinct chairs than members', () => {
     const state = {
       ...baseState,
@@ -278,7 +300,7 @@ describe('updateStaff', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'guided', dishId: null, tableId: 't1', tipAmount: 0,
-      seatTime: null, orderTime: null, eatTime: null, guideStaffId: 'h1', x: 860, y: 360,
+      seatTime: null, orderTime: null, eatTime: null, guideStaffId: 'w1', x: 860, y: 360,
     };
     const state = {
       ...baseState,
@@ -328,7 +350,7 @@ describe('updateStaff', () => {
       id, partyId: 'p1', partyType: 'couple', partySize: 2,
       archetype: 'regular', patience: 100, happiness: 80,
       state: 'guided', dishId: null, tableId: 't1', tipAmount: 0,
-       seatTime: null, orderTime: null, eatTime: null, guideStaffId: 'h1', x: 860 + index * 10, y: 360,
+       seatTime: null, orderTime: null, eatTime: null, guideStaffId: 'w1', x: 860 + index * 10, y: 360,
     }));
     const state = {
       ...baseState,
