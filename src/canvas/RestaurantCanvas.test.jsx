@@ -157,6 +157,26 @@ describe('RestaurantCanvas object movement', () => {
     expect(screen.queryByText(/Place table/)).not.toBeInTheDocument();
   });
 
+  it('cancels placement when right-clicking an overlay control', () => {
+    const dispatch = vi.fn();
+    const complete = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({ ...state, tables: [], chairs: [] });
+    render(
+      <RestaurantCanvas
+        managementOpen={false}
+        placementRequest={{ itemType: 'table' }}
+        onPlacementComplete={complete}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Zoom in' }));
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Place table/)).not.toBeInTheDocument();
+  });
+
   it('allows chairs to be placed between 20-pixel grid cells', () => {
     const dispatch = vi.fn();
     useDispatch.mockReturnValue(dispatch);

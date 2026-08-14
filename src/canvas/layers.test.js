@@ -254,6 +254,21 @@ describe('drawStaffLayer', () => {
     expect(ctx._calls.arcs[0].y).toBe(75);
   });
 
+  it('falls back to the assigned cashier position when waiter coordinates are missing', () => {
+    const state = {
+      staff: [{ id: 'w1', name: 'Elena', role: 'waiter', morale: 80 }],
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'w1',
+      }],
+      restaurant: { expansionLevel: 1 },
+    };
+    const ctx = recordCtx();
+
+    drawStaffLayer(ctx, state, camera);
+
+    expect(ctx._calls.arcs[0]).toMatchObject({ x: 840, y: 100 });
+  });
+
   it('does not render staff task text on the main canvas', () => {
     const state = {
       staff: [{ id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80, task: { type: 'take_order' } }],
@@ -358,31 +373,48 @@ describe('drawCustomerLayer', () => {
 
   it('shows a menu held by a seated customer who is deciding', () => {
     const customers = [
-      { id: 'c1', archetype: 'regular', state: 'seated', tableId: 't1', dishId: null },
+      { id: 'c1', archetype: 'regular', state: 'seated', tableId: 't1', chairId: 'ch1', dishId: null },
     ];
     const tables = [{ id: 't1', x: 200, y: 200, status: 'occupied', seats: 2 }];
-    const state = { customers, tables, restaurant: {} };
+    const chairs = [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }];
+    const state = { customers, tables, chairs, restaurant: {} };
     const ctx = recordCtx();
 
     drawCustomerLayer(ctx, state, camera);
 
     expect(ctx._calls.lines.length).toBeGreaterThanOrEqual(5);
-    expect(ctx._calls.rects).toContainEqual({ x: 211, y: 223, w: 18, h: 12 });
+    expect(ctx._calls.rects).toContainEqual({ x: 211, y: 193, w: 18, h: 12 });
   });
 
   it('keeps the menu visible while a customer is ordering', () => {
     const state = {
-      customers: [{ id: 'c1', archetype: 'regular', gender: 'female', state: 'ordering', tableId: 't1', dishId: 'd1' }],
+      customers: [{ id: 'c1', archetype: 'regular', gender: 'female', state: 'ordering', tableId: 't1', chairId: 'ch1', dishId: 'd1' }],
       tables: [{ id: 't1', x: 200, y: 200, status: 'occupied', seats: 2 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
       restaurant: {},
     };
     const ctx = recordCtx();
 
     drawCustomerLayer(ctx, state, camera);
 
-    expect(ctx._calls.rects).toContainEqual({ x: 211, y: 223, w: 18, h: 12 });
+    expect(ctx._calls.rects).toContainEqual({ x: 211, y: 193, w: 18, h: 12 });
     expect(ctx._calls.strokes).toContainEqual({ colour: '#e66a9c' });
     expect(ctx._calls.texts.some(call => call.text === 'ordering')).toBe(false);
+  });
+
+  it('does not render seated customers without an explicit valid chair', () => {
+    const state = {
+      customers: [{ id: 'c1', archetype: 'regular', state: 'seated', tableId: 't1', dishId: null }],
+      tables: [{ id: 't1', x: 200, y: 200, status: 'occupied', seats: 2 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+      restaurant: {},
+    };
+    const ctx = recordCtx();
+
+    drawCustomerLayer(ctx, state, camera);
+
+    expect(ctx._calls.arcs).toHaveLength(0);
+    expect(ctx._calls.rects).toHaveLength(0);
   });
 
   it('renders guided customer by x/y even when tableId is also set', () => {

@@ -33,4 +33,18 @@ describe('cashier station assignments', () => {
       { id: 'cashier2', assignedStaffId: 'w1' },
     ]);
   });
+
+  it('skips waiters who have active work or are carrying food', () => {
+    const staff = [
+      { id: 'w1', role: 'waiter', task: { type: 'pickup_food', foodId: 'f1' } },
+      { id: 'w2', role: 'waiter', carryingFoodId: 'f2' },
+      { id: 'w3', role: 'waiter', task: null, carryingFoodId: null },
+    ];
+    const stations = [{ id: 'cashier1' }];
+
+    expect(getAvailableWaiterId(staff, stations)).toBe('w3');
+    expect(assignWaiterToStation(stations, staff, 'cashier1')).toEqual([
+      { id: 'cashier1', assignedStaffId: 'w3' },
+    ]);
+  });
 });

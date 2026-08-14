@@ -244,6 +244,19 @@ export default function RestaurantCanvas({
     return () => window.removeEventListener('keydown', onKey);
   }, [state, onPlacementComplete]);
 
+  useEffect(() => {
+    if (!placement) return undefined;
+    const cancelPlacement = (event) => {
+      if (!placementRef.current) return;
+      event.preventDefault();
+      placementRef.current = null;
+      setPlacement(null);
+      onPlacementComplete?.();
+    };
+    window.addEventListener('contextmenu', cancelPlacement);
+    return () => window.removeEventListener('contextmenu', cancelPlacement);
+  }, [placement, onPlacementComplete]);
+
   // --- Mouse handlers ---
 
   const handleMouseMove = (e) => {
@@ -428,14 +441,6 @@ export default function RestaurantCanvas({
     adjustCameraZoom(cameraRef.current, factor);
   };
 
-  const handleContextMenu = (e) => {
-    if (!placementRef.current) return;
-    e.preventDefault();
-    placementRef.current = null;
-    setPlacement(null);
-    onPlacementComplete?.();
-  };
-
   // Context menu actions
   const handleMoveEntity = () => {
     if (!menu) return;
@@ -485,7 +490,6 @@ export default function RestaurantCanvas({
         onMouseUp={handleMouseUp}
         onWheel={handleWheel}
         onClick={handleClick}
-        onContextMenu={handleContextMenu}
       />
 
       {/* Context menu */}

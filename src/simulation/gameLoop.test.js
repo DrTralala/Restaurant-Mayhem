@@ -273,4 +273,44 @@ describe('runTick', () => {
     expect(state.cashierStations.filter(station => station.assignedStaffId)).toHaveLength(1);
     expect(state.staff.filter(staff => staff.role === 'waiter')).toHaveLength(3);
   });
+
+  it('lets a newly purchased second cashier station process payment alongside the staffed starter station', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const initial = createInitialState();
+    let state = {
+      ...initial,
+      tables: initial.tables.map(table => ['t1', 't2'].includes(table.id)
+        ? { ...table, status: 'occupied' }
+        : table),
+      cashierStations: [
+        initial.cashierStations[0],
+        { id: 'cashier2', x: 600, y: 300, w: 80, h: 40, assignedStaffId: 'starter-waiter' },
+      ],
+      customers: [
+        {
+          id: 'c1', state: 'paying', x: 780, y: 140, patience: 100,
+          happiness: 80, paymentQueuedAt: 10, dishId: 'starter-toast', tableId: 't1',
+        },
+        {
+          id: 'c2', state: 'paying', x: 580, y: 320, patience: 100,
+          happiness: 80, paymentQueuedAt: 20, dishId: 'starter-toast', tableId: 't2',
+        },
+      ],
+    };
+    let secondStationTookPayment = false;
+
+    for (let tick = 0; tick < 2; tick += 1) {
+      state = runTick(state, 0);
+      secondStationTookPayment ||= state.staff.some(staff =>
+        staff.id === 'starter-waiter'
+          && staff.task?.type === 'take_payment'
+          && staff.task.stationId === 'cashier2'
+          && staff.task.customerId === 'c2');
+    }
+
+    expect(secondStationTookPayment).toBe(true);
+    expect(state.customers.find(customer => customer.id === 'c2'))
+      .toMatchObject({ state: 'leaving', departureReason: 'served' });
+    expect(state.restaurant.totalServed).toBe(2);
+  });
 });

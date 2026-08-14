@@ -15,6 +15,8 @@ export function getAvailableWaiterId(staff, stations) {
     candidate?.role === 'waiter'
       && candidate.id != null
       && !assignedStaffIds.has(candidate.id)
+      && candidate.task == null
+      && candidate.carryingFoodId == null
   )?.id ?? null;
 }
 

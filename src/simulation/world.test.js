@@ -29,19 +29,16 @@ describe('restaurant world geometry', () => {
   it('returns role-specific default staff positions inside useful work zones', () => {
     const cook = getDefaultStaffPosition('cook', 0, { restaurant: { expansionLevel: 1 } });
     const waiter = getDefaultStaffPosition('waiter', 0, { restaurant: { expansionLevel: 1 } });
-    const host = getDefaultStaffPosition('host', 0, { restaurant: { expansionLevel: 1 } });
 
     expect(cook.y).toBeLessThan(waiter.y);
-    expect(host.x).toBeGreaterThan(waiter.x);
     expect(waiter.y).toBeGreaterThan(100);
   });
 
-  it('places cashiers one grid cell behind the cashier station', () => {
-    const station = { x: 800, y: 120, w: 80, h: 40 };
+  it('places an assigned waiter one grid cell behind the cashier station', () => {
+    const station = { x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'w1' };
     const state = { cashierStations: [station] };
 
     expect(getCashierWorkPosition(station)).toEqual({ x: 840, y: 100 });
-    expect(getDefaultStaffPosition('cashier', 0, state)).toEqual({ x: 840, y: 100 });
-    expect(getDefaultStaffPosition('cashier_waiter', 0, state)).toEqual({ x: 840, y: 100 });
+    expect(getDefaultStaffPosition('waiter', 0, state, 'w1')).toEqual({ x: 840, y: 100 });
   });
 });

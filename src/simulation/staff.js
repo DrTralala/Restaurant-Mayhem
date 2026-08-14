@@ -99,7 +99,7 @@ function taskCustomerIds(task) {
   return task.customerIds || (task.customerId ? [task.customerId] : []);
 }
 
-function assignTask({ state, staff, customers, queue, tables, foodItems, kitchenQueue, claimedCustomerIds, claimedFoodIds }) {
+function assignTask({ state, staff, customers, queue, tables, foodItems, kitchenQueue, claimedCustomerIds, claimedFoodIds, claimedTableIds }) {
   const cashierStation = staff.role === 'waiter'
     ? getAssignedCashierStation(state.cashierStations, staff.id)
     : null;
@@ -256,12 +256,14 @@ function assignTask({ state, staff, customers, queue, tables, foodItems, kitchen
       }
     }
 
-    const dirty = tables.find(t => t.status === 'dirty');
+    const dirty = tables.find(t => t.status === 'dirty'
+      && (!claimedTableIds || !claimedTableIds.has(t.id)));
     if (dirty) {
       const path = targetForTable(state, dirty, staff);
       if (path.length) {
         return {
           staff: { ...staff, path, task: { type: 'clean_table', tableId: dirty.id } },
+          claimedTableId: dirty.id,
         };
       }
     }
@@ -514,6 +516,7 @@ export function updateStaff(state, dt) {
 
   const claimedCustomerIds = new Set();
   const claimedFoodIds = new Set();
+  const claimedTableIds = new Set();
 
   // Seed claimed sets from existing active staff tasks to prevent cross-tick duplicate claims
   for (const s of state.staff) {
@@ -521,6 +524,7 @@ export function updateStaff(state, dt) {
       if (s.task.customerId) claimedCustomerIds.add(s.task.customerId);
       if (s.task.customerIds) s.task.customerIds.forEach(id => claimedCustomerIds.add(id));
       if (s.task.foodId) claimedFoodIds.add(s.task.foodId);
+      if (s.task.type === 'clean_table' && s.task.tableId) claimedTableIds.add(s.task.tableId);
     }
   }
 
@@ -606,7 +610,7 @@ export function updateStaff(state, dt) {
       continue;
     }
 
-    const result = assignTask({ state: { ...state, restaurant, staff, customers, queue, tables, foodItems, kitchenQueue, completedCustomers }, staff: s, customers, queue, tables, foodItems, kitchenQueue, claimedCustomerIds, claimedFoodIds });
+    const result = assignTask({ state: { ...state, restaurant, staff, customers, queue, tables, foodItems, kitchenQueue, completedCustomers }, staff: s, customers, queue, tables, foodItems, kitchenQueue, claimedCustomerIds, claimedFoodIds, claimedTableIds });
     if (result) {
       staff[i] = result.staff;
       if (result.customers) customers = result.customers;
@@ -617,6 +621,7 @@ export function updateStaff(state, dt) {
       if (result.claimedCustomerId) claimedCustomerIds.add(result.claimedCustomerId);
       if (result.claimedCustomerIds) result.claimedCustomerIds.forEach(id => claimedCustomerIds.add(id));
       if (result.claimedFoodId) claimedFoodIds.add(result.claimedFoodId);
+      if (result.claimedTableId) claimedTableIds.add(result.claimedTableId);
     }
   }
 

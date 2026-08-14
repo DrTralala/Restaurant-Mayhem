@@ -33,6 +33,26 @@ it('rejects collisions and accepts a free cashier-table footprint', () => {
   expect(validatePlacement(state, { itemType: 'cashierTable', x: 600, y: 300, rotation: 0 }).valid).toBe(true);
 });
 
+it('rejects a cashier table whose work cell is beyond the top edge', () => {
+  expect(validatePlacement(state, {
+    itemType: 'cashierTable', x: 600, y: 50, rotation: 0,
+  })).toMatchObject({ valid: false, reason: 'cashier-work-cell' });
+});
+
+it('rejects a cashier table whose work cell is blocked by adjacent furniture', () => {
+  const blocked = {
+    ...state,
+    chairs: [
+      ...state.chairs,
+      { id: 'work-blocker', tableId: 't1', x: 640, y: 280, rotation: 0 },
+    ],
+  };
+
+  expect(validatePlacement(blocked, {
+    itemType: 'cashierTable', x: 600, y: 300, rotation: 0,
+  })).toMatchObject({ valid: false, reason: 'cashier-work-cell' });
+});
+
 it('requires a purchasable chair to be adjacent to a table with an open seat', () => {
   expect(validatePlacement(state, { itemType: 'chair', x: 210, y: 240, rotation: 0 })).toMatchObject({ valid: true, tableId: 't1' });
   expect(validatePlacement(state, { itemType: 'chair', x: 600, y: 300, rotation: 0 }).valid).toBe(false);

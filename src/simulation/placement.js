@@ -1,5 +1,5 @@
 import { getPlaceable } from '../data/placeables';
-import { getDoors, getRestaurantWorld } from './world';
+import { GRID_SIZE, getCashierWorkPosition, getDoors, getRestaurantWorld } from './world';
 
 function invalid(reason) {
   return { valid: false, reason };
@@ -25,6 +25,15 @@ function getRecordRect(record, width, height) {
   const h = Number.isFinite(record.h) ? record.h : height;
   if (w <= 0 || h <= 0) return null;
   return { x: record.x, y: record.y, w, h };
+}
+
+function getGridCellRect(point) {
+  return {
+    x: Math.floor(point.x / GRID_SIZE) * GRID_SIZE,
+    y: Math.floor(point.y / GRID_SIZE) * GRID_SIZE,
+    w: GRID_SIZE,
+    h: GRID_SIZE,
+  };
 }
 
 function getExistingFurnitureRects(state) {
@@ -138,6 +147,14 @@ export function validatePlacement(state = {}, placement = {}) {
   const existingFurniture = getExistingFurnitureRects(currentState);
   if (existingFurniture.some(existing => rectangleIntersects(rect, existing))) {
     return invalid('overlap');
+  }
+
+  if (requestedPlacement.itemType === 'cashierTable') {
+    const workCell = getGridCellRect(getCashierWorkPosition(rect));
+    if (!isWithinFloor(world, workCell, requestedPlacement.itemType)
+      || existingFurniture.some(existing => rectangleIntersects(workCell, existing))) {
+      return invalid('cashier-work-cell');
+    }
   }
 
   if (requestedPlacement.itemType === 'door') {

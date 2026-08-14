@@ -111,15 +111,28 @@ export function updateCustomers(state, dt) {
     (state.staff || []).some(staff => staff.id === station.assignedStaffId && staff.role === 'waiter'),
   );
   const fallbackCashierStation = staffedCashierStations[0] || cashierStations[0];
+  const routingCashierStations = staffedCashierStations.length > 0
+    ? staffedCashierStations
+    : fallbackCashierStation ? [fallbackCashierStation] : [];
   const stationById = new Map(cashierStations.map(station => [station.id, station]));
   const payingCustomers = updatedCustomers.filter(customer => customer.state === 'paying');
 
   if (payingCustomers.length > 0 && fallbackCashierStation) {
+    const queueLengths = new Map(routingCashierStations.map(station => [station.id, 0]));
+    for (const customer of payingCustomers) {
+      if (!queueLengths.has(customer.cashierStationId)) continue;
+      queueLengths.set(customer.cashierStationId, queueLengths.get(customer.cashierStationId) + 1);
+    }
+
     updatedCustomers = updatedCustomers.map(customer => {
       if (customer.state !== 'paying') return customer;
       const assignedStation = stationById.get(customer.cashierStationId);
       if (assignedStation || !fallbackCashierStation) return customer;
-      return { ...customer, cashierStationId: fallbackCashierStation.id };
+      const shortestQueue = routingCashierStations.reduce((shortest, station) =>
+        queueLengths.get(station.id) < queueLengths.get(shortest.id) ? station : shortest,
+      routingCashierStations[0]);
+      queueLengths.set(shortestQueue.id, queueLengths.get(shortestQueue.id) + 1);
+      return { ...customer, cashierStationId: shortestQueue.id };
     });
 
     const payingByStation = new Map();

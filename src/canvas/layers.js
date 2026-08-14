@@ -297,7 +297,7 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
     const hasCoords = Number.isFinite(s.x) && Number.isFinite(s.y);
     const pos = hasCoords
       ? { x: s.x, y: s.y }
-      : getDefaultStaffPosition(s.role, index, state);
+      : getDefaultStaffPosition(s.role, index, state, s.id);
     const x = pos.x, y = pos.y;
 
     const palette = getCharacterPalette(s);
@@ -337,27 +337,20 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
   for (const c of state.customers) {
     let cx, cy;
     const seated = ['seated', 'ordering', 'eating'].includes(c.state);
-    const tableChairs = c.tableId
-      ? (state.chairs || []).filter(chair => chair.tableId === c.tableId)
-      : [];
-    const tableCustomers = c.tableId
-      ? state.customers.filter(customer => customer.tableId === c.tableId && ['seated', 'ordering', 'eating', 'paying'].includes(customer.state))
-      : [];
-    const chair = c.chairId
-      ? tableChairs.find(candidate => candidate.id === c.chairId)
-      : tableChairs[tableCustomers.findIndex(customer => customer.id === c.id)] || null;
+    const tableExists = c.tableId
+      && (state.tables || []).some(table => table.id === c.tableId);
+    const chair = c.chairId && tableExists
+      ? (state.chairs || []).find(candidate =>
+          candidate.id === c.chairId && candidate.tableId === c.tableId)
+      : null;
 
-    if (seated && chair) {
+    if (seated) {
+      if (!chair) continue;
       cx = chair.x + 10;
       cy = chair.y + 10;
     } else if (Number.isFinite(c.x) && Number.isFinite(c.y)) {
       cx = c.x;
       cy = c.y;
-    } else if (c.tableId) {
-      const table = state.tables.find(t => t.id === c.tableId);
-      if (!table) continue;
-      cx = table.x + 20;
-      cy = table.y + 20;
     } else {
       continue;
     }

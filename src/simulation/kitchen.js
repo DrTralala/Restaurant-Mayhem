@@ -156,7 +156,7 @@ export function processKitchen(state) {
     return c;
   });
 
-  // Payment completion is handled by a cashier or dual-role cashier-waiter.
+  // Payment completion is handled by a waiter assigned to a cashier station.
   return {
     ...state,
     kitchenQueue: queue,

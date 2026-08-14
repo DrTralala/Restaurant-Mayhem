@@ -8,7 +8,7 @@ export function findClickedEntity(state, camera, screenX, screenY) {
   for (const [index, staff] of state.staff.entries()) {
     const position = Number.isFinite(staff.x) && Number.isFinite(staff.y)
       ? staff
-      : getDefaultStaffPosition(staff.role, index, state);
+      : getDefaultStaffPosition(staff.role, index, state, staff.id);
     if (Math.hypot(world.x - position.x, world.y - position.y) <= 12) {
       return {
         type: 'staff',

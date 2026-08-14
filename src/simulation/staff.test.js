@@ -479,6 +479,42 @@ describe('updateStaff', () => {
     expect(result.tables).toEqual(tables);
   });
 
+  it('allows only one idle waiter to claim a dirty table in one tick', () => {
+    const state = {
+      ...baseState,
+      staff: [
+        { id: 'w1', role: 'waiter', morale: 80, x: 800, y: 500 },
+        { id: 'w2', role: 'waiter', morale: 80, x: 700, y: 500 },
+      ],
+      tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff.filter(staff => staff.task?.type === 'clean_table'))
+      .toHaveLength(1);
+  });
+
+  it('does not claim a dirty table already targeted by an active cleaning task', () => {
+    const state = {
+      ...baseState,
+      staff: [
+        {
+          id: 'w1', role: 'waiter', morale: 80, x: 800, y: 500,
+          path: [{ x: 20, y: 20 }], task: { type: 'clean_table', tableId: 't1' },
+        },
+        { id: 'w2', role: 'waiter', morale: 80, x: 700, y: 500 },
+      ],
+      tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff.filter(staff => staff.task?.type === 'clean_table'))
+      .toHaveLength(1);
+    expect(result.staff.find(staff => staff.id === 'w2').task).toBeNull();
+  });
+
   it('waiter does not complete order until arrival', () => {
     const waiter = { id: 'w1', name: 'Anna', role: 'waiter', skill: 5, morale: 80, salary: 150, x: 800, y: 500 };
     const customer = {

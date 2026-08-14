@@ -191,6 +191,31 @@ describe('updateCustomers', () => {
     expect(result.customers.every(customer => customer.path.length > 0)).toBe(true);
   });
 
+  it('distributes unassigned paying customers across the shortest staffed queues', () => {
+    const state = {
+      ...baseState,
+      chairs: [], kitchenStations: [], serviceTables: [],
+      staff: [
+        { id: 'w1', role: 'waiter' },
+        { id: 'w2', role: 'waiter' },
+      ],
+      cashierStations: [
+        { id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'w1' },
+        { id: 'cashier2', x: 600, y: 300, w: 80, h: 40, assignedStaffId: 'w2' },
+      ],
+      customers: [
+        { id: 'c1', state: 'paying', x: 400, y: 300, patience: 100, paymentQueuedAt: 10 },
+        { id: 'c2', state: 'paying', x: 420, y: 300, patience: 100, paymentQueuedAt: 20 },
+        { id: 'c3', state: 'paying', x: 440, y: 300, patience: 100, paymentQueuedAt: 30 },
+      ],
+    };
+
+    const result = updateCustomers(state, 0);
+
+    expect(result.customers.map(customer => customer.cashierStationId))
+      .toEqual(['cashier1', 'cashier2', 'cashier1']);
+  });
+
   it('sets leaving state and reduces happiness when patience runs out', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 5, happiness: 80,

@@ -232,6 +232,32 @@ describe('GameProvider authoritative placement actions', () => {
     expect(game.state.staff).toHaveLength(1);
   });
 
+  it('does not assign a newly placed cashier to a waiter picking up or carrying food', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      staff: initial.staff.map(staff => {
+        if (staff.id === 'starter-waiter') {
+          return { ...staff, task: { type: 'pickup_food', foodId: 'f1' } };
+        }
+        if (staff.id === 'starter-host') {
+          return { ...staff, carryingFoodId: 'f2' };
+        }
+        return staff;
+      }),
+    });
+
+    game.dispatch({
+      type: 'PLACE_ITEM',
+      itemType: 'cashierTable',
+      x: 600,
+      y: 300,
+      rotation: 0,
+    });
+
+    expect(game.state.restaurant.funds).toBe(300);
+    expect(game.state.cashierStations.at(-1)).not.toHaveProperty('assignedStaffId');
+  });
+
   it('stores a snapped y coordinate for an authoritative door placement', () => {
     const initial = createInitialState();
     const game = renderReducer();

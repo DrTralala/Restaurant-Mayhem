@@ -54,7 +54,7 @@ describe('movement runtime', () => {
   });
 
   it('consumes a nearly reached waypoint even when another character is close', () => {
-    const staff = { id: 'h', role: 'host', x: 521, y: 360, path: [{ x: 26, y: 18 }, { x: 25, y: 18 }] };
+    const staff = { id: 'w1', role: 'waiter', x: 521, y: 360, path: [{ x: 26, y: 18 }, { x: 25, y: 18 }] };
 
     const moved = moveStaffAlongPath(staff, 1, [{ id: 'w', x: 505, y: 360 }]);
 
