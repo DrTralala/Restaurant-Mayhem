@@ -27,6 +27,7 @@ vi.mock('./layers', () => ({
   drawOverlayLayer: vi.fn(),
   drawQueueLayer: vi.fn(),
   drawSelectionLayer: vi.fn(),
+  drawPlacementPreview: vi.fn(),
 }));
 vi.mock('./interaction', () => ({ findClickedEntity: vi.fn() }));
 
@@ -69,6 +70,91 @@ describe('RestaurantCanvas object movement', () => {
     expect(dispatch).toHaveBeenCalledWith({
       type: 'MOVE_CHAIR', id: 'ch1', x: 140, y: 80, rotation: 0,
     });
+  });
+
+  it('previews an item, rotates a chair, and confirms only on left click', () => {
+    const dispatch = vi.fn();
+    const complete = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({
+      ...state,
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 140, y: 100 }],
+      chairs: [],
+    });
+    const { container } = render(
+      <RestaurantCanvas
+        managementOpen={false}
+        placementRequest={{ itemType: 'chair' }}
+        onPlacementComplete={complete}
+      />,
+    );
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.mouseMove(canvas, { clientX: 137, clientY: 83, buttons: 0 });
+    fireEvent.keyDown(window, { key: 'r' });
+    expect(screen.getByText(/Place chair/)).toBeInTheDocument();
+    fireEvent.click(canvas, { clientX: 137, clientY: 83 });
+
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'PLACE_ITEM', itemType: 'chair', x: 140, y: 80, rotation: 1,
+    }));
+    expect(complete).toHaveBeenCalled();
+  });
+
+  it('keeps an invalid placement active without dispatching on left click', () => {
+    const dispatch = vi.fn();
+    const complete = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({ ...state, tables: [], chairs: [] });
+    const { container } = render(
+      <RestaurantCanvas
+        managementOpen={false}
+        placementRequest={{ itemType: 'chair' }}
+        onPlacementComplete={complete}
+      />,
+    );
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.mouseMove(canvas, { clientX: 137, clientY: 83, buttons: 0 });
+    fireEvent.click(canvas, { clientX: 137, clientY: 83 });
+
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'PLACE_ITEM' }));
+    expect(complete).not.toHaveBeenCalled();
+    expect(screen.getByText(/Place chair/)).toBeInTheDocument();
+    expect(screen.getByText(/chair-table/)).toBeInTheDocument();
+  });
+
+  it('cancels placement on right click and Escape without dispatching', () => {
+    const dispatch = vi.fn();
+    const complete = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({ ...state, tables: [], chairs: [] });
+    const { container, rerender } = render(
+      <RestaurantCanvas
+        managementOpen={false}
+        placementRequest={{ itemType: 'table' }}
+        onPlacementComplete={complete}
+      />,
+    );
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.contextMenu(canvas);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Place table/)).not.toBeInTheDocument();
+
+    rerender(
+      <RestaurantCanvas
+        managementOpen={false}
+        placementRequest={{ itemType: 'table' }}
+        onPlacementComplete={complete}
+      />,
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/Place table/)).not.toBeInTheDocument();
   });
 
   it('allows chairs to be placed between 20-pixel grid cells', () => {

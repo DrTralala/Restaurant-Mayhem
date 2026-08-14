@@ -1,9 +1,11 @@
 import { useGameState, useDispatch } from '../state/GameContext';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
+import { PLACEABLES } from '../data/placeables';
 
-export default function UpgradePanel() {
+export default function UpgradePanel({ onStartPlacement = () => {} }) {
   const state = useGameState();
   const dispatch = useDispatch();
+  const serviceTablePrice = PLACEABLES.serviceTable.price;
 
   return (
     <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
@@ -72,17 +74,17 @@ export default function UpgradePanel() {
           Long table where cooks place finished food and waiters pick it up. {state.serviceTables.length} installed.
         </p>
         <button
-          onClick={() => dispatch({ type: 'BUY_SERVICE_TABLE', cost: 300 })}
-          disabled={state.restaurant.funds < 300}
+          onClick={() => onStartPlacement('serviceTable')}
+          disabled={state.restaurant.funds < serviceTablePrice}
           style={{
-            background: state.restaurant.funds < 300 ? '#333' : '#f0a500',
-            color: state.restaurant.funds < 300 ? '#666' : '#111',
+            background: state.restaurant.funds < serviceTablePrice ? '#333' : '#f0a500',
+            color: state.restaurant.funds < serviceTablePrice ? '#666' : '#111',
             border: 'none', padding: '6px 14px', borderRadius: 4,
-            cursor: state.restaurant.funds < 300 ? 'not-allowed' : 'pointer',
+            cursor: state.restaurant.funds < serviceTablePrice ? 'not-allowed' : 'pointer',
             fontSize: 12, marginTop: 6,
           }}
         >
-          Buy ($300)
+          Buy (${serviceTablePrice})
         </button>
       </div>
 

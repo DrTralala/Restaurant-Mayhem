@@ -15,7 +15,7 @@ const TABS = [
   { key: 'stats', label: 'Stats' },
 ];
 
-export default function ManagementModal({ isOpen, onClose }) {
+export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
   const [tab, setTab] = useState('menu');
 
   if (!isOpen) return null;
@@ -64,8 +64,8 @@ export default function ManagementModal({ isOpen, onClose }) {
 
         <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
           {tab === 'menu' && <MenuPanel />}
-          {tab === 'upgrades' && <UpgradePanel />}
-          {tab === 'items' && <ItemsPanel />}
+          {tab === 'upgrades' && <UpgradePanel onStartPlacement={onStartPlacement} />}
+          {tab === 'items' && <ItemsPanel onStartPlacement={onStartPlacement} />}
           {tab === 'staff' && <StaffPanel />}
           {tab === 'milestones' && <MilestonePanel />}
           {tab === 'stats' && <StatsPanel />}

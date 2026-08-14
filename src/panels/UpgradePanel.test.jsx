@@ -29,4 +29,22 @@ describe('UpgradePanel', () => {
     expect(screen.getByText('Speed: 110% · Quality: +5%')).toBeInTheDocument();
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
   });
+
+  it('starts service-counter placement without charging immediately', () => {
+    const startPlacement = vi.fn();
+    useGameState.mockReturnValue({
+      upgrades: [],
+      restaurant: { funds: 500, expansionLevel: 1 },
+      serviceTables: [],
+      equipment: [],
+    });
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<UpgradePanel onStartPlacement={startPlacement} />);
+
+    expect(screen.getByRole('button', { name: 'Buy ($300)' })).toBeEnabled();
+    screen.getByRole('button', { name: 'Buy ($300)' }).click();
+
+    expect(startPlacement).toHaveBeenCalledWith('serviceTable');
+  });
 });

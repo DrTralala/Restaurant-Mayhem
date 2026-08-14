@@ -1,4 +1,5 @@
 import { getDoors, getRestaurantWorld, getQueuePosition, getDefaultStaffPosition } from '../simulation/world';
+import { getPlacementRect } from '../simulation/placement';
 import { getTableNumber } from './tableLabels';
 import { getCharacterPalette } from './characterAppearance';
 
@@ -237,6 +238,50 @@ export function drawFurnitureLayer(ctx, state, camera) {
     ctx.fillStyle = '#111';
     ctx.font = '7px monospace';
     ctx.fillText(label, food.x + 2, food.y + 10);
+  }
+
+  ctx.restore();
+}
+
+export function drawPlacementPreview(ctx, state, camera, placement) {
+  void state;
+  const rect = getPlacementRect(
+    placement?.itemType,
+    placement?.x,
+    placement?.y,
+    placement?.rotation,
+  );
+  if (!rect) return;
+
+  ctx.save();
+  ctx.translate(camera.x, camera.y);
+  ctx.scale(camera.zoom, camera.zoom);
+
+  const valid = placement.valid;
+  ctx.fillStyle = valid ? 'rgba(70,200,110,0.45)' : 'rgba(220,70,70,0.45)';
+  ctx.strokeStyle = valid ? 'rgba(70,200,110,0.9)' : 'rgba(220,70,70,0.9)';
+  ctx.lineWidth = 2 / camera.zoom;
+  ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+
+  if (placement.itemType === 'chair') {
+    const arrows = ['↑', '→', '↓', '←'];
+    const rotation = ((placement.rotation || 0) % 4 + 4) % 4;
+    ctx.fillStyle = '#f3e6bd';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(arrows[rotation], rect.x + rect.w / 2, rect.y + rect.h / 2);
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
+  } else if (placement.itemType === 'cashierTable') {
+    ctx.fillStyle = '#eee';
+    ctx.font = 'bold 8px monospace';
+    ctx.fillText('$ CASHIER', rect.x + 12, rect.y + 23);
+  } else if (placement.itemType === 'serviceTable') {
+    ctx.fillStyle = '#ddd';
+    ctx.font = '8px monospace';
+    ctx.fillText('SERVICE', rect.x + 30, rect.y + 24);
   }
 
   ctx.restore();

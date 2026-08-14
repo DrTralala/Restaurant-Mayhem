@@ -1,30 +1,21 @@
-import { ITEM_PRICES } from '../data/items';
-import { useDispatch, useGameState } from '../state/GameContext';
+import { PLACEABLES } from '../data/placeables';
+import { useGameState } from '../state/GameContext';
 
-const ITEMS = [
-  {
-    type: 'table',
-    name: 'Dining Table',
-    description: 'A four-seat table. Add chairs separately before seating guests.',
-    action: 'BUY_TABLE',
-  },
-  {
-    type: 'chair',
-    name: 'Dining Chair',
-    description: 'Adds one seat to the newest table with an open chair position.',
-    action: 'BUY_CHAIR',
-  },
-  {
-    type: 'door',
-    name: 'Additional Door',
-    description: 'Adds another entrance and exit lane so guests can pass through faster.',
-    action: 'BUY_DOOR',
-  },
-];
+const ITEM_DESCRIPTIONS = {
+  table: 'A four-seat table. Add chairs separately before seating guests.',
+  chair: 'Adds one seat to the newest table with an open chair position.',
+  door: 'Adds another entrance and exit lane so guests can pass through faster.',
+  cashierTable: 'A dedicated station permanently staffed by an available waiter.',
+};
 
-export default function ItemsPanel() {
+const ITEMS = ['table', 'chair', 'door', 'cashierTable'].map(type => ({
+  ...PLACEABLES[type],
+  name: PLACEABLES[type].label,
+  description: ITEM_DESCRIPTIONS[type],
+}));
+
+export default function ItemsPanel({ onStartPlacement = () => {} }) {
   const state = useGameState();
-  const dispatch = useDispatch();
 
   return (
     <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
@@ -34,7 +25,7 @@ export default function ItemsPanel() {
       </p>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
         {ITEMS.map(item => {
-          const cost = ITEM_PRICES[item.type];
+          const cost = item.price;
           const disabled = state.restaurant.funds < cost;
           return (
             <div key={item.type} style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, border: '1px solid #0f3460' }}>
@@ -44,7 +35,7 @@ export default function ItemsPanel() {
               <button
                 aria-label={`Buy ${item.type} ($${cost})`}
                 disabled={disabled}
-                onClick={() => dispatch({ type: item.action, cost })}
+                onClick={() => onStartPlacement(item.type)}
                 style={{
                   background: disabled ? '#333' : '#f0a500',
                   color: disabled ? '#666' : '#111',

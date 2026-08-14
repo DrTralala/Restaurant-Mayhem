@@ -2,12 +2,13 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } from './camera';
 import { loadSprites } from './sprites';
-import { drawFloorLayer, drawFurnitureLayer, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer, drawSelectionLayer } from './layers';
+import { drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer, drawSelectionLayer } from './layers';
 import { findClickedEntity } from './interaction';
 import { getTableNumber } from './tableLabels';
 import { getRestaurantWorld } from '../simulation/world';
 import StaffDetailsPanel from '../components/StaffDetailsPanel';
 import { normaliseSelectionRect, selectFurnitureInRect } from './selection';
+import { snapPlacement, validatePlacement } from '../simulation/placement';
 
 const GRID = 20;
 const CHAIR_GRID = GRID / 2;
@@ -16,7 +17,32 @@ function snap(n, grid = GRID) {
   return Math.round(n / grid) * grid;
 }
 
-export default function RestaurantCanvas({ managementOpen = false, fitRequest = 0 }) {
+function buildPlacement(state, itemType, point, rotation = 0) {
+  const candidate = {
+    itemType,
+    x: point.x,
+    y: point.y,
+    rotation,
+  };
+  return { ...candidate, ...validatePlacement(state, candidate) };
+}
+
+function samePlacement(first, second) {
+  return first?.itemType === second?.itemType
+    && first?.x === second?.x
+    && first?.y === second?.y
+    && first?.rotation === second?.rotation
+    && first?.valid === second?.valid
+    && first?.reason === second?.reason
+    && first?.tableId === second?.tableId;
+}
+
+export default function RestaurantCanvas({
+  managementOpen = false,
+  fitRequest = 0,
+  placementRequest = null,
+  onPlacementComplete,
+}) {
   const canvasRef = useRef(null);
   const cameraRef = useRef(createCamera());
   const spritesRef = useRef(loadSprites());
@@ -25,6 +51,8 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
   const reducedMotionRef = useRef(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
   const state = useGameState();
   const dispatch = useDispatch();
+  const [placement, setPlacement] = useState(null);
+  const placementRef = useRef(null);
 
   // Context menu state
   const [menu, setMenu] = useState(null); // { x, y, type, data }
@@ -117,6 +145,7 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
 
       drawFloorLayer(ctx, renderState, camera, sprites);
       drawFurnitureLayer(ctx, renderState, camera, sprites);
+      if (placement) drawPlacementPreview(ctx, state, camera, placement);
       const characterRenderOptions = { timeMs, reducedMotion: reducedMotionRef.current };
       drawStaffLayer(ctx, renderState, camera, characterRenderOptions);
       drawCustomerLayer(ctx, renderState, camera, characterRenderOptions);
@@ -128,7 +157,38 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
       ctx.font = '14px monospace';
       ctx.fillText('Render error: ' + err.message, 20, 40);
     }
-  }, [state, selectedItems]);
+  }, [state, selectedItems, placement]);
+
+  useEffect(() => {
+    if (!placementRequest) {
+      placementRef.current = null;
+      setPlacement(null);
+      return;
+    }
+
+    const origin = snapPlacement(placementRequest.itemType, { x: 200, y: 200 }, state);
+    if (!origin) {
+      const invalidPlacement = buildPlacement(state, placementRequest.itemType, { x: 200, y: 200 });
+      placementRef.current = invalidPlacement;
+      setPlacement(invalidPlacement);
+      return;
+    }
+
+    const initialPlacement = buildPlacement(state, placementRequest.itemType, origin);
+    placementRef.current = initialPlacement;
+    setPlacement(initialPlacement);
+  }, [placementRequest]);
+
+  useEffect(() => {
+    const current = placementRef.current;
+    if (!placementRequest || !current || current.itemType !== placementRequest.itemType) return;
+
+    const next = buildPlacement(state, current.itemType, current, current.rotation);
+    if (!samePlacement(current, next)) {
+      placementRef.current = next;
+      setPlacement(next);
+    }
+  }, [state, placementRequest]);
 
   useEffect(() => {
     cameraRef.current.manual = false;
@@ -152,13 +212,27 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
     return () => cancelAnimationFrame(animId);
   }, [draw]);
 
-  // R key to rotate during move
+  // R key to rotate during move or placement
   useEffect(() => {
     const onKey = (e) => {
+      const currentPlacement = placementRef.current;
+      if (currentPlacement && e.key.toLowerCase() === 'r' && currentPlacement.itemType === 'chair') {
+        e.preventDefault();
+        const rotation = ((currentPlacement.rotation ?? 0) + 1) % 4;
+        const next = buildPlacement(state, currentPlacement.itemType, currentPlacement, rotation);
+        placementRef.current = next;
+        setPlacement(next);
+        return;
+      }
       if (e.key === 'r' && moveRef.current?.type === 'chair') {
         moveRef.current.rotation = ((moveRef.current.rotation ?? 0) + 1) % 4;
       }
       if (e.key === 'Escape') {
+        if (placementRef.current) {
+          placementRef.current = null;
+          setPlacement(null);
+          onPlacementComplete?.();
+        }
         setMenu(null);
         setSelectedItems([]);
         setSelectionRect(null);
@@ -168,11 +242,24 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [state, onPlacementComplete]);
 
   // --- Mouse handlers ---
 
   const handleMouseMove = (e) => {
+    const currentPlacement = placementRef.current;
+    if (currentPlacement) {
+      const world = getWorldPos(e);
+      const snapped = snapPlacement(currentPlacement.itemType, world, state);
+      if (snapped) {
+        const next = buildPlacement(state, currentPlacement.itemType, snapped, currentPlacement.rotation);
+        if (!samePlacement(currentPlacement, next)) {
+          placementRef.current = next;
+          setPlacement(next);
+        }
+      }
+      return;
+    }
     if (moveRef.current) {
       const world = getWorldPos(e);
       if (moveRef.current.type === 'group') {
@@ -254,6 +341,21 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
   };
 
   const handleClick = (e) => {
+    const currentPlacement = placementRef.current;
+    if (currentPlacement) {
+      if (!currentPlacement.valid) return;
+      dispatch({
+        type: 'PLACE_ITEM',
+        itemType: currentPlacement.itemType,
+        x: currentPlacement.x,
+        y: currentPlacement.y,
+        rotation: currentPlacement.rotation,
+      });
+      placementRef.current = null;
+      setPlacement(null);
+      onPlacementComplete?.();
+      return;
+    }
     if (suppressClickRef.current) {
       suppressClickRef.current = false;
       return;
@@ -292,7 +394,7 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
   };
 
   const handleMouseDown = (e) => {
-    if (e.button !== 0 || moveRef.current) return;
+    if (e.button !== 0 || moveRef.current || placementRef.current) return;
     const world = getWorldPos(e);
     dragRef.current = {
       startWorld: world,
@@ -324,6 +426,14 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
     e.preventDefault();
     const factor = e.deltaY > 0 ? 0.9 : 1.1;
     adjustCameraZoom(cameraRef.current, factor);
+  };
+
+  const handleContextMenu = (e) => {
+    if (!placementRef.current) return;
+    e.preventDefault();
+    placementRef.current = null;
+    setPlacement(null);
+    onPlacementComplete?.();
   };
 
   // Context menu actions
@@ -369,12 +479,13 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
-        style={{ width: '100%', height: '100%', cursor: moveRef.current ? 'none' : 'default' }}
+        style={{ width: '100%', height: '100%', cursor: placement ? 'crosshair' : moveRef.current ? 'none' : 'default' }}
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
         onWheel={handleWheel}
         onClick={handleClick}
+        onContextMenu={handleContextMenu}
       />
 
       {/* Context menu */}
@@ -440,6 +551,20 @@ export default function RestaurantCanvas({ managementOpen = false, fitRequest = 
           fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         }}>
           Click to place · {moveRef.current.type === 'chair' ? 'R to rotate · ' : ''}Esc to cancel
+        </div>
+      )}
+
+      {placement && (
+        <div style={{
+          position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
+          background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
+          fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          textAlign: 'center',
+        }}>
+          <div>Place {placement.itemType} · Click to buy · R to rotate · Right click/Esc to cancel</div>
+          {!placement.valid && (
+            <div style={{ color: '#b00000', marginTop: 4 }}>Invalid: {placement.reason}</div>
+          )}
         </div>
       )}
 

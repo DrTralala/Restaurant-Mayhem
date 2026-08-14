@@ -45,13 +45,23 @@ function AppInner() {
   const [modalOpen, setModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fitRequest, setFitRequest] = useState(0);
+  const [placementRequest, setPlacementRequest] = useState(null);
+  const startPlacement = itemType => {
+    setModalOpen(false);
+    setPlacementRequest({ itemType });
+  };
 
   return (
     <div className="app">
       <GameLoopEngine />
       <StatsBar />
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        <RestaurantCanvas managementOpen={modalOpen || settingsOpen} fitRequest={fitRequest} />
+        <RestaurantCanvas
+          managementOpen={modalOpen || settingsOpen}
+          fitRequest={fitRequest}
+          placementRequest={placementRequest}
+          onPlacementComplete={() => setPlacementRequest(null)}
+        />
         <BookIcon
           onClick={() => {
             setSettingsOpen(false);
@@ -68,7 +78,11 @@ function AppInner() {
         />
       </div>
       <SpeedControls onFit={() => setFitRequest(request => request + 1)} />
-      <ManagementModal isOpen={modalOpen} onClose={() => setModalOpen(false)} />
+      <ManagementModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onStartPlacement={startPlacement}
+      />
       <Toast />
     </div>
   );
