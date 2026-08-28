@@ -42,7 +42,7 @@ const state = {
   queue: [],
   kitchenStations: [],
   serviceTables: [],
-  foodItems: [],
+  serviceItems: [],
   equipment: [],
   dishes: [],
 };
@@ -279,6 +279,13 @@ describe('RestaurantCanvas object movement', () => {
     expect(screen.getByRole('heading', { name: 'Sofia' })).toBeInTheDocument();
     expect(screen.getByText('80%')).toBeInTheDocument();
     expect(screen.getByText('Staffing cashier')).toBeInTheDocument();
+  });
+
+  it('uses unnumbered context-menu headings', () => {
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    fireEvent.click(container.querySelector('canvas'), { clientX: 20, clientY: 40 });
+    expect(screen.getByText('Chair')).toBeInTheDocument();
+    expect(screen.queryByText(/Table \d|Chair \d/)).not.toBeInTheDocument();
   });
 
   it('passes animation time and reduced-motion preference to character layers', () => {

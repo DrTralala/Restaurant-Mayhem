@@ -3,10 +3,11 @@ import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, dr
 
 function recordCtx(extraCanvas = {}) {
   const calls = { arcs: [], texts: [], rects: [], fills: [], moves: [], lines: [], strokes: [] };
+  let alpha = 1;
   return {
     canvas: { height: 600, width: 800, ...extraCanvas },
-    save: () => {},
-    restore: () => {},
+    save: () => calls.saves = (calls.saves || 0) + 1,
+    restore: () => calls.restores = (calls.restores || 0) + 1,
     translate: () => {},
     scale: () => {},
     measureText: (text) => ({ width: String(text).length }),
@@ -15,12 +16,14 @@ function recordCtx(extraCanvas = {}) {
     lineTo: (x, y) => calls.lines.push({ x, y }),
     stroke() { calls.strokes.push({ colour: this.strokeStyle }); },
     fillStyle: '',
+    get globalAlpha() { return alpha; },
+    set globalAlpha(value) { alpha = value; },
     font: '',
     lineWidth: 1,
-    arc: (x, y, r, start, end) => calls.arcs.push({ x, y, r, start, end }),
+    arc: (x, y, r, start, end) => calls.arcs.push({ x, y, r, start, end, alpha }),
     fill: () => calls.fills.push({}),
     fillRect: (x, y, w, h) => calls.rects.push({ x, y, w, h }),
-    fillText: (text, x, y) => calls.texts.push({ text, x, y }),
+    fillText: (text, x, y) => calls.texts.push({ text, x, y, alpha }),
     strokeRect: () => {},
     _calls: calls,
   };
@@ -83,7 +86,7 @@ describe('drawFloorLayer', () => {
 });
 
 describe('drawFurnitureLayer', () => {
-  it('labels every dining table and keeps its name above the customer marker', () => {
+  it('draws dining tables without visible numbering', () => {
     const ctx = recordCtx();
     ctx.fillText = function fillText(text, x, y) {
       this._calls.texts.push({ text, x, y, colour: this.fillStyle, font: this.font });
@@ -94,15 +97,49 @@ describe('drawFurnitureLayer', () => {
         { id: 't2', x: 200, y: 100, status: 'empty' },
         { id: 't3', x: 300, y: 100, status: 'empty' },
       ],
-      chairs: [], kitchenStations: [], serviceTables: [], foodItems: [], equipment: [], dishes: [],
+       chairs: [], kitchenStations: [], serviceTables: [], serviceItems: [], equipment: [], dishes: [],
     };
 
     drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
 
-    expect(ctx._calls.texts.map(call => call.text)).toEqual(['Table 1', 'Table 2', 'Table 3']);
-    expect(ctx._calls.texts.map(call => call.x)).toEqual([102, 202, 302]);
-    expect(ctx._calls.texts.map(call => call.y)).toEqual([110, 110, 110]);
-    expect(ctx._calls.texts[0]).toMatchObject({ colour: '#fff', font: 'bold 10px monospace' });
+    expect(ctx._calls.rects).toContainEqual({ x: 100, y: 100, w: 40, h: 40 });
+    expect(ctx._calls.rects).toContainEqual({ x: 200, y: 100, w: 40, h: 40 });
+    expect(ctx._calls.rects).toContainEqual({ x: 300, y: 100, w: 40, h: 40 });
+    expect(ctx._calls.texts.some(call => /Table \d|Chair \d/.test(call.text))).toBe(false);
+  });
+
+  it('draws on-service and delivered item emojis at their stored positions', () => {
+    const ctx = recordCtx();
+    const state = {
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [],
+      dishes: [{ id: 'toast', base: 'Bread' }],
+      serviceItems: [
+        { id: 'i1', kind: 'dish', menuItemId: 'toast', state: 'on_service', x: 150, y: 130 },
+        { id: 'i2', kind: 'drink', menuItemId: 'water', state: 'delivered', x: 224, y: 208 },
+        { id: 'i3', kind: 'drink', menuItemId: 'tea', state: 'to_clean', x: 240, y: 208 },
+      ],
+    };
+
+    drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍞', x: 150, y: 130 }));
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '💧', x: 224, y: 208 }));
+    expect(ctx._calls.texts.some(call => call.text === '🍵')).toBe(false);
+  });
+
+  it('does not render non-physical or unpositioned service items', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
+      serviceItems: [
+        { id: 'ordered', kind: 'dish', menuItemId: 'toast', state: 'ordered', x: null, y: null },
+        { id: 'preparing', kind: 'dish', menuItemId: 'toast', state: 'preparing', x: 0, y: 0 },
+        { id: 'ready', kind: 'dish', menuItemId: 'toast', state: 'ready', x: 10, y: 10 },
+        { id: 'invalid', kind: 'dish', menuItemId: 'toast', state: 'on_service', x: NaN, y: 10 },
+      ],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toEqual([]);
   });
 
   it('shows an arrow for a chair direction', () => {
@@ -112,14 +149,14 @@ describe('drawFurnitureLayer', () => {
       chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 120, rotation: 1 }],
       kitchenStations: [],
       serviceTables: [],
-      foodItems: [],
+      serviceItems: [],
       equipment: [],
       dishes: [],
     };
 
     drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
 
-    expect(ctx._calls.texts).toContainEqual({ text: '→', x: 110, y: 130 });
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '→', x: 110, y: 130 }));
   });
 });
 
@@ -224,8 +261,8 @@ describe('drawStaffLayer', () => {
 
     const names = ctx._calls.texts.filter(call => ['Sofia', 'Anna'].includes(call.text));
     expect(names).toEqual([
-      { text: 'Sofia', x: 200, y: 186 },
-      { text: 'Anna', x: 202, y: 176 },
+      expect.objectContaining({ text: 'Sofia', x: 200, y: 186 }),
+      expect.objectContaining({ text: 'Anna', x: 202, y: 176 }),
     ]);
   });
 
@@ -318,27 +355,77 @@ describe('drawStaffLayer', () => {
     expect(reducedStart._calls.rects).toEqual(reducedLater._calls.rects);
   });
 
-  it('shows carried-food marker when s.carryingFoodId is set', () => {
+  it('shows the carried dish emoji when carryingServiceItemId is set', () => {
     const staff = [
-      { id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80, carryingFoodId: 'f1' },
+      { id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80, carryingServiceItemId: 'f1' },
     ];
-    const state = { staff, restaurant: { expansionLevel: 1 } };
+    const state = { staff, restaurant: { expansionLevel: 1 }, serviceItems: [{ id: 'f1', kind: 'dish', menuItemId: 'dish' }], dishes: [{ id: 'dish', base: 'Bread' }] };
     const ctx = recordCtx();
     drawStaffLayer(ctx, state, camera);
-    // carried-food marker should be a small rect or text near the staff
-    const foodMarkers = ctx._calls.texts.filter(t => String(t.text).includes('F'));
-    expect(foodMarkers.length).toBe(1);
+    expect(ctx._calls.texts.some(t => t.text === '🍞')).toBe(true);
   });
 
-  it('does not show carried-food marker when not carrying', () => {
+  it('shows the carried drink emoji when carrying a drink', () => {
     const staff = [
-      { id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80 },
+      { id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80, carryingServiceItemId: 'd1' },
     ];
-    const state = { staff, restaurant: { expansionLevel: 1 } };
+    const state = { staff, restaurant: { expansionLevel: 1 }, serviceItems: [{ id: 'd1', kind: 'drink', menuItemId: 'water' }], dishes: [] };
     const ctx = recordCtx();
     drawStaffLayer(ctx, state, camera);
-    const foodMarkers = ctx._calls.texts.filter(t => String(t.text).includes('F'));
-    expect(foodMarkers.length).toBe(0);
+    expect(ctx._calls.texts.some(t => t.text === '💧')).toBe(true);
+    expect(ctx._calls.texts.some(t => t.text === 'F')).toBe(false);
+  });
+
+  it('does not leak fading alpha between customers and preserves reduced-motion coordinates', () => {
+    const state = {
+      customers: [
+        { id: 'fade', state: 'leaving', exitPhase: 'fading', exitFadeProgress: 0.4, x: 500, y: 300, path: [] },
+        { id: 'solid', state: 'guided', x: 700, y: 350, path: [] },
+      ], tables: [], chairs: [], restaurant: {},
+    };
+    const ctx = recordCtx();
+    drawCustomerLayer(ctx, state, camera, { timeMs: 200, reducedMotion: true });
+    expect(ctx._calls.arcs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ x: 500, y: 300, alpha: 0.6 }),
+      expect.objectContaining({ x: 700, y: 350, alpha: 1 }),
+    ]));
+    expect(ctx._calls.saves).toBe(3);
+    expect(ctx._calls.restores).toBe(3);
+    expect(ctx._calls.lines).toEqual(expect.any(Array));
+  });
+
+  it('suppresses fading limb animation in reduced motion at every time', () => {
+    const state = {
+      customers: [{ id: 'fade', state: 'leaving', exitPhase: 'fading', exitFadeProgress: 0.4, x: 500, y: 300, path: [] }],
+      tables: [], chairs: [], restaurant: {},
+    };
+    const first = recordCtx();
+    const second = recordCtx();
+    drawCustomerLayer(first, state, camera, { timeMs: 0, reducedMotion: true });
+    drawCustomerLayer(second, state, camera, { timeMs: 200, reducedMotion: true });
+    expect(first._calls.lines).toEqual(second._calls.lines);
+    expect(first._calls.arcs[0]).toMatchObject({ x: 500, y: 300, alpha: 0.6 });
+    expect(second._calls.arcs[0]).toMatchObject({ x: 500, y: 300, alpha: 0.6 });
+  });
+
+  it('uses the dish fallback when malformed truthy dishes accompany an item', () => {
+    const ctx = recordCtx();
+    expect(() => drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [],
+      dishes: {}, serviceItems: [{ id: 'i', kind: 'dish', menuItemId: 'missing', state: 'on_service', x: 10, y: 20 }],
+    }, camera)).not.toThrow();
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍽️', x: 10, y: 20 }));
+  });
+
+  it('safely ignores malformed service-item arrays', () => {
+    expect(() => drawFurnitureLayer(recordCtx(), {
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [],
+      dishes: [], serviceItems: {},
+    }, camera)).not.toThrow();
+    expect(() => drawStaffLayer(recordCtx(), {
+      staff: [{ id: 's', name: 'A', role: 'waiter', x: 1, y: 1, carryingServiceItemId: 'x' }],
+      serviceItems: true, dishes: [], restaurant: {},
+    }, camera)).not.toThrow();
   });
 });
 

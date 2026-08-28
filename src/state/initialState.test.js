@@ -8,6 +8,17 @@ describe('createInitialState', () => {
     expect(state.restaurant.funds).toBe(600);
     expect(state.dishes[0].price).toBe(12);
   });
+
+  it('starts version 4 with Water and unified service items', () => {
+    const state = createInitialState();
+
+    expect(state.version).toBe(4);
+    expect(state.unlockedDrinkIds).toEqual(['water']);
+    expect(state.serviceItems).toEqual([]);
+    expect(state.staff.every(staff => staff.carryingServiceItemId === null
+      || typeof staff.carryingServiceItemId === 'string')).toBe(true);
+  });
+
   it('gives starter staff distinct names', () => {
     const names = createInitialState().staff.map(staff => staff.name);
 
@@ -44,7 +55,7 @@ describe('createInitialState', () => {
   it('starts with one cook and three generic waiters', () => {
     const state = createInitialState();
 
-    expect(state.version).toBe(3);
+    expect(state.version).toBe(4);
     expect(state.staff.map(staff => staff.role)).toEqual(['cook', 'waiter', 'waiter', 'waiter']);
     expect(state.cashierStations).toHaveLength(1);
     expect(state.cashierStations[0]).toMatchObject({ id: 'cashier1' });

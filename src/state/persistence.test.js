@@ -30,24 +30,24 @@ describe('loadState', () => {
 describe('hydrateState', () => {
   it('fills fields added after an existing same-version save was created', () => {
     const fresh = {
-      version: 3,
+      version: 4,
       restaurant: { funds: 500, totalServed: 0 },
       staff: [{ id: 'starter-cook' }],
       serviceTables: [{ id: 'st1' }],
-      foodItems: [],
+      serviceItems: [],
     };
     const saved = {
-      version: 3,
+      version: 4,
       restaurant: { funds: 999 },
       staff: [{ id: 'custom-cook' }],
     };
 
     expect(hydrateState(saved, fresh)).toEqual({
-      version: 3,
+      version: 4,
       restaurant: { funds: 999, totalServed: 0 },
       staff: [{ id: 'custom-cook', gender: 'male' }],
       serviceTables: [{ id: 'st1' }],
-      foodItems: [],
+      serviceItems: [],
       customers: [],
       queue: [],
     });
@@ -55,12 +55,12 @@ describe('hydrateState', () => {
 
   it('adds stable genders to characters from older saves', () => {
     const fresh = {
-      version: 3,
+      version: 4,
       restaurant: { funds: 500 },
       staff: [], customers: [], queue: [],
     };
     const saved = {
-      version: 3,
+      version: 4,
       restaurant: { funds: 900 },
       staff: [{ id: 's1', name: 'Sofia' }],
       customers: [{ id: 'c1' }],
@@ -77,7 +77,7 @@ describe('hydrateState', () => {
 
   it('normalises equipment multipliers from saved levels', () => {
     const fresh = {
-      version: 3,
+      version: 4,
       restaurant: { funds: 500 },
       staff: [], customers: [], queue: [],
       equipment: [
@@ -86,7 +86,7 @@ describe('hydrateState', () => {
       ],
     };
     const saved = {
-      version: 3,
+      version: 4,
       restaurant: { funds: 900 },
       equipment: [
         { id: 'eq1', level: 4, speedMultiplier: 0.85, qualityBonus: null, owned: true },
@@ -96,7 +96,7 @@ describe('hydrateState', () => {
 
     const hydrated = hydrateState(saved, fresh);
 
-    expect(hydrated.version).toBe(3);
+    expect(hydrated.version).toBe(4);
     expect(hydrated.equipment[0].level).toBe(4);
     expect(hydrated.equipment[0].speedMultiplier).toBeCloseTo(1.3);
     expect(hydrated.equipment[0].qualityBonus).toBeCloseTo(0.15);
@@ -107,11 +107,11 @@ describe('hydrateState', () => {
     });
   });
 
-  it('normalises version-3 dish prices while preserving valid dish data', () => {
+  it('normalises version-4 dish prices while preserving valid dish data', () => {
     const fresh = createInitialState();
     const saved = {
       ...fresh,
-      version: 3,
+      version: 4,
       dishes: [
         { id: 'valid', name: 'Valid', price: 37, marker: 'preserved' },
         { id: 'rounded', name: 'Rounded', price: 37.6 },
@@ -126,7 +126,7 @@ describe('hydrateState', () => {
 
     const hydrated = hydrateState(saved, fresh);
 
-    expect(hydrated.version).toBe(3);
+    expect(hydrated.version).toBe(4);
     expect(hydrated.dishes.map(dish => dish.price)).toEqual([37, 38, 1, 100, 12, 1, 1, 1]);
     expect(hydrated.dishes[0]).toMatchObject({ name: 'Valid', marker: 'preserved' });
   });
@@ -144,6 +144,6 @@ describe('hydrateState', () => {
     expect(legacy.staffSlots).toBe(6);
     expect(crowded.staffSlots).toBe(7);
     expect(expanded.staffSlots).toBe(9);
-    expect(legacy.version).toBe(3);
+    expect(legacy.version).toBe(4);
   });
 });

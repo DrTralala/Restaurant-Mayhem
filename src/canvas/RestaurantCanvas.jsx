@@ -4,7 +4,6 @@ import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } fro
 import { loadSprites } from './sprites';
 import { drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer, drawSelectionLayer } from './layers';
 import { findClickedEntity } from './interaction';
-import { getTableNumber } from './tableLabels';
 import { getRestaurantWorld } from '../simulation/world';
 import StaffDetailsPanel from '../components/StaffDetailsPanel';
 import { normaliseSelectionRect, selectFurnitureInRect } from './selection';
@@ -501,9 +500,7 @@ export default function RestaurantCanvas({
           minWidth: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
         }}>
           <div style={{ color: '#888', fontSize: 11, padding: '2px 8px', fontFamily: 'monospace' }}>
-            {menu.type === 'table'
-              ? `Table ${getTableNumber(menu.data.id)}`
-              : `Chair ${state.chairs.findIndex(chair => chair.id === menu.data.id) + 1}`}
+            {menu.type === 'table' ? 'Dining table' : 'Chair'}
           </div>
           <button onClick={handleMoveEntity} style={menuBtn}>
             Move {menu.type === 'chair' ? '(R=rotate)' : ''}

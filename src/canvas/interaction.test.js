@@ -11,17 +11,36 @@ const state = {
   customers: [],
   kitchenStations: [],
   serviceTables: [],
-  foodItems: [],
+  serviceItems: [],
 };
 const camera = { x: 0, y: 0, zoom: 1 };
 
 describe('findClickedEntity table labels', () => {
-  it('uses the sequential table number in table tooltips', () => {
-    expect(findClickedEntity(state, camera, 220, 120).text).toBe('Table 2 · 2 seats · empty');
+  it('uses unnumbered table tooltips', () => {
+    expect(findClickedEntity(state, camera, 220, 120).text).toBe('Dining table · 2 seats · empty');
+    expect(findClickedEntity(state, camera, 220, 120).text).not.toMatch(/Table \d|Chair \d/);
   });
 
-  it('uses the sequential table number in chair tooltips', () => {
-    expect(findClickedEntity(state, camera, 195, 95).text).toBe('Chair · Table 2');
+  it('uses unnumbered chair tooltips', () => {
+    expect(findClickedEntity(state, camera, 195, 95).text).toBe('Chair');
+    expect(findClickedEntity(state, camera, 195, 95).text).not.toMatch(/Table \d|Chair \d/);
+  });
+
+  it('counts only items waiting on the clicked counter', () => {
+    const counters = [{ id: 'a', x: 0, y: 0 }, { id: 'b', x: 200, y: 0 }];
+    const hit = findClickedEntity({ ...state, serviceTables: counters, serviceItems: [
+      { id: 'a1', state: 'on_service', serviceTableId: 'a' },
+      { id: 'a2', state: 'on_service', serviceTableId: 'a' },
+      { id: 'b1', state: 'on_service', serviceTableId: 'b' },
+    ] }, camera, 10, 10);
+    expect(hit.text).toBe('Service Counter · 2 items waiting');
+    expect(hit.text).not.toContain('3');
+  });
+
+  it('handles malformed truthy serviceItems on a counter', () => {
+    expect(() => findClickedEntity({ ...state, serviceTables: [{ id: 'a', x: 0, y: 0 }], serviceItems: {} }, camera, 10, 10)).not.toThrow();
+    expect(findClickedEntity({ ...state, serviceTables: [{ id: 'a', x: 0, y: 0 }], serviceItems: {} }, camera, 10, 10).text)
+      .toBe('Service Counter · 0 items waiting');
   });
 });
 

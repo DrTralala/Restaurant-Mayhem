@@ -2,12 +2,14 @@ import { createContext, useContext, useReducer, useEffect, useRef } from 'react'
 import { createInitialState } from './initialState';
 import { hydrateState, loadState, saveState } from './persistence';
 import { ITEM_PRICES, ITEM_SELL_RATIO } from '../data/items';
+import { getDrink } from '../data/drinks';
 import { getPlaceable } from '../data/placeables';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { clampReputation } from '../simulation/balance';
 import { assignWaiterToStation } from '../simulation/cashiers';
 import { getNextNumericId, snapPlacement, validatePlacement } from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
+import { hasValidDrinkReservation } from '../simulation/serviceItems';
 
 const DISH_QUALITY_COST = 50;
 const TRAINING_COST = 100;
@@ -185,6 +187,22 @@ function gameReducer(state, action) {
       return { ...state, speed: action.speed };
     case 'TOGGLE_PAUSE':
       return { ...state, paused: !state.paused };
+    case 'UNLOCK_DRINK': {
+      const drink = getDrink(action.id);
+      const unlockedDrinkIds = Array.isArray(state.unlockedDrinkIds)
+        ? state.unlockedDrinkIds
+        : [];
+      if (!drink || drink.unlockCost == null || unlockedDrinkIds.includes(drink.id)
+        || !canAfford(state, drink.unlockCost)) return state;
+      return {
+        ...state,
+        restaurant: {
+          ...state.restaurant,
+          funds: state.restaurant.funds - drink.unlockCost,
+        },
+        unlockedDrinkIds: [...unlockedDrinkIds, drink.id],
+      };
+    }
     case 'ADD_DISH': {
       const dish = action.dish;
       if (!dish || state.dishes.length >= state.recipeSlots
@@ -285,22 +303,32 @@ function gameReducer(state, action) {
       const salary = STAFF_SALARIES[action.staff?.role];
       if (!action.staff || state.staff.length >= state.staffSlots
         || salary == null || !canAfford(state, salary)) return state;
+      const { ...staff } = action.staff;
       return {
         ...state,
         restaurant: { ...state.restaurant, funds: state.restaurant.funds - salary },
-        staff: [...state.staff, { ...action.staff, salary }],
+        staff: [...state.staff, { ...staff, salary, carryingServiceItemId: null }],
       };
     }
     case 'FIRE_STAFF':
-      return {
-        ...state,
-        staff: state.staff.filter(s => s.id !== action.id),
-        cashierStations: (state.cashierStations || []).map(station => {
-          if (station.assignedStaffId !== action.id) return station;
-          const { assignedStaffId, ...unassigned } = station;
-          return unassigned;
-        }),
-      };
+      {
+        const fired = state.staff.find(staff => staff.id === action.id);
+        const carriedId = fired?.carryingServiceItemId;
+        return {
+          ...state,
+          staff: state.staff.filter(s => s.id !== action.id),
+          serviceItems: (state.serviceItems || []).map(item => item.assignedStaffId === action.id
+            && item.kind === 'drink' && ['ordered', 'preparing'].includes(item.state)
+            ? { ...item, serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null }
+            : item.id === carriedId && item.state === 'carried'
+              ? { ...item, state: 'to_clean' } : item),
+          cashierStations: (state.cashierStations || []).map(station => {
+            if (station.assignedStaffId !== action.id) return station;
+            const { assignedStaffId, ...unassigned } = station;
+            return unassigned;
+          }),
+        };
+      }
     case 'RENAME_STAFF':
       return {
         ...state,
@@ -453,30 +481,16 @@ function gameReducer(state, action) {
     case 'DELETE_SERVICE_TABLE': {
       const serviceTable = state.serviceTables.find(table => table.id === action.id);
       if (!serviceTable) return state;
-      const hasFood = state.foodItems.some(food => food.serviceTableId === serviceTable.id
-        || (!food.serviceTableId
-          && food.x >= serviceTable.x && food.x < serviceTable.x + 120
-          && food.y >= serviceTable.y && food.y < serviceTable.y + 40));
-      if (hasFood) return state;
+      const hasItems = (state.serviceItems || []).some(item => item.state === 'on_service'
+        && item.serviceTableId === serviceTable.id);
+      const hasReservation = (state.serviceItems || []).some(item =>
+        item.serviceTableId === serviceTable.id && hasValidDrinkReservation(state, item));
+      if (hasItems || hasReservation) return state;
       return {
         ...state,
         serviceTables: state.serviceTables.filter(st => st.id !== action.id),
       };
     }
-    case 'ADD_FOOD_ITEM':
-      return { ...state, foodItems: [...state.foodItems, action.item] };
-    case 'DELIVER_FOOD':
-      return {
-        ...state,
-        foodItems: state.foodItems.map(f =>
-          f.id === action.id ? { ...f, state: 'delivered', x: action.x, y: action.y } : f
-        ),
-      };
-    case 'CLEAN_FOOD':
-      return {
-        ...state,
-        foodItems: state.foodItems.filter(f => f.id !== action.id),
-      };
     case 'EXPAND': {
       const level = state.restaurant.expansionLevel;
       const cost = EXPANSION_COSTS[level];

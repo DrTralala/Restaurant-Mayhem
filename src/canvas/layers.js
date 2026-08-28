@@ -1,7 +1,7 @@
 import { getDoors, getRestaurantWorld, getQueuePosition, getDefaultStaffPosition } from '../simulation/world';
 import { getPlacementRect } from '../simulation/placement';
-import { getTableNumber } from './tableLabels';
 import { getCharacterPalette } from './characterAppearance';
+import { getServiceItemEmoji } from './serviceItemEmoji';
 
 function animationOffset(id = '') {
   return [...String(id)].reduce((total, character) => total + character.charCodeAt(0), 0) * 0.17;
@@ -179,12 +179,6 @@ export function drawFurnitureLayer(ctx, state, camera) {
     ctx.fillStyle = tableColor;
     ctx.fillRect(tx, ty, 40, 40);
 
-    const tableNumber = getTableNumber(table.id);
-    if (tableNumber != null) {
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 10px monospace';
-      ctx.fillText(`Table ${tableNumber}`, tx + 2, ty + 10);
-    }
   }
 
   // Chairs (drawn from chairs array — independently movable, rotatable)
@@ -228,16 +222,12 @@ export function drawFurnitureLayer(ctx, state, camera) {
     ctx.fillText('SERVICE', st.x + 30, st.y + 24);
   }
 
-  // Food items
-  for (const food of state.foodItems) {
-    if (food.state === 'to_clean') continue;
-    const dish = state.dishes.find(d => d.id === food.dishId);
-    const label = dish ? dish.name.substring(0, 6) : 'food';
-    ctx.fillStyle = food.state === 'on_service' ? '#f0a500' : '#4a7';
-    ctx.fillRect(food.x, food.y, 24, 12);
-    ctx.fillStyle = '#111';
-    ctx.font = '7px monospace';
-    ctx.fillText(label, food.x + 2, food.y + 10);
+  for (const item of Array.isArray(state.serviceItems) ? state.serviceItems : []) {
+    if (!['on_service', 'delivered'].includes(item.state)
+      || !Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
+    ctx.fillStyle = '#fff';
+    ctx.font = '16px sans-serif';
+    ctx.fillText(getServiceItemEmoji(item, state.dishes || []), item.x, item.y);
   }
 
   ctx.restore();
@@ -319,10 +309,13 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
     ctx.textAlign = 'start';
     renderedStaff.push({ x, y });
 
-    if (s.carryingFoodId) {
-      ctx.fillStyle = '#f0a500';
-      ctx.font = 'bold 7px monospace';
-      ctx.fillText('F', x + 12, y - 14);
+    const carriedItem = Array.isArray(state.serviceItems)
+      ? state.serviceItems.find(item => item.id === s.carryingServiceItemId)
+      : null;
+    if (carriedItem) {
+      ctx.fillStyle = '#fff';
+      ctx.font = '16px sans-serif';
+      ctx.fillText(getServiceItemEmoji(carriedItem, state.dishes || []), x + 12, y - 14);
     }
   }
 
@@ -336,7 +329,7 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
 
   for (const c of state.customers) {
     let cx, cy;
-    const seated = ['seated', 'ordering', 'eating'].includes(c.state);
+    const seated = ['seated', 'ordering', 'eating', 'waiting_for_items'].includes(c.state);
     const tableExists = c.tableId
       && (state.tables || []).some(table => table.id === c.tableId);
     const chair = c.chairId && tableExists
@@ -356,14 +349,21 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
     }
 
     const deciding = (c.state === 'seated' && !c.dishId) || c.state === 'ordering';
+    ctx.save();
+    ctx.globalAlpha = c.state === 'leaving' && c.exitPhase === 'fading'
+      ? Math.max(0, 1 - (c.exitFadeProgress || 0))
+      : 1;
     drawStickFigure(ctx, cx, cy, getCharacterPalette(c).figure, {
       seated,
-      walking: (c.state === 'guided' || c.state === 'leaving') && Boolean(c.path?.length),
+      walking: c.state === 'leaving'
+        ? !renderOptions.reducedMotion
+        : c.state === 'guided' && Boolean(c.path?.length),
       id: c.id,
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
     });
     if (deciding) drawMenu(ctx, cx, cy);
+    ctx.restore();
   }
 
   ctx.restore();

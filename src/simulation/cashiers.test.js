@@ -34,11 +34,11 @@ describe('cashier station assignments', () => {
     ]);
   });
 
-  it('skips waiters who have active work or are carrying food', () => {
+  it('skips waiters who have active work or are carrying a service item', () => {
     const staff = [
-      { id: 'w1', role: 'waiter', task: { type: 'pickup_food', foodId: 'f1' } },
-      { id: 'w2', role: 'waiter', carryingFoodId: 'f2' },
-      { id: 'w3', role: 'waiter', task: null, carryingFoodId: null },
+      { id: 'w1', role: 'waiter', task: { type: 'pickup_service_item', serviceItemId: 'i1' } },
+      { id: 'w2', role: 'waiter', carryingServiceItemId: 'i2' },
+      { id: 'w3', role: 'waiter', task: null, carryingServiceItemId: null },
     ];
     const stations = [{ id: 'cashier1' }];
 

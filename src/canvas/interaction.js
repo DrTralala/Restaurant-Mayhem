@@ -1,5 +1,4 @@
 import { screenToWorld } from './camera';
-import { getTableNumber } from './tableLabels';
 import { getDefaultStaffPosition } from '../simulation/world';
 
 export function findClickedEntity(state, camera, screenX, screenY) {
@@ -25,7 +24,7 @@ export function findClickedEntity(state, camera, screenX, screenY) {
       return {
         type: 'chair',
         data: chair,
-        text: `Chair · Table ${getTableNumber(chair.tableId)}`,
+        text: 'Chair',
       };
     }
   }
@@ -37,7 +36,7 @@ export function findClickedEntity(state, camera, screenX, screenY) {
       return {
         type: 'table',
         data: table,
-        text: `Table ${getTableNumber(table.id)} · ${table.seats} seats · ${table.status}${customer ? ' · ' + customer.archetype : ''}`,
+        text: `Dining table · ${table.seats} seats · ${table.status}${customer ? ` · ${customer.archetype}` : ''}`,
       };
     }
   }
@@ -59,7 +58,8 @@ export function findClickedEntity(state, camera, screenX, screenY) {
       return {
         type: 'serviceTable',
         data: st,
-        text: `Service Counter · ${state.foodItems.filter(f => f.state === 'on_service').length} plates waiting`,
+        text: `Service Counter · ${(Array.isArray(state.serviceItems) ? state.serviceItems : [])
+          .filter(item => item.state === 'on_service' && item.serviceTableId === st.id).length} items waiting`,
       };
     }
   }

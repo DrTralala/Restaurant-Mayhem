@@ -3,12 +3,13 @@ import { useEffect, useState } from 'react';
 const taskLabels = {
   guide_customer: 'Guiding customer',
   clean_table: 'Cleaning table',
-  clean_food: 'Clearing dishes',
   take_order: 'Taking order',
-  pickup_food: 'Collecting food',
-  deliver_food: 'Delivering food',
-  cook_order: 'Cooking order',
   take_payment: 'Taking payment',
+  prepare_dish: 'Preparing dish',
+  prepare_drink: 'Preparing drink',
+  pickup_service_item: 'Collecting order',
+  deliver_service_item: 'Delivering order',
+  clean_service_item: 'Clearing service item',
 };
 
 const actionButton = {

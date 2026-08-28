@@ -87,8 +87,8 @@ function renderReducer(overrides = {}) {
 describe('GameProvider staff actions', () => {
   beforeEach(() => localStorage.clear());
 
-  it('uses fresh state when a saved state has an older version', () => {
-    const saved = { ...createInitialState(), version: 2, restaurant: { funds: 999 } };
+  it('uses fresh version-4 state when a version-3 save exists', () => {
+    const saved = { ...createInitialState(), version: 3, restaurant: { funds: 999 } };
     localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
 
     render(<GameProvider><ItemHarness /></GameProvider>);
@@ -319,15 +319,16 @@ describe('GameProvider authoritative placement actions', () => {
     expect(game.state.staff).toHaveLength(1);
   });
 
-  it('does not assign a newly placed cashier to a waiter picking up or carrying food', () => {
+  it('assigns a newly placed cashier only to a genuinely available waiter', () => {
     const initial = createInitialState();
     const game = renderReducer({
+      cashierStations: [],
       staff: initial.staff.map(staff => {
         if (staff.id === 'starter-waiter') {
-          return { ...staff, task: { type: 'pickup_food', foodId: 'f1' } };
+           return { ...staff, task: { type: 'pickup_service_item', serviceItemId: 'i1' } };
         }
         if (staff.id === 'starter-host') {
-          return { ...staff, carryingFoodId: 'f2' };
+           return { ...staff, carryingServiceItemId: 'i2' };
         }
         return staff;
       }),
@@ -342,7 +343,7 @@ describe('GameProvider authoritative placement actions', () => {
     });
 
     expect(game.state.restaurant.funds).toBe(300);
-    expect(game.state.cashierStations.at(-1)).not.toHaveProperty('assignedStaffId');
+     expect(game.state.cashierStations.at(-1)).toHaveProperty('assignedStaffId', 'starter-cashier-waiter');
   });
 
   it('stores a snapped y coordinate for an authoritative door placement', () => {
@@ -571,6 +572,26 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.dishes[0].price).toBe(100);
   });
 
+  it('unlocks a canonical drink once at its catalogue cost', () => {
+    const game = renderReducer({ restaurant: { funds: 500 } });
+
+    game.dispatch({ type: 'UNLOCK_DRINK', id: 'tea', cost: 1 });
+    game.dispatch({ type: 'UNLOCK_DRINK', id: 'tea', cost: 1 });
+
+    expect(game.state.restaurant.funds).toBe(350);
+    expect(game.state.unlockedDrinkIds).toEqual(['water', 'tea']);
+  });
+
+  it('rejects unknown and unaffordable drink unlocks', () => {
+    const game = renderReducer({ restaurant: { funds: 149 } });
+
+    game.dispatch({ type: 'UNLOCK_DRINK', id: 'tea' });
+    game.dispatch({ type: 'UNLOCK_DRINK', id: 'unknown' });
+
+    expect(game.state.restaurant.funds).toBe(149);
+    expect(game.state.unlockedDrinkIds).toEqual(['water']);
+  });
+
   it('canonicalises valid dish creation and rejects malformed dishes', () => {
     const initial = createInitialState();
     const game = renderReducer({ dishes: [], recipeSlots: 3 });
@@ -609,37 +630,69 @@ describe('GameProvider guarded economy actions', () => {
 describe('GameProvider service counter actions', () => {
   beforeEach(() => localStorage.clear());
 
-  it('prevents deleting a counter referenced by a food item ID', () => {
+  it('blocks deletion for a unified on-service item on the counter', () => {
     const game = renderReducer({
       serviceTables: [
         { id: 'st1', x: 140, y: 120 },
         { id: 'st2', x: 400, y: 120 },
       ],
-      foodItems: [{
-        id: 'food-1', serviceTableId: 'st1', state: 'on_service', x: 410, y: 130,
-      }],
+       serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'c1', serviceTableId: 'st1', state: 'on_service' }],
     });
 
     game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
 
-    expect(game.state.serviceTables.map(table => table.id)).toEqual(['st1', 'st2']);
-    expect(game.state.foodItems).toHaveLength(1);
+     expect(game.state.serviceTables.map(table => table.id)).toEqual(['st1', 'st2']);
   });
 
-  it('uses geometry for legacy food without a counter ID while allowing unoccupied deletion', () => {
+  it('allows deletion when an item is carried away from the counter', () => {
     const game = renderReducer({
       serviceTables: [
         { id: 'st1', x: 140, y: 120 },
         { id: 'st2', x: 400, y: 120 },
       ],
-      foodItems: [{ id: 'legacy-food', state: 'on_service', x: 150, y: 130 }],
+       serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'c1', serviceTableId: 'st1', state: 'carried' }],
     });
 
     game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
-    expect(game.state.serviceTables.map(table => table.id)).toEqual(['st1', 'st2']);
+     expect(game.state.serviceTables.map(table => table.id)).toEqual(['st2']);
+  });
+
+  it('blocks deletion for an exact valid drink reservation', () => {
+    const game = renderReducer({
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', drinkId: 'water' }],
+      serviceItems: [{ id: 'i1', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'preparing', serviceTableId: 'st1', serviceSlotIndex: 2, assignedStaffId: 'w1' }],
+      staff: [{ id: 'w1', role: 'waiter', task: { type: 'prepare_drink', serviceItemId: 'i1', serviceTableId: 'st1', serviceSlotIndex: 2 } }],
+    });
+    game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
+    expect(game.state.serviceTables).toHaveLength(1);
+  });
+
+  it('allows deletion for a malformed drink reservation', () => {
+    const game = renderReducer({
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', drinkId: 'water' }],
+      serviceItems: [{ id: 'i1', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'preparing', serviceTableId: 'st1', serviceSlotIndex: 2, assignedStaffId: 'w1' }],
+      staff: [{ id: 'w1', role: 'cook', task: { type: 'prepare_drink', serviceItemId: 'i1', serviceTableId: 'st1', serviceSlotIndex: 2 } }],
+    });
+    game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
+    expect(game.state.serviceTables).toEqual([]);
+  });
+
+  it('preserves cleanup items when deleting an unoccupied counter', () => {
+    const cleanupItem = {
+      id: 'service-item-1', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1',
+      serviceTableId: 'st1', state: 'to_clean',
+    };
+    const game = renderReducer({
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      serviceItems: [cleanupItem],
+    });
+    game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
+    expect(game.state.serviceTables).toEqual([]);
 
     game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st2' });
-    expect(game.state.serviceTables.map(table => table.id)).toEqual(['st1']);
-    expect(game.state.foodItems).toHaveLength(1);
+    expect(game.state.serviceTables).toEqual([]);
+    expect(game.state.serviceItems).toEqual([cleanupItem]);
   });
 });

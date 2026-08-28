@@ -38,6 +38,13 @@ export function buildBlockedCells(state) {
   return blocked;
 }
 
+export function buildOccupiedCharacterCells(characters, excludedIds = []) {
+  const excluded = new Set(excludedIds);
+  return new Set((characters || [])
+    .filter(character => !excluded.has(character.id) && Number.isFinite(character.x) && Number.isFinite(character.y))
+    .map(character => cellKey(worldToCell(character))));
+}
+
 function isInsideWorld(state, cell) {
   const world = getRestaurantWorld(state.restaurant || {});
   const point = cellToWorld(cell);
@@ -48,7 +55,7 @@ function isOpen(state, blocked, cell) {
   return isInsideWorld(state, cell) && !blocked.has(cellKey(cell));
 }
 
-export function findPath(state, start, goal, { occupiedCells = null } = {}) {
+export function findPath(state, start, goal, { occupiedCells = null, allowOccupiedGoal = false } = {}) {
   const blocked = buildBlockedCells(state);
   const queue = [start];
   const cameFrom = new Map([[cellKey(start), null]]);
@@ -60,7 +67,8 @@ export function findPath(state, start, goal, { occupiedCells = null } = {}) {
     for (const [dx, dy] of dirs) {
       const next = { x: current.x + dx, y: current.y + dy };
       const key = cellKey(next);
-      if (cameFrom.has(key) || !isOpen(state, blocked, next) || occupiedCells?.has(key)) continue;
+      const occupied = occupiedCells?.has(key) && !(allowOccupiedGoal && key === cellKey(goal));
+      if (cameFrom.has(key) || !isOpen(state, blocked, next) || occupied) continue;
       cameFrom.set(key, current);
       queue.push(next);
     }
@@ -74,6 +82,13 @@ export function findPath(state, start, goal, { occupiedCells = null } = {}) {
     current = cameFrom.get(cellKey(current));
   }
   return path.slice(1);
+}
+
+export function findPathWithDynamicFallback(state, start, goal, { occupiedCells = null } = {}) {
+  const path = findPath(state, start, goal, { occupiedCells, allowOccupiedGoal: true });
+  if (path.length) return { path, usedStaticFallback: false };
+  const staticPath = findPath(state, start, goal);
+  return { path: staticPath, usedStaticFallback: staticPath.length > 0 };
 }
 
 export function findAdjacentOpenCells(state, rect, fromCell = null) {

@@ -17,6 +17,17 @@ describe('StaffDetailsPanel', () => {
     expect(screen.getByText('Taking order')).toBeInTheDocument();
   });
 
+  it.each([
+    ['prepare_dish', 'Preparing dish'],
+    ['prepare_drink', 'Preparing drink'],
+    ['pickup_service_item', 'Collecting order'],
+    ['deliver_service_item', 'Delivering order'],
+    ['clean_service_item', 'Clearing service item'],
+  ])('labels %s tasks', (type, label) => {
+    render(<StaffDetailsPanel staff={{ ...staff, task: { type } }} dispatch={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
   it('shows a cashier assignment for an idle waiter', () => {
     render(
       <StaffDetailsPanel

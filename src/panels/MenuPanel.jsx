@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
+import { DRINKS } from '../data/drinks';
 import RecipeCreator from './RecipeCreator';
 
 export default function MenuPanel() {
   const state = useGameState();
   const dispatch = useDispatch();
   const [showCreator, setShowCreator] = useState(false);
+  const unlockedDrinkIds = state.unlockedDrinkIds || [];
 
   if (showCreator) {
     return <RecipeCreator onClose={() => setShowCreator(false)} />;
@@ -65,6 +67,32 @@ export default function MenuPanel() {
           </div>
         </div>
       ))}
+
+      <h4 style={{ color: '#f0a500', margin: '16px 0 8px' }}>Drinks</h4>
+      {DRINKS.map(drink => {
+        const unlocked = unlockedDrinkIds.includes(drink.id);
+
+        return (
+          <div key={drink.id} style={{
+            background: '#1a1a2e', borderRadius: 8, padding: 12, marginBottom: 8,
+            border: '1px solid #0f3460', display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center',
+          }}>
+            <strong>{drink.name}</strong>
+            {unlocked ? (
+              <span style={{ color: '#f0a500' }}>${drink.price}</span>
+            ) : (
+              <button
+                onClick={() => dispatch({ type: 'UNLOCK_DRINK', id: drink.id })}
+                disabled={state.restaurant.funds < drink.unlockCost}
+                style={{ background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}
+              >
+                Unlock {drink.name} (${drink.unlockCost})
+              </button>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

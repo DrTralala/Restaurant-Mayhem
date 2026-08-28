@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBlockedCells, findAdjacentOpenCell, findPath, worldToCell } from './pathfinding';
+import { buildBlockedCells, findAdjacentOpenCell, findPath, findPathWithDynamicFallback, worldToCell } from './pathfinding';
 import { GRID_SIZE } from './world';
 
 const state = {
@@ -107,5 +107,49 @@ describe('pathfinding', () => {
 
     expect(crossing.y * GRID_SIZE).toBeGreaterThanOrEqual(340);
     expect(crossing.y * GRID_SIZE).toBeLessThan(380);
+  });
+
+  it('allows an occupied goal while avoiding other occupied cells', () => {
+    const open = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [] };
+    const goal = worldToCell({ x: 200, y: 300 });
+    const path = findPath(open, worldToCell({ x: 100, y: 300 }), goal, {
+      occupiedCells: new Set(['7,15', `${goal.x},${goal.y}`]),
+      allowOccupiedGoal: true,
+    });
+
+    expect(path.at(-1)).toEqual(goal);
+    expect(path).not.toContainEqual({ x: 7, y: 15 });
+  });
+
+  it('falls back to a static route when characters close the dynamic route', () => {
+    const corridor = {
+      restaurant: { expansionLevel: 1 }, tables: [], kitchenStations: [], serviceTables: [],
+      chairs: Array.from({ length: 20 }, (_, index) => ({ id: `wall-${index}`, x: 100 + index * 20, y: 280 }))
+        .concat(Array.from({ length: 20 }, (_, index) => ({ id: `wall-b-${index}`, x: 100 + index * 20, y: 320 }))),
+    };
+    const result = findPathWithDynamicFallback(
+      corridor,
+      worldToCell({ x: 120, y: 300 }),
+      worldToCell({ x: 400, y: 300 }),
+      { occupiedCells: new Set(['10,15']) },
+    );
+
+    expect(result.usedStaticFallback).toBe(false);
+    expect(result.path.length).toBeGreaterThan(0);
+  });
+
+  it('does not invent a route through furniture when the static target is enclosed', () => {
+    const unreachable = {
+      restaurant: { expansionLevel: 1 }, tables: [],
+      chairs: [
+        { id: 'cw', x: 280, y: 300 }, { id: 'ce', x: 320, y: 300 },
+        { id: 'cn', x: 300, y: 280 }, { id: 'cs', x: 300, y: 320 },
+      ], kitchenStations: [], serviceTables: [],
+    };
+    const goal = worldToCell({ x: 300, y: 300 });
+    const start = worldToCell({ x: 100, y: 300 });
+    const result = findPathWithDynamicFallback(unreachable, start, goal, { occupiedCells: new Set() });
+
+    expect(result).toEqual({ path: [], usedStaticFallback: false });
   });
 });
