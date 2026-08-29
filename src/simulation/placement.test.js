@@ -22,6 +22,24 @@ it('exposes canonical prices and footprints', () => {
   expect(getPlaceable('door')).toMatchObject({ price: 400, width: 6, height: 40 });
   expect(getPlaceable('serviceTable')).toMatchObject({ price: 300, width: 120, height: 40 });
   expect(getPlaceable('cashierTable')).toMatchObject({ price: 300, width: 80, height: 40 });
+  expect(getPlaceable('automaticDishwasher')).toMatchObject({ price: 600, width: 40, height: 40 });
+});
+
+it('places a dishwasher freely and rejects overlap with every furniture/station type', () => {
+  const empty = { ...state, tables: [], chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [], washStations: [] };
+  expect(validatePlacement(empty, { itemType: 'automaticDishwasher', x: 500, y: 300 })).toMatchObject({ valid: true });
+  const occupied = [
+    { tables: [{ id: 't', x: 500, y: 300 }] },
+    { chairs: [{ id: 'c', x: 500, y: 300 }] },
+    { kitchenStations: [{ id: 'k', x: 500, y: 300 }] },
+    { serviceTables: [{ id: 's', x: 500, y: 300 }] },
+    { cashierStations: [{ id: 'cash', x: 500, y: 300, w: 80, h: 40 }] },
+    { washStations: [{ id: 'wash', x: 500, y: 300, w: 40, h: 40 }] },
+  ];
+  for (const furniture of occupied) {
+    expect(validatePlacement({ ...empty, ...furniture }, { itemType: 'automaticDishwasher', x: 500, y: 300 }).reason)
+      .toBe('overlap');
+  }
 });
 
 it('snaps chairs to the ten-pixel grid and doors to the right wall', () => {

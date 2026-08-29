@@ -1,28 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawQueueLayer } from './layers';
+import { updateStaff } from '../simulation/staff';
+import { processKitchen } from '../simulation/kitchen';
 
 function recordCtx(extraCanvas = {}) {
   const calls = { arcs: [], texts: [], rects: [], fills: [], moves: [], lines: [], strokes: [] };
   let alpha = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+  let figureScale = 1;
+  const transforms = [];
+  const point = (x, y) => ({ x: offsetX + x * figureScale, y: offsetY + y * figureScale });
   return {
     canvas: { height: 600, width: 800, ...extraCanvas },
-    save: () => calls.saves = (calls.saves || 0) + 1,
-    restore: () => calls.restores = (calls.restores || 0) + 1,
-    translate: () => {},
-    scale: () => {},
+    save: () => { calls.saves = (calls.saves || 0) + 1; transforms.push([offsetX, offsetY, figureScale]); },
+    restore: () => { calls.restores = (calls.restores || 0) + 1; [offsetX, offsetY, figureScale] = transforms.pop(); },
+    translate: (x, y) => { offsetX += x; offsetY += y; },
+    rotate: () => {},
+    scale: (x, y) => { calls.scales = [...(calls.scales || []), { x, y }]; figureScale *= x; },
     measureText: (text) => ({ width: String(text).length }),
     beginPath: () => {},
-    moveTo: (x, y) => calls.moves.push({ x, y }),
-    lineTo: (x, y) => calls.lines.push({ x, y }),
+    moveTo: (x, y) => calls.moves.push(point(x, y)),
+    lineTo: (x, y) => calls.lines.push(point(x, y)),
     stroke() { calls.strokes.push({ colour: this.strokeStyle }); },
     fillStyle: '',
     get globalAlpha() { return alpha; },
     set globalAlpha(value) { alpha = value; },
     font: '',
     lineWidth: 1,
-    arc: (x, y, r, start, end) => calls.arcs.push({ x, y, r, start, end, alpha }),
+    arc: (x, y, r, start, end) => calls.arcs.push({ ...point(x, y), r, start, end, alpha }),
     fill: () => calls.fills.push({}),
-    fillRect: (x, y, w, h) => calls.rects.push({ x, y, w, h }),
+    fillRect: (x, y, w, h) => calls.rects.push({ ...point(x, y), w: w * figureScale, h: h * figureScale }),
     fillText: (text, x, y) => calls.texts.push({ text, x, y, alpha }),
     strokeRect: () => {},
     _calls: calls,
@@ -157,6 +165,109 @@ describe('drawFurnitureLayer', () => {
     drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
 
     expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '→', x: 110, y: 130 }));
+  });
+
+  it('draws dirt, station labels, queue stacks, and exact half progress', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, { tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
+      floorDirt: [{ x: 100, y: 100 }, { x: Infinity, y: 20 }], restaurant: { gameTime: 90 },
+      washStations: [{ id: 'sink', type: 'manual', x: 20, y: 20 }, { id: 'auto', type: 'automatic', x: 100, y: 20 }],
+      serviceItems: [{ id: 'a', washStationId: 'auto', state: 'washing', washStartedAt: 0 },
+        { id: 'b', washStationId: 'auto', state: 'queued_for_wash' }] }, { x: 0, y: 0, zoom: 1 });
+    expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining(['💦', 'SINK', 'AUTO', '×2']));
+    expect(ctx._calls.rects).toContainEqual(expect.objectContaining({ x: 143, y: 45, w: 1, h: 7 }));
+  });
+
+  it('renders stationary customer and staff progress exactly once and suppresses invalid or moving staff', () => {
+    const ctx = recordCtx();
+    drawCustomerLayer(ctx, { restaurant: { gameTime: 90 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }],
+      customers: [{ id: 'c', state: 'eating', tableId: 't', chairId: 'ch', consumptionStartedAt: 0, consumptionDuration: 180 }] }, { x: 0, y: 0, zoom: 1 });
+    drawStaffLayer(ctx, { restaurant: { gameTime: 30 }, serviceItems: [], dishes: [], kitchenStations: [], equipment: [],
+      staff: [
+        { id: 'o', name: 'O', role: 'waiter', x: 200, y: 200, task: { type: 'take_order', startedAt: 0 }, path: [] },
+        { id: 'p', name: 'P', role: 'waiter', x: 240, y: 200, task: { type: 'take_payment', startedAt: 0 }, path: [] },
+        { id: 'w', name: 'W', role: 'janitor', x: 280, y: 200, task: { type: 'clean_floor', cleaningStartedAt: 0 }, path: [] },
+        { id: 'x', name: 'X', role: 'janitor', x: 320, y: 200, task: { type: 'wash_item', washingStartedAt: 0 }, path: [{ x: 1, y: 1 }] },
+        { id: 'i', name: 'I', role: 'janitor', x: 360, y: 200, task: { type: 'wash_item', washingStartedAt: null }, path: [] },
+      ] }, { x: 0, y: 0, zoom: 1 });
+    const progressFills = ctx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14);
+    expect(progressFills).toHaveLength(4);
+    expect(progressFills.map(fill => fill.h)).toEqual(expect.arrayContaining([7, 7, 7, 10.5]));
+  });
+
+  it('suppresses consumption progress for a moving eating customer with valid timestamps', () => {
+    const moving = recordCtx();
+    drawCustomerLayer(moving, { restaurant: { gameTime: 90 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }], customers: [
+      { id: 'moving', state: 'eating', tableId: 't', chairId: 'ch', path: [{ x: 5, y: 5 }], consumptionStartedAt: 0, consumptionDuration: 180 },
+    ] }, { x: 0, y: 0, zoom: 1 });
+    expect(moving._calls.arcs).toHaveLength(1);
+    expect(moving._calls.arcs[0]).toMatchObject({ x: 100, y: 100 });
+    expect(moving._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14)).toHaveLength(0);
+
+    const stationary = recordCtx();
+    drawCustomerLayer(stationary, { restaurant: { gameTime: 90 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }], customers: [
+      { id: 'stationary', state: 'eating', tableId: 't', chairId: 'ch', path: [], consumptionStartedAt: 0, consumptionDuration: 180 },
+    ] }, { x: 0, y: 0, zoom: 1 });
+    expect(stationary._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14)).toHaveLength(1);
+  });
+
+  it('uses canonical drink, recipe/equipment, and manual wash durations', () => {
+    const ctx = recordCtx();
+    drawStaffLayer(ctx, {
+      restaurant: { gameTime: 30 },
+      serviceItems: [
+        { id: 'drink', kind: 'drink', preparationStartedAt: 0, menuItemId: 'water' },
+        { id: 'food', kind: 'dish', preparationStartedAt: 0, menuItemId: 'dish', stationId: 'k1' },
+      ],
+      dishes: [{ id: 'dish', prepTime: 100 }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 2 }],
+      staff: [
+        { id: 'd', name: 'D', role: 'waiter', x: 100, y: 100, path: [], task: { type: 'prepare_drink', serviceItemId: 'drink' } },
+        { id: 'f', name: 'F', role: 'cook', x: 200, y: 100, path: [], task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } },
+        { id: 'm', name: 'M', role: 'janitor', x: 300, y: 100, path: [], task: { type: 'wash_item', washingStartedAt: 0 } },
+      ],
+    }, { x: 0, y: 0, zoom: 1 });
+    const fills = ctx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14);
+    expect(fills).toHaveLength(3);
+    expect(fills.map(fill => fill.h)).toEqual(expect.arrayContaining([
+      10.5, 5.6000000000000005, 12.6,
+    ]));
+  });
+
+  it('suppresses delivered-item drawing for overlapping chair geometry', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [{ id: 't1', x: 200, y: 200 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 205, y: 205 }],
+      customers: [{ id: 'c1', tableId: 't1', chairId: 'ch1' }],
+      kitchenStations: [], serviceTables: [], equipment: [], dishes: [{ id: 'toast', base: 'Bread' }],
+      serviceItems: [{ id: 'dish', kind: 'dish', menuItemId: 'toast', customerId: 'c1', state: 'delivered', x: 208, y: 208 }],
+    }, { x: 0, y: 0, zoom: 1 });
+    expect(ctx._calls.texts.some(call => call.text === '🍞')).toBe(false);
+  });
+
+  it('renders production cook progress from preparation start until kitchen completion', () => {
+    const station = { id: 'k1', equipmentId: 'eq1', x: 100, y: 100 };
+    const state = {
+      restaurant: { gameTime: 100 }, customers: [{ id: 'customer', state: 'waiting_for_items', dishId: 'dish' }],
+      queue: [], tables: [], chairs: [], floorDirt: [], washStations: [], serviceTables: [{ id: 'st1', x: 200, y: 100 }],
+      dishes: [{ id: 'dish', prepTime: 60, requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }], kitchenStations: [station],
+      staff: [{ id: 'cook', name: 'Cook', role: 'cook', morale: 80, x: 80, y: 120, path: [],
+        task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } }],
+      serviceItems: [{ id: 'food', kind: 'dish', menuItemId: 'dish', customerId: 'customer', state: 'ordered' }],
+    };
+    const preparing = updateStaff(state, 0);
+    expect(preparing.staff[0].task).toMatchObject({ type: 'prepare_dish', serviceItemId: 'food' });
+    expect(preparing.serviceItems[0]).toMatchObject({ state: 'preparing', preparationStartedAt: 100 });
+    const ctx = recordCtx();
+    drawStaffLayer(ctx, { ...preparing, restaurant: { gameTime: 130 } }, { x: 0, y: 0, zoom: 1 });
+    expect(ctx._calls.rects).toContainEqual(expect.objectContaining({ w: 1, h: 7 }));
+
+    const completed = processKitchen({ ...preparing, restaurant: { gameTime: 160 } });
+    expect(completed.staff[0].task).toBeNull();
+    expect(completed.serviceItems[0].state).toBe('on_service');
   });
 });
 
@@ -361,8 +472,11 @@ describe('drawStaffLayer', () => {
     ];
     const state = { staff, restaurant: { expansionLevel: 1 }, serviceItems: [{ id: 'f1', kind: 'dish', menuItemId: 'dish' }], dishes: [{ id: 'dish', base: 'Bread' }] };
     const ctx = recordCtx();
+    ctx.fillText = function fillText(text, x, y) {
+      this._calls.texts.push({ text, x, y, font: this.font });
+    };
     drawStaffLayer(ctx, state, camera);
-    expect(ctx._calls.texts.some(t => t.text === '🍞')).toBe(true);
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍞', font: '12px sans-serif' }));
   });
 
   it('shows the carried drink emoji when carrying a drink', () => {
@@ -389,8 +503,8 @@ describe('drawStaffLayer', () => {
       expect.objectContaining({ x: 500, y: 300, alpha: 0.6 }),
       expect.objectContaining({ x: 700, y: 350, alpha: 1 }),
     ]));
-    expect(ctx._calls.saves).toBe(3);
-    expect(ctx._calls.restores).toBe(3);
+    expect(ctx._calls.saves).toBe(5);
+    expect(ctx._calls.restores).toBe(5);
     expect(ctx._calls.lines).toEqual(expect.any(Array));
   });
 

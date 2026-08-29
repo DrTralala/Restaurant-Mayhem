@@ -9,10 +9,17 @@ describe('createInitialState', () => {
     expect(state.dishes[0].price).toBe(12);
   });
 
-  it('starts version 4 with Water and unified service items', () => {
+  it('starts version 5 with janitor and wash station state', () => {
     const state = createInitialState();
 
-    expect(state.version).toBe(4);
+    expect(state.version).toBe(5);
+    expect(state.floorDirt).toEqual([]);
+    expect(state.washStations).toEqual([
+      expect.objectContaining({ id: 'wash1', type: 'manual', w: 40, h: 40 }),
+    ]);
+    expect(state.staffSlots).toBe(7);
+    expect(state.staff.map(staff => staff.role)).toContain('janitor');
+    expect(state.staff).toHaveLength(5);
     expect(state.unlockedDrinkIds).toEqual(['water']);
     expect(state.serviceItems).toEqual([]);
     expect(state.staff.every(staff => staff.carryingServiceItemId === null
@@ -22,7 +29,7 @@ describe('createInitialState', () => {
   it('gives starter staff distinct names', () => {
     const names = createInitialState().staff.map(staff => staff.name);
 
-    expect(names).toEqual(['Marco', 'Sofia', 'Luca', 'Elena']);
+    expect(names).toEqual(['Marco', 'Sofia', 'Luca', 'Elena', 'Mia']);
     expect(new Set(names).size).toBe(names.length);
   });
 
@@ -32,6 +39,7 @@ describe('createInitialState', () => {
       ['Sofia', 'female'],
       ['Luca', 'male'],
       ['Elena', 'female'],
+      ['Mia', 'female'],
     ]);
   });
 
@@ -55,8 +63,8 @@ describe('createInitialState', () => {
   it('starts with one cook and three generic waiters', () => {
     const state = createInitialState();
 
-    expect(state.version).toBe(4);
-    expect(state.staff.map(staff => staff.role)).toEqual(['cook', 'waiter', 'waiter', 'waiter']);
+    expect(state.version).toBe(5);
+    expect(state.staff.map(staff => staff.role)).toEqual(['cook', 'waiter', 'waiter', 'waiter', 'janitor']);
     expect(state.cashierStations).toHaveLength(1);
     expect(state.cashierStations[0]).toMatchObject({ id: 'cashier1' });
     expect(state.staff.find(staff => staff.id === state.cashierStations[0].assignedStaffId))

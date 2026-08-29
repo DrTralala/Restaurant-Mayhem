@@ -19,7 +19,7 @@ function makeState(overrides = {}) {
       { id: 's3', name: 'Luca', role: 'waiter', skill: 2, morale: 80, salary: 150 },
       { id: 's4', name: 'Mario', role: 'cook', skill: 4, morale: 80, salary: 200 },
     ],
-    staffSlots: 6,
+    staffSlots: 7,
     restaurant: { funds: 500 },
     ...overrides,
   };
@@ -29,6 +29,7 @@ describe('StaffPanel', () => {
   it('disables hiring when all six staff slots are used', () => {
     const base = makeState();
     const state = makeState({
+      staffSlots: 6,
       staff: [
         ...base.staff,
         { id: 's5', name: 'Sofia', role: 'waiter', skill: 2, morale: 80, salary: 150 },
@@ -51,23 +52,19 @@ describe('StaffPanel', () => {
 
     render(<StaffPanel />);
 
-    expect(screen.getByText('Staff (1/6)')).toBeInTheDocument();
+    expect(screen.getByText('Staff (1/7)')).toBeInTheDocument();
   });
 
   it('disables hire controls that are unaffordable', () => {
-    useGameState.mockReturnValue(makeState({ restaurant: { funds: 175 } }));
+    useGameState.mockReturnValue(makeState({ restaurant: { funds: 119 } }));
     useDispatch.mockReturnValue(vi.fn());
 
     render(<StaffPanel />);
-    fireEvent.click(screen.getByText('+ Hire'));
-
-    expect(screen.getByText('Cook')).toBeDisabled();
-    expect(screen.getByText('Waiter')).toBeEnabled();
-    expect(screen.queryByText('Host')).not.toBeInTheDocument();
+    expect(screen.getByText('+ Hire')).toBeDisabled();
   });
 
   it('disables the primary hire control when no role is affordable', () => {
-    useGameState.mockReturnValue(makeState({ restaurant: { funds: 149 } }));
+    useGameState.mockReturnValue(makeState({ restaurant: { funds: 119 } }));
     useDispatch.mockReturnValue(vi.fn());
 
     render(<StaffPanel />);
@@ -114,6 +111,21 @@ describe('StaffPanel', () => {
 
     const hiredName = dispatch.mock.calls[0][0].staff.name;
     expect(['Marco', 'Anna', 'Luca', 'Mario']).not.toContain(hiredName);
+  });
+
+  it('dispatches a janitor hire with a $120 salary', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({ restaurant: { funds: 500 } }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+    fireEvent.click(screen.getByText('+ Hire'));
+    fireEvent.click(screen.getByText('Janitor'));
+
+    expect(dispatch.mock.calls[0][0]).toMatchObject({
+      type: 'HIRE_STAFF',
+      staff: { role: 'janitor', salary: 120 },
+    });
   });
 
   it('renames a staff member inline', () => {

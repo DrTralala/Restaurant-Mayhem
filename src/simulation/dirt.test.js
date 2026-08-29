@@ -1,0 +1,104 @@
+import { describe, expect, it } from 'vitest';
+import { getNextDirtId, updateDirt } from './dirt';
+import { buildBlockedCells, worldToCell } from './pathfinding';
+
+const baseState = {
+  floorDirt: [],
+  customers: [{ id: 'c1', state: 'seated', x: 200, y: 200, dirtFactor: 9, happiness: 80 }],
+  tables: [], chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
+  restaurant: { gameTime: 1000, reputation: 3 },
+};
+
+describe('updateDirt', () => {
+  it('generates the next dirt id after existing ids', () => {
+    expect(getNextDirtId([{ id: 'dirt-2' }, { id: 'dirt-9' }, { id: 'other' }])).toBe('dirt-10');
+  });
+
+  it('creates deterministic floor dirt when a customer reaches the threshold', () => {
+    const result = updateDirt(baseState, 60, () => 0.5);
+    expect(result.floorDirt).toHaveLength(1);
+    expect(result.floorDirt[0]).toMatchObject({ id: 'dirt-1', createdAt: 1000 });
+    expect(result.customers[0].dirtFactor).toBeCloseTo(0);
+  });
+
+  it('adds two dirt-factor units per minute while eating', () => {
+    const state = { ...baseState, customers: [{ ...baseState.customers[0], state: 'eating', dirtFactor: 0 }] };
+    expect(updateDirt(state, 60).customers[0].dirtFactor).toBe(2);
+  });
+
+  it('does not accumulate dirt factor for queued or leaving customers', () => {
+    const customers = [
+      { ...baseState.customers[0], id: 'queued', state: 'queued', dirtFactor: 4 },
+      { ...baseState.customers[0], id: 'leaving', state: 'leaving', dirtFactor: 4 },
+    ];
+    expect(updateDirt({ ...baseState, customers }, 60).customers.map(customer => customer.dirtFactor))
+      .toEqual([4, 4]);
+  });
+
+  it('places generated dirt outside blocked cells', () => {
+    const result = updateDirt(baseState, 60, () => 0.5);
+    const dirtCell = worldToCell(result.floorDirt[0]);
+    expect(buildBlockedCells(result).has(`${dirtCell.x},${dirtCell.y}`)).toBe(false);
+  });
+
+  it('reduces nearby customer happiness by 0.2 per minute', () => {
+    const state = { ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 0 }], floorDirt: [{ id: 'dirt-1', x: 210, y: 200 }] };
+    expect(updateDirt(state, 60).customers[0].happiness).toBeCloseTo(79.8);
+  });
+
+  it('uses a 120-unit radius and adds the happiness loss for multiple nearby messes', () => {
+    const state = {
+      ...baseState,
+      customers: [{ ...baseState.customers[0], dirtFactor: 0 }],
+      floorDirt: [
+        { id: 'dirt-1', x: 319, y: 200 },
+        { id: 'dirt-2', x: 200, y: 319 },
+        { id: 'dirt-3', x: 321, y: 200 },
+      ],
+    };
+    expect(updateDirt(state, 60).customers[0].happiness).toBeCloseTo(79.6);
+  });
+
+  it('caps happiness loss at one point per minute', () => {
+    const floorDirt = Array.from({ length: 8 }, (_, index) => ({ id: `dirt-${index + 1}`, x: 200 + index, y: 200 }));
+    expect(updateDirt({ ...baseState, floorDirt }, 60).customers[0].happiness).toBeCloseTo(79);
+  });
+
+  it('reduces reputation by 0.001 per minute per dirt spot', () => {
+    const floorDirt = [1, 2, 3, 4].map(index => ({ id: `dirt-${index}`, x: 700 + index * 20, y: 700 }));
+    expect(updateDirt({ ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 0 }], floorDirt }, 60).restaurant.reputation).toBeCloseTo(2.999);
+  });
+
+  it('exempts the first three messes from reputation loss', () => {
+    const floorDirt = [1, 2, 3].map(index => ({ id: `dirt-${index}`, x: 700 + index * 20, y: 700 }));
+    expect(updateDirt({ ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 0 }], floorDirt }, 60).restaurant.reputation).toBe(3);
+  });
+
+  it('charges reputation only for excess messes and caps the loss at 0.01 per minute', () => {
+    const floorDirt = Array.from({ length: 20 }, (_, index) => ({ id: `dirt-${index + 1}`, x: 700 + index * 20, y: 700 }));
+    expect(updateDirt({ ...baseState, floorDirt }, 60).restaurant.reputation).toBeCloseTo(2.99);
+  });
+
+  it('caps accumulation and recurring penalties at one minute for large game time', () => {
+    const floorDirt = Array.from({ length: 20 }, (_, index) => ({ id: `dirt-${index + 1}`, x: 210 + index, y: 200 }));
+    const state = {
+      ...baseState,
+      floorDirt,
+      customers: [{ ...baseState.customers[0], dirtFactor: 0 }],
+    };
+    const result = updateDirt(state, 600);
+    expect(result.customers[0].dirtFactor).toBe(1);
+    expect(result.customers[0].happiness).toBeCloseTo(79);
+    expect(result.restaurant.reputation).toBeCloseTo(2.99);
+  });
+
+  it('applies nearby happiness penalties using a table position when customer coordinates are absent', () => {
+    const state = {
+      ...baseState,
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1', dirtFactor: 0, happiness: 80 }],
+      tables: [{ id: 't1', x: 200, y: 200, status: 'occupied' }],
+      floorDirt: [{ id: 'dirt-1', x: 220, y: 220 }],
+    };
+    expect(updateDirt(state, 60).customers[0].happiness).toBeCloseTo(79.8);
+  });
+});

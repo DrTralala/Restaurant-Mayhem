@@ -15,7 +15,7 @@ const DISH_QUALITY_COST = 50;
 const TRAINING_COST = 100;
 const BONUS_COST = 50;
 const STARTING_DISH_QUALITY = 1;
-const STAFF_SALARIES = { cook: 200, waiter: 150 };
+const STAFF_SALARIES = { cook: 200, waiter: 150, janitor: 120 };
 const EXPANSION_COSTS = [0, 1000, 3000, 6000];
 
 function canAfford(state, cost) {
@@ -170,6 +170,17 @@ function placeItem(state, action) {
         state.staff,
         id,
       ),
+    };
+  }
+
+  if (action.itemType === 'automaticDishwasher') {
+    const washStations = state.washStations || [];
+    return {
+      ...nextState,
+      washStations: [...washStations, {
+        id: getNextNumericId(washStations, 'wash'), type: 'automatic',
+        x: placement.x, y: placement.y, w: 40, h: 40,
+      }],
     };
   }
 
@@ -426,15 +437,25 @@ function gameReducer(state, action) {
         .filter(id => {
           const chair = state.chairs.find(candidate => candidate.id === id);
           const table = chair && state.tables.find(candidate => candidate.id === chair.tableId);
-          return chair && table?.status === 'empty' && !state.customers.some(customer => customer.chairId === id);
+           return chair && table?.status === 'empty' && !state.customers.some(customer => customer.chairId === id);
+         }));
+      const selectedWashIds = new Set(action.items
+        .filter(item => item.type === 'washStation')
+        .map(item => item.id)
+        .filter(id => {
+          const station = (state.washStations || []).find(candidate => candidate.id === id);
+          return station?.type === 'automatic' && !(state.serviceItems || []).some(item =>
+            item.washStationId === id && ['queued_for_wash', 'washing'].includes(item.state));
         }));
       const removedChairs = state.chairs.filter(chair => selectedChairIds.has(chair.id) || selectedTableIds.has(chair.tableId));
-      const refund = Math.round((selectedTableIds.size * ITEM_PRICES.table + removedChairs.length * ITEM_PRICES.chair) * ITEM_SELL_RATIO);
+      const refund = Math.round((selectedTableIds.size * ITEM_PRICES.table + removedChairs.length * ITEM_PRICES.chair
+        + selectedWashIds.size * ITEM_PRICES.automaticDishwasher) * ITEM_SELL_RATIO);
       return {
         ...state,
         restaurant: { ...state.restaurant, funds: state.restaurant.funds + refund },
         tables: state.tables.filter(table => !selectedTableIds.has(table.id)),
         chairs: state.chairs.filter(chair => !selectedChairIds.has(chair.id) && !selectedTableIds.has(chair.tableId)),
+        washStations: (state.washStations || []).filter(station => !selectedWashIds.has(station.id)),
       };
     }
     case 'MOVE_CHAIR':
@@ -451,6 +472,16 @@ function gameReducer(state, action) {
           t.id === action.id ? { ...t, x: action.x, y: action.y } : t
         ),
       };
+    case 'MOVE_WASH_STATION': {
+      const station = (state.washStations || []).find(candidate => candidate.id === action.id);
+      const busy = (state.serviceItems || []).some(item => item.washStationId === action.id
+        && ['queued_for_wash', 'washing'].includes(item.state));
+      if (!station || busy) return state;
+      const withoutStation = { ...state, washStations: state.washStations.filter(item => item.id !== action.id) };
+      if (!validatePlacement(withoutStation, { itemType: 'automaticDishwasher', x: action.x, y: action.y }).valid) return state;
+      return { ...state, washStations: state.washStations.map(item => item.id === action.id
+        ? { ...item, x: action.x, y: action.y } : item) };
+    }
     case 'DELETE_TABLE':
       return {
         ...state,

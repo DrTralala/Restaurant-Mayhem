@@ -1,5 +1,6 @@
 import { DRINKS, getDrink } from '../data/drinks';
 import { getDishValueScore } from './balance';
+import { DIRTY_STATES } from './dishwashing';
 
 export function selectOrderKinds(roll) {
   if (roll < 0.75) return ['dish'];
@@ -93,6 +94,10 @@ function createServiceItem(serviceItems, customer, kind, menuItemId) {
     assignedStaffId: null,
     preparationStartedAt: null,
     readyAt: null,
+    dirtyAt: null,
+    washStationId: null,
+    washQueuedAt: null,
+    washStartedAt: null,
     x: null,
     y: null,
   };
@@ -155,7 +160,7 @@ export function allOrderedItemsDelivered(customer, serviceItems) {
 }
 
 function isPhysicalServiceItem(item) {
-  return ['ready', 'on_service', 'carried', 'delivered', 'to_clean'].includes(item.state);
+  return ['ready', 'on_service', 'carried', 'delivered', 'to_clean', ...DIRTY_STATES].includes(item.state);
 }
 
 export function hasValidDrinkReservation(state, item) {
@@ -184,12 +189,12 @@ export function normaliseServiceItemOwnership(state) {
   for (const item of state.serviceItems || []) {
     const key = `${item.customerId}:${item.kind}`;
     if (seen.has(key)) {
-      if (isPhysicalServiceItem(item)) kept.push({ ...item, state: 'to_clean' });
+       if (isPhysicalServiceItem(item)) kept.push({ ...item, state: DIRTY_STATES.has(item.state) ? item.state : 'to_clean' });
       continue;
     }
     const owner = customers.find(customer => customer.id === item.customerId);
     if (!customerIds.has(item.customerId) || owner.state === 'leaving') {
-      if (isPhysicalServiceItem(item)) kept.push({ ...item, state: 'to_clean' });
+       if (isPhysicalServiceItem(item)) kept.push({ ...item, state: DIRTY_STATES.has(item.state) ? item.state : 'to_clean' });
       continue;
     }
     if (['ordered', 'preparing'].includes(item.state) && item.kind === 'drink'
@@ -206,7 +211,8 @@ export function normaliseServiceItemOwnership(state) {
   const carrierByItem = new Map();
   let staff = (state.staff || []).map(worker => {
     const item = kept.find(candidate => candidate.id === worker.carryingServiceItemId);
-    if (!item || item.state !== 'carried') return { ...worker, carryingServiceItemId: null };
+    if (!item || !['carried', 'carried_dirty'].includes(item.state)
+      || (item.state === 'carried_dirty' && worker.role !== 'waiter')) return { ...worker, carryingServiceItemId: null };
     const owners = carrierByItem.get(item.id) || [];
     carrierByItem.set(item.id, [...owners, worker.id]);
     return worker;
@@ -215,10 +221,26 @@ export function normaliseServiceItemOwnership(state) {
   staff = staff.map(worker => uniqueCarriers.get(worker.carryingServiceItemId)
     ? worker
     : { ...worker, carryingServiceItemId: null });
-  const serviceItems = kept.map(item => item.state === 'carried'
+  let serviceItems = kept.map(item => item.state === 'carried'
     && uniqueCarriers.get(item.id) == null
     ? { ...item, state: 'to_clean' }
     : item);
+  const stationIds = new Set((state.washStations || []).map(station => station.id));
+  serviceItems = serviceItems.map(item => {
+    if (item.state === 'carried_dirty' && uniqueCarriers.get(item.id) == null) {
+      return item.tableId != null && (state.tables || []).some(table => table.id === item.tableId)
+        ? { ...item, state: 'dirty_at_table' }
+        : { ...item, state: 'queued_for_wash', washStationId: null };
+    }
+    if (item.state === 'washing' && !stationIds.has(item.washStationId)) {
+      return { ...item, state: 'queued_for_wash', washStationId: null, washStartedAt: null };
+    }
+    if (item.state === 'queued_for_wash' && item.washStationId != null
+      && !stationIds.has(item.washStationId)) {
+      return { ...item, washStationId: null, washStartedAt: null };
+    }
+    return item;
+  });
 
   const finalCustomers = customers.map(customer => {
     const selectedKinds = [customer.dishId ? 'dish' : null, customer.drinkId ? 'drink' : null].filter(Boolean);

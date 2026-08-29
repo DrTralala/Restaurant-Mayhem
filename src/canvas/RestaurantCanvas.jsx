@@ -138,7 +138,14 @@ export default function RestaurantCanvas({
               const item = m.items.find(candidate => candidate.type === 'chair' && candidate.id === chair.id);
               return item ? { ...chair, x: item.x, y: item.y } : chair;
             }),
+            washStations: (state.washStations || []).map(station => {
+              const item = m.items.find(candidate => candidate.type === 'washStation' && candidate.id === station.id);
+              return item ? { ...station, x: item.x, y: item.y } : station;
+            }),
           };
+        } else if (m.type === 'washStation') {
+          renderState = { ...state, washStations: (state.washStations || []).map(station =>
+            station.id === m.id ? { ...station, x: m.x, y: m.y } : station) };
         }
       }
 
@@ -325,12 +332,15 @@ export default function RestaurantCanvas({
       if (m.type === 'group') {
         dispatch({
           type: 'MOVE_ITEMS',
-          items: m.items.map(item => ({
+          items: m.items.filter(item => item.type !== 'washStation').map(item => ({
             ...item,
             x: snap(item.x, item.type === 'chair' ? CHAIR_GRID : GRID),
             y: snap(item.y, item.type === 'chair' ? CHAIR_GRID : GRID),
           })),
         });
+        for (const item of m.items.filter(candidate => candidate.type === 'washStation')) {
+          dispatch({ type: 'MOVE_WASH_STATION', id: item.id, x: snap(item.x), y: snap(item.y) });
+        }
         setSelectedItems([]);
       } else if (m.type === 'chair') {
         dispatch({
@@ -340,6 +350,8 @@ export default function RestaurantCanvas({
           y: snap(m.y, CHAIR_GRID),
           rotation: m.rotation,
         });
+      } else if (m.type === 'washStation') {
+        dispatch({ type: 'MOVE_WASH_STATION', id: m.id, x: snap(m.x), y: snap(m.y) });
       } else {
         dispatch({
           type: 'MOVE_TABLE',
@@ -385,7 +397,7 @@ export default function RestaurantCanvas({
       setSelectedStaffId(hit.data.id);
       setSelectedItems([]);
       tooltipRef.current = null;
-    } else if (hit && (hit.type === 'table' || hit.type === 'chair')) {
+    } else if (hit && (hit.type === 'table' || hit.type === 'chair' || hit.type === 'washStation')) {
       // Show context menu at click position
       setSelectedStaffId(null);
       setSelectedItems([]);
@@ -463,7 +475,8 @@ export default function RestaurantCanvas({
     const items = selectedItems.map(item => {
       const data = item.type === 'table'
         ? state.tables.find(table => table.id === item.id)
-        : state.chairs.find(chair => chair.id === item.id);
+        : item.type === 'chair' ? state.chairs.find(chair => chair.id === item.id)
+          : (state.washStations || []).find(station => station.id === item.id);
       return { ...item, x: data.x, y: data.y };
     });
     moveRef.current = {
@@ -478,6 +491,13 @@ export default function RestaurantCanvas({
     dispatch({ type: 'SELL_ITEMS', items: selectedItems });
     setSelectedItems([]);
   };
+
+  const menuWashStationBusy = menu?.type === 'washStation'
+    && (state.serviceItems || []).some(item => item.washStationId === menu.data.id
+      && ['queued_for_wash', 'washing'].includes(item.state));
+  const canMoveMenuEntity = !menuWashStationBusy;
+  const canSellMenuEntity = !menuWashStationBusy
+    && !(menu?.type === 'washStation' && menu.data.type === 'manual');
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -500,14 +520,18 @@ export default function RestaurantCanvas({
           minWidth: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
         }}>
           <div style={{ color: '#888', fontSize: 11, padding: '2px 8px', fontFamily: 'monospace' }}>
-            {menu.type === 'table' ? 'Dining table' : 'Chair'}
+            {menu.type === 'table' ? 'Dining table' : menu.type === 'chair' ? 'Chair' : 'Wash station'}
           </div>
-          <button onClick={handleMoveEntity} style={menuBtn}>
-            Move {menu.type === 'chair' ? '(R=rotate)' : ''}
-          </button>
-          <button onClick={handleDeleteEntity} style={{ ...menuBtn, color: '#d44' }}>
-            Sell
-          </button>
+          {canMoveMenuEntity && (
+            <button onClick={handleMoveEntity} style={menuBtn}>
+              Move {menu.type === 'chair' ? '(R=rotate)' : ''}
+            </button>
+          )}
+          {canSellMenuEntity && (
+            <button onClick={handleDeleteEntity} style={{ ...menuBtn, color: '#d44' }}>
+              Sell
+            </button>
+          )}
         </div>
       )}
 

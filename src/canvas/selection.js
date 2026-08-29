@@ -22,5 +22,8 @@ export function selectFurnitureInRect(state, rawRect) {
   const chairs = (state.chairs || [])
     .filter(chair => intersects(rect, { ...chair, w: 20, h: 20 }))
     .map(chair => ({ type: 'chair', id: chair.id }));
-  return [...tables, ...chairs];
+  const washStations = (state.washStations || [])
+    .filter(station => intersects(rect, { ...station, w: station.w || 40, h: station.h || 40 }))
+    .map(station => ({ type: 'washStation', id: station.id }));
+  return [...tables, ...chairs, ...washStations];
 }

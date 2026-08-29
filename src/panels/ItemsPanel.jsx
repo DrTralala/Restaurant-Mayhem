@@ -6,9 +6,10 @@ const ITEM_DESCRIPTIONS = {
   chair: 'Adds one seat to the newest table with an open chair position.',
   door: 'Adds another entrance and exit lane so guests can pass through faster.',
   cashierTable: 'A dedicated station permanently staffed by an available waiter.',
+  automaticDishwasher: 'Washes queued dishes automatically in three in-game minutes.',
 };
 
-const ITEMS = ['table', 'chair', 'door', 'cashierTable'].map(type => ({
+const ITEMS = ['table', 'chair', 'door', 'cashierTable', 'automaticDishwasher'].map(type => ({
   ...PLACEABLES[type],
   name: PLACEABLES[type].label,
   description: ITEM_DESCRIPTIONS[type],

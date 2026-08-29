@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import RestaurantCanvas from './RestaurantCanvas';
-import { drawStaffLayer } from './layers';
+import { drawFurnitureLayer, drawStaffLayer } from './layers';
 import { calculateFitCamera } from './camera';
 import { useDispatch, useGameState } from '../state/GameContext';
 import { findClickedEntity } from './interaction';
@@ -376,5 +376,84 @@ describe('RestaurantCanvas object movement', () => {
         { type: 'chair', id: 'ch1', x: 110, y: 80 },
       ],
     });
+  });
+
+  it('moves a selected wash station through the canvas action', () => {
+    const dispatch = vi.fn(); useDispatch.mockReturnValue(dispatch);
+    const station = { id: 'wash2', type: 'automatic', x: 20, y: 40, w: 40, h: 40 };
+    useGameState.mockReturnValue({ ...state, washStations: [station] });
+    findClickedEntity.mockReturnValue({ type: 'washStation', data: station, text: 'Automatic Dishwasher · 0 waiting' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    fireEvent.click(canvas, { clientX: 30, clientY: 50 });
+    fireEvent.click(screen.getByRole('button', { name: /Move/ }));
+    fireEvent.mouseMove(canvas, { clientX: 137, clientY: 83 });
+    fireEvent.click(canvas, { clientX: 137, clientY: 83 });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'MOVE_WASH_STATION', id: 'wash2', x: 140, y: 80 });
+  });
+
+  it('moves selected wash stations through explicit validated dispatches', () => {
+    const dispatch = vi.fn(); useDispatch.mockReturnValue(dispatch);
+    const station = { id: 'wash2', type: 'automatic', x: 20, y: 40, w: 40, h: 40 };
+    useGameState.mockReturnValue({ ...state, washStations: [station] });
+    findClickedEntity.mockReturnValue(null);
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    fireEvent.mouseDown(canvas, { clientX: 10, clientY: 10, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 100, clientY: 100, buttons: 1 });
+    fireEvent.mouseUp(canvas, { clientX: 100, clientY: 100 });
+    fireEvent.click(canvas, { clientX: 100, clientY: 100 });
+    fireEvent.click(screen.getByRole('button', { name: 'Move selected' }));
+    fireEvent.mouseMove(canvas, { clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(canvas, { clientX: 140, clientY: 150 });
+    fireEvent.click(canvas, { clientX: 140, clientY: 150 });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'MOVE_WASH_STATION', id: 'wash2', x: 60, y: 100 });
+  });
+
+  it('previews wash stations while moving a mixed selection', () => {
+    const station = { id: 'wash2', type: 'automatic', x: 20, y: 40, w: 40, h: 40 };
+    useGameState.mockReturnValue({ ...state,
+      tables: [{ id: 't1', x: 80, y: 40, status: 'empty' }], washStations: [station] });
+    findClickedEntity.mockReturnValue(null);
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { value: 600 });
+    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    fireEvent.mouseDown(canvas, { clientX: 10, clientY: 10, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 130, clientY: 100, buttons: 1 });
+    fireEvent.mouseUp(canvas, { clientX: 130, clientY: 100 });
+    fireEvent.click(canvas, { clientX: 130, clientY: 100 });
+    fireEvent.click(screen.getByRole('button', { name: 'Move selected' }));
+    fireEvent.mouseMove(canvas, { clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(canvas, { clientX: 140, clientY: 150 });
+
+    const frame = requestAnimationFrame.mock.calls.at(-1)[0];
+    frame(1000);
+    const previewState = drawFurnitureLayer.mock.calls.at(-1)[1];
+    expect(previewState.washStations[0]).toMatchObject({ id: 'wash2', x: 60, y: 90 });
+  });
+
+  it.each([
+    ['manual sink', { id: 'sink', type: 'manual', x: 20, y: 40, w: 40, h: 40 }, [], true, false],
+    ['busy automatic station', { id: 'auto', type: 'automatic', x: 20, y: 40, w: 40, h: 40 },
+      [{ id: 'dirty', state: 'queued_for_wash', washStationId: 'auto' }], false, false],
+  ])('hides impossible context actions for a %s', (_label, station, serviceItems, moveVisible, sellVisible) => {
+    useGameState.mockReturnValue({ ...state, washStations: [station], serviceItems });
+    findClickedEntity.mockReturnValue({ type: 'washStation', data: station, text: 'Wash station' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    fireEvent.click(container.querySelector('canvas'), { clientX: 30, clientY: 50 });
+    expect(Boolean(screen.queryByRole('button', { name: /Move/ }))).toBe(moveVisible);
+    expect(Boolean(screen.queryByRole('button', { name: 'Sell' }))).toBe(sellVisible);
+  });
+
+  it('labels a wash-station context menu as Wash station', () => {
+    const station = { id: 'wash2', type: 'automatic', x: 20, y: 40, w: 40, h: 40 };
+    useGameState.mockReturnValue({ ...state, washStations: [station] });
+    findClickedEntity.mockReturnValue({ type: 'washStation', data: station, text: 'Automatic Dishwasher · 0 waiting' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    fireEvent.click(container.querySelector('canvas'), { clientX: 20, clientY: 40 });
+    expect(screen.getByText('Wash station')).toBeInTheDocument();
+    expect(screen.queryByText('Chair')).not.toBeInTheDocument();
   });
 });

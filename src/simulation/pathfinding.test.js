@@ -19,6 +19,11 @@ describe('pathfinding', () => {
     expect(blocked.has('13,6')).toBe(true);
   });
 
+  it('blocks both cells occupied by a 40x40 wash station', () => {
+    const blocked = buildBlockedCells({ ...state, washStations: [{ id: 'wash1', x: 500, y: 300, w: 40, h: 40 }] });
+    for (const cell of ['25,15', '26,15', '25,16', '26,16']) expect(blocked.has(cell)).toBe(true);
+  });
+
   it('finds the nearest open cell adjacent to a blocked target', () => {
     const cleanState = {
       restaurant: { expansionLevel: 1 },

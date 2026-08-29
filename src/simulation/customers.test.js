@@ -55,14 +55,12 @@ describe('spawnCustomers', () => {
     expect(result.queue[0].state).toBe('queued');
   });
 
-  it('does not spawn during closed hours', () => {
+  it('spawns regardless of the time of day', () => {
     const state = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 3 * 3600 } };
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     let result = state;
-    for (let i = 0; i < 50; i++) {
-      result = spawnCustomers(result);
-    }
-    expect(result.customers.length).toBe(0);
-    expect(result.queue.length).toBe(0);
+    result = spawnCustomers(result, 1);
+    expect(result.queue.length).toBeGreaterThan(0);
   });
 
   it('includes archetype in spawned customer', () => {
@@ -271,7 +269,7 @@ describe('updateCustomers', () => {
         { id: 'c2', state: 'paying', x: 420, y: 300, patience: 100, paymentQueuedAt: 20 },
       ],
     };
-    const goals = [{ x: 780, y: 140 }, { x: 760, y: 140 }];
+    const goals = [{ x: 840, y: 180 }, { x: 840, y: 200 }];
     const initial = new Map(state.customers.map((customer, index) => [customer.id,
       Math.hypot(customer.x - goals[index].x, customer.y - goals[index].y)]));
     const histories = new Map(state.customers.map(customer => [customer.id, []]));
@@ -412,8 +410,8 @@ describe('updateCustomers', () => {
 
     const result = updateCustomers(state, 0);
 
-    expect(result.customers[0].checkoutPosition).toEqual({ x: 780, y: 140 });
-    expect(result.customers[1].checkoutPosition).toEqual({ x: 760, y: 140 });
+    expect(result.customers[0].checkoutPosition).toEqual({ x: 840, y: 180 });
+    expect(result.customers[1].checkoutPosition).toEqual({ x: 840, y: 200 });
     expect(result.customers.every(customer => customer.path.length > 0)).toBe(true);
   });
 
@@ -435,8 +433,8 @@ describe('updateCustomers', () => {
     const result = updateCustomers(state, 0);
 
     expect(result.customers.map(customer => customer.cashierStationId)).toEqual(['cashier2', 'cashier2']);
-    expect(result.customers[0].checkoutPosition).toEqual({ x: 380, y: 320 });
-    expect(result.customers[1].checkoutPosition).toEqual({ x: 360, y: 320 });
+    expect(result.customers[0].checkoutPosition).toEqual({ x: 440, y: 360 });
+    expect(result.customers[1].checkoutPosition).toEqual({ x: 440, y: 380 });
     expect(result.customers.every(customer => customer.path.length > 0)).toBe(true);
   });
 
@@ -463,6 +461,26 @@ describe('updateCustomers', () => {
 
     expect(result.customers.map(customer => customer.cashierStationId))
       .toEqual(['cashier1', 'cashier2', 'cashier1']);
+  });
+
+  it('reassigns a paying customer from an unstaffed station to the shortest staffed queue', () => {
+    const result = updateCustomers({
+      ...baseState,
+      chairs: [], kitchenStations: [], serviceTables: [],
+      staff: [{ id: 'w1', role: 'waiter' }, { id: 'w2', role: 'waiter' }],
+      cashierStations: [
+        { id: 'abandoned', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'missing' },
+        { id: 'busy', x: 600, y: 300, w: 80, h: 40, assignedStaffId: 'w1' },
+        { id: 'short', x: 400, y: 300, w: 80, h: 40, assignedStaffId: 'w2' },
+      ],
+      customers: [
+        { id: 'existing', state: 'paying', x: 600, y: 400, patience: 100, paymentQueuedAt: 10, cashierStationId: 'busy' },
+        { id: 'stale', state: 'paying', x: 700, y: 300, patience: 100, paymentQueuedAt: 20, cashierStationId: 'abandoned' },
+      ],
+    }, 0);
+    expect(result.customers.find(customer => customer.id === 'stale')).toMatchObject({
+      cashierStationId: 'short', checkoutPosition: { x: 440, y: 360 },
+    });
   });
 
   it('sets leaving state and reduces happiness when patience runs out', () => {

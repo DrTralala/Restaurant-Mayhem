@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { getNameGender } from '../canvas/characterAppearance';
 
-const ROLES = ['cook', 'waiter'];
+const ROLE_SALARIES = { cook: 200, waiter: 150, janitor: 120 };
+const ROLES = Object.keys(ROLE_SALARIES);
 const NAMES = ['Marco', 'Anna', 'Luca', 'Sofia', 'Giovanni', 'Isabella', 'Mario', 'Elena'];
 
 const smallBtn = {
@@ -17,7 +18,7 @@ export default function StaffPanel() {
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
   const staffFull = state.staff.length >= state.staffSlots;
-  const canAffordAnyRole = state.restaurant.funds >= 150;
+  const canAffordAnyRole = Object.values(ROLE_SALARIES).some(salary => state.restaurant.funds >= salary);
 
   const handleHire = (role) => {
     const usedNames = new Set(state.staff.map(staff => staff.name.toLowerCase()));
@@ -25,7 +26,7 @@ export default function StaffPanel() {
     const namePool = availableNames.length > 0 ? availableNames : NAMES;
     const name = namePool[Math.floor(Math.random() * namePool.length)];
     const skill = 1 + Math.floor(Math.random() * 3);
-    const salary = role === 'cook' ? 200 : 150;
+    const salary = ROLE_SALARIES[role];
     if (staffFull || state.restaurant.funds < salary) return;
     dispatch({
       type: 'HIRE_STAFF',
@@ -76,7 +77,7 @@ export default function StaffPanel() {
           <h4 style={{ marginBottom: 8 }}>Hire Staff</h4>
           {ROLES.map(role => (
             <button key={role} onClick={() => handleHire(role)}
-              disabled={staffFull || state.restaurant.funds < (role === 'cook' ? 200 : 150)} style={{
+              disabled={staffFull || state.restaurant.funds < ROLE_SALARIES[role]} style={{
               background: '#333', color: '#ccc', border: '1px solid #555',
               padding: '8px 14px', borderRadius: 4, cursor: 'pointer', marginRight: 8, marginBottom: 4,
             }}>

@@ -10,6 +10,10 @@ const taskLabels = {
   pickup_service_item: 'Collecting order',
   deliver_service_item: 'Delivering order',
   clean_service_item: 'Clearing service item',
+  clean_floor: 'Cleaning floor',
+  collect_dirty_item: 'Collecting dirty item',
+  deliver_dirty_item: 'Delivering dirty item',
+  wash_item: 'Washing item',
 };
 
 const actionButton = {

@@ -1,5 +1,6 @@
 import { useGameState } from '../state/GameContext';
 import { secondsToGameTime } from '../simulation/clock';
+import AnalogClock from './AnalogClock';
 
 export default function StatsBar() {
   const state = useGameState();
@@ -15,7 +16,10 @@ export default function StatsBar() {
       <span>{'★'.repeat(Math.floor(restaurant.reputation))}{'☆'.repeat(5 - Math.floor(restaurant.reputation))} {restaurant.reputation.toFixed(1)}</span>
       <span>Day {restaurant.day}</span>
       <span>{restaurant.totalServed} served</span>
-      <span>{secondsToGameTime(restaurant.gameTime)}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <AnalogClock gameTime={restaurant.gameTime} />
+        <span>{secondsToGameTime(restaurant.gameTime)}</span>
+      </span>
     </div>
   );
 }

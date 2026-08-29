@@ -64,6 +64,13 @@ export function getCashierWorkPosition(station) {
   return { x: station.x + station.w / 2, y: station.y - GRID_SIZE };
 }
 
+export function getCashierCustomerPosition(station, queueIndex = 0) {
+  return {
+    x: station.x + station.w / 2,
+    y: station.y + station.h + GRID_SIZE + queueIndex * GRID_SIZE,
+  };
+}
+
 export function getDefaultStaffPosition(role, index = 0, state = {}, staffId = null) {
   const currentState = state || {};
   const world = getRestaurantWorld(currentState.restaurant || {});

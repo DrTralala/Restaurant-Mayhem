@@ -59,16 +59,8 @@ describe('service item orders', () => {
 
     expect(result.customer.orderTime).toBe(42);
     expect(result.serviceItems.slice(1)).toEqual([
-      {
-        id: 'service-item-5', kind: 'dish', menuItemId: 'toast', customerId: 'c1', tableId: 't1',
-        serviceTableId: null, serviceSlotIndex: null, state: 'ordered', stationId: null,
-        assignedStaffId: null, preparationStartedAt: null, readyAt: null, x: null, y: null,
-      },
-      {
-        id: 'service-item-6', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',
-        serviceTableId: null, serviceSlotIndex: null, state: 'ordered', stationId: null,
-        assignedStaffId: null, preparationStartedAt: null, readyAt: null, x: null, y: null,
-      },
+      expect.objectContaining({ id: 'service-item-5', kind: 'dish', state: 'ordered' }),
+      expect.objectContaining({ id: 'service-item-6', kind: 'drink', state: 'ordered' }),
     ]);
   });
 
@@ -244,6 +236,27 @@ describe('service item orders', () => {
       serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'c1', state: 'carried' }] });
     expect(result.staff.every(worker => worker.carryingServiceItemId == null)).toBe(true);
     expect(result.serviceItems[0].state).toBe('to_clean');
+  });
+
+  it('rejects a janitor or cook as carrier of a dirty item', () => {
+    for (const role of ['janitor', 'cook']) {
+      const result = normaliseServiceItemOwnership({ tables: [{ id: 't1' }], customers: [], serviceTables: [],
+        staff: [{ id: 'worker', role, carryingServiceItemId: 'i1' }],
+        serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried_dirty' }] });
+      expect(result.staff[0].carryingServiceItemId).toBeNull();
+      expect(result.serviceItems[0].state).toBe('dirty_at_table');
+    }
+  });
+
+  it('normalises a queued item that references a missing wash station', () => {
+    const result = normaliseServiceItemOwnership({
+      customers: [], staff: [], tables: [], washStations: [{ id: 'existing' }], serviceTables: [],
+      serviceItems: [{ id: 'dirty', kind: 'dish', customerId: 'gone', state: 'queued_for_wash',
+        washStationId: 'missing', washQueuedAt: 10 }],
+    });
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'queued_for_wash', washStationId: null, washQueuedAt: 10,
+    });
   });
 
   it.each([

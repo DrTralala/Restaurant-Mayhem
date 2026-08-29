@@ -12,8 +12,8 @@ export function createInitialState() {
       day: 1,
       gameTime: 10 * 3600, // start at 10:00 AM
       totalServed: 0,
-      openHour: 10,
-      closeHour: 22,
+      openHour: 0,
+      closeHour: 24,
       expansionLevel: 1,
     },
     tables: [
@@ -48,6 +48,8 @@ export function createInitialState() {
       { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
       { id: 'k2', equipmentId: null, x: 200, y: 120 },
     ],
+    floorDirt: [],
+    washStations: [{ id: 'wash1', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],
     queue: [],              // customers waiting outside for a free table
     serviceItems: [],
     serviceTables: [
@@ -95,6 +97,10 @@ export function createInitialState() {
         salary: 150,
         carryingServiceItemId: null,
       },
+      {
+        id: 'starter-janitor', name: 'Mia', gender: 'female', role: 'janitor',
+        skill: 2, morale: 80, salary: 120, carryingServiceItemId: null,
+      },
     ],
     dishes: [
       {
@@ -118,12 +124,12 @@ export function createInitialState() {
     milestones: MILESTONES,
     recipeSlots: 1,
     unlockedDrinkIds: ['water'],
-    staffSlots: 6,
+    staffSlots: 7,
     completedCustomers: [],
     dailyHistory: [],
     notifications: [],
     speed: 1,
     paused: false,
-    version: 4,
+    version: 5,
   };
 }

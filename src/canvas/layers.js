@@ -2,40 +2,75 @@ import { getDoors, getRestaurantWorld, getQueuePosition, getDefaultStaffPosition
 import { getPlacementRect } from '../simulation/placement';
 import { getCharacterPalette } from './characterAppearance';
 import { getServiceItemEmoji } from './serviceItemEmoji';
+import { getChairFacingRadians, getPlaceSettingPositions } from './tableGeometry';
+import { ACTIVITY_DURATIONS, getRemainingFraction } from '../simulation/activity';
+import { getUpgradeEffect } from '../simulation/balance';
+
+function drawVerticalProgress(ctx, x, y, remaining) {
+  if (!Number.isFinite(remaining)) return;
+  const height = 14;
+  const filled = height * Math.min(1, Math.max(0, remaining));
+  ctx.save(); ctx.strokeStyle = '#8a6a00'; ctx.strokeRect(x, y, 3, height);
+  ctx.fillStyle = '#ffd400'; ctx.fillRect(x + 1, y + height - filled, 1, filled); ctx.restore();
+}
+
+function staffProgress(state, staff) {
+  if (!staff.task || staff.path?.length) return null;
+  let duration = { take_order: ACTIVITY_DURATIONS.takeOrder, take_payment: ACTIVITY_DURATIONS.takePayment,
+    clean_floor: ACTIVITY_DURATIONS.wipeFloor, wash_item: ACTIVITY_DURATIONS.manualWash }[staff.task.type];
+  let started = staff.task.startedAt ?? staff.task.cleaningStartedAt ?? staff.task.washingStartedAt;
+  const item = (state.serviceItems || []).find(candidate => candidate.id === staff.task.serviceItemId);
+  if (staff.task.type === 'prepare_drink') duration = ACTIVITY_DURATIONS.prepareDrink;
+  if (staff.task.type === 'prepare_dish') {
+    const dish = (state.dishes || []).find(candidate => candidate.id === item?.menuItemId);
+    const station = (state.kitchenStations || []).find(candidate => candidate.id === staff.task.stationId);
+    const equipment = (state.equipment || []).find(candidate => candidate.id === station?.equipmentId);
+    duration = (dish?.prepTime || 60) / ((equipment?.speedMultiplier || 1)
+      * (1 + getUpgradeEffect(state, 'globalSpeed')));
+  }
+  if (item?.preparationStartedAt != null) started = item.preparationStartedAt;
+  return getRemainingFraction(state.restaurant?.gameTime, started, duration);
+}
 
 function animationOffset(id = '') {
   return [...String(id)].reduce((total, character) => total + character.charCodeAt(0), 0) * 0.17;
 }
 
-function drawStickFigure(ctx, x, y, color, { seated = false, walking = false, cleaning = false, timeMs = 0, reducedMotion = false, id = '' } = {}) {
+function drawStickFigure(ctx, x, y, color, { seated = false, walking = false, cleaning = false, timeMs = 0, reducedMotion = false, id = '', scale = 1, rotation = 0 } = {}) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+  ctx.scale(scale, scale);
+  const localX = 0;
+  const localY = 0;
   const stride = walking && !cleaning && !reducedMotion
     ? Math.sin(timeMs * 0.012 + animationOffset(id)) * 4
     : 0;
   const wipe = cleaning && !reducedMotion
     ? Math.sin(timeMs * 0.012 + animationOffset(id)) * 5
     : 0;
-  const leftHandX = cleaning ? x + 3 + wipe : x - 8;
-  const rightHandX = cleaning ? x + 9 + wipe : x + 8;
-  const handY = cleaning ? y + 12 : y + 10;
+  const leftHandX = cleaning ? localX + 3 + wipe : localX - 8;
+  const rightHandX = cleaning ? localX + 9 + wipe : localX + 8;
+  const handY = cleaning ? localY + 12 : localY + 10;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
   ctx.lineWidth = 2;
 
   ctx.beginPath();
-  ctx.arc(x, y, 4, 0, Math.PI * 2);
+  ctx.arc(localX, localY, 4, 0, Math.PI * 2);
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.moveTo(x, y + 4);
-  ctx.lineTo(x, y + 14);
-  ctx.moveTo(x, y + 7);
+  ctx.moveTo(localX, localY + 4);
+  ctx.lineTo(localX, localY + 14);
+  ctx.moveTo(localX, localY + 7);
   ctx.lineTo(leftHandX, handY + stride);
-  ctx.moveTo(x, y + 7);
+  ctx.moveTo(localX, localY + 7);
   ctx.lineTo(rightHandX, handY - stride);
-  ctx.moveTo(x, y + 14);
-  ctx.lineTo(x - 6, seated ? y + 15 : y + 22 - stride);
-  ctx.moveTo(x, y + 14);
-  ctx.lineTo(x + 6, seated ? y + 15 : y + 22 + stride);
+  ctx.moveTo(localX, localY + 14);
+  ctx.lineTo(localX - 6, seated ? localY + 15 : localY + 22 - stride);
+  ctx.moveTo(localX, localY + 14);
+  ctx.lineTo(localX + 6, seated ? localY + 15 : localY + 22 + stride);
   ctx.stroke();
 
   // Hands remain visible at small canvas scales.
@@ -50,6 +85,7 @@ function drawStickFigure(ctx, x, y, color, { seated = false, walking = false, cl
     ctx.lineTo(rightHandX + 2, handY + 3);
     ctx.stroke();
   }
+  ctx.restore();
 }
 
 function drawMenu(ctx, x, y) {
@@ -207,8 +243,16 @@ export function drawFurnitureLayer(ctx, state, camera) {
       ctx.fillRect(station.x + 5, station.y + 5, 30, 30);
       if (eq) {
         ctx.fillStyle = '#fff';
-        ctx.font = '8px monospace';
-        ctx.fillText(eq.name, station.x + 8, station.y + 25);
+        let fontSize = 8;
+        do {
+          ctx.font = `${fontSize}px monospace`;
+          fontSize -= 1;
+        } while (fontSize >= 5 && ctx.measureText(eq.name).width > 26);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(eq.name, station.x + 20, station.y + 20);
+        ctx.textAlign = 'start';
+        ctx.textBaseline = 'alphabetic';
       }
     }
   }
@@ -218,15 +262,56 @@ export function drawFurnitureLayer(ctx, state, camera) {
     ctx.fillStyle = '#4a6a4a';
     ctx.fillRect(st.x, st.y, 120, 40);
     ctx.fillStyle = '#aaa';
-    ctx.font = '8px monospace';
-    ctx.fillText('SERVICE', st.x + 30, st.y + 24);
+     ctx.font = '8px monospace';
+     ctx.textAlign = 'center';
+     ctx.textBaseline = 'middle';
+     ctx.fillText('SERVICE', st.x + 60, st.y + 20);
+     ctx.textAlign = 'start';
+     ctx.textBaseline = 'alphabetic';
+  }
+
+  ctx.font = '10px sans-serif';
+  for (const dirt of state.floorDirt || []) {
+    if (Number.isFinite(dirt.x) && Number.isFinite(dirt.y)) ctx.fillText('💦', dirt.x - 5, dirt.y + 5);
+  }
+  for (const station of state.washStations || []) {
+    const w = station.w || 40, h = station.h || 40;
+    ctx.fillStyle = station.type === 'automatic' ? '#536b75' : '#466b62';
+    ctx.fillRect(station.x, station.y, w, h); ctx.strokeStyle = '#9ab0aa'; ctx.strokeRect(station.x, station.y, w, h);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(station.type === 'automatic' ? 'AUTO' : 'SINK', station.x + w / 2, station.y + h / 2);
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+    const items = (state.serviceItems || []).filter(item => item.washStationId === station.id
+      && ['queued_for_wash', 'washing'].includes(item.state));
+    if (items.length > 1) ctx.fillText(`×${items.length}`, station.x + w + 2, station.y + 10);
+    const active = items.find(item => item.state === 'washing');
+    if (active) drawVerticalProgress(ctx, station.x + w + 2, station.y + 18,
+      getRemainingFraction(state.restaurant?.gameTime, active.washStartedAt,
+        station.type === 'automatic' ? ACTIVITY_DURATIONS.automaticWash : ACTIVITY_DURATIONS.manualWash));
   }
 
   for (const item of Array.isArray(state.serviceItems) ? state.serviceItems : []) {
     if (!['on_service', 'delivered'].includes(item.state)
       || !Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
     ctx.fillStyle = '#fff';
-    ctx.font = '16px sans-serif';
+     ctx.font = '10px sans-serif';
+     if (item.state === 'delivered') {
+       const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
+       const chair = customer && (state.chairs || []).find(candidate => candidate.id === customer.chairId);
+       const table = customer && (state.tables || []).find(candidate => candidate.id === customer.tableId);
+       if (chair && table) {
+         const kinds = [...new Set((state.serviceItems || [])
+           .filter(candidate => candidate.customerId === item.customerId && candidate.state === 'delivered')
+           .map(candidate => candidate.kind))];
+         const positions = getPlaceSettingPositions(table, chair, kinds);
+         const position = positions[item.kind];
+          if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+            ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);
+            continue;
+          }
+          continue;
+        }
+     }
     ctx.fillText(getServiceItemEmoji(item, state.dishes || []), item.x, item.y);
   }
 
@@ -271,7 +356,11 @@ export function drawPlacementPreview(ctx, state, camera, placement) {
   } else if (placement.itemType === 'serviceTable') {
     ctx.fillStyle = '#ddd';
     ctx.font = '8px monospace';
-    ctx.fillText('SERVICE', rect.x + 30, rect.y + 24);
+     ctx.textAlign = 'center';
+     ctx.textBaseline = 'middle';
+     ctx.fillText('SERVICE', rect.x + rect.w / 2, rect.y + rect.h / 2);
+     ctx.textAlign = 'start';
+     ctx.textBaseline = 'alphabetic';
   }
 
   ctx.restore();
@@ -294,10 +383,11 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
     drawStickFigure(ctx, x, y, palette.figure, {
       id: s.id,
       walking: Boolean(s.path?.length),
-      cleaning: s.task?.type === 'clean_table' && !s.path?.length,
+      cleaning: ['clean_table', 'clean_floor', 'wash_item'].includes(s.task?.type) && !s.path?.length,
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
     });
+    drawVerticalProgress(ctx, x + 14, y - 7, staffProgress(state, s));
 
     ctx.fillStyle = palette.staffName;
     ctx.font = '8px monospace';
@@ -314,7 +404,7 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
       : null;
     if (carriedItem) {
       ctx.fillStyle = '#fff';
-      ctx.font = '16px sans-serif';
+      ctx.font = '12px sans-serif';
       ctx.fillText(getServiceItemEmoji(carriedItem, state.dishes || []), x + 12, y - 14);
     }
   }
@@ -355,6 +445,8 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       : 1;
     drawStickFigure(ctx, cx, cy, getCharacterPalette(c).figure, {
       seated,
+      scale: seated ? 0.7 : 1,
+      rotation: seated ? getChairFacingRadians(chair?.rotation ?? 0) : 0,
       walking: c.state === 'leaving'
         ? !renderOptions.reducedMotion
         : c.state === 'guided' && Boolean(c.path?.length),
@@ -363,6 +455,10 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       reducedMotion: renderOptions.reducedMotion,
     });
     if (deciding) drawMenu(ctx, cx, cy);
+    const consuming = c.state === 'eating' && !c.path?.length;
+    drawVerticalProgress(ctx, cx + 14, cy - 7, consuming
+      ? getRemainingFraction(state.restaurant?.gameTime, c.consumptionStartedAt, c.consumptionDuration)
+      : null);
     ctx.restore();
   }
 
@@ -373,6 +469,7 @@ export function drawSelectionLayer(ctx, state, camera, selectedItems = []) {
   if (!selectedItems.length) return;
   const selectedTables = new Set(selectedItems.filter(item => item.type === 'table').map(item => item.id));
   const selectedChairs = new Set(selectedItems.filter(item => item.type === 'chair').map(item => item.id));
+  const selectedWashStations = new Set(selectedItems.filter(item => item.type === 'washStation').map(item => item.id));
 
   ctx.save();
   ctx.translate(camera.x, camera.y);
@@ -384,6 +481,9 @@ export function drawSelectionLayer(ctx, state, camera, selectedItems = []) {
   }
   for (const chair of state.chairs) {
     if (selectedChairs.has(chair.id)) ctx.strokeRect(chair.x - 3, chair.y - 3, 26, 26);
+  }
+  for (const station of state.washStations || []) {
+    if (selectedWashStations.has(station.id)) ctx.strokeRect(station.x - 3, station.y - 3, 46, 46);
   }
   ctx.restore();
 }

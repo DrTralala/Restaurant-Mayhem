@@ -1,6 +1,6 @@
 import { buildOccupiedCharacterCells, findAdjacentOpenCells, findPath, findPathWithDynamicFallback, worldToCell } from './pathfinding';
 import { ensureStaffRuntime, hasArrived, moveCharacterWithRecovery, planCharacterPath } from './movement';
-import { getCashierWorkPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
+import { getCashierCustomerPosition, getCashierWorkPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
 import { clampReputation, getTipRate, getUpgradeEffect } from './balance';
 import { getAssignedCashierStation } from './cashiers';
 import { getDrink } from '../data/drinks';
@@ -12,6 +12,8 @@ import {
   normaliseServiceItemOwnership,
   hasValidDrinkReservation,
 } from './serviceItems';
+import { ACTIVITY_DURATIONS } from './activity';
+import { markCustomerItemsDirty, releaseClearedTables } from './dishwashing';
 
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
   return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
@@ -104,13 +106,47 @@ function leavingFields(customer) {
 }
 
 function targetForRectOrCurrent(state, rect, staff) {
-  const path = targetForRect(state, rect, staff);
-  if (path.length) return path;
-
   const current = worldToCell(staff);
   const alreadyAdjacent = findAdjacentOpenCells(state, rect, current)
     .some(candidate => candidate.x === current.x && candidate.y === current.y);
-  return alreadyAdjacent ? [] : null;
+  if (alreadyAdjacent) return [];
+
+  const path = targetForRect(state, rect, staff);
+  return path.length ? path : null;
+}
+
+function washDuration(station) {
+  return station.type === 'automatic'
+    ? ACTIVITY_DURATIONS.automaticWash
+    : ACTIVITY_DURATIONS.manualWash;
+}
+
+function projectedWashWorkload(state, station, staff, serviceItems, allStaff) {
+  const duration = washDuration(station);
+  const active = serviceItems.find(item => item.state === 'washing' && item.washStationId === station.id);
+  const activeRemaining = active && Number.isFinite(active.washStartedAt)
+    && Number.isFinite(state.restaurant?.gameTime)
+    ? Math.max(0, duration - (state.restaurant.gameTime - active.washStartedAt))
+    : active ? duration : 0;
+  const queuedCount = serviceItems.filter(item => item.state === 'queued_for_wash'
+    && item.washStationId === station.id).length;
+  const pendingDeliveries = (allStaff || state.staff || []).filter(worker => worker.id !== staff.id
+    && worker.task?.type === 'deliver_dirty_item'
+    && worker.task.washStationId === station.id).length;
+  return activeRemaining + (queuedCount + pendingDeliveries) * duration;
+}
+
+function selectWashStation(state, staff, serviceItems, allStaff) {
+  return (state.washStations || [])
+    .map(station => ({
+      station,
+      path: targetForRectOrCurrent(state, station, staff),
+      workload: projectedWashWorkload(state, station, staff, serviceItems, allStaff),
+    }))
+    .filter(candidate => candidate.path !== null)
+    .sort((left, right) => left.workload - right.workload
+      || left.path.length - right.path.length
+      || String(left.station.id).localeCompare(String(right.station.id)))[0] || null;
 }
 
 function hasExactDrinkReservation(staff, item, serviceTables) {
@@ -141,14 +177,67 @@ function clearDrinkReservation(serviceItems, serviceItemId) {
     : item);
 }
 
-function assignTask({ state, staff, allStaff, customers, queue, tables, serviceItems, claimedCustomerIds, claimedServiceItemIds, claimedTableIds }) {
+function assignTask({ state, staff, allStaff, customers, queue, tables, serviceItems, claimedCustomerIds, claimedServiceItemIds, claimedTableIds, claimedDirtIds }) {
   const cashierStation = staff.role === 'waiter'
     ? getAssignedCashierStation(state.cashierStations, staff.id)
     : null;
 
+  if (staff.role === 'janitor') {
+    const dirt = (state.floorDirt || [])
+      .filter(candidate => !claimedDirtIds?.has(candidate.id))
+      .map(candidate => ({
+        dirt: candidate,
+        path: targetForRectOrCurrent(state, { x: candidate.x - 6, y: candidate.y - 6, w: 12, h: 12 }, staff),
+      }))
+      .filter(candidate => candidate.path)
+      .sort((a, b) => a.path.length - b.path.length)[0];
+    if (dirt) {
+      return {
+        staff: { ...staff, path: dirt.path, task: { type: 'clean_floor', dirtId: dirt.dirt.id } },
+        claimedDirtId: dirt.dirt.id,
+      };
+    }
+    const manualStations = (state.washStations || []).filter(station => station.type === 'manual');
+    const washStationIds = new Set(manualStations.map(station => station.id));
+    const activeWashStations = new Set((allStaff || state.staff || [])
+      .filter(worker => worker.id !== staff.id && worker.task?.type === 'wash_item')
+      .map(worker => worker.task.washStationId));
+    const washItems = serviceItems
+      .filter(item => item.state === 'queued_for_wash'
+        && (item.washStationId == null || washStationIds.has(item.washStationId))
+        && !claimedServiceItemIds?.has(item.id))
+      .sort((a, b) => (a.washQueuedAt ?? 0) - (b.washQueuedAt ?? 0)
+        || String(a.id).localeCompare(String(b.id)));
+    for (const washItem of washItems) {
+      const candidateStations = washItem.washStationId == null
+        ? manualStations
+        : manualStations.filter(station => station.id === washItem.washStationId);
+      const stationChoice = candidateStations
+        .filter(station => !serviceItems.some(candidate => candidate.state === 'washing'
+          && candidate.washStationId === station.id)
+          && !activeWashStations.has(station.id))
+        .map(station => ({ station, path: targetForRectOrCurrent(state, station, staff) }))
+        .filter(candidate => candidate.path !== null)
+        .sort((left, right) => left.path.length - right.path.length
+          || String(left.station.id).localeCompare(String(right.station.id)))[0];
+      if (stationChoice) {
+        const { station, path } = stationChoice;
+        return {
+          staff: { ...staff, path, task: { type: 'wash_item', serviceItemId: washItem.id, washStationId: station.id } },
+          serviceItems: washItem.washStationId == null
+            ? serviceItems.map(item => item === washItem ? { ...item, washStationId: station.id } : item)
+            : serviceItems,
+          claimedServiceItemId: washItem.id,
+        };
+      }
+    }
+    return null;
+  }
+
   if (cashierStation) {
     const paying = customers
-      .filter(customer => customer.state === 'paying' && (!claimedCustomerIds || !claimedCustomerIds.has(customer.id)))
+      .filter(customer => customer.state === 'paying' && customer.paymentReady
+        && (!claimedCustomerIds || !claimedCustomerIds.has(customer.id)))
       .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0));
     const payingCustomer = paying.find(customer => customer.cashierStationId === cashierStation.id)
       || paying.find(customer => customer.cashierStationId == null);
@@ -179,6 +268,16 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
   if (staff.role === 'waiter') {
     if (staff.carryingServiceItemId != null) {
       const item = serviceItems.find(candidate => candidate.id === staff.carryingServiceItemId);
+      if (item?.state === 'carried_dirty') {
+        const stationChoice = selectWashStation(state, staff, serviceItems, allStaff);
+        if (stationChoice) {
+          return {
+            staff: { ...staff, path: stationChoice.path, task: { type: 'deliver_dirty_item', serviceItemId: item.id, washStationId: stationChoice.station.id } },
+            claimedServiceItemId: item.id,
+          };
+        }
+        return null;
+      }
       const customer = item && customers.find(candidate => candidate.id === item.customerId);
       const table = item && tables.find(candidate => candidate.id === item.tableId);
       const path = table ? targetForTable(state, table, staff) : [];
@@ -275,6 +374,20 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
             }
             : item),
           claimedServiceItemId: pendingDrink.id,
+        };
+      }
+    }
+
+    const dirtyItem = serviceItems
+      .filter(item => item.state === 'dirty_at_table' && (!claimedServiceItemIds?.has(item.id)))
+      .sort((a, b) => (a.dirtyAt ?? 0) - (b.dirtyAt ?? 0))[0];
+    if (dirtyItem) {
+      const table = tables.find(candidate => candidate.id === dirtyItem.tableId);
+      const path = table ? targetForRectOrCurrent(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff) : null;
+      if (path !== null) {
+        return {
+          staff: { ...staff, path, task: { type: 'collect_dirty_item', serviceItemId: dirtyItem.id, tableId: dirtyItem.tableId } },
+          claimedServiceItemId: dirtyItem.id,
         };
       }
     }
@@ -461,6 +574,12 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
   if (staff.task.type === 'take_order') {
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
     if (!customer || customer.state !== 'seated') return { staff: completedStaff, customers, queue, tables, serviceItems };
+    if (staff.task.startedAt == null) {
+      return { staff: { ...staff, path: [], task: { ...staff.task, startedAt: state.restaurant.gameTime } }, queue, tables, serviceItems, customers };
+    }
+    if (state.restaurant.gameTime - staff.task.startedAt < ACTIVITY_DURATIONS.takeOrder) {
+      return { staff: { ...staff, path: [] }, queue, tables, serviceItems, customers };
+    }
     const ordered = createCustomerOrder(
       { ...state, serviceItems },
       customer,
@@ -479,6 +598,19 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
   if (staff.task.type === 'take_payment') {
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
     if (!customer || customer.state !== 'paying') return { staff: completedStaff, customers, queue, tables, serviceItems };
+    const station = (state.cashierStations || []).find(candidate => candidate.id === staff.task.stationId);
+    const customerPosition = station ? getCashierCustomerPosition(station, 0) : null;
+    const cashierArrived = station && Math.hypot(staff.x - getCashierWorkPosition(station).x, staff.y - getCashierWorkPosition(station).y) <= 2;
+    const customerArrived = customerPosition && Math.hypot(customer.x - customerPosition.x, customer.y - customerPosition.y) <= 2;
+    if (!customer.paymentReady || !cashierArrived || !customerArrived) {
+      return { staff: { ...completedStaff, path: [] }, customers, queue, tables, serviceItems };
+    }
+    if (staff.task.startedAt == null) {
+      return { staff: { ...staff, path: [], task: { ...staff.task, startedAt: state.restaurant.gameTime } }, customers, queue, tables, serviceItems };
+    }
+    if (state.restaurant.gameTime - staff.task.startedAt < ACTIVITY_DURATIONS.takePayment) {
+      return { staff: { ...staff, path: [] }, customers, queue, tables, serviceItems };
+    }
     const dishPrice = (state.dishes || []).find(candidate => candidate.id === customer.dishId)?.price || 0;
     const drinkPrice = getDrink(customer.drinkId)?.price || 0;
     const price = dishPrice + drinkPrice;
@@ -497,19 +629,17 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     };
     const remainingAtTable = customers.some(candidate => candidate.id !== customer.id && candidate.tableId === customer.tableId && candidate.state !== 'leaving');
     const carriedServiceItemIds = serviceItems
-      .filter(item => item.customerId === customer.id && item.state === 'carried')
+      .filter(item => item.customerId === customer.id && ['carried', 'carried_dirty'].includes(item.state))
       .map(item => item.id);
     return {
       staff: completedStaff, queue,
       customers: customers.map(candidate => candidate.id === customer.id
         ? leavingFields({ ...candidate, departureReason: 'served' })
         : candidate),
-       serviceItems: serviceItems.filter(item => item.customerId !== customer.id
-         || !['ordered', 'preparing'].includes(item.state)).map(item =>
-           item.customerId === customer.id && ['delivered', 'carried', 'on_service'].includes(item.state)
-             ? { ...item, state: 'to_clean' } : item),
+       serviceItems: markCustomerItemsDirty(serviceItems.filter(item => item.customerId !== customer.id
+          || !['ordered', 'preparing'].includes(item.state)), customer.id, state.restaurant.gameTime),
         clearCarriedServiceItemIds: carriedServiceItemIds,
-      tables: tables.map(table => table.id === customer.tableId && !remainingAtTable ? { ...table, status: 'dirty' } : table),
+       tables: tables.map(table => table.id === customer.tableId && !remainingAtTable ? { ...table, status: 'dirty' } : table),
       completedCustomers: [...(state.completedCustomers || []), payment],
       restaurant: {
         ...state.restaurant,
@@ -533,9 +663,32 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     if (state.restaurant.gameTime - staff.task.cleaningStartedAt < 2) {
       return { staff: { ...staff, path: [] }, queue, customers, serviceItems, tables };
     }
+    const hasDirtyItems = serviceItems.some(item => item.tableId === staff.task.tableId && item.state === 'dirty_at_table');
+    if (hasDirtyItems || customers.some(customer => customer.tableId === staff.task.tableId
+      && customer.state !== 'leaving' && customer.state !== 'paying')) {
+      return { staff: { ...completedStaff, path: [] }, queue, customers, serviceItems, tables };
+    }
     return {
       staff: { ...completedStaff, path: [] }, queue, customers, serviceItems,
       tables: tables.map(t => t.id === staff.task.tableId ? { ...t, status: 'empty' } : t),
+    };
+  }
+
+  if (staff.task.type === 'clean_floor') {
+    const dirt = (state.floorDirt || []).find(candidate => candidate.id === staff.task.dirtId);
+    if (!dirt) return { staff: { ...completedStaff, path: [] }, queue, customers, tables, serviceItems, floorDirt: state.floorDirt || [] };
+    if (staff.task.cleaningStartedAt == null) {
+      return {
+        staff: { ...staff, path: [], task: { ...staff.task, cleaningStartedAt: state.restaurant.gameTime } },
+        queue, customers, tables, serviceItems, floorDirt: state.floorDirt || [],
+      };
+    }
+    if (state.restaurant.gameTime - staff.task.cleaningStartedAt < ACTIVITY_DURATIONS.wipeFloor) {
+      return { staff: { ...staff, path: [] }, queue, customers, tables, serviceItems, floorDirt: state.floorDirt || [] };
+    }
+    return {
+      staff: { ...completedStaff, path: [] }, queue, customers, tables, serviceItems,
+      floorDirt: (state.floorDirt || []).filter(candidate => candidate.id !== dirt.id),
     };
   }
 
@@ -623,6 +776,71 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     };
   }
 
+  if (staff.task.type === 'collect_dirty_item') {
+    const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
+    const table = tables.find(candidate => candidate.id === item?.tableId);
+    if (!item || item.state !== 'dirty_at_table' || !table || staff.carryingServiceItemId != null) {
+      return { staff: { ...completedStaff, carryingServiceItemId: null }, queue, tables, customers, serviceItems };
+    }
+    const pickupPath = targetForRectOrCurrent(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff);
+    if (pickupPath === null) {
+      return { staff: { ...completedStaff, path: [], carryingServiceItemId: null }, queue, tables, customers, serviceItems };
+    }
+    if (pickupPath.length) {
+      return { staff: { ...staff, path: pickupPath }, queue, tables, customers, serviceItems };
+    }
+    const carriedItems = serviceItems.map(candidate => candidate.id === item.id
+      ? { ...candidate, state: 'carried_dirty' } : candidate);
+    const stationChoice = selectWashStation(state, staff, carriedItems, state.staff);
+    return {
+      staff: { ...staff, task: stationChoice ? { type: 'deliver_dirty_item', serviceItemId: item.id, washStationId: stationChoice.station.id } : null,
+        carryingServiceItemId: item.id, path: stationChoice?.path || [] },
+      queue, customers,
+      tables: releaseClearedTables(tables, customers, carriedItems),
+      serviceItems: carriedItems,
+    };
+  }
+
+  if (staff.task.type === 'deliver_dirty_item') {
+    const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
+    const station = (state.washStations || []).find(candidate => candidate.id === staff.task.washStationId);
+    if (!item || item.state !== 'carried_dirty' || staff.carryingServiceItemId !== item.id) {
+      return { staff: { ...completedStaff, carryingServiceItemId: null }, queue, tables, customers, serviceItems };
+    }
+    if (!station) {
+      return { staff: { ...completedStaff, path: [], carryingServiceItemId: item.id }, queue, tables, customers, serviceItems };
+    }
+    const deliveryPath = targetForRectOrCurrent(state, station, staff);
+    if (deliveryPath === null) {
+      return { staff: { ...completedStaff, path: [], carryingServiceItemId: item.id }, queue, tables, customers, serviceItems };
+    }
+    if (deliveryPath.length) {
+      return { staff: { ...staff, path: deliveryPath }, queue, tables, customers, serviceItems };
+    }
+    return {
+      staff: { ...completedStaff, carryingServiceItemId: null, path: [] }, queue, tables, customers,
+      serviceItems: serviceItems.map(candidate => candidate.id === item.id
+        ? { ...candidate, state: 'queued_for_wash', washStationId: station.id, washQueuedAt: state.restaurant.gameTime } : candidate),
+    };
+  }
+
+  if (staff.task.type === 'wash_item') {
+    const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
+    const station = (state.washStations || []).find(candidate => candidate.id === staff.task.washStationId && candidate.type === 'manual');
+    if (!item || !['queued_for_wash', 'washing'].includes(item.state) || item.washStationId !== station?.id) {
+      return { staff: { ...completedStaff, path: [] }, queue, tables, customers, serviceItems };
+    }
+    if (staff.task.washingStartedAt == null) {
+      const itemIndex = serviceItems.indexOf(item);
+      return { staff: { ...staff, path: [], task: { ...staff.task, washingStartedAt: state.restaurant.gameTime } }, queue, tables, customers, serviceItems: serviceItems.map((candidate, index) => index === itemIndex ? { ...candidate, state: 'washing', washStartedAt: state.restaurant.gameTime } : candidate) };
+    }
+    if (state.restaurant.gameTime - staff.task.washingStartedAt < ACTIVITY_DURATIONS.manualWash) {
+      return { staff: { ...staff, path: [] }, queue, tables, customers, serviceItems };
+    }
+    const itemIndex = serviceItems.indexOf(item);
+    return { staff: { ...completedStaff, path: [] }, queue, tables, customers, serviceItems: serviceItems.filter((_candidate, index) => index !== itemIndex) };
+  }
+
   if (staff.task.type === 'deliver_service_item') {
     const itemIndex = serviceItems.findIndex(candidate => candidate.id === staff.task.serviceItemId);
     const item = serviceItems[itemIndex];
@@ -686,7 +904,11 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
           ? {
             ...candidate,
             state: 'eating',
-            eatTime: state.restaurant.gameTime,
+             eatTime: state.restaurant.gameTime,
+             consumptionStartedAt: state.restaurant.gameTime,
+             consumptionDuration: candidate.dishId && candidate.drinkId
+               ? ACTIVITY_DURATIONS.consumeBoth
+               : candidate.dishId ? ACTIVITY_DURATIONS.consumeFood : ACTIVITY_DURATIONS.consumeDrink,
             ...(item.kind === 'dish' ? { happiness } : {}),
           }
           : item.kind === 'dish'
@@ -746,7 +968,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     }
 
     const elapsed = state.restaurant.gameTime - item.preparationStartedAt;
-    if (!Number.isFinite(item.preparationStartedAt) || elapsed < 5) {
+    if (!Number.isFinite(item.preparationStartedAt) || elapsed < ACTIVITY_DURATIONS.prepareDrink) {
       return {
         staff: { ...staff, path: [] },
         customers, queue, tables, serviceItems,
@@ -788,8 +1010,11 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       && candidate.task?.type === 'prepare_dish'
       && candidate.task.stationId === staff.task.stationId);
     const validAssignment = item?.kind === 'dish'
-      && item.state === 'ordered'
-      && (item.assignedStaffId == null || item.assignedStaffId === staff.id)
+      && staff.role === 'cook'
+      && ['ordered', 'preparing'].includes(item.state)
+      && (item.state === 'ordered'
+        ? item.assignedStaffId == null || item.assignedStaffId === staff.id
+        : item.assignedStaffId === staff.id && item.stationId === staff.task.stationId)
       && dish
       && station
       && requiredEquipmentOwned
@@ -797,9 +1022,12 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       && !anotherWorkerOwnsItem
       && !anotherWorkerOwnsStation;
 
+    if (!validAssignment) {
+      return { staff: completedStaff, queue, tables, customers, serviceItems };
+    }
     return {
-      staff: completedStaff, queue, tables, customers,
-      serviceItems: serviceItems.map(candidate => validAssignment && candidate.id === item.id
+      staff: { ...staff, path: [] }, queue, tables, customers,
+      serviceItems: serviceItems.map(candidate => item.state === 'ordered' && candidate.id === item.id
         ? {
           ...candidate,
           state: 'preparing',
@@ -821,11 +1049,13 @@ export function updateStaff(state, dt) {
   let tables = [...(state.tables || [])];
   let serviceItems = [...(state.serviceItems || [])];
   let completedCustomers = [...(state.completedCustomers || [])];
+  let floorDirt = [...(state.floorDirt || [])];
   let restaurant = state.restaurant;
 
   const claimedCustomerIds = new Set();
   const claimedServiceItemIds = new Set();
   const claimedTableIds = new Set();
+  const claimedDirtIds = new Set();
 
   let staff = ensureStaffRuntime(state.staff, state).map(s => ({
     ...s,
@@ -854,6 +1084,7 @@ export function updateStaff(state, dt) {
       if (s.task.customerIds) s.task.customerIds.forEach(id => claimedCustomerIds.add(id));
       if (s.task.serviceItemId) claimedServiceItemIds.add(s.task.serviceItemId);
       if (s.task.type === 'clean_table' && s.task.tableId) claimedTableIds.add(s.task.tableId);
+      if (s.task.type === 'clean_floor' && s.task.dirtId) claimedDirtIds.add(s.task.dirtId);
     }
   }
   staff = staff.map(worker => worker.task?.type === 'prepare_drink'
@@ -958,7 +1189,7 @@ export function updateStaff(state, dt) {
 
     if (s.task && hasArrived(s)) {
       const resolved = resolveTask({
-        state: { ...state, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers },
+        state: { ...state, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt },
         staff: s, customers, queue, tables, serviceItems,
       });
       if (resolved.customers) customers = resolved.customers;
@@ -967,6 +1198,7 @@ export function updateStaff(state, dt) {
       if (resolved.serviceItems) serviceItems = resolved.serviceItems;
       if (resolved.completedCustomers) completedCustomers = resolved.completedCustomers;
       if (resolved.restaurant) restaurant = resolved.restaurant;
+      if (resolved.floorDirt) floorDirt = resolved.floorDirt;
       staff[i] = resolved.staff;
       if (resolved.clearCarriedServiceItemIds) {
         const clearedIds = new Set(resolved.clearCarriedServiceItemIds);
@@ -978,9 +1210,9 @@ export function updateStaff(state, dt) {
     }
 
     const result = assignTask({
-      state: { ...state, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers },
+      state: { ...state, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt },
       staff: s, allStaff: staff, customers, queue, tables, serviceItems,
-      claimedCustomerIds, claimedServiceItemIds, claimedTableIds,
+      claimedCustomerIds, claimedServiceItemIds, claimedTableIds, claimedDirtIds,
     });
     if (result) {
       staff[i] = result.staff;
@@ -992,6 +1224,7 @@ export function updateStaff(state, dt) {
       if (result.claimedCustomerIds) result.claimedCustomerIds.forEach(id => claimedCustomerIds.add(id));
       if (result.claimedServiceItemId) claimedServiceItemIds.add(result.claimedServiceItemId);
       if (result.claimedTableId) claimedTableIds.add(result.claimedTableId);
+      if (result.claimedDirtId) claimedDirtIds.add(result.claimedDirtId);
     }
   }
 
@@ -1002,6 +1235,6 @@ export function updateStaff(state, dt) {
       : item;
   });
 
-  const result = { ...state, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers };
+  const result = { ...state, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt };
   return result;
 }

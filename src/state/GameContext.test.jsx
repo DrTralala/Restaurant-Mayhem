@@ -87,13 +87,14 @@ function renderReducer(overrides = {}) {
 describe('GameProvider staff actions', () => {
   beforeEach(() => localStorage.clear());
 
-  it('uses fresh version-4 state when a version-3 save exists', () => {
-    const saved = { ...createInitialState(), version: 3, restaurant: { funds: 999 } };
+  it('uses fresh version-5 state when a version-4 save exists', () => {
+    const saved = { ...createInitialState(), version: 4, restaurant: { funds: 999 } };
     localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
 
     render(<GameProvider><ItemHarness /></GameProvider>);
 
     expect(screen.getByTestId('funds')).toHaveTextContent('600');
+    expect(JSON.parse(localStorage.getItem('restaurant-sim-save')).version).toBe(4);
   });
 
   it('renames only the selected staff member', () => {
@@ -128,7 +129,7 @@ describe('GameProvider staff actions', () => {
     game.dispatch({ type: 'SET_STAFF_SALARY', id: 'missing', salary: 250 });
 
     expect(game.state.staff.find(staff => staff.id === 'starter-cook').salary).toBe(200);
-    expect(game.state.staff).toHaveLength(4);
+    expect(game.state.staff).toHaveLength(5);
   });
 
   it('preserves raise-only salary adjustment semantics', () => {
@@ -137,6 +138,18 @@ describe('GameProvider staff actions', () => {
     game.dispatch({ type: 'SET_STAFF_SALARY', id: 'starter-cook', salary: 190 });
 
     expect(game.state.staff.find(staff => staff.id === 'starter-cook').salary).toBe(200);
+  });
+
+  it('hires a janitor through the reducer at the authoritative $120 salary', () => {
+    const game = renderReducer({ restaurant: { funds: 500 } });
+
+    game.dispatch({
+      type: 'HIRE_STAFF',
+      staff: { id: 'janitor-1', name: 'June', role: 'janitor', salary: 999, skill: 1, morale: 80 },
+    });
+
+    expect(game.state.restaurant.funds).toBe(380);
+    expect(game.state.staff.at(-1)).toMatchObject({ role: 'janitor', salary: 120 });
   });
 });
 
@@ -176,6 +189,30 @@ describe('GameProvider furniture actions', () => {
     expect(screen.getByTestId('chair-count')).toHaveTextContent('11');
   });
 
+  it('moves a free dishwasher, preserves invalid overlaps, and refunds an idle automatic station', () => {
+    const game = renderReducer({ washStations: [{ id: 'wash2', type: 'automatic', x: 300, y: 120, w: 40, h: 40 }] });
+    game.dispatch({ type: 'MOVE_WASH_STATION', id: 'wash2', x: 500, y: 300 });
+    expect(game.state.washStations[0]).toMatchObject({ x: 500, y: 300 });
+    game.dispatch({ type: 'MOVE_WASH_STATION', id: 'wash2', x: game.state.tables[0].x, y: game.state.tables[0].y });
+    expect(game.state.washStations[0]).toMatchObject({ x: 500, y: 300 });
+    game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'washStation', id: 'wash2' }] });
+    expect(game.state.washStations).toEqual([]);
+    expect(game.state.restaurant.funds).toBe(900);
+  });
+
+  it.each([
+    ['manual', []],
+    ['automatic', [{ id: 'dirty', washStationId: 'wash2', state: 'queued_for_wash' }]],
+    ['automatic', [{ id: 'dirty', washStationId: 'wash2', state: 'washing' }]],
+  ])('blocks %s or busy wash stations from moving or selling', (type, serviceItems) => {
+    const station = { id: 'wash2', type, x: 300, y: 120, w: 40, h: 40 };
+    const game = renderReducer({ washStations: [station], serviceItems });
+    if (type !== 'manual') game.dispatch({ type: 'MOVE_WASH_STATION', id: 'wash2', x: 500, y: 300 });
+    game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'washStation', id: 'wash2' }] });
+    expect(game.state.washStations).toEqual([station]);
+    expect(game.state.restaurant.funds).toBe(600);
+  });
+
   it('buys an additional door and deducts its item price', () => {
     render(<GameProvider><ItemHarness /></GameProvider>);
 
@@ -190,6 +227,16 @@ describe('GameProvider authoritative placement actions', () => {
   beforeEach(() => localStorage.clear());
 
   const authoritativePlacementCases = [
+    {
+      itemType: 'automaticDishwasher',
+      cost: 600,
+      action: { x: 500, y: 300, rotation: 0, cost: 1 },
+      assertPlacement(state) {
+        expect(state.washStations).toContainEqual(expect.objectContaining({
+          id: 'wash2', type: 'automatic', x: 500, y: 300, w: 40, h: 40,
+        }));
+      },
+    },
     {
       itemType: 'table',
       cost: 300,
@@ -297,7 +344,7 @@ describe('GameProvider authoritative placement actions', () => {
       h: 40,
       assignedStaffId: 'starter-waiter',
     });
-    expect(game.state.staff).toHaveLength(4);
+    expect(game.state.staff).toHaveLength(5);
   });
 
   it('creates an unassigned cashier station when no waiter is available', () => {
@@ -316,7 +363,7 @@ describe('GameProvider authoritative placement actions', () => {
 
     expect(game.state.restaurant.funds).toBe(300);
     expect(game.state.cashierStations.at(-1)).not.toHaveProperty('assignedStaffId');
-    expect(game.state.staff).toHaveLength(1);
+    expect(game.state.staff).toHaveLength(2);
   });
 
   it('assigns a newly placed cashier only to a genuinely available waiter', () => {
@@ -494,12 +541,12 @@ describe('GameProvider guarded economy actions', () => {
     game.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('sixth') });
     game.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('seventh') });
 
-    expect(game.state.staff).toHaveLength(6);
+    expect(game.state.staff).toHaveLength(7);
     expect(game.state.restaurant.funds).toBe(0);
 
     const unaffordable = renderReducer({ restaurant: { funds: 149 } });
     unaffordable.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('fifth') });
-    expect(unaffordable.state.staff).toHaveLength(4);
+    expect(unaffordable.state.staff).toHaveLength(5);
     expect(unaffordable.state.restaurant.funds).toBe(149);
 
     const forgedSalary = renderReducer({ restaurant: { funds: 150 } });
@@ -512,7 +559,7 @@ describe('GameProvider guarded economy actions', () => {
       type: 'HIRE_STAFF',
       staff: { ...makeStaff('invalid'), role: 'manager', salary: 0 },
     });
-    expect(unknownRole.state.staff).toHaveLength(4);
+    expect(unknownRole.state.staff).toHaveLength(5);
     expect(unknownRole.state.restaurant.funds).toBe(1000);
   });
 

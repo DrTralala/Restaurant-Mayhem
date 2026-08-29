@@ -14,6 +14,39 @@ const baseState = {
 };
 
 describe('processKitchen', () => {
+  const makeEatingState = (order, gameTime) => ({
+    ...baseState,
+    restaurant: { gameTime, totalServed: 0 },
+    customers: [{ id: 'c1', state: 'eating', ...order,
+      consumptionStartedAt: 0,
+      consumptionDuration: gameTime >= 0 ? (order.dishId && order.drinkId ? 600 : order.dishId ? 480 : 180) : 0,
+    }],
+  });
+
+  it.each([
+    [{ dishId: null, drinkId: 'water' }, 180],
+    [{ dishId: 'toast', drinkId: null }, 480],
+    [{ dishId: 'toast', drinkId: 'water' }, 600],
+  ])('uses order-dependent consumption duration', (order, duration) => {
+    expect(processKitchen(makeEatingState(order, duration - 1)).customers[0].state).toBe('eating');
+    expect(processKitchen(makeEatingState(order, duration)).customers[0].state).toBe('paying');
+  });
+
+  it('keeps a multi-customer table occupied when one customer finishes first', () => {
+    const result = processKitchen({
+      ...baseState,
+      restaurant: { gameTime: 180, totalServed: 0 },
+      customers: [
+        { id: 'c1', state: 'eating', tableId: 't1', consumptionStartedAt: 0, consumptionDuration: 180 },
+        { id: 'c2', state: 'eating', tableId: 't1', consumptionStartedAt: 100, consumptionDuration: 180 },
+      ],
+      tables: [{ id: 't1', status: 'occupied' }],
+    });
+    expect(result.customers[0].state).toBe('paying');
+    expect(result.customers[1].state).toBe('eating');
+    expect(result.tables[0].status).toBe('occupied');
+  });
+
   it('does not progress an ordered dish before a cook arrives', () => {
     const item = {
       id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1',
@@ -190,11 +223,11 @@ describe('processKitchen', () => {
       .serviceItems).toEqual([drink]);
   });
 
-  it('transitions an eating customer to paying after 30 seconds', () => {
+  it('transitions an eating customer after its recorded consumption duration', () => {
     const result = processKitchen({
       ...baseState,
       restaurant: { gameTime: 50 },
-      customers: [{ id: 'c1', state: 'eating', eatTime: 20, path: [{ x: 1, y: 1 }] }],
+      customers: [{ id: 'c1', state: 'eating', consumptionStartedAt: 20, consumptionDuration: 30, path: [{ x: 1, y: 1 }] }],
     });
 
     expect(result.customers[0]).toMatchObject({

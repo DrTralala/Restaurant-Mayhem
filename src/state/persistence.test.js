@@ -35,6 +35,8 @@ describe('hydrateState', () => {
       staff: [{ id: 'starter-cook' }],
       serviceTables: [{ id: 'st1' }],
       serviceItems: [],
+      floorDirt: [],
+      washStations: [],
     };
     const saved = {
       version: 4,
@@ -50,7 +52,22 @@ describe('hydrateState', () => {
       serviceItems: [],
       customers: [],
       queue: [],
+      floorDirt: [],
+      washStations: [],
     });
+  });
+
+  it('hydrates missing wash collections from fresh state and preserves populated saves', () => {
+    const fresh = createInitialState();
+    const missing = hydrateState({ ...fresh, floorDirt: undefined, washStations: undefined }, fresh);
+    const saved = [{ id: 'd1' }];
+    const stations = [{ id: 'wash9', type: 'automatic', x: 500, y: 300, w: 40, h: 40 }];
+    const populated = hydrateState({ ...fresh, floorDirt: saved, washStations: stations }, fresh);
+
+    expect(missing.floorDirt).toEqual([]);
+    expect(missing.washStations).toEqual(fresh.washStations);
+    expect(populated.floorDirt).toEqual(saved);
+    expect(populated.washStations).toEqual(stations);
   });
 
   it('adds stable genders to characters from older saves', () => {
@@ -141,9 +158,9 @@ describe('hydrateState', () => {
     const crowded = hydrateState({ ...fresh, staff: crowdedStaff, staffSlots: 3 }, fresh);
     const expanded = hydrateState({ ...fresh, staffSlots: 9 }, fresh);
 
-    expect(legacy.staffSlots).toBe(6);
-    expect(crowded.staffSlots).toBe(7);
+    expect(legacy.staffSlots).toBe(7);
+    expect(crowded.staffSlots).toBe(8);
     expect(expanded.staffSlots).toBe(9);
-    expect(legacy.version).toBe(4);
+    expect(legacy.version).toBe(5);
   });
 });

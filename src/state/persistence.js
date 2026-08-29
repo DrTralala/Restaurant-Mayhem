@@ -43,6 +43,8 @@ export function hydrateState(saved, fresh) {
       ...character,
       gender: inferGender(character),
     })),
+    floorDirt: Array.isArray(saved.floorDirt) ? saved.floorDirt : fresh.floorDirt,
+    washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
   };
 
   if ('staffSlots' in saved || 'staffSlots' in fresh) {

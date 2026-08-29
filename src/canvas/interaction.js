@@ -64,5 +64,17 @@ export function findClickedEntity(state, camera, screenX, screenY) {
     }
   }
 
+  for (const station of state.washStations || []) {
+    if (world.x >= station.x && world.x <= station.x + (station.w || 40)
+      && world.y >= station.y && world.y <= station.y + (station.h || 40)) {
+      const waiting = (state.serviceItems || []).filter(item => item.washStationId === station.id
+        && ['queued_for_wash', 'washing'].includes(item.state)).length;
+      return {
+        type: 'washStation', data: station,
+        text: `${station.type === 'automatic' ? 'Automatic Dishwasher' : 'Sink'} · ${waiting} waiting`,
+      };
+    }
+  }
+
   return null;
 }

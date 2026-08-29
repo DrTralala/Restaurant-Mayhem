@@ -46,6 +46,10 @@ export const PLACEABLES = {
     grid: 20,
     rotatable: false,
   },
+  automaticDishwasher: {
+    type: 'automaticDishwasher', label: 'Automatic Dishwasher',
+    price: ITEM_PRICES.automaticDishwasher, width: 40, height: 40, grid: 20, rotatable: false,
+  },
 };
 
 export function getPlaceable(itemType) {

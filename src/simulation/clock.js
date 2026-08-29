@@ -46,8 +46,32 @@ export function advanceClock(state, dt) {
 }
 
 export function isRestaurantOpen(state) {
-  const secondsOfDay = state.restaurant.gameTime % SECONDS_PER_DAY;
-  return secondsOfDay >= state.restaurant.openHour * 3600 && secondsOfDay < state.restaurant.closeHour * 3600;
+  return true;
+}
+
+function ramp(secondsOfDay, start, peak, end, peakMultiplier) {
+  if (secondsOfDay < start || secondsOfDay > end) return 1;
+  if (secondsOfDay <= peak) {
+    return 1 + (peakMultiplier - 1) * ((secondsOfDay - start) / (peak - start));
+  }
+  return peakMultiplier - (peakMultiplier - 1) * ((secondsOfDay - peak) / (end - peak));
+}
+
+export function getRushHourMultiplier(totalSeconds) {
+  const time = ((totalSeconds % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY;
+  return Math.max(
+    1,
+    ramp(time, 6.5 * 3600, 8 * 3600, 10 * 3600, 2),
+    ramp(time, 11 * 3600, 12.5 * 3600, 15 * 3600, 2.5),
+    ramp(time, 17 * 3600, 19 * 3600, 22 * 3600, 3),
+  );
+}
+
+export function getClockHandAngles(totalSeconds) {
+  const time = ((totalSeconds % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY;
+  const hours = time / 3600;
+  const minutes = (time % 3600) / 60;
+  return { hourDegrees: (hours % 12) * 30, minuteDegrees: minutes * 6 };
 }
 
 export function secondsToGameTime(totalSeconds) {

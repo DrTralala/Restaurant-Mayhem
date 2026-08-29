@@ -18,6 +18,10 @@ describe('StaffDetailsPanel', () => {
   });
 
   it.each([
+    ['clean_floor', 'Cleaning floor'],
+    ['collect_dirty_item', 'Collecting dirty item'],
+    ['deliver_dirty_item', 'Delivering dirty item'],
+    ['wash_item', 'Washing item'],
     ['prepare_dish', 'Preparing dish'],
     ['prepare_drink', 'Preparing drink'],
     ['pickup_service_item', 'Collecting order'],

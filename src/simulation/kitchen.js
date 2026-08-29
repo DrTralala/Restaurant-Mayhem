@@ -1,7 +1,10 @@
 import { getUpgradeEffect } from './balance';
 import { findAvailableServiceSlot } from './serviceItems';
+import { markCustomerItemsDirty } from './dishwashing';
+import { ACTIVITY_DURATIONS } from './activity';
 
 const PHYSICAL_ITEM_STATES = new Set(['on_service', 'carried', 'delivered']);
+const DIRTY_ITEM_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
 
 function isActiveCustomer(customers, customerId) {
   return customers.some(customer => customer.id === customerId && customer.state !== 'leaving');
@@ -26,8 +29,9 @@ function canProgressDish(state, item) {
 export function processKitchen(state) {
   const customers = (state.customers || []).map(customer => {
     if (customer.state === 'eating'
-      && customer.eatTime != null
-      && state.restaurant.gameTime - customer.eatTime >= 30) {
+      && Number.isFinite(customer.consumptionStartedAt)
+      && Number.isFinite(customer.consumptionDuration)
+      && state.restaurant.gameTime - customer.consumptionStartedAt >= customer.consumptionDuration) {
       return {
         ...customer,
         state: 'paying',
@@ -45,6 +49,7 @@ export function processKitchen(state) {
     if (orphan && ['ordered', 'preparing'].includes(item.state)) {
       return null;
     }
+    if (orphan && DIRTY_ITEM_STATES.has(item.state)) return item;
     if (orphan && (item.state === 'ready' || PHYSICAL_ITEM_STATES.has(item.state))) {
       return { ...item, state: 'to_clean' };
     }
@@ -68,6 +73,12 @@ export function processKitchen(state) {
     };
   }).filter(Boolean);
 
+  const newlyPaying = customers.filter((customer, index) => customer.state === 'paying'
+    && state.customers?.[index]?.state === 'eating');
+  for (const customer of newlyPaying) {
+    serviceItems = markCustomerItemsDirty(serviceItems, customer.id, state.restaurant.gameTime);
+  }
+
   const readyItems = serviceItems
     .filter(item => item.kind === 'dish' && item.state === 'ready')
     .sort((left, right) =>
@@ -82,6 +93,27 @@ export function processKitchen(state) {
       : item);
   }
 
-  const result = { ...state, customers, serviceItems };
+  const staff = (state.staff || []).map(worker => {
+    if (worker.task?.type !== 'prepare_dish') return worker;
+    const item = serviceItems.find(candidate => candidate.id === worker.task.serviceItemId);
+    const dish = item && (state.dishes || []).find(candidate => candidate.id === item.menuItemId);
+    const station = (state.kitchenStations || []).find(candidate => candidate.id === worker.task.stationId);
+    const requiredEquipmentOwned = !dish?.requiredEquipmentId
+      || (state.equipment || []).some(candidate => candidate.id === dish.requiredEquipmentId && candidate.owned);
+    const validOrderedTask = worker.role === 'cook' && item?.kind === 'dish' && item.state === 'ordered'
+      && dish && station && requiredEquipmentOwned
+      && (!dish.requiredEquipmentId || station.equipmentId === dish.requiredEquipmentId);
+    const validActiveTask = item?.state === 'preparing'
+      && item.assignedStaffId === worker.id
+      && item.stationId === worker.task.stationId
+      && canProgressDish({ ...state, customers, serviceItems }, item);
+    const validPreparation = validOrderedTask || validActiveTask;
+    return validPreparation ? worker : { ...worker, task: null, path: [] };
+  });
+  const result = { ...state, customers, serviceItems, staff,
+    tables: (state.tables || []).map(table => newlyPaying.some(customer => customer.tableId === table.id)
+      && !customers.some(candidate => !newlyPaying.some(customer => customer.id === candidate.id)
+        && candidate.tableId === table.id && candidate.state !== 'leaving')
+      ? { ...table, status: 'dirty' } : table) };
   return result;
 }

@@ -26,4 +26,9 @@ describe('selectFurnitureInRect', () => {
     expect(selectFurnitureInRect(state, { x1: 100, y1: 100, x2: 10, y2: 10 }))
       .toEqual([{ type: 'table', id: 't1' }]);
   });
+
+  it('selects wash stations using the public washStation entity type', () => {
+    expect(selectFurnitureInRect({ tables: [], chairs: [], washStations: [{ id: 'wash2', x: 40, y: 40 }] },
+      { x1: 0, y1: 0, x2: 100, y2: 100 })).toEqual([{ type: 'washStation', id: 'wash2' }]);
+  });
 });

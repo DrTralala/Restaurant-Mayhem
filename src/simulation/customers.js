@@ -1,7 +1,7 @@
-import { isRestaurantOpen } from './clock';
+import { getRushHourMultiplier, isRestaurantOpen } from './clock';
 import { buildBlockedCells, worldToCell } from './pathfinding';
 import { moveCharacterTowards, moveCharacterWithRecovery, planCharacterPath } from './movement';
-import { getDoorPosition, getDoors, getQueuePosition } from './world';
+import { getCashierCustomerPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
 import { clampReputation, getQueuePatienceMultiplier, getUpgradeEffect } from './balance';
 
 let customerIdCounter = 0;
@@ -69,9 +69,11 @@ export function spawnCustomers(state, dt = 1) {
   const queuedParties = new Set((state.queue || []).map((customer, index) => customer.partyId ?? customer.id ?? index)).size;
   if (queuedParties >= 8) return state;
 
-  const spawnRatePerSecond = 0.018
+  const baseRatePerSecond = Math.max(0, 0.018
     + (state.restaurant.reputation - 1) * 0.004
-    + getUpgradeEffect(state, 'customerRate');
+    + getUpgradeEffect(state, 'customerRate'));
+  const spawnRatePerSecond = baseRatePerSecond
+    * getRushHourMultiplier(state.restaurant.gameTime);
   const spawnProbability = 1 - Math.exp(-spawnRatePerSecond * Math.max(0, dt));
   if (Math.random() > spawnProbability) return state;
 
@@ -167,8 +169,7 @@ export function updateCustomers(state, dt) {
 
     updatedCustomers = updatedCustomers.map(customer => {
       if (customer.state !== 'paying') return customer;
-      const assignedStation = stationById.get(customer.cashierStationId);
-      if (assignedStation || !fallbackCashierStation) return customer;
+      if (queueLengths.has(customer.cashierStationId) || !fallbackCashierStation) return customer;
       const shortestQueue = routingCashierStations.reduce((shortest, station) =>
         queueLengths.get(station.id) < queueLengths.get(shortest.id) ? station : shortest,
       routingCashierStations[0]);
@@ -185,15 +186,14 @@ export function updateCustomers(state, dt) {
     }
 
     const positions = new Map();
+    const queueIndexes = new Map();
     for (const [stationId, customersAtStation] of payingByStation) {
       const station = stationById.get(stationId);
       customersAtStation
         .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0))
         .forEach((customer, queueIndex) => {
-          positions.set(customer.id, {
-            x: station.x - 20 - queueIndex * 20,
-            y: station.y + station.h / 2,
-          });
+          positions.set(customer.id, getCashierCustomerPosition(station, queueIndex));
+          queueIndexes.set(customer.id, queueIndex);
         });
     }
 
@@ -206,7 +206,7 @@ export function updateCustomers(state, dt) {
       const goal = worldToCell(checkoutPosition);
       const currentGoal = current.pathGoal;
       const arrived = Math.hypot(current.x - checkoutPosition.x, current.y - checkoutPosition.y) <= 2;
-      if (arrived) return { ...current, checkoutPosition, path: [], pathGoal: undefined, stalledFor: 0 };
+      if (arrived) return { ...current, checkoutPosition, paymentReady: queueIndexes.get(customer.id) === 0, path: [], pathGoal: undefined, stalledFor: 0 };
       const needsPlan = !current.path?.length || !currentGoal || currentGoal.x !== goal.x || currentGoal.y !== goal.y;
       const routed = needsPlan
         ? planCharacterPath(state, current, { world: checkoutPosition }, [
@@ -214,7 +214,7 @@ export function updateCustomers(state, dt) {
           ...updatedCustomers.filter(candidate => candidate.id !== current.id && candidate.exitPhase !== 'fading'),
         ])
         : { ...current, checkoutPosition };
-      return moveCharacterWithRecovery(state, { ...routed, checkoutPosition }, dt, [
+      return moveCharacterWithRecovery(state, { ...routed, checkoutPosition, paymentReady: false }, dt, [
         ...(state.staff || []),
         ...updatedCustomers.filter(candidate => candidate.id !== current.id && candidate.exitPhase !== 'fading'),
       ], 62);

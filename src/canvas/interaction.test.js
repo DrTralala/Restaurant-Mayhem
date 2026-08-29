@@ -42,6 +42,15 @@ describe('findClickedEntity table labels', () => {
     expect(findClickedEntity({ ...state, serviceTables: [{ id: 'a', x: 0, y: 0 }], serviceItems: {} }, camera, 10, 10).text)
       .toBe('Service Counter · 0 items waiting');
   });
+
+  it('returns a wash-station tooltip with the queued count', () => {
+    const station = { id: 'wash2', type: 'automatic', x: 300, y: 100, w: 40, h: 40 };
+    const hit = findClickedEntity({ ...state, washStations: [station], serviceItems: [
+      { id: 'i1', washStationId: 'wash2', state: 'queued_for_wash' },
+      { id: 'i2', washStationId: 'wash2', state: 'washing' },
+    ] }, camera, 320, 120);
+    expect(hit).toMatchObject({ type: 'washStation', data: station, text: 'Automatic Dishwasher · 2 waiting' });
+  });
 });
 
 describe('findClickedEntity staff selection', () => {

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { advanceClock, isRestaurantOpen, secondsToGameTime } from './clock';
+import {
+  advanceClock, getClockHandAngles, getRushHourMultiplier,
+  isRestaurantOpen, secondsToGameTime,
+} from './clock';
 
 describe('advanceClock', () => {
   it('advances gameTime by dt', () => {
@@ -94,9 +97,30 @@ describe('isRestaurantOpen', () => {
     expect(isRestaurantOpen(state)).toBe(true);
   });
 
-  it('returns false during closed hours', () => {
+  it('is always open', () => {
     const state = { restaurant: { gameTime: 5 * 3600, openHour: 10, closeHour: 22 } };
-    expect(isRestaurantOpen(state)).toBe(false);
+    expect(isRestaurantOpen({ restaurant: { gameTime: 3 * 3600 } })).toBe(true);
+  });
+});
+
+describe('rush hour and analogue clock helpers', () => {
+  it.each([
+    [6.5 * 3600, 1], [8 * 3600, 2], [10 * 3600, 1],
+    [12.5 * 3600, 2.5], [19 * 3600, 3], [22 * 3600, 1],
+  ])('returns the approved rush multiplier at %s seconds', (time, expected) => {
+    expect(getRushHourMultiplier(time)).toBeCloseTo(expected);
+  });
+
+  it('interpolates each side of lunch rush', () => {
+    expect(getRushHourMultiplier(11.75 * 3600)).toBeCloseTo(1.75);
+    expect(getRushHourMultiplier(13.75 * 3600)).toBeCloseTo(1.75);
+  });
+
+  it('derives analogue hand angles including partial hours', () => {
+    expect(getClockHandAngles(3 * 3600 + 30 * 60)).toEqual({
+      hourDegrees: 105,
+      minuteDegrees: 180,
+    });
   });
 });
 

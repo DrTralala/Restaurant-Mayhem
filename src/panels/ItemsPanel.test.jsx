@@ -21,6 +21,18 @@ describe('ItemsPanel', () => {
     expect(screen.getByText('Cashier Table')).toBeInTheDocument();
   });
 
+  it('offers the automatic dishwasher at $600 with its catalogue description', () => {
+    useGameState.mockReturnValue({ restaurant: { funds: 1000 } });
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<ItemsPanel onStartPlacement={vi.fn()} />);
+
+    expect(screen.getByText('Automatic Dishwasher')).toBeInTheDocument();
+    expect(screen.getByText('$600')).toBeInTheDocument();
+    expect(screen.getByText('Washes queued dishes automatically in three in-game minutes.'))
+      .toBeInTheDocument();
+  });
+
   it('starts chair placement without charging immediately', () => {
     const startPlacement = vi.fn();
     useGameState.mockReturnValue({ restaurant: { funds: 500 } });

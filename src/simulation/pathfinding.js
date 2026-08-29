@@ -27,6 +27,7 @@ export function buildBlockedCells(state) {
   for (const station of state.kitchenStations || []) blockRect(blocked, { x: station.x, y: station.y, w: 40, h: 40 });
   for (const service of state.serviceTables || []) blockRect(blocked, { x: service.x, y: service.y, w: 120, h: 40 });
   for (const cashier of state.cashierStations || []) blockRect(blocked, cashier);
+  for (const station of state.washStations || []) blockRect(blocked, { x: station.x, y: station.y, w: station.w || 40, h: station.h || 40 });
   const world = getRestaurantWorld(state.restaurant || {});
   blockRect(blocked, { x: world.doorX, y: world.kitchenY, w: 6, h: world.floorH });
   const wallCellX = worldToCell({ x: world.doorX, y: 0 }).x;

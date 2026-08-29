@@ -6,7 +6,10 @@ vi.mock('./MenuPanel', () => ({ default: () => <div>Menu panel</div> }));
 vi.mock('./UpgradePanel', () => ({ default: () => <div>Upgrade panel</div> }));
 vi.mock('./ItemsPanel', () => ({
   default: ({ onStartPlacement }) => (
-    <button onClick={() => onStartPlacement('cashierTable')}>Items panel</button>
+    <>
+      <button onClick={() => onStartPlacement('cashierTable')}>Items panel</button>
+      <button onClick={() => onStartPlacement('automaticDishwasher')}>Buy automaticDishwasher ($600)</button>
+    </>
   ),
 }));
 vi.mock('./StaffPanel', () => ({ default: () => <div>Staff panel</div> }));

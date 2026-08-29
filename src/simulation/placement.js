@@ -44,6 +44,7 @@ function getExistingFurnitureRects(state) {
   const kitchenStations = Array.isArray(state?.kitchenStations) ? state.kitchenStations : [];
   const serviceTables = Array.isArray(state?.serviceTables) ? state.serviceTables : [];
   const cashierStations = Array.isArray(state?.cashierStations) ? state.cashierStations : [];
+  const washStations = Array.isArray(state?.washStations) ? state.washStations : [];
 
   for (const table of tables) {
     const rect = getRecordRect(table, 40, 40);
@@ -63,6 +64,10 @@ function getExistingFurnitureRects(state) {
   }
   for (const cashier of cashierStations) {
     const rect = getRecordRect(cashier, 80, 40);
+    if (rect) rects.push(rect);
+  }
+  for (const station of washStations) {
+    const rect = getRecordRect(station, 40, 40);
     if (rect) rects.push(rect);
   }
 
