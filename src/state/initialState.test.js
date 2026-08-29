@@ -7,6 +7,7 @@ describe('createInitialState', () => {
 
     expect(state.restaurant.funds).toBe(600);
     expect(state.dishes[0].price).toBe(12);
+    expect(state.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
   });
 
   it('starts version 5 with janitor and wash station state', () => {

@@ -1,4 +1,5 @@
 const SECONDS_PER_DAY = 86400;
+const HOURS_PER_DAY = 24;
 
 export function advanceClock(state, dt) {
   const newGameTime = state.restaurant.gameTime + dt;
@@ -45,8 +46,23 @@ export function advanceClock(state, dt) {
   };
 }
 
+export function normaliseOperatingHour(value, fallback) {
+  if (value === HOURS_PER_DAY) return 0;
+  return Number.isFinite(value) && value >= 0 && value < HOURS_PER_DAY
+    && Number.isInteger(value * 2) ? value : fallback;
+}
+
 export function isRestaurantOpen(state) {
-  return true;
+  const restaurant = state?.restaurant || {};
+  const openHour = normaliseOperatingHour(restaurant.openHour, 10);
+  const closeHour = normaliseOperatingHour(restaurant.closeHour, 22);
+  if (openHour === closeHour) return true;
+  const seconds = ((Number(restaurant.gameTime) || 0) % SECONDS_PER_DAY + SECONDS_PER_DAY)
+    % SECONDS_PER_DAY;
+  const hour = seconds / 3600;
+  return openHour < closeHour
+    ? hour >= openHour && hour < closeHour
+    : hour >= openHour || hour < closeHour;
 }
 
 function ramp(secondsOfDay, start, peak, end, peakMultiplier) {
@@ -81,4 +97,8 @@ export function secondsToGameTime(totalSeconds) {
   const ampm = hours >= 12 ? 'PM' : 'AM';
   const displayHour = hours % 12 === 0 ? 12 : hours % 12;
   return `${displayHour}:${String(minutes).padStart(2, '0')} ${ampm}`;
+}
+
+export function formatOperatingHour(hour) {
+  return secondsToGameTime(normaliseOperatingHour(hour, 0) * 3600);
 }

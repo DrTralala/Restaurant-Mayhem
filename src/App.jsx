@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
-import { GameProvider, useGameState, useDispatch } from './state/GameContext';
-import { runTick } from './simulation/gameLoop';
+import { useState } from 'react';
+import { GameProvider } from './state/GameContext';
+import SimulationRuntime from './state/SimulationRuntime';
 import RestaurantCanvas from './canvas/RestaurantCanvas';
 import StatsBar from './components/StatsBar';
 import BookIcon from './components/BookIcon';
@@ -8,38 +8,6 @@ import SettingsMenu from './components/SettingsMenu';
 import SpeedControls from './components/SpeedControls';
 import Toast from './components/Toast';
 import ManagementModal from './panels/ManagementModal';
-
-function GameLoopEngine() {
-  const state = useGameState();
-  const dispatch = useDispatch();
-  const stateRef = useRef(state);
-  stateRef.current = state;
-
-  useEffect(() => {
-    let lastTime = performance.now();
-    let animId;
-
-    function loop(now) {
-      const dt = (now - lastTime) / 1000;
-      lastTime = now;
-
-      const current = stateRef.current;
-      if (current && !current.paused) {
-        const nextState = runTick(current, dt);
-        if (nextState !== current) {
-          dispatch({ type: 'TICK', nextState });
-        }
-      }
-
-      animId = requestAnimationFrame(loop);
-    }
-
-    animId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animId);
-  }, [dispatch]);
-
-  return null;
-}
 
 function AppInner() {
   const [modalOpen, setModalOpen] = useState(false);
@@ -53,7 +21,6 @@ function AppInner() {
 
   return (
     <div className="app">
-      <GameLoopEngine />
       <StatsBar />
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <RestaurantCanvas
@@ -91,7 +58,9 @@ function AppInner() {
 export default function App() {
   return (
     <GameProvider>
-      <AppInner />
+      <SimulationRuntime>
+        <AppInner />
+      </SimulationRuntime>
     </GameProvider>
   );
 }

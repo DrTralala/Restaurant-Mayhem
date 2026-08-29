@@ -18,6 +18,18 @@ const baseState = {
   serviceTables: [],
 };
 
+it('reduces morale by 0.01 per game minute without using movement time', () => {
+  const state = {
+    ...baseState,
+    staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 100, y: 100, path: [], task: null }],
+  };
+
+  const result = updateStaff(state, { gameDt: 60, movementDt: 0 });
+
+  expect(result.staff[0].morale).toBeCloseTo(79.99);
+  expect(result.staff[0]).toMatchObject({ x: 100, y: 100 });
+});
+
 function corridorWalls(endX) {
   return [80, 120].flatMap(y => Array.from(
     { length: (endX - 60) / 20 + 1 },
@@ -140,6 +152,66 @@ describe('updateStaff', () => {
     expect(washing.serviceItems.filter(item => item.state === 'washing')).toHaveLength(2);
     expect(new Set(washing.serviceItems.filter(item => item.state === 'washing')
       .map(item => item.washStationId))).toEqual(new Set(['auto-1', 'auto-2']));
+  });
+
+  it('reserves only eight inbound deliveries for a manual sink', () => {
+    const washStations = [{ id: 'sink', type: 'manual', x: 300, y: 200, w: 40, h: 40 }];
+    const serviceItems = Array.from({ length: 9 }, (_, index) => ({
+      id: `dirty-${index}`, state: 'carried_dirty', tableId: `table-${index}`,
+    }));
+    const staff = serviceItems.map((item, index) => ({
+      id: `waiter-${index}`, role: 'waiter', morale: 80,
+      x: 100, y: 100 + index * 20, path: [], task: null, carryingServiceItemId: item.id,
+    }));
+
+    const result = updateStaff({ ...baseState, washStations, serviceItems, staff }, 0);
+
+    expect(result.staff.filter(worker => worker.task?.type === 'deliver_dirty_item')).toHaveLength(8);
+    expect(result.staff.filter(worker => worker.task == null && worker.carryingServiceItemId)).toHaveLength(1);
+  });
+
+  it('leaves dirty items at tables when every wash station is full', () => {
+    const washStations = [{ id: 'sink', type: 'manual', x: 300, y: 200, w: 40, h: 40 }];
+    const serviceItems = [
+      ...Array.from({ length: 8 }, (_, index) => ({
+        id: `queued-${index}`, state: 'queued_for_wash', washStationId: 'sink', washQueuedAt: index,
+      })),
+      { id: 'dirty', state: 'dirty_at_table', tableId: 't1' },
+    ];
+    const staff = [{ id: 'waiter', role: 'waiter', morale: 80, x: 180, y: 220, path: [], task: null }];
+
+    const result = updateStaff({
+      ...baseState,
+      washStations,
+      serviceItems,
+      staff,
+      tables: [{ id: 't1', status: 'dirty', x: 200, y: 200 }],
+    }, 0);
+
+    expect(result.serviceItems.find(item => item.id === 'dirty').state).toBe('dirty_at_table');
+    expect(result.staff[0].task?.type).not.toBe('collect_dirty_item');
+  });
+
+  it('rechecks capacity before delivering a reserved dirty item', () => {
+    const queued = Array.from({ length: 8 }, (_, index) => ({
+      id: `queued-${index}`, state: 'queued_for_wash', washStationId: 'sink', washQueuedAt: index,
+    }));
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      washStations: [{ id: 'sink', type: 'manual', x: 200, y: 200, w: 40, h: 40 }],
+      serviceItems: [...queued, { id: 'dirty', state: 'carried_dirty' }],
+      staff: [{
+        id: 'waiter', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
+        task: { type: 'deliver_dirty_item', serviceItemId: 'dirty', washStationId: 'sink' },
+        carryingServiceItemId: 'dirty',
+      }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.serviceItems.find(item => item.id === 'dirty')).toMatchObject({ state: 'carried_dirty' });
+    expect(result.staff[0]).toMatchObject({ task: null, carryingServiceItemId: 'dirty', path: [] });
   });
 
   it('does not claim a dirty item at a table with no reachable adjacent cell', () => {

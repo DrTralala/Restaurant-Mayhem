@@ -4,12 +4,17 @@ import RestaurantCanvas from './RestaurantCanvas';
 import { drawFurnitureLayer, drawStaffLayer } from './layers';
 import { calculateFitCamera } from './camera';
 import { useDispatch, useGameState } from '../state/GameContext';
+import { useRenderState } from '../state/SimulationRuntime';
 import { findClickedEntity } from './interaction';
 import { getRestaurantWorld } from '../simulation/world';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
   useDispatch: vi.fn(),
+}));
+
+vi.mock('../state/SimulationRuntime', () => ({
+  useRenderState: vi.fn(),
 }));
 
 vi.mock('./camera', () => ({
@@ -82,6 +87,7 @@ describe('RestaurantCanvas object movement', () => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
     useGameState.mockReturnValue(state);
+    useRenderState.mockImplementation(() => useGameState());
     useDispatch.mockReturnValue(vi.fn());
     findClickedEntity.mockReturnValue({ type: 'chair', data: chair, text: 'Chair' });
   });
@@ -303,6 +309,25 @@ describe('RestaurantCanvas object movement', () => {
     expect(drawStaffLayer).toHaveBeenCalledWith(
       expect.anything(), state, expect.anything(),
       { timeMs: 1250, reducedMotion: true },
+    );
+  });
+
+  it('draws interpolated characters while retaining canonical interaction state', () => {
+    const renderState = {
+      ...state,
+      staff: [{ id: 'moving', role: 'waiter', x: 150, y: 200 }],
+    };
+    useRenderState.mockReturnValue(renderState);
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { value: 600 });
+    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+
+    requestAnimationFrame.mock.calls[0][0](0);
+
+    expect(drawStaffLayer).toHaveBeenCalledWith(
+      expect.anything(), renderState, expect.anything(), expect.anything(),
     );
   });
 

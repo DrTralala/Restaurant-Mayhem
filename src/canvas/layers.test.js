@@ -4,7 +4,10 @@ import { updateStaff } from '../simulation/staff';
 import { processKitchen } from '../simulation/kitchen';
 
 function recordCtx(extraCanvas = {}) {
-  const calls = { arcs: [], texts: [], rects: [], fills: [], moves: [], lines: [], strokes: [] };
+  const calls = {
+    arcs: [], texts: [], rects: [], rectColours: [], strokeRects: [],
+    fills: [], moves: [], lines: [], strokes: [],
+  };
   let alpha = 1;
   let offsetX = 0;
   let offsetY = 0;
@@ -30,9 +33,17 @@ function recordCtx(extraCanvas = {}) {
     lineWidth: 1,
     arc: (x, y, r, start, end) => calls.arcs.push({ ...point(x, y), r, start, end, alpha }),
     fill: () => calls.fills.push({}),
-    fillRect: (x, y, w, h) => calls.rects.push({ ...point(x, y), w: w * figureScale, h: h * figureScale }),
+    fillRect(x, y, w, h) {
+      const rect = { ...point(x, y), w: w * figureScale, h: h * figureScale };
+      calls.rects.push(rect);
+      calls.rectColours.push({ ...rect, colour: this.fillStyle });
+    },
     fillText: (text, x, y) => calls.texts.push({ text, x, y, alpha }),
-    strokeRect: () => {},
+    strokeRect(x, y, w, h) {
+      calls.strokeRects.push({
+        ...point(x, y), w: w * figureScale, h: h * figureScale, colour: this.strokeStyle,
+      });
+    },
     _calls: calls,
   };
 }
@@ -174,7 +185,9 @@ describe('drawFurnitureLayer', () => {
       washStations: [{ id: 'sink', type: 'manual', x: 20, y: 20 }, { id: 'auto', type: 'automatic', x: 100, y: 20 }],
       serviceItems: [{ id: 'a', washStationId: 'auto', state: 'washing', washStartedAt: 0 },
         { id: 'b', washStationId: 'auto', state: 'queued_for_wash' }] }, { x: 0, y: 0, zoom: 1 });
-    expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining(['💦', 'SINK', 'AUTO', '×2']));
+    expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining([
+      '💦', 'SINK', 'AUTO', '0 / 8', '2 / 12',
+    ]));
     expect(ctx._calls.rects).toContainEqual(expect.objectContaining({ x: 143, y: 45, w: 1, h: 7 }));
   });
 
@@ -572,7 +585,7 @@ describe('drawCustomerLayer', () => {
     expect(ctx._calls.arcs[0].y).toBe(190);
   });
 
-  it('shows a menu held by a seated customer who is deciding', () => {
+  it('shows a cream open-book menu held by a seated customer who is deciding', () => {
     const customers = [
       { id: 'c1', archetype: 'regular', state: 'seated', tableId: 't1', chairId: 'ch1', dishId: null },
     ];
@@ -584,7 +597,12 @@ describe('drawCustomerLayer', () => {
     drawCustomerLayer(ctx, state, camera);
 
     expect(ctx._calls.lines.length).toBeGreaterThanOrEqual(5);
-    expect(ctx._calls.rects).toContainEqual({ x: 211, y: 193, w: 18, h: 12 });
+    expect(ctx._calls.rectColours).toContainEqual({
+      x: 208, y: 191, w: 24, h: 16, colour: '#f3e6bd',
+    });
+    expect(ctx._calls.strokeRects).toContainEqual({
+      x: 208, y: 191, w: 24, h: 16, colour: '#4d3a1f',
+    });
   });
 
   it('keeps the menu visible while a customer is ordering', () => {
@@ -598,9 +616,45 @@ describe('drawCustomerLayer', () => {
 
     drawCustomerLayer(ctx, state, camera);
 
-    expect(ctx._calls.rects).toContainEqual({ x: 211, y: 193, w: 18, h: 12 });
+    expect(ctx._calls.rects).toContainEqual({ x: 208, y: 191, w: 24, h: 16 });
     expect(ctx._calls.strokes).toContainEqual({ colour: '#e66a9c' });
     expect(ctx._calls.texts.some(call => call.text === 'ordering')).toBe(false);
+  });
+
+  it.each([0, 1, 2, 3])('keeps the ordering menu upright at chair rotation %s', rotation => {
+    const state = {
+      customers: [{
+        id: 'c1', archetype: 'regular', gender: 'female', state: 'ordering',
+        tableId: 't1', chairId: 'ch1', dishId: 'd1',
+      }],
+      tables: [{ id: 't1', x: 200, y: 200, status: 'occupied', seats: 2 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180, rotation }],
+      restaurant: {},
+    };
+    const ctx = recordCtx();
+
+    drawCustomerLayer(ctx, state, camera);
+
+    expect(ctx._calls.rects).toContainEqual({ x: 208, y: 191, w: 24, h: 16 });
+    expect(ctx._calls.moves).toContainEqual({ x: 220, y: 192 });
+    expect(ctx._calls.lines).toContainEqual({ x: 220, y: 206 });
+  });
+
+  it('hides the menu after the order while waiting for items', () => {
+    const state = {
+      customers: [{
+        id: 'c1', archetype: 'regular', state: 'waiting_for_items',
+        tableId: 't1', chairId: 'ch1', dishId: 'd1',
+      }],
+      tables: [{ id: 't1', x: 200, y: 200, status: 'occupied', seats: 2 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180, rotation: 0 }],
+      restaurant: {},
+    };
+    const ctx = recordCtx();
+
+    drawCustomerLayer(ctx, state, camera);
+
+    expect(ctx._calls.rects).not.toContainEqual({ x: 208, y: 191, w: 24, h: 16 });
   });
 
   it('does not render seated customers without an explicit valid chair', () => {

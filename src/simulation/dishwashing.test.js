@@ -1,8 +1,39 @@
 import { describe, expect, it } from 'vitest';
-import { markCustomerItemsDirty, releaseClearedTables, updateAutomaticDishwashers } from './dishwashing';
+import {
+  getWashStationCapacity,
+  getWashStationOccupancy,
+  hasWashStationCapacity,
+  markCustomerItemsDirty,
+  releaseClearedTables,
+  updateAutomaticDishwashers,
+} from './dishwashing';
 import { processKitchen } from './kitchen';
 
 describe('dishwashing lifecycle', () => {
+  it('balances manual and automatic station capacities', () => {
+    expect(getWashStationCapacity({ type: 'manual' })).toBe(8);
+    expect(getWashStationCapacity({ type: 'automatic' })).toBe(12);
+    expect(getWashStationCapacity({ type: 'unknown' })).toBe(0);
+  });
+
+  it('counts unique queued, washing, and inbound reserved items', () => {
+    const station = { id: 'sink', type: 'manual' };
+    const state = {
+      serviceItems: [
+        { id: 'washing', state: 'washing', washStationId: 'sink' },
+        { id: 'queued', state: 'queued_for_wash', washStationId: 'sink' },
+      ],
+      staff: [
+        { id: 'w1', task: { type: 'deliver_dirty_item', serviceItemId: 'inbound', washStationId: 'sink' } },
+        { id: 'w2', task: { type: 'deliver_dirty_item', serviceItemId: 'inbound', washStationId: 'sink' } },
+      ],
+    };
+
+    expect(getWashStationOccupancy(state, station)).toBe(3);
+    expect(getWashStationOccupancy(state, station, { excludeServiceItemId: 'inbound' })).toBe(2);
+    expect(hasWashStationCapacity(state, station)).toBe(true);
+  });
+
   it('marks only delivered items for the target customer dirty', () => {
     const result = markCustomerItemsDirty([
       { id: 'dish', customerId: 'c1', state: 'delivered' },
@@ -55,6 +86,23 @@ describe('dishwashing lifecycle', () => {
     const done = updateAutomaticDishwashers({ ...started, restaurant: { gameTime: 190 } });
     expect(done.serviceItems).toHaveLength(1);
     expect(done.serviceItems[0].state).toBe('queued_for_wash');
+  });
+
+  it('does not import an unassigned item when inbound reservations fill an automatic station', () => {
+    const station = { id: 'auto', type: 'automatic', x: 0, y: 0, w: 40, h: 40 };
+    const state = {
+      washStations: [station],
+      restaurant: { gameTime: 10 },
+      serviceItems: [{ id: 'unassigned', state: 'queued_for_wash', washStationId: null, washQueuedAt: 1 }],
+      staff: Array.from({ length: 12 }, (_, index) => ({
+        id: `w${index}`,
+        task: { type: 'deliver_dirty_item', serviceItemId: `inbound-${index}`, washStationId: 'auto' },
+      })),
+    };
+
+    const result = updateAutomaticDishwashers(state);
+
+    expect(result.serviceItems[0]).toMatchObject({ state: 'queued_for_wash', washStationId: null });
   });
 
   it.each(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing'])

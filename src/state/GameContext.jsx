@@ -10,6 +10,7 @@ import { assignWaiterToStation } from '../simulation/cashiers';
 import { getNextNumericId, snapPlacement, validatePlacement } from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
 import { hasValidDrinkReservation } from '../simulation/serviceItems';
+import { normaliseOperatingHour } from '../simulation/clock';
 
 const DISH_QUALITY_COST = 50;
 const TRAINING_COST = 100;
@@ -196,6 +197,15 @@ function gameReducer(state, action) {
       return action.nextState;
     case 'SET_SPEED':
       return { ...state, speed: action.speed };
+    case 'SET_OPERATING_HOURS': {
+      const openHour = normaliseOperatingHour(action.openHour, null);
+      const closeHour = normaliseOperatingHour(action.closeHour, null);
+      if (openHour == null || closeHour == null) return state;
+      return {
+        ...state,
+        restaurant: { ...state.restaurant, openHour, closeHour },
+      };
+    }
     case 'TOGGLE_PAUSE':
       return { ...state, paused: !state.paused };
     case 'UNLOCK_DRINK': {

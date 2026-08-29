@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
+import { useRenderState } from '../state/SimulationRuntime';
 import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } from './camera';
 import { loadSprites } from './sprites';
 import { drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer, drawSelectionLayer } from './layers';
@@ -49,6 +50,7 @@ export default function RestaurantCanvas({
   const viewportRef = useRef({ w: 0, h: 0 });
   const reducedMotionRef = useRef(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
   const state = useGameState();
+  const simulationRenderState = useRenderState();
   const dispatch = useDispatch();
   const [placement, setPlacement] = useState(null);
   const placementRef = useRef(null);
@@ -110,41 +112,41 @@ export default function RestaurantCanvas({
     canvas.style.height = canvas.clientHeight + 'px';
 
     try {
-      let renderState = state;
+      let renderState = simulationRenderState;
       if (moveRef.current) {
         const m = moveRef.current;
         if (m.type === 'table') {
           renderState = {
-            ...state,
-            tables: state.tables.map(t =>
+            ...simulationRenderState,
+            tables: simulationRenderState.tables.map(t =>
               t.id === m.id ? { ...t, x: m.x, y: m.y } : t
             ),
           };
         } else if (m.type === 'chair') {
           renderState = {
-            ...state,
-            chairs: state.chairs.map(ch =>
+            ...simulationRenderState,
+            chairs: simulationRenderState.chairs.map(ch =>
               ch.id === m.id ? { ...ch, x: m.x, y: m.y, rotation: m.rotation ?? ch.rotation } : ch
             ),
           };
         } else if (m.type === 'group') {
           renderState = {
-            ...state,
-            tables: state.tables.map(table => {
+            ...simulationRenderState,
+            tables: simulationRenderState.tables.map(table => {
               const item = m.items.find(candidate => candidate.type === 'table' && candidate.id === table.id);
               return item ? { ...table, x: item.x, y: item.y } : table;
             }),
-            chairs: state.chairs.map(chair => {
+            chairs: simulationRenderState.chairs.map(chair => {
               const item = m.items.find(candidate => candidate.type === 'chair' && candidate.id === chair.id);
               return item ? { ...chair, x: item.x, y: item.y } : chair;
             }),
-            washStations: (state.washStations || []).map(station => {
+            washStations: (simulationRenderState.washStations || []).map(station => {
               const item = m.items.find(candidate => candidate.type === 'washStation' && candidate.id === station.id);
               return item ? { ...station, x: item.x, y: item.y } : station;
             }),
           };
         } else if (m.type === 'washStation') {
-          renderState = { ...state, washStations: (state.washStations || []).map(station =>
+          renderState = { ...simulationRenderState, washStations: (simulationRenderState.washStations || []).map(station =>
             station.id === m.id ? { ...station, x: m.x, y: m.y } : station) };
         }
       }
@@ -163,7 +165,7 @@ export default function RestaurantCanvas({
       ctx.font = '14px monospace';
       ctx.fillText('Render error: ' + err.message, 20, 40);
     }
-  }, [state, selectedItems, placement]);
+  }, [state, simulationRenderState, selectedItems, placement]);
 
   useEffect(() => {
     if (!placementRequest) {

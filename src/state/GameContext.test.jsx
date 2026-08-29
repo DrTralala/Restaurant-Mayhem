@@ -84,6 +84,28 @@ function renderReducer(overrides = {}) {
   };
 }
 
+describe('GameProvider operating-hours actions', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('updates valid half-hour values atomically', () => {
+    const game = renderReducer();
+
+    game.dispatch({ type: 'SET_OPERATING_HOURS', openHour: 18.5, closeHour: 2 });
+
+    expect(game.state.restaurant).toMatchObject({ openHour: 18.5, closeHour: 2 });
+  });
+
+  it('leaves both hours unchanged when either value is invalid', () => {
+    const game = renderReducer({ restaurant: { openHour: 10, closeHour: 22 } });
+    const before = game.state;
+
+    game.dispatch({ type: 'SET_OPERATING_HOURS', openHour: 10.25, closeHour: 2 });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
+  });
+});
+
 describe('GameProvider staff actions', () => {
   beforeEach(() => localStorage.clear());
 

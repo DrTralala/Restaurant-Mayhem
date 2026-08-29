@@ -1,5 +1,6 @@
 import { screenToWorld } from './camera';
 import { getDefaultStaffPosition } from '../simulation/world';
+import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/dishwashing';
 
 export function findClickedEntity(state, camera, screenX, screenY) {
   const world = screenToWorld(camera, screenX, screenY);
@@ -67,11 +68,11 @@ export function findClickedEntity(state, camera, screenX, screenY) {
   for (const station of state.washStations || []) {
     if (world.x >= station.x && world.x <= station.x + (station.w || 40)
       && world.y >= station.y && world.y <= station.y + (station.h || 40)) {
-      const waiting = (state.serviceItems || []).filter(item => item.washStationId === station.id
-        && ['queued_for_wash', 'washing'].includes(item.state)).length;
+      const occupancy = getWashStationOccupancy(state, station);
+      const capacity = getWashStationCapacity(station);
       return {
         type: 'washStation', data: station,
-        text: `${station.type === 'automatic' ? 'Automatic Dishwasher' : 'Sink'} · ${waiting} waiting`,
+        text: `${station.type === 'automatic' ? 'Automatic Dishwasher' : 'Sink'} · ${occupancy} / ${capacity}`,
       };
     }
   }

@@ -2,6 +2,15 @@ function finiteNumber(value, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+export const CUSTOMER_PATIENCE = Object.freeze({
+  regular: 15 * 60,
+  foodie: 20 * 60,
+  rusher: 10 * 60,
+  influencer: 18 * 60,
+});
+
+export const ABANDONMENT_REPUTATION_PENALTY = 0.1;
+
 export function clampReputation(value) {
   return Math.min(5, Math.max(1, finiteNumber(value, 1)));
 }
@@ -12,9 +21,14 @@ export function getUpgradeEffect(state, type) {
   return finiteNumber(upgrade.effects?.value) * finiteNumber(upgrade.level);
 }
 
+export function getBaseArrivalRate(reputation) {
+  const stars = clampReputation(reputation);
+  return 0.00055 + (stars - 1) * 0.00005;
+}
+
 export function getQueuePatienceMultiplier(queue) {
   const parties = new Set((queue || []).map((customer, index) => customer?.partyId ?? customer?.id ?? index)).size;
-  return Math.min(2, 1 + Math.max(0, parties - 1) * 0.1);
+  return Math.min(1.5, 1 + Math.max(0, parties - 1) * 0.1);
 }
 
 export function getTipRate(happiness) {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getBaseArrivalRate,
   clampReputation,
   getDishValueScore,
   getQueuePatienceMultiplier,
@@ -32,6 +33,21 @@ describe('balance helpers', () => {
 
     expect(getQueuePatienceMultiplier(oneParty)).toBe(1);
     expect(getQueuePatienceMultiplier(sixParties)).toBe(1.5);
+  });
+
+  it('caps queue pressure at 1.5 for heavily backed-up service', () => {
+    const twentyParties = Array.from({ length: 20 }, (_, index) => ({
+      id: `c${index}`,
+      partyId: `p${index}`,
+    }));
+
+    expect(getQueuePatienceMultiplier(twentyParties)).toBe(1.5);
+  });
+
+  it('paces ordinary off-peak arrivals between 20 and 30 real seconds apart', () => {
+    expect(1 / (getBaseArrivalRate(1) * 60)).toBeCloseTo(30.303, 3);
+    expect(1 / (getBaseArrivalRate(3) * 60)).toBeCloseTo(25.641, 3);
+    expect(1 / (getBaseArrivalRate(5) * 60)).toBeCloseTo(22.222, 3);
   });
 
   it('preserves a 20% tip at 80 happiness', () => {

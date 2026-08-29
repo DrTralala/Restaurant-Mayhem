@@ -15,6 +15,7 @@ vi.mock('./ItemsPanel', () => ({
 vi.mock('./StaffPanel', () => ({ default: () => <div>Staff panel</div> }));
 vi.mock('./MilestonePanel', () => ({ default: () => <div>Milestone panel</div> }));
 vi.mock('./StatsPanel', () => ({ default: () => <div>Stats panel</div> }));
+vi.mock('./HoursPanel', () => ({ default: () => <div>Hours panel</div> }));
 
 describe('ManagementModal', () => {
   it('opens physical furniture in a separate Items tab', () => {
@@ -33,5 +34,13 @@ describe('ManagementModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Items panel' }));
 
     expect(startPlacement).toHaveBeenCalledWith('cashierTable');
+  });
+
+  it('opens operating hours in a dedicated Hours tab', () => {
+    render(<ManagementModal isOpen onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hours' }));
+
+    expect(screen.getByText('Hours panel')).toBeInTheDocument();
   });
 });

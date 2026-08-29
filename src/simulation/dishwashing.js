@@ -1,6 +1,32 @@
 import { ACTIVITY_DURATIONS } from './activity';
 
 const DIRTY_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
+const WASH_STATION_CAPACITY = Object.freeze({ manual: 8, automatic: 12 });
+
+export function getWashStationCapacity(station) {
+  return WASH_STATION_CAPACITY[station?.type] ?? 0;
+}
+
+export function getWashStationOccupancy(state, station, { excludeServiceItemId = null } = {}) {
+  if (!station?.id) return 0;
+  const ids = new Set((state.serviceItems || [])
+    .filter(item => item.id !== excludeServiceItemId
+      && item.washStationId === station.id
+      && ['queued_for_wash', 'washing'].includes(item.state))
+    .map(item => item.id));
+  for (const worker of state.staff || []) {
+    if (worker.task?.type === 'deliver_dirty_item'
+      && worker.task.washStationId === station.id
+      && worker.task.serviceItemId !== excludeServiceItemId) {
+      ids.add(worker.task.serviceItemId);
+    }
+  }
+  return ids.size;
+}
+
+export function hasWashStationCapacity(state, station, options) {
+  return getWashStationOccupancy(state, station, options) < getWashStationCapacity(station);
+}
 
 export function markCustomerItemsDirty(serviceItems, customerId, gameTime) {
   return (serviceItems || []).map(item => item.customerId === customerId && item.state === 'delivered'
@@ -55,7 +81,7 @@ export function updateAutomaticDishwashers(state) {
       .filter(item => item.state === 'queued_for_wash' && item.washStationId == null)
       .sort((a, b) => (a.washQueuedAt ?? 0) - (b.washQueuedAt ?? 0)
         || String(a.id).localeCompare(String(b.id)))[0];
-    if (unassigned) {
+    if (unassigned && hasWashStationCapacity({ ...state, serviceItems }, station)) {
       const unassignedIndex = serviceItems.indexOf(unassigned);
       serviceItems = serviceItems.map((item, index) => index === unassignedIndex
         ? { ...item, washStationId: station.id, state: 'washing', washStartedAt: now }

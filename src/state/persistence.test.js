@@ -28,6 +28,23 @@ describe('loadState', () => {
 });
 
 describe('hydrateState', () => {
+  it('hydrates missing, malformed, and legacy operating hours safely', () => {
+    const fresh = createInitialState();
+    const missing = hydrateState({ ...fresh, restaurant: { funds: 900 } }, fresh);
+    const malformed = hydrateState({
+      ...fresh,
+      restaurant: { ...fresh.restaurant, openHour: 10.25, closeHour: '22' },
+    }, fresh);
+    const legacy = hydrateState({
+      ...fresh,
+      restaurant: { ...fresh.restaurant, openHour: 0, closeHour: 24 },
+    }, fresh);
+
+    expect(missing.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
+    expect(malformed.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
+    expect(legacy.restaurant).toMatchObject({ openHour: 0, closeHour: 0 });
+  });
+
   it('fills fields added after an existing same-version save was created', () => {
     const fresh = {
       version: 4,
@@ -46,7 +63,7 @@ describe('hydrateState', () => {
 
     expect(hydrateState(saved, fresh)).toEqual({
       version: 4,
-      restaurant: { funds: 999, totalServed: 0 },
+      restaurant: { funds: 999, totalServed: 0, openHour: 10, closeHour: 22 },
       staff: [{ id: 'custom-cook', gender: 'male' }],
       serviceTables: [{ id: 'st1' }],
       serviceItems: [],

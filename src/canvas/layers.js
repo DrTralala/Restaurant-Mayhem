@@ -5,6 +5,7 @@ import { getServiceItemEmoji } from './serviceItemEmoji';
 import { getChairFacingRadians, getPlaceSettingPositions } from './tableGeometry';
 import { ACTIVITY_DURATIONS, getRemainingFraction } from '../simulation/activity';
 import { getUpgradeEffect } from '../simulation/balance';
+import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/dishwashing';
 
 function drawVerticalProgress(ctx, x, y, remaining) {
   if (!Number.isFinite(remaining)) return;
@@ -89,15 +90,23 @@ function drawStickFigure(ctx, x, y, color, { seated = false, walking = false, cl
 }
 
 function drawMenu(ctx, x, y) {
+  const left = x - 12;
+  const top = y + 1;
+  ctx.save();
   ctx.fillStyle = '#f3e6bd';
-  ctx.fillRect(x - 9, y + 3, 18, 12);
-  ctx.strokeStyle = '#8f7648';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(x - 9, y + 3, 18, 12);
+  ctx.strokeStyle = '#4d3a1f';
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(left, top, 24, 16);
+  ctx.strokeRect(left, top, 24, 16);
   ctx.beginPath();
-  ctx.moveTo(x, y + 4);
-  ctx.lineTo(x, y + 14);
+  ctx.moveTo(x, top + 1);
+  ctx.lineTo(x, top + 15);
+  ctx.moveTo(left + 3, top + 5);
+  ctx.lineTo(x - 3, top + 5);
+  ctx.moveTo(x + 3, top + 5);
+  ctx.lineTo(left + 21, top + 5);
   ctx.stroke();
+  ctx.restore();
 }
 
 export function drawFloorLayer(ctx, state, camera) {
@@ -283,7 +292,9 @@ export function drawFurnitureLayer(ctx, state, camera) {
     ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
     const items = (state.serviceItems || []).filter(item => item.washStationId === station.id
       && ['queued_for_wash', 'washing'].includes(item.state));
-    if (items.length > 1) ctx.fillText(`×${items.length}`, station.x + w + 2, station.y + 10);
+    ctx.fillText(`${getWashStationOccupancy(state, station)} / ${getWashStationCapacity(station)}`,
+      station.x + w / 2, station.y + h + 10);
+    ctx.textAlign = 'start';
     const active = items.find(item => item.state === 'washing');
     if (active) drawVerticalProgress(ctx, station.x + w + 2, station.y + 18,
       getRemainingFraction(state.restaurant?.gameTime, active.washStartedAt,

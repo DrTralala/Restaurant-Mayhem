@@ -33,15 +33,15 @@ describe('runTick', () => {
     expect(result).toBe(state);
   });
 
-  it('advances gameTime on the 60x game-time scale', () => {
-    const result = runTick(emptyState, 5);
-    expect(result.restaurant.gameTime).toBe(400);
+  it('advances only by the supplied game-time duration', () => {
+    const result = runTick(emptyState, { gameDt: 2, movementDt: 1 / 30 });
+    expect(result.restaurant.gameTime).toBe(102);
   });
 
-  it('applies speed multiplier', () => {
+  it('does not apply the speed multiplier a second time', () => {
     const state = { ...emptyState, speed: 2 };
-    const result = runTick(state, 5);
-    expect(result.restaurant.gameTime).toBe(700); // 100 + 5 * 2 * 60
+    const result = runTick(state, { gameDt: 4, movementDt: 2 / 30 });
+    expect(result.restaurant.gameTime).toBe(104);
   });
 
   it('creates floor dirt before staff assignment so a janitor can claim it in the same tick', () => {
@@ -55,15 +55,6 @@ describe('runTick', () => {
     expect(result.floorDirt).toHaveLength(1);
     expect(result.staff[0].task).toMatchObject({ type: 'clean_floor', dirtId: 'dirt-1' });
   });
-
-  it.each([[1, 60], [2, 120], [4, 240]])(
-    'advances %s speed by %s game seconds for one real second',
-    (speed, expected) => {
-      const initial = createInitialState();
-      const state = { ...initial, speed, restaurant: { ...initial.restaurant, gameTime: 0 } };
-      expect(runTick(state, 1).restaurant.gameTime).toBe(expected);
-    },
-  );
 
   it('releases stale carried service items for cleanup without leaving a carrier reference', () => {
     const state = {

@@ -1,6 +1,7 @@
 const SAVE_KEY = 'restaurant-sim-save';
 import { inferGender } from '../canvas/characterAppearance';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
+import { normaliseOperatingHour } from '../simulation/clock';
 
 export function saveState(state) {
   try {
@@ -46,6 +47,14 @@ export function hydrateState(saved, fresh) {
     floorDirt: Array.isArray(saved.floorDirt) ? saved.floorDirt : fresh.floorDirt,
     washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
   };
+  hydrated.restaurant.openHour = normaliseOperatingHour(
+    hydrated.restaurant.openHour,
+    normaliseOperatingHour(fresh.restaurant.openHour, 10),
+  );
+  hydrated.restaurant.closeHour = normaliseOperatingHour(
+    hydrated.restaurant.closeHour,
+    normaliseOperatingHour(fresh.restaurant.closeHour, 22),
+  );
 
   if ('staffSlots' in saved || 'staffSlots' in fresh) {
     hydrated.staffSlots = Math.max(fresh.staffSlots || 0, staff.length, saved.staffSlots || 0);

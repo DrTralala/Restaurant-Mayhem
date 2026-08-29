@@ -5,6 +5,7 @@ import ItemsPanel from './ItemsPanel';
 import StaffPanel from './StaffPanel';
 import MilestonePanel from './MilestonePanel';
 import StatsPanel from './StatsPanel';
+import HoursPanel from './HoursPanel';
 
 const TABS = [
   { key: 'menu', label: 'Menu' },
@@ -13,6 +14,7 @@ const TABS = [
   { key: 'staff', label: 'Staff' },
   { key: 'milestones', label: 'Milestones' },
   { key: 'stats', label: 'Stats' },
+  { key: 'hours', label: 'Hours' },
 ];
 
 export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
@@ -38,7 +40,7 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           padding: '12px 16px', borderBottom: '1px solid #0f3460',
         }}>
-          <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {TABS.map(t => (
               <button
                 key={t.key}
@@ -69,6 +71,7 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
           {tab === 'staff' && <StaffPanel />}
           {tab === 'milestones' && <MilestonePanel />}
           {tab === 'stats' && <StatsPanel />}
+          {tab === 'hours' && <HoursPanel />}
         </div>
       </div>
     </div>

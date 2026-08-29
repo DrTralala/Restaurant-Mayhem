@@ -13,7 +13,7 @@ import {
   hasValidDrinkReservation,
 } from './serviceItems';
 import { ACTIVITY_DURATIONS } from './activity';
-import { markCustomerItemsDirty, releaseClearedTables } from './dishwashing';
+import { hasWashStationCapacity, markCustomerItemsDirty, releaseClearedTables } from './dishwashing';
 
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
   return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
@@ -137,7 +137,9 @@ function projectedWashWorkload(state, station, staff, serviceItems, allStaff) {
 }
 
 function selectWashStation(state, staff, serviceItems, allStaff) {
+  const occupancyState = { ...state, staff: allStaff || state.staff || [], serviceItems };
   return (state.washStations || [])
+    .filter(station => hasWashStationCapacity(occupancyState, station))
     .map(station => ({
       station,
       path: targetForRectOrCurrent(state, station, staff),
@@ -378,9 +380,10 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       }
     }
 
-    const dirtyItem = serviceItems
+    const hasWashCapacity = selectWashStation(state, staff, serviceItems, allStaff) != null;
+    const dirtyItem = hasWashCapacity ? serviceItems
       .filter(item => item.state === 'dirty_at_table' && (!claimedServiceItemIds?.has(item.id)))
-      .sort((a, b) => (a.dirtyAt ?? 0) - (b.dirtyAt ?? 0))[0];
+      .sort((a, b) => (a.dirtyAt ?? 0) - (b.dirtyAt ?? 0))[0] : null;
     if (dirtyItem) {
       const table = tables.find(candidate => candidate.id === dirtyItem.tableId);
       const path = table ? targetForRectOrCurrent(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff) : null;
@@ -817,6 +820,12 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     if (deliveryPath.length) {
       return { staff: { ...staff, path: deliveryPath }, queue, tables, customers, serviceItems };
     }
+    if (!hasWashStationCapacity(state, station, { excludeServiceItemId: item.id })) {
+      return {
+        staff: { ...completedStaff, path: [], carryingServiceItemId: item.id },
+        queue, tables, customers, serviceItems,
+      };
+    }
     return {
       staff: { ...completedStaff, carryingServiceItemId: null, path: [] }, queue, tables, customers,
       serviceItems: serviceItems.map(candidate => candidate.id === item.id
@@ -1042,7 +1051,9 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
   return { staff: completedStaff, customers, queue, tables, serviceItems };
 }
 
-export function updateStaff(state, dt) {
+export function updateStaff(state, timing) {
+  const gameDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.gameDt) || 0);
+  const movementDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.movementDt) || 0);
   state = normaliseServiceItemOwnership(state);
   let customers = [...(state.customers || [])];
   let queue = [...(state.queue || [])];
@@ -1059,7 +1070,7 @@ export function updateStaff(state, dt) {
 
   let staff = ensureStaffRuntime(state.staff, state).map(s => ({
     ...s,
-    morale: Math.max(0, s.morale - 0.01 * dt),
+    morale: Math.max(0, s.morale - 0.01 * gameDt / 60),
     carryingServiceItemId: s.carryingServiceItemId ?? null,
   }));
 
@@ -1120,7 +1131,7 @@ export function updateStaff(state, dt) {
     }
   }
 
-  staff = staff.map((s, index, allStaff) => moveCharacterWithRecovery({ ...state, customers, tables, serviceItems }, s, dt, [
+  staff = staff.map((s, index, allStaff) => moveCharacterWithRecovery({ ...state, customers, tables, serviceItems }, s, movementDt, [
     ...allStaff.filter((_, candidateIndex) => candidateIndex !== index),
     ...customers,
   ], s.role === 'waiter' ? 75 : 55, s.task?.type === 'guide_customer'
@@ -1149,13 +1160,13 @@ export function updateStaff(state, dt) {
             [s.id, ...ids],
           );
         let movedCustomer = followed;
-        let remainingDistance = Math.max(0, 62 * dt);
+        let remainingDistance = Math.max(0, 62 * movementDt);
         for (let step = 0; step < 16 && movedCustomer.path?.length; step += 1) {
           const beforeStep = movedCustomer;
           const candidate = moveCharacterWithRecovery(
             { ...state, customers, tables, serviceItems },
             movedCustomer,
-            dt / 16,
+            movementDt / 16,
             others,
             62,
             [s.id, ...ids],

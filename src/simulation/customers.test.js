@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { getExitHeading, spawnCustomers, updateCustomers } from './customers';
 import { buildBlockedCells, worldToCell } from './pathfinding';
+import { UPGRADES } from '../data/upgrades';
 
 const baseState = {
   restaurant: { reputation: 3.0, gameTime: 12 * 3600, openHour: 10, closeHour: 22, totalServed: 0 },
@@ -20,21 +21,30 @@ describe('spawnCustomers', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('scales spawning probability by elapsed time instead of animation frames', () => {
-    vi.spyOn(Math, 'random').mockReturnValue(0.01);
+    vi.spyOn(Math, 'random').mockReturnValue(0.03);
 
-    const frameResult = spawnCustomers(baseState, 0.016);
-    const oneSecondResult = spawnCustomers(baseState, 1);
+    const frameResult = spawnCustomers(baseState, 1);
+    const oneRealSecondResult = spawnCustomers(baseState, 60);
 
     expect(frameResult.queue).toHaveLength(0);
-    expect(oneSecondResult.queue).toHaveLength(1);
+    expect(oneRealSecondResult.queue).toHaveLength(1);
+  });
+
+  it('spawns dinner-rush parties every 8 to 15 real seconds on average', () => {
+    const dinner = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 19 * 3600 } };
+    vi.spyOn(Math, 'random').mockReturnValue(0.1);
+
+    expect(spawnCustomers(dinner, 60).queue).toHaveLength(1);
+
+    vi.restoreAllMocks();
+    vi.spyOn(Math, 'random').mockReturnValue(0.12);
+    expect(spawnCustomers(dinner, 60).queue).toHaveLength(0);
   });
 
   it('spawns customers into queue when restaurant is open', () => {
     const state = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 } };
-    let result = state;
-    for (let i = 0; i < 200; i++) {
-      result = spawnCustomers(result);
-    }
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const result = spawnCustomers(state, 60);
     expect(result.queue.length).toBeGreaterThan(0);
     expect(result.queue[0].state).toBe('queued');
     expect(result.queue[0].tableId).toBeNull();
@@ -55,21 +65,22 @@ describe('spawnCustomers', () => {
     expect(result.queue[0].state).toBe('queued');
   });
 
-  it('spawns regardless of the time of day', () => {
+  it('does not spawn while the restaurant is closed', () => {
     const state = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 3 * 3600 } };
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    let result = state;
-    result = spawnCustomers(result, 1);
-    expect(result.queue.length).toBeGreaterThan(0);
+    const result = spawnCustomers(state, 60);
+    expect(result).toBe(state);
+    expect(result.queue).toHaveLength(0);
   });
 
   it('includes archetype in spawned customer', () => {
     const state = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 } };
-    let result = state;
-    for (let i = 0; i < 200; i++) {
-      result = spawnCustomers(result);
-      if (result.queue.length > 0) break;
-    }
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.7)
+      .mockReturnValueOnce(0);
+    const result = spawnCustomers(state, 60);
     const archetypes = ['regular', 'foodie', 'rusher', 'influencer'];
     expect(archetypes).toContain(result.queue[0].archetype);
   });
@@ -114,20 +125,84 @@ describe('spawnCustomers', () => {
   });
 
   it('applies configured marketing and ambient-lighting effects', () => {
-    vi.spyOn(Math, 'random').mockReturnValue(0.04);
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0.08)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0);
     const upgrades = [
-      { level: 2, effects: { type: 'customerRate', value: 0.02 } },
+      { level: 2, effects: { type: 'customerRate', value: 0.0001 } },
       { level: 2, effects: { type: 'happiness', value: 5 } },
     ];
 
-    const result = spawnCustomers({ ...baseState, upgrades }, 1);
+    const result = spawnCustomers({ ...baseState, upgrades }, 60);
 
     expect(result.queue).toHaveLength(1);
     expect(result.queue[0].happiness).toBe(90);
   });
+
+  it('keeps the configured marketing campaign proportional to the corrected arrival rate', () => {
+    const upgrades = UPGRADES.map(upgrade => upgrade.id === 'u5' ? { ...upgrade, level: 2 } : upgrade);
+    vi.spyOn(Math, 'random').mockReturnValue(0.1);
+
+    const result = spawnCustomers({ ...baseState, upgrades }, 60);
+
+    expect(result.queue).toHaveLength(0);
+  });
+
+  it.each([
+    [0, 900],
+    [0.5, 1200],
+    [0.7, 600],
+    [0.9, 1080],
+  ])('assigns balanced patience for archetype roll %s', (archetypeRoll, expectedPatience) => {
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(archetypeRoll)
+      .mockReturnValueOnce(0);
+
+    const result = spawnCustomers(baseState, 60);
+
+    expect(result.queue[0].patience).toBe(expectedPatience);
+  });
 });
 
 describe('updateCustomers', () => {
+  it('sends outside queued parties away without a reputation penalty when closed', () => {
+    const queue = [
+      { id: 'q1', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
+      { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
+    ];
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 22 * 3600 },
+      queue,
+    };
+
+    const result = updateCustomers(state, { gameDt: 60, movementDt: 0 });
+
+    expect(result.queue).toEqual([]);
+    expect(result.customers).toHaveLength(2);
+    expect(result.customers.every(customer => customer.state === 'leaving')).toBe(true);
+    expect(result.customers.every(customer => customer.reputationApplied)).toBe(true);
+    expect(result.customers.every(customer => customer.closedAt === 22 * 3600)).toBe(true);
+    expect(result.restaurant.reputation).toBe(3);
+  });
+
+  it('continues serving admitted customers after closing', () => {
+    const customer = { id: 'c1', state: 'eating', patience: 100, happiness: 80 };
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 22 * 3600 },
+      customers: [customer],
+    };
+
+    const result = updateCustomers(state, { gameDt: 60, movementDt: 0 });
+
+    expect(result.customers).toEqual([customer]);
+  });
+
   it('derives one stable outward heading from each customer ID', () => {
     const first = getExitHeading('c1');
     const repeated = getExitHeading('c1');
@@ -595,15 +670,79 @@ describe('updateCustomers', () => {
     expect(result.customers[0].patience).toBe(100);
   });
 
-  it('lowers reputation once for each abandoning customer', () => {
-    const customer = { id: 'c1', state: 'waiting', patience: 1, happiness: 80 };
+  it.each(['guided', 'ordering', 'eating'])('does not reduce patience while a customer is %s', stateName => {
+    const customer = { id: 'c1', state: stateName, patience: 100, happiness: 80 };
 
-    const abandoned = updateCustomers({ ...baseState, customers: [customer] }, 2);
+    const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+
+    expect(result.customers[0].patience).toBe(100);
+  });
+
+  it('does not reduce patience during active payment', () => {
+    const customer = { id: 'c1', state: 'paying', patience: 100, happiness: 80 };
+    const staff = [{ id: 'w1', task: { type: 'take_payment', customerId: 'c1' } }];
+
+    const result = updateCustomers({ ...baseState, customers: [customer], staff }, 10);
+
+    expect(result.customers[0].patience).toBe(100);
+  });
+
+  it.each(['waiting', 'seated', 'waiting_for_items', 'paying'])('reduces patience while a customer is %s', stateName => {
+    const customer = { id: 'c1', state: stateName, patience: 100, happiness: 80 };
+
+    const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+
+    expect(result.customers[0].patience).toBe(90);
+  });
+
+  it('uses game time for patience independently of movement time', () => {
+    const customer = { id: 'c1', state: 'waiting', patience: 100, happiness: 80 };
+
+    const result = updateCustomers(
+      { ...baseState, customers: [customer] },
+      { gameDt: 60, movementDt: 0 },
+    );
+
+    expect(result.customers[0].patience).toBe(40);
+  });
+
+  it('makes the whole party leave and lowers reputation once per abandoning party', () => {
+    const customers = [
+      { id: 'c1', partyId: 'p1', state: 'waiting', patience: 1, happiness: 80 },
+      { id: 'c2', partyId: 'p1', state: 'ordering', patience: 100, happiness: 80 },
+    ];
+
+    const abandoned = updateCustomers({ ...baseState, customers }, 2);
     const updatedAgain = updateCustomers(abandoned, 2);
 
-    expect(abandoned.restaurant.reputation).toBe(2.98);
-    expect(abandoned.customers[0].reputationApplied).toBe(true);
-    expect(updatedAgain.restaurant.reputation).toBe(2.98);
+    expect(abandoned.restaurant.reputation).toBe(2.9);
+    expect(abandoned.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
+    expect(abandoned.customers.every(customer => customer.reputationApplied)).toBe(true);
+    expect(updatedAgain.restaurant.reputation).toBe(2.9);
+  });
+
+  it('penalises separate abandoning parties independently', () => {
+    const customers = [
+      { id: 'c1', partyId: 'p1', state: 'waiting', patience: 1, happiness: 80 },
+      { id: 'c2', partyId: 'p2', state: 'waiting_for_items', patience: 1, happiness: 80 },
+    ];
+
+    const result = updateCustomers({ ...baseState, customers }, 2);
+
+    expect(result.restaurant.reputation).toBe(2.8);
+  });
+
+  it('removes an entire queued party with one reputation penalty', () => {
+    const queue = [
+      { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
+      { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
+    ];
+
+    const result = updateCustomers({ ...baseState, queue }, 2);
+
+    expect(result.queue).toHaveLength(0);
+    expect(result.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
+    expect(result.restaurant.reputation).toBe(2.9);
   });
 
   it('spawn never assigns tableId or adds directly to customers', () => {

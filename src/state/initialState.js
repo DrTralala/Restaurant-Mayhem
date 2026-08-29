@@ -12,8 +12,8 @@ export function createInitialState() {
       day: 1,
       gameTime: 10 * 3600, // start at 10:00 AM
       totalServed: 0,
-      openHour: 0,
-      closeHour: 24,
+      openHour: 10,
+      closeHour: 22,
       expansionLevel: 1,
     },
     tables: [

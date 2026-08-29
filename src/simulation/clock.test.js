@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   advanceClock, getClockHandAngles, getRushHourMultiplier,
-  isRestaurantOpen, secondsToGameTime,
+  formatOperatingHour, isRestaurantOpen, normaliseOperatingHour, secondsToGameTime,
 } from './clock';
 
 describe('advanceClock', () => {
@@ -92,14 +92,36 @@ describe('advanceClock', () => {
 });
 
 describe('isRestaurantOpen', () => {
-  it('returns true during open hours', () => {
-    const state = { restaurant: { gameTime: 15 * 3600, openHour: 10, closeHour: 22 } };
-    expect(isRestaurantOpen(state)).toBe(true);
+  it.each([
+    [10 * 3600, 10, 22, true],
+    [22 * 3600, 10, 22, false],
+    [23 * 3600, 18, 2, true],
+    [1.5 * 3600, 18, 2, true],
+    [2 * 3600, 18, 2, false],
+    [5 * 3600, 0, 0, true],
+  ])('evaluates %s with %s-%s as %s', (gameTime, openHour, closeHour, expected) => {
+    expect(isRestaurantOpen({ restaurant: { gameTime, openHour, closeHour } })).toBe(expected);
   });
 
-  it('is always open', () => {
-    const state = { restaurant: { gameTime: 5 * 3600, openHour: 10, closeHour: 22 } };
-    expect(isRestaurantOpen({ restaurant: { gameTime: 3 * 3600 } })).toBe(true);
+  it('uses the default schedule when stored hours are malformed or missing', () => {
+    expect(isRestaurantOpen({ restaurant: { gameTime: 9 * 3600 } })).toBe(false);
+    expect(isRestaurantOpen({ restaurant: {
+      gameTime: 12 * 3600, openHour: 10.25, closeHour: Number.NaN,
+    } })).toBe(true);
+  });
+});
+
+describe('operating-hour helpers', () => {
+  it.each([
+    [10, 10], [10.5, 10.5], [24, 0], [-1, 10], [10.25, 10],
+  ])('normalises %s to %s', (input, expected) => {
+    expect(normaliseOperatingHour(input, 10)).toBe(expected);
+  });
+
+  it('formats normalised half-hour values for display', () => {
+    expect(formatOperatingHour(0)).toBe('12:00 AM');
+    expect(formatOperatingHour(18.5)).toBe('6:30 PM');
+    expect(formatOperatingHour(24)).toBe('12:00 AM');
   });
 });
 

@@ -2,7 +2,14 @@ import { getRushHourMultiplier, isRestaurantOpen } from './clock';
 import { buildBlockedCells, worldToCell } from './pathfinding';
 import { moveCharacterTowards, moveCharacterWithRecovery, planCharacterPath } from './movement';
 import { getCashierCustomerPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
-import { clampReputation, getQueuePatienceMultiplier, getUpgradeEffect } from './balance';
+import {
+  ABANDONMENT_REPUTATION_PENALTY,
+  CUSTOMER_PATIENCE,
+  clampReputation,
+  getBaseArrivalRate,
+  getQueuePatienceMultiplier,
+  getUpgradeEffect,
+} from './balance';
 
 let customerIdCounter = 0;
 let partyIdCounter = 0;
@@ -55,6 +62,18 @@ function nextCustomerId() {
 }
 
 const ARCHETYPES = ['regular', 'regular', 'regular', 'foodie', 'rusher', 'influencer'];
+const PATIENCE_STATES = new Set(['waiting', 'seated', 'waiting_for_items']);
+
+function partyKey(customer) {
+  return customer.partyId ?? customer.id;
+}
+
+function isWaitingForService(customer, staff) {
+  if (PATIENCE_STATES.has(customer.state)) return true;
+  return customer.state === 'paying'
+    && !(staff || []).some(worker => worker.task?.type === 'take_payment'
+      && worker.task.customerId === customer.id);
+}
 
 function chooseParty() {
   const roll = Math.random();
@@ -69,15 +88,13 @@ export function spawnCustomers(state, dt = 1) {
   const queuedParties = new Set((state.queue || []).map((customer, index) => customer.partyId ?? customer.id ?? index)).size;
   if (queuedParties >= 8) return state;
 
-  const baseRatePerSecond = Math.max(0, 0.018
-    + (state.restaurant.reputation - 1) * 0.004
+  const baseRatePerSecond = Math.max(0, getBaseArrivalRate(state.restaurant.reputation)
     + getUpgradeEffect(state, 'customerRate'));
   const spawnRatePerSecond = baseRatePerSecond
     * getRushHourMultiplier(state.restaurant.gameTime);
   const spawnProbability = 1 - Math.exp(-spawnRatePerSecond * Math.max(0, dt));
   if (Math.random() > spawnProbability) return state;
 
-  const patienceMap = { regular: 240, foodie: 330, rusher: 150, influencer: 270 };
   const party = chooseParty();
   const partyId = `p${++partyIdCounter}`;
   const archetype = ARCHETYPES[Math.floor(Math.random() * ARCHETYPES.length)];
@@ -89,7 +106,7 @@ export function spawnCustomers(state, dt = 1) {
       partySize: party.size,
       archetype,
       gender: Math.random() < 0.5 ? 'male' : 'female',
-      patience: patienceMap[archetype],
+      patience: CUSTOMER_PATIENCE[archetype],
       happiness: 80 + getUpgradeEffect(state, 'happiness'),
       state: 'queued',
       dishId: null,
@@ -109,18 +126,21 @@ export function spawnCustomers(state, dt = 1) {
   };
 }
 
-export function updateCustomers(state, dt) {
-  const patienceStates = new Set(['arriving', 'waiting', 'guided', 'seated', 'ordering', 'waiting_for_items', 'paying']);
+export function updateCustomers(state, timing) {
+  const gameDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.gameDt) || 0);
+  const movementDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.movementDt) || 0);
+  const restaurantOpen = isRestaurantOpen(state);
+  const closedQueue = restaurantOpen ? [] : state.queue.map(customer => leavingFields(customer, {
+    tableId: null,
+    reputationApplied: true,
+    closedAt: state.restaurant.gameTime,
+  }));
   let abandonmentCount = 0;
-  let updatedCustomers = state.customers.map(c => {
-    const newPatience = patienceStates.has(c.state)
-      ? Math.max(0, c.patience - dt)
+  let updatedCustomers = [...state.customers, ...closedQueue].map(c => {
+    const waitingForService = isWaitingForService(c, state.staff);
+    const newPatience = waitingForService
+      ? Math.max(0, c.patience - gameDt)
       : c.patience;
-
-    if (newPatience <= 0 && patienceStates.has(c.state)) {
-      if (!c.reputationApplied) abandonmentCount += 1;
-      return leavingFields(c, { patience: 0, happiness: Math.max(0, c.happiness - 30), reputationApplied: true });
-    }
 
     let newState = c.state;
     if (c.state === 'arriving') {
@@ -132,20 +152,39 @@ export function updateCustomers(state, dt) {
 
   // Update queue: apply party pressure to patience, then remove those who run out.
   const queuePatienceMultiplier = getQueuePatienceMultiplier(state.queue);
-  let updatedQueue = state.queue.map(q => ({
+  let updatedQueue = (restaurantOpen ? state.queue : []).map(q => ({
     ...q,
-    patience: Math.max(0, q.patience - dt * queuePatienceMultiplier),
+    patience: Math.max(0, q.patience - gameDt * queuePatienceMultiplier),
   }));
 
-  // Separate queue members whose patience expired
-  const deadQueue = updatedQueue.filter(q => q.patience <= 0);
-  updatedQueue = updatedQueue.filter(q => q.patience > 0);
+  const abandoningParties = new Set([
+    ...updatedCustomers
+      .filter(customer => isWaitingForService(customer, state.staff) && customer.patience <= 0)
+      .map(partyKey),
+    ...updatedQueue.filter(customer => customer.patience <= 0).map(partyKey),
+  ]);
 
-  // If dead queue members exist, add them as leaving customers (reputation penalty)
-  if (deadQueue.length > 0) {
-    abandonmentCount += deadQueue.filter(customer => !customer.reputationApplied).length;
-    updatedCustomers = [...updatedCustomers, ...deadQueue.map(q => leavingFields(q, {
-      happiness: Math.max(0, q.happiness - 30), tableId: null, reputationApplied: true,
+  if (abandoningParties.size > 0) {
+    const allPartyMembers = [...updatedCustomers, ...updatedQueue];
+    abandonmentCount = [...abandoningParties].filter(key =>
+      !allPartyMembers.some(customer => partyKey(customer) === key && customer.reputationApplied),
+    ).length;
+
+    updatedCustomers = updatedCustomers.map(customer => abandoningParties.has(partyKey(customer))
+      ? leavingFields(customer, {
+          patience: Math.max(0, customer.patience),
+          happiness: Math.max(0, customer.happiness - 30),
+          reputationApplied: true,
+        })
+      : customer);
+
+    const abandoningQueue = updatedQueue.filter(customer => abandoningParties.has(partyKey(customer)));
+    updatedQueue = updatedQueue.filter(customer => !abandoningParties.has(partyKey(customer)));
+    updatedCustomers = [...updatedCustomers, ...abandoningQueue.map(customer => leavingFields(customer, {
+      patience: Math.max(0, customer.patience),
+      happiness: Math.max(0, customer.happiness - 30),
+      tableId: null,
+      reputationApplied: true,
     }))];
   }
 
@@ -214,7 +253,7 @@ export function updateCustomers(state, dt) {
           ...updatedCustomers.filter(candidate => candidate.id !== current.id && candidate.exitPhase !== 'fading'),
         ])
         : { ...current, checkoutPosition };
-      return moveCharacterWithRecovery(state, { ...routed, checkoutPosition, paymentReady: false }, dt, [
+      return moveCharacterWithRecovery(state, { ...routed, checkoutPosition, paymentReady: false }, movementDt, [
         ...(state.staff || []),
         ...updatedCustomers.filter(candidate => candidate.id !== current.id && candidate.exitPhase !== 'fading'),
       ], 62);
@@ -287,9 +326,9 @@ export function updateCustomers(state, dt) {
       ...allCustomers.filter((candidate, candidateIndex) => candidateIndex !== index && candidate.exitPhase !== 'fading'),
     ];
     const frameStart = { x: leaving.x, y: leaving.y };
-    const moved = moveCharacterWithRecovery(state, leaving, dt, others, 55);
+    const moved = moveCharacterWithRecovery(state, leaving, movementDt, others, 55);
     const displacement = Math.hypot(moved.x - frameStart.x, moved.y - frameStart.y);
-    const remainingBudget = Math.max(0, 55 * dt - displacement);
+    const remainingBudget = Math.max(0, 55 * movementDt - displacement);
     if (!hasStaticRoute || moved.path?.length || remainingBudget <= 0) return moved;
     if (!isOpenCell(state, destination)) return moved;
     const finalMove = moveCharacterTowards(moved, destination, remainingBudget / 55, others, 55, 16, state);
@@ -302,10 +341,10 @@ export function updateCustomers(state, dt) {
     const heading = customer.exitHeading || getExitHeading(customer.id);
     return {
       ...customer,
-      x: customer.x + heading.x * 30 * dt,
-      y: customer.y + heading.y * 30 * dt,
+      x: customer.x + heading.x * 30 * movementDt,
+      y: customer.y + heading.y * 30 * movementDt,
       exitHeading: heading,
-      exitFadeProgress: Math.min(1, (customer.exitFadeProgress || 0) + dt / 4),
+      exitFadeProgress: Math.min(1, (customer.exitFadeProgress || 0) + movementDt / 4),
     };
   });
 
@@ -324,7 +363,8 @@ export function updateCustomers(state, dt) {
     restaurant: abandonmentCount > 0
       ? {
           ...state.restaurant,
-          reputation: clampReputation(state.restaurant.reputation - abandonmentCount * 0.02),
+          reputation: clampReputation(state.restaurant.reputation
+            - abandonmentCount * ABANDONMENT_REPUTATION_PENALTY),
         }
       : state.restaurant,
     customers: updatedCustomers,
