@@ -147,6 +147,12 @@ try {
     solverBreakdown,
     localConflictMillisecondsByRun: runs.map(run => phaseValues(run.summary, localConflictKeys)),
     solverMillisecondsByRun: runs.map(run => phaseValues(run.summary, solverKeys)),
+    executablePrefixWork: {
+      scores: representative.summary.solverExecutablePrefixScores,
+      parentNodeVisits: representative.summary.solverExecutablePrefixNodeVisits,
+      scoresByRun: runs.map(run => run.summary.solverExecutablePrefixScores),
+      parentNodeVisitsByRun: runs.map(run => run.summary.solverExecutablePrefixNodeVisits),
+    },
     eligibleLeafOrderingByRun,
     innerHotspotCriterion: {
       largestEligibleLeafByRun,

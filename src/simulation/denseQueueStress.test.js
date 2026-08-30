@@ -51,6 +51,8 @@ describe('dense queue stress scenario', () => {
     expect(first.summary.pairChecks).toBeGreaterThan(0);
     expect(first.summary.conflictPairs).toBeGreaterThan(0);
     expect(first.summary.maxComponentSize).toBeGreaterThan(1);
+    expect(first.summary.solverExecutablePrefixScores).toBeGreaterThan(0);
+    expect(first.summary.solverExecutablePrefixNodeVisits).toBeGreaterThan(0);
     expect(first.displacedActors).toBeGreaterThanOrEqual(12);
     expect(first.totalDisplacement).toBeGreaterThan(1000);
     expect(first.actorsPassingDoor).toBeGreaterThan(0);
@@ -161,6 +163,8 @@ describe('dense queue stress scenario', () => {
       'localConflictSafetyFallbacks',
       'spaceTimePlanCalls',
       'spaceTimeExpandedStates',
+      'solverExecutablePrefixScores',
+      'solverExecutablePrefixNodeVisits',
       'solverNodesBuilt',
       'solverBranchesGenerated',
     ]) {

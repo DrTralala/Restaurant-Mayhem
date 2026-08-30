@@ -58,10 +58,11 @@ function compareNodes(left, right, goalCell) {
     || compareKeys(cellKey(left.cell), cellKey(right.cell));
 }
 
-function buildPlan(node) {
+function buildPlan(node, onVisit = null) {
   const plan = [];
   let current = node;
   while (current.parent) {
+    onVisit?.();
     plan.unshift(current.cell);
     current = current.parent;
   }
@@ -84,7 +85,10 @@ export function findSpaceTimePlan({
   const startKey = cellKey(startCell);
   const scoringSlot = Math.max(1, Math.min(horizon, progressHorizon));
   const prefixScore = node => {
-    const prefix = buildPlan(node).slice(0, scoringSlot);
+    if (metrics) metrics.solverExecutablePrefixScores += 1;
+    const prefix = buildPlan(node, metrics
+      ? () => { metrics.solverExecutablePrefixNodeVisits += 1; }
+      : null).slice(0, scoringSlot);
     let previous = startCell;
     let waits = 0;
     let routeDeviation = 0;

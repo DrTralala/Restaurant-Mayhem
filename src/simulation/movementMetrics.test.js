@@ -37,6 +37,8 @@ const metricKeys = [
   'localConflictSafetyFallbacks',
   'spaceTimePlanCalls',
   'spaceTimeExpandedStates',
+  'solverExecutablePrefixScores',
+  'solverExecutablePrefixNodeVisits',
   'solverNodesBuilt',
   'solverBranchesGenerated',
   'safePrefixProbes',
@@ -76,6 +78,8 @@ describe('movement metrics', () => {
     metrics.localConflictPreparationMilliseconds = 2;
     metrics.solverCalls = 4;
     metrics.spaceTimeExpandedStates = 12;
+    metrics.solverExecutablePrefixScores = 7;
+    metrics.solverExecutablePrefixNodeVisits = 21;
 
     const summary = summariseMovementMetrics(metrics);
     metrics.solverCalls = 8;
@@ -86,5 +90,9 @@ describe('movement metrics', () => {
     expect(summary.localConflictPreparationMilliseconds).toBe(2);
     expect(summary.solverCalls).toBe(4);
     expect(summary.spaceTimeExpandedStates).toBe(12);
+    expect(summary).toMatchObject({
+      solverExecutablePrefixScores: 7,
+      solverExecutablePrefixNodeVisits: 21,
+    });
   });
 });
