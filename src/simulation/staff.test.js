@@ -2205,6 +2205,25 @@ describe('updateStaff', () => {
     expect(finished.staff[0].task).toBeNull();
   });
 
+  it('cancels active table cleaning when a customer blocks the table', () => {
+    const active = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 180, y: 220, path: [],
+        task: { type: 'clean_table', tableId: 't1', cleaningStartedAt: 100 } }],
+      tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
+      restaurant: { ...baseState.restaurant, gameTime: 150 },
+    };
+
+    const result = updateStaff({
+      ...active,
+      customers: [{ id: 'c1', tableId: 't1', state: 'eating' }],
+    }, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.staff[0].path).toEqual([]);
+    expect(result.tables[0].status).toBe('dirty');
+  });
+
   it('cancels cleaning safely when the target table is no longer dirty', () => {
     const tables = [
       { id: 't1', seats: 2, status: 'occupied', x: 200, y: 220 },
