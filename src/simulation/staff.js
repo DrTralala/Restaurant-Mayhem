@@ -1,4 +1,4 @@
-import { buildOccupiedCharacterCells, cellToWorld, findAdjacentOpenCells, findPath, findPathWithDynamicFallback, isInsideWorld, worldToCell } from './pathfinding';
+import { buildBlockedCells, buildOccupiedCharacterCells, cellToWorld, findAdjacentOpenCells, findPath, findPathWithDynamicFallback, isInsideWorld, worldToCell } from './pathfinding';
 import { ensureStaffRuntime, hasArrived, planCharacterPath, resolveCharacterMovementBatch } from './movement';
 import { getCashierCustomerPosition, getCashierWorkPosition, getDoorPosition, getDoors, getQueuePosition, getRestaurantWorld } from './world';
 import { clampReputation, getTipRate, getUpgradeEffect } from './balance';
@@ -21,6 +21,97 @@ function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
 }
 
 const CHARACTER_START_SPACING = 16;
+const QUEUE_ADMISSION_SPACING = 16;
+
+function getQueueAdmissionCandidates(state, door) {
+  const world = getRestaurantWorld(state.restaurant || {});
+  const outside = getDoorPosition(state, door).outside;
+  const first = {
+    x: Math.ceil(world.queueX / world.gridSize),
+    y: Math.ceil(world.kitchenY / world.gridSize),
+  };
+  const last = {
+    x: Math.floor((world.queueX + world.queueW) / world.gridSize),
+    y: Math.floor((world.diningY + world.areaH + 50) / world.gridSize),
+  };
+  const blocked = buildBlockedCells(state);
+  const candidates = [];
+  for (let y = first.y; y <= last.y; y += 1) {
+    for (let x = first.x; x <= last.x; x += 1) {
+      const cell = { x, y };
+      const point = cellToWorld(cell);
+      const insideQueue = point.x >= world.queueX
+        && point.x <= world.queueX + world.queueW
+        && point.y >= world.kitchenY
+        && point.y <= world.diningY + world.areaH + 50;
+      if (insideQueue && isInsideWorld(state, cell) && !blocked.has(`${x},${y}`)) {
+        candidates.push(point);
+      }
+    }
+  }
+  return candidates.sort((left, right) =>
+    Math.hypot(left.x - outside.x, left.y - outside.y)
+      - Math.hypot(right.x - outside.x, right.y - outside.y)
+    || left.y - right.y
+    || left.x - right.x);
+}
+
+function allocateQueuedPartyAdmission(state, {
+  party,
+  remainingQueue,
+  door,
+  guide,
+  guidePath,
+  staff,
+  customers,
+  partyIds,
+  tableId,
+}) {
+  const queuedPositions = remainingQueue.map((customer, index) => ({
+    ...getQueuePosition(state, index),
+    id: customer.id,
+  }));
+  const occupiedPositions = [...staff, ...customers, ...queuedPositions]
+    .filter(actor => Number.isFinite(actor.x) && Number.isFinite(actor.y));
+  const candidates = getQueueAdmissionCandidates(state, door);
+  const admittedCustomers = [];
+
+  for (const customer of party) {
+    const candidate = candidates.find(point => occupiedPositions.every(actor =>
+      Math.hypot(point.x - actor.x, point.y - actor.y) >= QUEUE_ADMISSION_SPACING));
+    if (!candidate) return null;
+
+    const routeToGuide = findPathWithDynamicFallback(
+      state,
+      worldToCell(candidate),
+      worldToCell(guide),
+      {
+        occupiedCells: occupiedCharacterCells(
+          staff,
+          [...customers, ...admittedCustomers, ...queuedPositions],
+          guide.id,
+          partyIds,
+        ),
+      },
+    ).path;
+    if (!routeToGuide.length) return null;
+
+    const admitted = {
+      ...customer,
+      state: 'guided',
+      guideStaffId: guide.id,
+      chairId: null,
+      x: candidate.x,
+      y: candidate.y,
+      tableId,
+      path: [...routeToGuide, ...guidePath],
+    };
+    admittedCustomers.push(admitted);
+    occupiedPositions.push(admitted);
+  }
+
+  return admittedCustomers;
+}
 
 function findGuidedCustomerStart(state, customer, guideContext, occupiedActors) {
   const memberIndex = Math.max(0, guideContext.genuinePartyIds.indexOf(customer.id));
@@ -518,20 +609,20 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       if (reachable) {
         const { table, path, chairs } = reachable;
         const door = [...getDoors(state)].sort((a, b) => Math.abs(a.y - staff.y) - Math.abs(b.y - staff.y))[0];
-        const outside = getDoorPosition(state, door).outside;
         const partyIds = party.map(c => c.id);
-        const newCustomers = party.map((customer, index) => ({
-          ...customer,
-          state: 'guided', guideStaffId: staff.id, chairId: null,
-          x: outside.x + index * 18, y: outside.y + index * 18,
+        const remainingQueue = queue.filter(q => !party.some(member => member.id === q.id));
+        const newCustomers = allocateQueuedPartyAdmission(state, {
+          party,
+          remainingQueue,
+          door,
+          guide: staff,
+          guidePath: path,
+          staff: allStaff || state.staff || [],
+          customers,
+          partyIds,
           tableId: table.id,
-           path: [...findPathWithDynamicFallback(
-             state,
-             worldToCell(outside),
-             worldToCell(staff),
-             { occupiedCells: occupiedCharacterCells(state.staff || [], customers, staff.id, partyIds) },
-           ).path, ...path],
-        }));
+        });
+        if (!newCustomers) continue;
         return {
           staff: {
             ...staff,
@@ -546,7 +637,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
             },
           },
           customers: [...customers, ...newCustomers],
-          queue: queue.filter(q => !party.some(member => member.id === q.id)),
+          queue: remainingQueue,
           tables: tables.map(t => t.id === table.id ? { ...t, status: 'reserved' } : t),
           claimedCustomerIds: partyIds,
         };

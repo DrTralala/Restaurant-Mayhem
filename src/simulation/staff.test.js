@@ -6,10 +6,10 @@ import {
   updateStaff,
 } from './staff';
 import { updateCustomers } from './customers';
-import { buildBlockedCells, isInsideWorld, worldToCell } from './pathfinding';
+import { buildBlockedCells, cellToWorld, isInsideWorld, worldToCell } from './pathfinding';
 import { minimumSweptDistance, resolveCharacterMovementBatch } from './movement';
 import { updateAutomaticDishwashers } from './dishwashing';
-import { getQueuePosition } from './world';
+import { getQueuePosition, getRestaurantWorld } from './world';
 
 const baseState = {
   staff: [],
@@ -443,6 +443,28 @@ function runCongestionScenario(state, isComplete) {
 
 function congestionState(staff, customers = [], corridorEndX = 340) {
   return { ...baseState, staff, customers, chairs: corridorWalls(corridorEndX), tables: [], serviceItems: [] };
+}
+
+function queuedAdmissionState() {
+  return {
+    ...baseState,
+    staff: [
+      { id: 'w1', role: 'waiter', morale: 80, x: 860, y: 300, path: [], task: null },
+      { id: 'w2', role: 'waiter', morale: 80, x: 860, y: 420, path: [], task: null },
+    ],
+    queue: [
+      { id: 'q1', partyId: 'p1', partySize: 1, state: 'queued', patience: 100, happiness: 80 },
+      { id: 'q2', partyId: 'p2', partySize: 1, state: 'queued', patience: 100, happiness: 80 },
+    ],
+    tables: [
+      { id: 't1', seats: 1, status: 'empty', x: 200, y: 220 },
+      { id: 't2', seats: 1, status: 'empty', x: 400, y: 420 },
+    ],
+    chairs: [
+      { id: 'ch1', tableId: 't1', x: 210, y: 180 },
+      { id: 'ch2', tableId: 't2', x: 410, y: 380 },
+    ],
+  };
 }
 
 describe('updateStaff', () => {
@@ -1186,6 +1208,102 @@ describe('updateStaff', () => {
   });
 
   // --- New arrival-based tests (Task 4) ---
+
+  it('allocates distinct collision-safe positions when two waiters admit queued parties together', () => {
+    const state = queuedAdmissionState();
+    const result = updateStaff(state, 0);
+    const [first, second] = result.customers;
+    const world = getRestaurantWorld(state.restaurant || {});
+    const blocked = buildBlockedCells(state);
+
+    expect(result.queue).toEqual([]);
+    expect(first).toMatchObject({ state: 'guided', guideStaffId: 'w1' });
+    expect(second).toMatchObject({ state: 'guided', guideStaffId: 'w2' });
+    expect(Number.isFinite(first.x) && Number.isFinite(first.y)).toBe(true);
+    expect(Number.isFinite(second.x) && Number.isFinite(second.y)).toBe(true);
+    expect(Math.hypot(first.x - second.x, first.y - second.y)).toBeGreaterThanOrEqual(16);
+    for (const admitted of [first, second]) {
+      expect(admitted.x).toBeGreaterThanOrEqual(world.queueX);
+      expect(admitted.x).toBeLessThanOrEqual(world.queueX + world.queueW);
+      expect(admitted.y).toBeGreaterThanOrEqual(world.kitchenY);
+      expect(admitted.y).toBeLessThanOrEqual(world.diningY + world.areaH + 50);
+      const cell = worldToCell(admitted);
+      expect(blocked.has(`${cell.x},${cell.y}`)).toBe(false);
+    }
+  });
+
+  it('uses a deterministic safe fallback and routes from the allocated admission position', () => {
+    const initialState = queuedAdmissionState();
+    const blockers = [
+      { id: 'blocker-preferred', state: 'eating', x: 1000, y: 360, path: [] },
+      { id: 'blocker-shared-origin', state: 'eating', x: 980, y: 360, path: [] },
+    ];
+    const blockedState = {
+      ...initialState,
+      staff: initialState.staff.slice(0, 1),
+      customers: blockers,
+      queue: initialState.queue.slice(0, 1),
+      tables: initialState.tables.slice(0, 1),
+      chairs: initialState.chairs.slice(0, 1),
+    };
+
+    const firstRun = updateStaff(blockedState, 0);
+    const secondRun = updateStaff(blockedState, 0);
+    const admitted = firstRun.customers.find(customer => customer.id === 'q1');
+    const repeated = secondRun.customers.find(customer => customer.id === 'q1');
+    const world = getRestaurantWorld(blockedState.restaurant || {});
+    const blocked = buildBlockedCells(blockedState);
+
+    expect(admitted).toMatchObject({ x: 1000, y: 340 });
+    for (const blocker of blockers) {
+      expect(worldToCell(admitted)).not.toEqual(worldToCell(blocker));
+      expect(Math.hypot(admitted.x - blocker.x, admitted.y - blocker.y)).toBeGreaterThanOrEqual(16);
+    }
+    expect(admitted).toMatchObject(repeated);
+    expect(admitted.path.length).toBeGreaterThan(0);
+    expect(cellToWorld(admitted.path[0])).toEqual({ x: 980, y: 340 });
+    expect(admitted.x).toBeGreaterThanOrEqual(world.queueX);
+    expect(admitted.x).toBeLessThanOrEqual(world.queueX + world.queueW);
+    expect(admitted.y).toBeGreaterThanOrEqual(world.kitchenY);
+    expect(admitted.y).toBeLessThanOrEqual(world.diningY + world.areaH + 50);
+    const admittedCell = worldToCell(admitted);
+    expect(blocked.has(`${admittedCell.x},${admittedCell.y}`)).toBe(false);
+  });
+
+  it('leaves a queued party and table untouched when no safe admission position exists', () => {
+    const initialState = queuedAdmissionState();
+    const world = getRestaurantWorld(initialState.restaurant || {});
+    const blockers = [];
+    const first = {
+      x: Math.ceil(world.queueX / world.gridSize),
+      y: Math.ceil(world.kitchenY / world.gridSize),
+    };
+    const last = {
+      x: Math.floor((world.queueX + world.queueW) / world.gridSize),
+      y: Math.floor((world.diningY + world.areaH + 50) / world.gridSize),
+    };
+    for (let y = first.y; y <= last.y; y += 1) {
+      for (let x = first.x; x <= last.x; x += 1) {
+        const point = cellToWorld({ x, y });
+        blockers.push({ id: `blocker-${x}-${y}`, state: 'eating', ...point, path: [] });
+      }
+    }
+    const state = {
+      ...initialState,
+      staff: initialState.staff.slice(0, 1),
+      customers: blockers,
+      queue: initialState.queue.slice(0, 1),
+      tables: initialState.tables.slice(0, 1),
+      chairs: initialState.chairs.slice(0, 1),
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.queue.map(customer => customer.id)).toContain('q1');
+    expect(result.customers.some(customer => customer.id === 'q1')).toBe(false);
+    expect(result.staff[0].task).toBeNull();
+    expect(result.tables.find(table => table.id === 't1').status).toBe('empty');
+  });
 
   it('waiter starts guiding a waiting customer and reserves table', () => {
     const waiter = { id: 'w1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150, x: 860, y: 360 };
