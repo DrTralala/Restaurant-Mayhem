@@ -283,7 +283,7 @@ export function moveCharacterTowards(character, target, dt, others = [], speed =
 }
 
 function getMovementSpacing(character) {
-  return character.usingStaticFallback || (character.stalledFor || 0) >= 2 ? 6 : 16;
+  return 16;
 }
 
 function isAtTarget(position, target) {
@@ -446,7 +446,7 @@ function buildMovementIntent(state, entry, dt) {
   const { speed } = entry;
   const sourceCharacter = entry.character;
   const useLocalConflictTarget = sourceCharacter.localConflictTarget
-    && !sourceCharacter.usingStaticFallback
+    && (!sourceCharacter.usingStaticFallback || sourceCharacter.minimumSpacing === 2)
     && (sourceCharacter.path?.length || entry.target || entry.targetAfterPath);
   const { localConflictTarget: _staleLocalTarget, ...withoutLocalTarget } = sourceCharacter;
   const character = useLocalConflictTarget ? sourceCharacter : withoutLocalTarget;
@@ -581,6 +581,43 @@ function findSafeDetour(state, intent, spacing, dt, intents, resolutions, checke
   return null;
 }
 
+function findControlledOverlapDetour(state, intent, dt, intents, resolutions, component) {
+  const sideTargets = [
+    { x: intent.start.x, y: intent.start.y - 40 },
+    { x: intent.start.x, y: intent.start.y + 40 },
+    { x: intent.start.x - 40, y: intent.start.y },
+    { x: intent.start.x + 40, y: intent.start.y },
+  ];
+  for (const sideTarget of sideTargets) {
+    if (!isInsideWorld(state, worldToCell(sideTarget))
+      || !isSafeSegment(state, intent.start, sideTarget)) continue;
+    const moved = moveCharacterTowards(
+      intent.character,
+      sideTarget,
+      dt,
+      [],
+      intent.speed,
+      2,
+      state,
+    );
+    if (Math.hypot(moved.x - intent.start.x, moved.y - intent.start.y) <= 1e-6) continue;
+    const endpoint = {
+      ...moved,
+      path: intent.character.path,
+      localConflictTarget: worldToCell(sideTarget),
+    };
+    const candidate = resolvedIntent(
+      intent,
+      endpoint,
+      buildTimeParameterizedTrajectory(intent.start, endpoint, intent.speed, dt),
+    );
+    const candidateResolutions = new Map(resolutions);
+    candidateResolutions.set(intent.character.id, candidate);
+    if (areIntentPairsSafeFor(component, intents, candidateResolutions)) return candidate;
+  }
+  return null;
+}
+
 function getEffectivePairSpacing(actor, peer, requiredSpacing) {
   const startingDistance = Math.hypot(
     actor.start.x - peer.start.x,
@@ -593,8 +630,32 @@ function getEffectivePairSpacing(actor, peer, requiredSpacing) {
 }
 
 function isSafeIntentPair(actor, peer, requiredSpacing) {
+  const startingDistance = Math.hypot(
+    actor.start.x - peer.start.x,
+    actor.start.y - peer.start.y,
+  );
+  if (startingDistance <= 1e-9) {
+    const actorEnd = actor.trajectory.at(-1).end;
+    const peerEnd = peer.trajectory.at(-1).end;
+    return Math.hypot(actorEnd.x - peerEnd.x, actorEnd.y - peerEnd.y) > 1e-9;
+  }
   const effectiveSpacing = getEffectivePairSpacing(actor, peer, requiredSpacing);
-  return minimumTrajectoryDistance(actor.trajectory, peer.trajectory) >= effectiveSpacing - 1e-6;
+  const minimumDistance = minimumTrajectoryDistance(actor.trajectory, peer.trajectory);
+  return minimumDistance > 1e-9 && minimumDistance >= effectiveSpacing - 1e-6;
+}
+
+function normalEffectiveSpacing(left, right) {
+  return Math.max(left.spacing, right.spacing);
+}
+
+function requiredSpacingForPair(left, right) {
+  const selectedId = left.controlledOverlapId ?? right.controlledOverlapId;
+  const componentIds = left.controlledOverlapComponentIds ?? right.controlledOverlapComponentIds;
+  const sameRelaxedComponent = selectedId != null
+    && (left.character.id === selectedId || right.character.id === selectedId)
+    && componentIds?.has(left.character.id)
+    && componentIds?.has(right.character.id);
+  return sameRelaxedComponent ? 2 : normalEffectiveSpacing(left, right);
 }
 
 function cellsEqual(left, right) {
@@ -624,7 +685,7 @@ function intentsConflict(left, right) {
     return false;
   }
   return desiredCellsConflict(left, right)
-    || !isSafeIntentPair(left, right, Math.max(left.spacing, right.spacing));
+    || !isSafeIntentPair(left, right, requiredSpacingForPair(left, right));
 }
 
 function buildConflictComponents(intents) {
@@ -912,7 +973,7 @@ function isResolutionSafeForIntent(intent, candidate, intents, resolutions) {
     || isSafeResolvedPair(
       candidate,
       resolutions.get(peer.character.id),
-      Math.max(intent.spacing, peer.spacing),
+      requiredSpacingForPair(intent, peer),
     ));
 }
 
@@ -1055,6 +1116,42 @@ function compareIntentsByAgedPriority(left, right) {
     || String(left.character.id).localeCompare(String(right.character.id));
 }
 
+function selectControlledOverlapActor(component) {
+  const selected = [...component]
+    .filter(intent => (intent.character.stalledFor || 0) >= 2 && intent.hasValidStaticRoute)
+    .sort(compareIntentsByAgedPriority)[0];
+  return selected ? selected.character.id : null;
+}
+
+function movementGoalForIntent(intent) {
+  const goalCell = intent.character.pathGoal || intent.character.path?.at(-1);
+  if (goalCell) return cellToWorld(goalCell);
+  return intent.targetAfterPath || intent.target || null;
+}
+
+function hasMeasurableRouteProgress(intent, endpoint) {
+  const beforeLength = intent.character.path?.length || 0;
+  if ((endpoint.path?.length || 0) < beforeLength) return true;
+  const goal = movementGoalForIntent(intent);
+  if (!goal) return false;
+  const beforeDistance = Math.hypot(intent.start.x - goal.x, intent.start.y - goal.y);
+  const afterDistance = Math.hypot(endpoint.x - goal.x, endpoint.y - goal.y);
+  return afterDistance < beforeDistance - 0.1;
+}
+
+function componentHasMeasurableRouteProgress(component, resolutions) {
+  return component.some(intent => hasMeasurableRouteProgress(
+    intent,
+    resolutions.get(intent.character.id)?.endpoint || intent.character,
+  ));
+}
+
+function copyComponentResolutions(component, source, target) {
+  for (const intent of component) {
+    target.set(intent.character.id, source.get(intent.character.id));
+  }
+}
+
 function componentIsSafe(component, intents, resolutions) {
   return component.every(intent => isResolutionSafeForIntent(
     intent,
@@ -1072,7 +1169,14 @@ function resolveComponentWithExistingSafety(state, component, resolutions, dt, i
   }
 }
 
-function resolveConflictComponent(state, component, resolutions, dt, intents) {
+function resolveConflictComponentAttempt(
+  state,
+  component,
+  resolutions,
+  dt,
+  intents,
+  allowControlledOverlapId = null,
+) {
   const desiredCellKeys = component.map(intent => {
     const cell = worldToCell(intent.desired);
     return `${cell.x},${cell.y}`;
@@ -1112,6 +1216,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
     blockedCells: buildBlockedCells(state),
     horizon,
     maxHighLevelNodes: 128,
+    allowControlledOverlapId,
   });
   if (!solved) {
     resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
@@ -1152,24 +1257,62 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
   }
 }
 
+function resolveConflictComponent(state, component, resolutions, dt, intents) {
+  const ordinaryResolutions = new Map(resolutions);
+  resolveConflictComponentAttempt(state, component, ordinaryResolutions, dt, intents);
+  if (componentHasMeasurableRouteProgress(component, ordinaryResolutions)) {
+    copyComponentResolutions(component, ordinaryResolutions, resolutions);
+    return;
+  }
+
+  for (const intent of component) {
+    const goal = movementGoalForIntent(intent);
+    intent.hasValidStaticRoute = Boolean(goal
+      && findPath(state, worldToCell(intent.character), worldToCell(goal)).length);
+  }
+  const selectedId = selectControlledOverlapActor(component);
+  if (!selectedId) {
+    copyComponentResolutions(component, ordinaryResolutions, resolutions);
+    return;
+  }
+
+  const componentIds = new Set(component.map(intent => intent.character.id));
+  for (const intent of component) {
+    intent.controlledOverlapId = selectedId;
+    intent.controlledOverlapComponentIds = componentIds;
+    intent.controlledOverlapSelected = intent.character.id === selectedId;
+  }
+  const relaxedResolutions = new Map(resolutions);
+  resolveConflictComponentAttempt(
+    state,
+    component,
+    relaxedResolutions,
+    dt,
+    intents,
+    selectedId,
+  );
+  const selectedIntent = component.find(intent => intent.character.id === selectedId);
+  if (!hasMeasurableRouteProgress(
+    selectedIntent,
+    relaxedResolutions.get(selectedId)?.endpoint || selectedIntent.character,
+  )) {
+    const detour = findControlledOverlapDetour(
+      state,
+      selectedIntent,
+      dt,
+      intents,
+      relaxedResolutions,
+      component,
+    );
+    if (detour) relaxedResolutions.set(selectedId, detour);
+  }
+  copyComponentResolutions(component, relaxedResolutions, resolutions);
+}
+
 function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   const character = intent.character;
   const moved = endpoint || resolvedAtStart(intent).endpoint;
-  const beforeLength = character.path?.length || 0;
-  const displacement = Math.hypot(moved.x - intent.start.x, moved.y - intent.start.y);
-  const consumedWaypoint = (moved.path?.length || 0) < beforeLength;
-  const desiredDistanceBefore = Math.hypot(
-    intent.desired.x - intent.start.x,
-    intent.desired.y - intent.start.y,
-  );
-  const desiredDistanceAfter = Math.hypot(
-    intent.desired.x - moved.x,
-    intent.desired.y - moved.y,
-  );
-  // A solver side-step must not erase age unless it advances the original intent.
-  const progress = consumedWaypoint
-    || (displacement >= 0.1
-      && (!moved.localConflictTarget || desiredDistanceAfter < desiredDistanceBefore - 0.1));
+  const progress = hasMeasurableRouteProgress(intent, moved);
   const targetReached = intent.target && isAtTarget(moved, intent.target);
 
   if (!character.path?.length && (!intent.target || targetReached)) {
@@ -1195,10 +1338,12 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   }
 
   const stalledFor = (character.stalledFor || 0) + dt;
+  const retainsControlledOverlap = intent.controlledOverlapSelected
+    || (character.minimumSpacing === 2 && moved.localConflictTarget);
   let recovered = {
     ...moved,
     stalledFor,
-    minimumSpacing: character.usingStaticFallback || stalledFor >= 2 ? 6 : 16,
+    minimumSpacing: retainsControlledOverlap ? 2 : 16,
     usingStaticFallback: character.usingStaticFallback || false,
   };
   const pathGoal = character.pathGoal || character.path?.at(-1);
@@ -1227,8 +1372,8 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   if (stalledFor >= 2 && pathGoal) {
     const staticPath = findPath(state, worldToCell(recovered), pathGoal);
     recovered = staticPath.length
-      ? { ...recovered, path: staticPath, usingStaticFallback: true, minimumSpacing: 6 }
-      : { ...recovered, usingStaticFallback: true, minimumSpacing: 6 };
+      ? { ...recovered, path: staticPath, usingStaticFallback: true }
+      : { ...recovered, usingStaticFallback: true };
   }
   return recovered;
 }

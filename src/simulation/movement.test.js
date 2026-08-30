@@ -40,6 +40,35 @@ const expectAllEndpointPairsAtLeast = (entries, moved, spacing) => {
     }
   }
 };
+const simulateMovementTicks = (state, initialEntries, tickCount, dt = 1 / 30, updateEntries = null) => {
+  let entries = initialEntries.map(entry => ({ ...entry, character: { ...entry.character } }));
+  const frames = [];
+  for (let tick = 0; tick < tickCount; tick += 1) {
+    if (updateEntries) entries = updateEntries(entries, tick);
+    const starts = entries.map(entry => ({ ...entry, character: { ...entry.character } }));
+    const moved = resolveCharacterMovementBatch(state, starts, dt);
+    frames.push({ entries: starts, moved });
+    entries = starts.map(entry => ({
+      ...entry,
+      character: moved.get(entry.character.id),
+    }));
+  }
+  return { entries, frames };
+};
+
+const routeDistance = character => {
+  const goal = character.pathGoal || character.path?.at(-1);
+  if (!goal) return 0;
+  return Math.hypot(character.x - goal.x * 20, character.y - goal.y * 20);
+};
+
+const corridorState = {
+  ...openState,
+  chairs: [60, 80, 100, 120, 140, 160, 180, 200, 220].flatMap((x, index) => [
+    { id: `north-${index}`, x, y: 60 },
+    { id: `south-${index}`, x, y: 120 },
+  ]),
+};
 
 describe('movement runtime', () => {
   it('replaces non-finite coordinates (NaN, Infinity) with default positions', () => {
@@ -1414,7 +1443,7 @@ describe('movement runtime', () => {
     expect(dynamicOnly.path).toEqual(actor.path);
 
     const staticFallback = resolveCharacterMovementBatch(openState, entries, 2).get('actor');
-    expect(staticFallback).toMatchObject({ usingStaticFallback: true, minimumSpacing: 6, stalledFor: 2 });
+    expect(staticFallback).toMatchObject({ usingStaticFallback: true, minimumSpacing: 16, stalledFor: 2 });
   });
 
   it('preserves an existing static fallback during pre-two-second no-progress recovery', () => {
@@ -1424,7 +1453,7 @@ describe('movement runtime', () => {
     };
     const moved = resolveCharacterMovementBatch(openState, [{ character, speed: 0 }], 0.25).get('fallback');
 
-    expect(moved).toMatchObject({ stalledFor: 1.25, usingStaticFallback: true, minimumSpacing: 6 });
+    expect(moved).toMatchObject({ stalledFor: 1.25, usingStaticFallback: true, minimumSpacing: 16 });
   });
 
   it('does not create static fallback during a normal 0.75-second dynamic replan', () => {
@@ -1445,7 +1474,7 @@ describe('movement runtime', () => {
     const moved = resolveCharacterMovementBatch(state, [{ character, speed: 0 }], 2).get('stuck');
 
     expect(moved.path).toEqual(character.path);
-    expect(moved).toMatchObject({ stalledFor: 2, usingStaticFallback: true, minimumSpacing: 6 });
+    expect(moved).toMatchObject({ stalledFor: 2, usingStaticFallback: true, minimumSpacing: 16 });
   });
 
   it('returns swept-safe endpoints when pair resolution reaches its safety limit', () => {
@@ -1522,5 +1551,291 @@ describe('movement runtime', () => {
     expect(moved.get('a')).toMatchObject({ x: 120, path: [] });
     expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
       .toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
+  it('moves both horizontal opposing actors beyond their initial cells within a bounded number of ticks', () => {
+    const initialEntries = [
+      {
+        character: {
+          id: 'left', x: 180, y: 100,
+          path: [{ x: 16, y: 5 }], pathGoal: { x: 16, y: 5 },
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'right', x: 220, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+        },
+        speed: 60,
+      },
+    ];
+
+    const { entries } = simulateMovementTicks(openState, initialEntries, 360);
+
+    expect(entries.find(entry => entry.character.id === 'left').character.x).toBeGreaterThan(220);
+    expect(entries.find(entry => entry.character.id === 'right').character.x).toBeLessThan(180);
+  });
+
+  it('moves both vertical opposing actors beyond their initial cells within a bounded number of ticks', () => {
+    const initialEntries = [
+      {
+        character: {
+          id: 'upper', x: 100, y: 180,
+          path: [{ x: 5, y: 16 }], pathGoal: { x: 5, y: 16 },
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'lower', x: 100, y: 220,
+          path: [{ x: 5, y: 3 }], pathGoal: { x: 5, y: 3 },
+        },
+        speed: 60,
+      },
+    ];
+
+    const { entries } = simulateMovementTicks(openState, initialEntries, 240);
+
+    expect(entries.find(entry => entry.character.id === 'upper').character.y).toBeGreaterThan(220);
+    expect(entries.find(entry => entry.character.id === 'lower').character.y).toBeLessThan(180);
+  });
+
+  it('keeps every actor making eventual progress while contesting a crossing', () => {
+    const initialEntries = threeWayCrossingEntries();
+    const initialDistance = new Map(initialEntries.map(({ character }) => [character.id, routeDistance(character)]));
+
+    const { entries, frames } = simulateMovementTicks(openState, initialEntries, 360);
+    const midpoint = frames[179].moved;
+
+    for (const { character } of entries) {
+      expect(routeDistance(character), character.id)
+        .toBeLessThan(routeDistance(midpoint.get(character.id)) - 0.1);
+      expect(routeDistance(character), character.id)
+        .toBeLessThan(initialDistance.get(character.id) - 0.1);
+    }
+  });
+
+  it('serialises converging exit traffic through the door within a bounded number of ticks', () => {
+    const world = getRestaurantWorld(openState.restaurant);
+    const doorCell = worldToCell({ x: world.doorX, y: world.doorY + 20 });
+    const initialEntries = [
+      {
+        character: {
+          id: 'north-exit', x: 860, y: 320,
+          path: [{ x: 44, y: doorCell.y }, doorCell, { x: 48, y: doorCell.y }],
+          pathGoal: { x: 48, y: doorCell.y },
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'south-exit', x: 860, y: 380,
+          path: [{ x: 44, y: doorCell.y }, doorCell, { x: 48, y: doorCell.y }],
+          pathGoal: { x: 48, y: doorCell.y },
+        },
+        speed: 60,
+      },
+    ];
+
+    const { entries, frames } = simulateMovementTicks(openState, initialEntries, 240);
+
+    expect(entries.every(entry => entry.character.x > world.doorX)).toBe(true);
+    for (const { moved } of frames) {
+      expect(Math.hypot(
+        moved.get('north-exit').x - moved.get('south-exit').x,
+        moved.get('north-exit').y - moved.get('south-exit').y,
+      )).toBeGreaterThan(0);
+    }
+  });
+
+  it('advances an older stalled actor within a bounded number of ticks despite repeated lower-ID arrivals', () => {
+    const oldActor = {
+      id: 'z-old', x: 92, y: 100,
+      path: [{ x: 11, y: 5 }], pathGoal: { x: 11, y: 5 },
+      stalledFor: 3, usingStaticFallback: true, minimumSpacing: 6,
+    };
+    const newcomer = tick => ({
+      id: `a-${String(tick).padStart(3, '0')}`, x: 108, y: 100,
+      path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+      stalledFor: 0, usingStaticFallback: false, minimumSpacing: 16,
+    });
+    const initialEntries = [
+      { character: oldActor, speed: 60 },
+      { character: newcomer(0), speed: 60 },
+    ];
+
+    const { entries } = simulateMovementTicks(openState, initialEntries, 120, 1 / 30,
+      (currentEntries, tick) => currentEntries.map(entry => (entry.character.id === 'z-old'
+        ? entry
+        : { ...entry, character: newcomer(tick) })));
+
+    expect(entries.find(entry => entry.character.id === 'z-old').character.x).toBeGreaterThan(108);
+  });
+
+  it('starts controlled overlap only at two seconds and selects greatest age then stable ID', () => {
+    const makeEntries = (leftId, leftAge, rightId, rightAge) => [
+      {
+        character: {
+          id: leftId, x: 92, y: 100,
+          path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+          stalledFor: leftAge, usingStaticFallback: true, minimumSpacing: 6,
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: rightId, x: 108, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: rightAge, usingStaticFallback: true, minimumSpacing: 6,
+        },
+        speed: 60,
+      },
+    ];
+
+    const beforeThreshold = resolveCharacterMovementBatch(
+      corridorState, makeEntries('z', 1.99, 'a', 1.99), 1 / 30,
+    );
+    expect(beforeThreshold.get('z').minimumSpacing).toBe(16);
+    expect(beforeThreshold.get('a').minimumSpacing).toBe(16);
+    expect(Math.hypot(
+      beforeThreshold.get('z').x - beforeThreshold.get('a').x,
+      beforeThreshold.get('z').y - beforeThreshold.get('a').y,
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+
+    const greatestAge = resolveCharacterMovementBatch(
+      corridorState, makeEntries('z-old', 3, 'a-young', 2), 0.2,
+    );
+    expect(greatestAge.get('z-old').x).toBeGreaterThan(92);
+    expect(greatestAge.get('z-old').x - 92).toBeGreaterThan(108 - greatestAge.get('a-young').x);
+
+    const stableId = resolveCharacterMovementBatch(
+      corridorState, makeEntries('a', 2, 'z', 2), 0.2,
+    );
+    expect(stableId.get('a').x).toBeGreaterThan(92);
+    expect(stableId.get('a').x - 92).toBeGreaterThan(108 - stableId.get('z').x);
+  });
+
+  it('keeps every same-component swept pair at least two units apart during controlled overlap', () => {
+    const initialEntries = [
+      {
+        character: {
+          id: 'selected', x: 92, y: 100,
+          path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+          stalledFor: 3, usingStaticFallback: true, minimumSpacing: 6,
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'peer', x: 108, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: 2, usingStaticFallback: true, minimumSpacing: 6,
+        },
+        speed: 60,
+      },
+    ];
+    const { frames } = simulateMovementTicks(corridorState, initialEntries, 8);
+
+    for (const { entries, moved } of frames) {
+      const left = entries[0];
+      const right = entries[1];
+      expect(minimumTrajectoryDistance(
+        buildTimeParameterizedTrajectory(left.character, moved.get(left.character.id), left.speed, 1 / 30),
+        buildTimeParameterizedTrajectory(right.character, moved.get(right.character.id), right.speed, 1 / 30),
+      )).toBeGreaterThanOrEqual(2 - 1e-6);
+    }
+  });
+
+  it('keeps an outside-component actor at normal spacing during controlled overlap', () => {
+    const entries = [
+      {
+        character: {
+          id: 'selected', x: 92, y: 100,
+          path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+          stalledFor: 3, usingStaticFallback: true, minimumSpacing: 6,
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'peer', x: 108, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: 2, usingStaticFallback: true, minimumSpacing: 6,
+        },
+        speed: 60,
+      },
+      { character: { id: 'outside', x: 100, y: 84, path: [] }, speed: 0 },
+    ];
+
+    const moved = resolveCharacterMovementBatch(openState, entries, 1 / 30);
+
+    expect(minimumTrajectoryDistance(
+      buildTimeParameterizedTrajectory(entries[0].character, moved.get('selected'), 60, 1 / 30),
+      buildTimeParameterizedTrajectory(entries[2].character, moved.get('outside'), 0, 1 / 30),
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
+  it('restores normal metadata immediately after controlled overlap progress', () => {
+    const entries = [
+      {
+        character: {
+          id: 'selected', x: 92, y: 100,
+          path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+          stalledFor: 3, usingStaticFallback: true, minimumSpacing: 6,
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'peer', x: 108, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: 2, usingStaticFallback: true, minimumSpacing: 6,
+        },
+        speed: 60,
+      },
+    ];
+
+    const first = resolveCharacterMovementBatch(corridorState, entries, 1 / 30);
+    expect(first.get('selected')).toMatchObject({ stalledFor: 0, minimumSpacing: 16, usingStaticFallback: false });
+
+    const secondEntries = entries.map(entry => ({ ...entry, character: first.get(entry.character.id) }));
+    const second = resolveCharacterMovementBatch(corridorState, secondEntries, 1 / 30);
+    expect(second.get('selected')).toMatchObject({ minimumSpacing: 16, usingStaticFallback: false });
+    expect(Math.hypot(
+      second.get('selected').x - second.get('peer').x,
+      second.get('selected').y - second.get('peer').y,
+    )).toBeGreaterThanOrEqual(Math.hypot(
+      first.get('selected').x - first.get('peer').x,
+      first.get('selected').y - first.get('peer').y,
+    ) - 1e-6);
+  });
+
+  it('keeps a statically impossible furniture enclosure stationary and finite', () => {
+    const state = {
+      ...openState,
+      chairs: [
+        { id: 'north', x: 100, y: 80 },
+        { id: 'east', x: 120, y: 100 },
+        { id: 'south', x: 100, y: 120 },
+        { id: 'west', x: 80, y: 100 },
+      ],
+    };
+    const actor = {
+      id: 'enclosed', x: 100, y: 100,
+      path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+      stalledFor: 2, usingStaticFallback: true, minimumSpacing: 6,
+    };
+
+    const { entries, frames } = simulateMovementTicks(state, [{ character: actor, speed: 60 }], 120);
+    const result = entries[0].character;
+
+    expect(result).toMatchObject({ x: actor.x, y: actor.y });
+    expect(Number.isFinite(result.x) && Number.isFinite(result.y)).toBe(true);
+    const blocked = buildBlockedCells(state);
+    for (const { moved } of frames) {
+      const endpoint = moved.get(actor.id);
+      expect(blocked.has(`${worldToCell(endpoint).x},${worldToCell(endpoint).y}`)).toBe(false);
+    }
   });
 });
