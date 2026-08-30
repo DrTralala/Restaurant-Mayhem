@@ -48,15 +48,6 @@ function buildPlan(node) {
   return plan;
 }
 
-function canHoldGoal(goalCell, fromSlot, horizon, vertexReservations, edgeReservations) {
-  const key = cellKey(goalCell);
-  for (let slot = fromSlot + 1; slot <= horizon; slot += 1) {
-    if (vertexReservations.get(slot)?.has(key)) return false;
-    if (edgeReservations.has(edgeKey(goalCell, goalCell, slot))) return false;
-  }
-  return true;
-}
-
 export function findSpaceTimePlan({
   state,
   startCell,
@@ -111,13 +102,6 @@ export function findSpaceTimePlan({
     frontier = [...bestByCellAndSlot.values()]
       .sort((left, right) => compareNodes(left, right, goalCell));
     if (frontier.length === 0) return null;
-
-    const goalNode = frontier.find(node => cellKey(node.cell) === cellKey(goalCell));
-    if (goalNode && canHoldGoal(goalCell, slot, horizon, vertexReservations, edgeReservations)) {
-      const plan = buildPlan(goalNode);
-      while (plan.length < horizon) plan.push({ ...goalCell });
-      return plan;
-    }
   }
 
   return buildPlan(frontier[0]);

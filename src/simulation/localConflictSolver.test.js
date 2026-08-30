@@ -36,20 +36,29 @@ describe('findSpaceTimePlan', () => {
     })).toBeNull();
   });
 
-  it('pads the goal with waits and never leaves it to evade a later reservation', () => {
-    const findPlan = vertexReservations => findSpaceTimePlan({
+  it('scores goal holds as waits in the horizon objective', () => {
+    const plan = findSpaceTimePlan({
       state: openState, routeCells: [{ x: 6, y: 5 }],
       startCell: { x: 5, y: 5 }, goalCell: { x: 6, y: 5 }, blockedCells: new Set(), horizon: 3,
+      vertexReservations: new Map(),
+      edgeReservations: new Set(),
+    });
+
+    expect(plan).toEqual([{ x: 4, y: 5 }, { x: 5, y: 5 }, { x: 6, y: 5 }]);
+  });
+
+  it('locks goal arrivals and delays them when a future hold is reserved', () => {
+    const findPlan = vertexReservations => findSpaceTimePlan({
+      state: openState, routeCells: [{ x: 6, y: 5 }],
+      startCell: { x: 5, y: 5 }, goalCell: { x: 6, y: 5 },
+      blockedCells: new Set(['5,4', '4,5', '5,6']), horizon: 3,
       vertexReservations,
       edgeReservations: new Set(),
     });
-    const unreserved = findPlan(new Map());
-    const reservedLater = findPlan(new Map([[2, new Set(['6,5'])]]));
-    const firstGoalSlot = reservedLater.findIndex(cell => cell.x === 6 && cell.y === 5);
 
-    expect(unreserved).toEqual([{ x: 6, y: 5 }, { x: 6, y: 5 }, { x: 6, y: 5 }]);
-    expect(firstGoalSlot).toBeGreaterThanOrEqual(0);
-    expect(reservedLater.slice(firstGoalSlot)).toEqual([{ x: 6, y: 5 }]);
+    expect(findPlan(new Map())).toEqual([{ x: 6, y: 5 }, { x: 6, y: 5 }, { x: 6, y: 5 }]);
+    expect(findPlan(new Map([[2, new Set(['6,5'])]])))
+      .toEqual([{ x: 5, y: 5 }, { x: 5, y: 5 }, { x: 6, y: 5 }]);
   });
 
   it('returns byte-identical plans regardless of reservation Set insertion order', () => {
