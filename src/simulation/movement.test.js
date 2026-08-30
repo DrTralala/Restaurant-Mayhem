@@ -707,6 +707,38 @@ describe('movement runtime', () => {
     expect(moved.get('actor')).toMatchObject({ x: 120, y: 100, path: [] });
   });
 
+  it('continues through a contested desired waypoint to the furthest safe solver prefix', () => {
+    const actor = {
+      id: 'a', x: 80, y: 100,
+      path: [{ x: 5, y: 5 }, { x: 6, y: 5 }],
+      pathGoal: { x: 6, y: 5 }, stalledFor: 1,
+    };
+    const peer = {
+      id: 'b', x: 100, y: 80,
+      path: [{ x: 5, y: 5 }],
+      pathGoal: { x: 5, y: 5 }, stalledFor: 0,
+    };
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: actor, speed: 40 },
+      { character: peer, speed: 20 },
+    ], 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 120, y: 100, path: [] });
+    expect(moved.get('b')).toMatchObject({ x: 100, y: 90 });
+    expect(Math.hypot(moved.get('a').x - actor.x, moved.get('a').y - actor.y))
+      .toBeLessThanOrEqual(40 + 1e-6);
+    expect(minimumTrajectoryDistance(
+      [
+        { start: { x: 80, y: 100 }, end: { x: 100, y: 100 }, startTime: 0, endTime: 0.5 },
+        { start: { x: 100, y: 100 }, end: { x: 120, y: 100 }, startTime: 0.5, endTime: 1 },
+      ],
+      [
+        { start: { x: 100, y: 80 }, end: { x: 100, y: 80 }, startTime: 0, endTime: 0.5 },
+        { start: { x: 100, y: 80 }, end: { x: 100, y: 90 }, startTime: 0.5, endTime: 1 },
+      ],
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
   it('preserves the fast-path endpoint and path consumption for one uncongested actor', () => {
     const character = { id: 'solo', x: 100, y: 100, path: [{ x: 6, y: 5 }, { x: 8, y: 5 }] };
     const expected = moveCharacterAlongPath(character, 1, [], 20, 16, openState);

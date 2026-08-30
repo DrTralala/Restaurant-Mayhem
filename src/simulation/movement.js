@@ -765,13 +765,6 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
       pathConsumptionTimes.push(Math.min(1, (slotStart + duration) / dt));
     }
     appendTimedSegment(trajectory, current, current, slotStart + duration, Math.min(dt, slotEnd), dt);
-    // Reaching a contested desired waypoint completes this tick's original intent.
-    if (isAtTarget(current, intent.desired)
-      && component.some(peer => peer !== intent
-        && cellsEqual(worldToCell(peer.desired), worldToCell(intent.desired)))) {
-      nextPlanIndex = plan.length;
-      break;
-    }
   }
 
   if (trajectory.length === 0) trajectory.push(...stationaryTrajectory(intent.start));
@@ -997,8 +990,26 @@ function resolveComponentWithExistingSafety(state, component, resolutions, dt, i
 }
 
 function resolveConflictComponent(state, component, resolutions, dt, intents) {
+  const desiredCellKeys = component.map(intent => {
+    const cell = worldToCell(intent.desired);
+    return `${cell.x},${cell.y}`;
+  });
+  const hasContestedDesiredCell = new Set(desiredCellKeys).size < desiredCellKeys.length;
   const actors = component.map(solverActorForIntent);
-  const horizon = 8;
+  const contestedRouteHorizon = Math.max(1, ...actors.map(actor => actor.routeCells.length));
+  const maxSpeed = Math.max(0, ...component.map(intent => intent.speed));
+  const executableSlots = Math.max(1, Math.ceil(dt * maxSpeed / GRID_SIZE));
+  const hasUnscopedPath = component.some(intent => intent.character.path?.length
+    && !intent.character.pathGoal && !intent.targetAfterPath);
+  const stalledAges = component.map(intent => intent.character.stalledFor || 0);
+  const hasAgedPriority = Math.max(...stalledAges) > Math.min(...stalledAges);
+  let horizon = 8;
+  // Without a route goal, only the current desired waypoint is a committed solver step.
+  if (hasContestedDesiredCell && hasUnscopedPath) horizon = 1;
+  // Do not reward delaying an older actor's contested route until after this tick's budget.
+  else if (hasContestedDesiredCell && hasAgedPriority) {
+    horizon = Math.min(8, contestedRouteHorizon, executableSlots);
+  }
   const solved = solveLocalConflictComponent({
     state,
     actors,
