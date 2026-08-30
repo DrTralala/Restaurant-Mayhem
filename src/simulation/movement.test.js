@@ -15,7 +15,7 @@ import {
   solveLocalConflictWithMovementMetrics,
 } from './movement';
 import { buildBlockedCells, findPath, worldToCell } from './pathfinding';
-import { createMovementMetrics } from './movementMetrics';
+import { createMovementMetrics, setExecutablePrefixProfile } from './movementMetrics';
 import { getRestaurantWorld } from './world';
 
 const openState = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [] };
@@ -652,6 +652,29 @@ describe('movement runtime', () => {
       + metrics.dynamicRepathMilliseconds
       + metrics.staticRepathMilliseconds
       + metrics.residualBatchMilliseconds).toBeCloseTo(metrics.batchMilliseconds, 6);
+  });
+
+  it('returns byte-equivalent movement in legacy and cached executable-prefix profile modes', () => {
+    const entries = threeWayCrossingEntries();
+    const legacyMetrics = setExecutablePrefixProfile(createMovementMetrics(), {
+      mode: 'legacy', countWork: false,
+    });
+    const cachedMetrics = setExecutablePrefixProfile(createMovementMetrics(), {
+      mode: 'cached', countWork: false,
+    });
+
+    const production = serialiseById(resolveCharacterMovementBatch(openState, entries, 1));
+    const legacy = serialiseById(resolveCharacterMovementBatch(openState, entries, 1, legacyMetrics));
+    const cached = serialiseById(resolveCharacterMovementBatch(openState, entries, 1, cachedMetrics));
+
+    expect(legacy).toEqual(production);
+    expect(cached).toEqual(production);
+    expect(legacyMetrics.solverExecutablePrefixScores).toBe(0);
+    expect(legacyMetrics.solverExecutablePrefixNodeVisits).toBe(0);
+    expect(cachedMetrics.solverExecutablePrefixScores).toBe(0);
+    expect(cachedMetrics.solverExecutablePrefixNodeVisits).toBe(0);
+    expect(legacyMetrics.solverInitialPlanningMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(cachedMetrics.solverInitialPlanningMilliseconds).toBeGreaterThanOrEqual(0);
   });
 
   it('reconciles an initial-plan null result through the production movement solver wrapper', () => {

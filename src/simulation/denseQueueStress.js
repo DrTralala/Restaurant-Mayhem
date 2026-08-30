@@ -182,6 +182,35 @@ export function selectRepresentativeDenseQueueRun(runs) {
       || left.index - right.index)[Math.floor(runs.length / 2)];
 }
 
+export function calculateInitialPlanningOptimisation({
+  baselineMillisecondsByRun,
+  optimisedMillisecondsByRun,
+  requiredImprovement = 0.30,
+  parentNodeVisits,
+}) {
+  const median = values => {
+    const sorted = [...values].sort((left, right) => left - right);
+    const middle = sorted.length / 2;
+    return sorted.length % 2 === 0
+      ? (sorted[middle - 1] + sorted[middle]) / 2
+      : sorted[Math.floor(middle)];
+  };
+  const baselineMedianMilliseconds = median(baselineMillisecondsByRun);
+  const optimisedMedianMilliseconds = median(optimisedMillisecondsByRun);
+  const improvement = (baselineMedianMilliseconds - optimisedMedianMilliseconds)
+    / baselineMedianMilliseconds;
+  return {
+    baselineMillisecondsByRun,
+    baselineMedianMilliseconds,
+    optimisedMillisecondsByRun,
+    optimisedMedianMilliseconds,
+    improvement,
+    requiredImprovement,
+    parentNodeVisits,
+    performanceAccepted: parentNodeVisits === 0 && improvement >= requiredImprovement,
+  };
+}
+
 function elapsedNow() {
   return globalThis.performance?.now?.() ?? Date.now();
 }

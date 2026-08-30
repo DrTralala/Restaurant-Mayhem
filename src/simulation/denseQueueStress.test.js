@@ -3,6 +3,7 @@ import {
   assertDenseQueueDeterministicRuns,
   buildDenseQueueNonTimingProjection,
   buildDenseQueueScenario,
+  calculateInitialPlanningOptimisation,
   runDenseQueueScenario,
   selectRepresentativeDenseQueueRun,
 } from './denseQueueStress';
@@ -176,5 +177,30 @@ describe('dense queue stress scenario', () => {
         .toThrow('Dense queue non-timing results changed between measured runs');
       second.summary[key] -= 1;
     }
+  });
+
+  it('computes the same-process median gate at the inclusive threshold', () => {
+    expect(calculateInitialPlanningOptimisation({
+      baselineMillisecondsByRun: [102, 100, 101, 99, 98],
+      optimisedMillisecondsByRun: [72, 70, 71, 69, 68],
+      parentNodeVisits: 0,
+    })).toMatchObject({
+      baselineMedianMilliseconds: 100,
+      optimisedMedianMilliseconds: 70,
+      improvement: 0.30,
+      requiredImprovement: 0.30,
+      performanceAccepted: true,
+    });
+
+    expect(calculateInitialPlanningOptimisation({
+      baselineMillisecondsByRun: [100],
+      optimisedMillisecondsByRun: [69],
+      parentNodeVisits: 1,
+    }).performanceAccepted).toBe(false);
+    expect(calculateInitialPlanningOptimisation({
+      baselineMillisecondsByRun: [100],
+      optimisedMillisecondsByRun: [71],
+      parentNodeVisits: 0,
+    }).performanceAccepted).toBe(false);
   });
 });

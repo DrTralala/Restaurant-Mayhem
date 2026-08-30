@@ -3,13 +3,8 @@ import { createServer } from 'vite';
 const WARMUP_RUNS = 1;
 const MEASURED_RUNS = 5;
 const TICKS = 900;
-const TASK_1_INITIAL_PLANNING_MILLISECONDS = [
-  556.0645100000002,
-  522.5600380000028,
-  559.5139229999995,
-  521.1914290000027,
-  515.3672089999982,
-];
+const EXPECTED_EXECUTABLE_PREFIX_SCORES = 205458;
+const EXPECTED_LEGACY_PARENT_NODE_VISITS = 1479314;
 const phaseKeys = [
   'pairBuildMilliseconds',
   'localConflictMilliseconds',
@@ -83,12 +78,57 @@ try {
   const {
     assertDenseQueueDeterministicRuns,
     buildDenseQueueNonTimingProjection,
+    calculateInitialPlanningOptimisation,
     runDenseQueueScenario,
     selectRepresentativeDenseQueueRun,
   } = await server.ssrLoadModule('/src/simulation/denseQueueStress.js');
-  for (let run = 0; run < WARMUP_RUNS; run += 1) runDenseQueueScenario({ ticks: TICKS });
-  const runs = Array.from({ length: MEASURED_RUNS }, () => runDenseQueueScenario({ ticks: TICKS }));
-  assertDenseQueueDeterministicRuns(runs);
+  const {
+    createMovementMetrics,
+    setExecutablePrefixProfile,
+  } = await server.ssrLoadModule('/src/simulation/movementMetrics.js');
+  const runMode = (mode, countWork = false) => runDenseQueueScenario({
+    ticks: TICKS,
+    metrics: setExecutablePrefixProfile(createMovementMetrics(), { mode, countWork }),
+  });
+  for (let run = 0; run < WARMUP_RUNS; run += 1) {
+    runMode('legacy');
+    runMode('cached');
+  }
+  const legacyRuns = [];
+  const cachedRuns = [];
+  const measuredPairOrder = [];
+  for (let pair = 0; pair < MEASURED_RUNS; pair += 1) {
+    const modes = pair % 2 === 0 ? ['legacy', 'cached'] : ['cached', 'legacy'];
+    measuredPairOrder.push(modes);
+    for (const mode of modes) {
+      const result = runMode(mode);
+      (mode === 'legacy' ? legacyRuns : cachedRuns).push(result);
+    }
+  }
+  const runs = cachedRuns;
+  assertDenseQueueDeterministicRuns([...legacyRuns, ...cachedRuns]);
+
+  const legacyWorkRun = runMode('legacy', true);
+  const cachedWorkRun = runMode('cached', true);
+  const withoutPrefixWork = result => {
+    const projection = buildDenseQueueNonTimingProjection(result);
+    delete projection.summary.solverExecutablePrefixScores;
+    delete projection.summary.solverExecutablePrefixNodeVisits;
+    return projection;
+  };
+  const expectedProjection = JSON.stringify(withoutPrefixWork(cachedRuns[0]));
+  if (![legacyWorkRun, cachedWorkRun]
+    .every(run => JSON.stringify(withoutPrefixWork(run)) === expectedProjection)) {
+    throw new Error('Counter-enabled executable-prefix evidence changed movement or invariants');
+  }
+  const legacyWork = legacyWorkRun.summary;
+  const cachedWork = cachedWorkRun.summary;
+  if (legacyWork.solverExecutablePrefixScores !== EXPECTED_EXECUTABLE_PREFIX_SCORES
+    || cachedWork.solverExecutablePrefixScores !== EXPECTED_EXECUTABLE_PREFIX_SCORES
+    || legacyWork.solverExecutablePrefixNodeVisits !== EXPECTED_LEGACY_PARENT_NODE_VISITS
+    || cachedWork.solverExecutablePrefixNodeVisits !== 0) {
+    throw new Error('Executable-prefix deterministic work evidence changed');
+  }
   const { run: representative, index: representativeRunIndex } = selectRepresentativeDenseQueueRun(runs);
   const deterministicProjection = buildDenseQueueNonTimingProjection(representative);
   const phaseMilliseconds = Object.fromEntries(phaseKeys.map(key => [
@@ -126,20 +166,29 @@ try {
   const innerHotspotProven = consistentlyLargestEligibleLeaf
     && eligibleLeafMajority
     && nestedAccountingReconciles;
-  const initialPlanningMillisecondsByRun = runs
+  const baselineInitialPlanningMillisecondsByRun = legacyRuns
     .map(run => run.summary.solverInitialPlanningMilliseconds);
-  const baselineInitialPlanningMedian = median(TASK_1_INITIAL_PLANNING_MILLISECONDS);
-  const optimisedInitialPlanningMedian = median(initialPlanningMillisecondsByRun);
-  const initialPlanningImprovement = (baselineInitialPlanningMedian
-    - optimisedInitialPlanningMedian) / baselineInitialPlanningMedian;
-  const parentNodeVisits = representative.summary.solverExecutablePrefixNodeVisits;
-  const performanceAccepted = parentNodeVisits === 0 && initialPlanningImprovement >= 0.30;
+  const optimisedInitialPlanningMillisecondsByRun = runs
+    .map(run => run.summary.solverInitialPlanningMilliseconds);
+  const initialPlanningOptimisation = calculateInitialPlanningOptimisation({
+    baselineMillisecondsByRun: baselineInitialPlanningMillisecondsByRun,
+    optimisedMillisecondsByRun: optimisedInitialPlanningMillisecondsByRun,
+    requiredImprovement: 0.30,
+    parentNodeVisits: cachedWork.solverExecutablePrefixNodeVisits,
+  });
 
   console.log(JSON.stringify({
     ...deterministicProjection.summary,
     batchMilliseconds: representative.summary.batchMilliseconds,
     averageBatchMilliseconds: representative.summary.averageBatchMilliseconds,
-    profileRuns: { warmup: WARMUP_RUNS, measured: MEASURED_RUNS, ticksPerRun: TICKS },
+    profileRuns: {
+      warmupPerMode: WARMUP_RUNS,
+      measuredPairs: MEASURED_RUNS,
+      ticksPerRun: TICKS,
+      measuredPairOrder,
+      sameProcess: true,
+      prefixWorkCountersEnabledDuringTiming: false,
+    },
     representativeRunIndex,
     batchMillisecondsByRun: runs.map(run => run.summary.batchMilliseconds),
     phaseMilliseconds,
@@ -163,20 +212,24 @@ try {
     localConflictMillisecondsByRun: runs.map(run => phaseValues(run.summary, localConflictKeys)),
     solverMillisecondsByRun: runs.map(run => phaseValues(run.summary, solverKeys)),
     executablePrefixWork: {
-      scores: representative.summary.solverExecutablePrefixScores,
-      parentNodeVisits,
-      scoresByRun: runs.map(run => run.summary.solverExecutablePrefixScores),
-      parentNodeVisitsByRun: runs.map(run => run.summary.solverExecutablePrefixNodeVisits),
+      counterEvidenceRuns: 1,
+      countersEnabled: true,
+      legacy: {
+        scores: legacyWork.solverExecutablePrefixScores,
+        parentNodeVisits: legacyWork.solverExecutablePrefixNodeVisits,
+      },
+      cached: {
+        scores: cachedWork.solverExecutablePrefixScores,
+        parentNodeVisits: cachedWork.solverExecutablePrefixNodeVisits,
+      },
     },
     initialPlanningOptimisation: {
-      baselineMillisecondsByRun: TASK_1_INITIAL_PLANNING_MILLISECONDS,
-      baselineMedianMilliseconds: baselineInitialPlanningMedian,
-      optimisedMillisecondsByRun: initialPlanningMillisecondsByRun,
-      optimisedMedianMilliseconds: optimisedInitialPlanningMedian,
-      improvement: initialPlanningImprovement,
-      requiredImprovement: 0.30,
-      parentNodeVisits,
-      performanceAccepted,
+      ...initialPlanningOptimisation,
+      baselineMode: 'legacy-reconstructive',
+      optimisedMode: 'cached',
+      sameProcess: true,
+      interleavedPairs: true,
+      prefixWorkCountersEnabledDuringTiming: false,
     },
     eligibleLeafOrderingByRun,
     innerHotspotCriterion: {

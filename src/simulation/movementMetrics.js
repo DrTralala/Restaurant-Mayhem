@@ -1,3 +1,20 @@
+const executablePrefixProfiles = new WeakMap();
+
+export function setExecutablePrefixProfile(metrics, {
+  mode = 'cached',
+  countWork = true,
+} = {}) {
+  if (mode !== 'cached' && mode !== 'legacy') {
+    throw new Error(`Unknown executable-prefix profile mode: ${mode}`);
+  }
+  executablePrefixProfiles.set(metrics, { mode, countWork });
+  return metrics;
+}
+
+export function getExecutablePrefixProfile(metrics) {
+  return executablePrefixProfiles.get(metrics) || null;
+}
+
 export function createMovementMetrics() {
   return {
     batches: 0,

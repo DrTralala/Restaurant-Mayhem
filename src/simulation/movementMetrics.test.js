@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createMovementMetrics, summariseMovementMetrics } from './movementMetrics';
+import {
+  createMovementMetrics,
+  getExecutablePrefixProfile,
+  setExecutablePrefixProfile,
+  summariseMovementMetrics,
+} from './movementMetrics';
 
 const metricKeys = [
   'batches',
@@ -94,5 +99,19 @@ describe('movement metrics', () => {
       solverExecutablePrefixScores: 7,
       solverExecutablePrefixNodeVisits: 21,
     });
+  });
+
+  it('keeps executable-prefix profile options in private non-enumerable storage', () => {
+    const metrics = createMovementMetrics();
+    const keys = Object.keys(metrics);
+    const summary = summariseMovementMetrics(metrics);
+
+    expect(setExecutablePrefixProfile(metrics, { mode: 'legacy', countWork: false })).toBe(metrics);
+
+    expect(Object.keys(metrics)).toEqual(keys);
+    expect(Object.getOwnPropertySymbols(metrics)).toEqual([]);
+    expect(summariseMovementMetrics(metrics)).toEqual(summary);
+    expect(getExecutablePrefixProfile(metrics)).toEqual({ mode: 'legacy', countWork: false });
+    expect(getExecutablePrefixProfile(createMovementMetrics())).toBeNull();
   });
 });

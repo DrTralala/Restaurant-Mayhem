@@ -5,7 +5,7 @@ import {
   findSpaceTimePlan,
   solveLocalConflictComponent,
 } from './localConflictSolver';
-import { createMovementMetrics } from './movementMetrics';
+import { createMovementMetrics, setExecutablePrefixProfile } from './movementMetrics';
 
 const openState = {
   restaurant: { expansionLevel: 1 },
@@ -131,6 +131,62 @@ describe('findSpaceTimePlan', () => {
       { x: 6, y: 5 }, { x: 7, y: 5 }, { x: 8, y: 5 },
       { x: 8, y: 5 }, { x: 8, y: 5 }, { x: 8, y: 5 },
     ]);
+  });
+
+  it('returns identical plans in counter-disabled legacy and cached profile modes', () => {
+    const options = {
+      state: openState,
+      startCell: { x: 5, y: 5 },
+      goalCell: { x: 8, y: 5 },
+      routeCells: [{ x: 6, y: 5 }, { x: 7, y: 5 }, { x: 8, y: 5 }],
+      blockedCells: new Set(),
+      horizon: 6,
+      progressHorizon: 3,
+      vertexReservations: new Map(),
+      edgeReservations: new Set(),
+    };
+    const legacyMetrics = setExecutablePrefixProfile(createMovementMetrics(), {
+      mode: 'legacy', countWork: false,
+    });
+    const cachedMetrics = setExecutablePrefixProfile(createMovementMetrics(), {
+      mode: 'cached', countWork: false,
+    });
+
+    const withoutMetrics = findSpaceTimePlan(options);
+    const legacy = findSpaceTimePlan({ ...options, metrics: legacyMetrics });
+    const cached = findSpaceTimePlan({ ...options, metrics: cachedMetrics });
+
+    expect(legacy).toEqual(withoutMetrics);
+    expect(cached).toEqual(withoutMetrics);
+    expect([
+      legacyMetrics.solverExecutablePrefixScores,
+      legacyMetrics.solverExecutablePrefixNodeVisits,
+      cachedMetrics.solverExecutablePrefixScores,
+      cachedMetrics.solverExecutablePrefixNodeVisits,
+    ]).toEqual([0, 0, 0, 0]);
+    expect(legacyMetrics.spaceTimePlanCalls).toBe(1);
+    expect(cachedMetrics.spaceTimePlanCalls).toBe(1);
+  });
+
+  it('retains counter-enabled reconstructive work evidence only in legacy mode', () => {
+    const options = {
+      state: openState,
+      startCell: { x: 5, y: 5 },
+      goalCell: { x: 8, y: 5 },
+      routeCells: [{ x: 6, y: 5 }, { x: 7, y: 5 }, { x: 8, y: 5 }],
+      blockedCells: new Set(), horizon: 6, progressHorizon: 3,
+      vertexReservations: new Map(), edgeReservations: new Set(),
+    };
+    const legacyMetrics = setExecutablePrefixProfile(createMovementMetrics(), { mode: 'legacy' });
+    const cachedMetrics = setExecutablePrefixProfile(createMovementMetrics(), { mode: 'cached' });
+
+    expect(findSpaceTimePlan({ ...options, metrics: legacyMetrics }))
+      .toEqual(findSpaceTimePlan({ ...options, metrics: cachedMetrics }));
+    expect(legacyMetrics.solverExecutablePrefixScores).toBeGreaterThan(0);
+    expect(legacyMetrics.solverExecutablePrefixNodeVisits).toBeGreaterThan(0);
+    expect(cachedMetrics.solverExecutablePrefixScores)
+      .toBe(legacyMetrics.solverExecutablePrefixScores);
+    expect(cachedMetrics.solverExecutablePrefixNodeVisits).toBe(0);
   });
 
   it('counts each plan call and expanded frontier state', () => {
