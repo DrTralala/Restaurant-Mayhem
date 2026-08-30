@@ -123,7 +123,15 @@ export function moveFixtures(state, requestedMoves) {
   const validation = validateFixtureMoves(state, expandedMoves);
   if (!validation.valid) return state;
 
-  const moves = validation.moves;
+  const moves = validation.moves.filter(move => {
+    const fixture = getFixture(state, move.type, move.id).data;
+    return (move.type !== 'door' && move.x !== fixture.x)
+      || move.y !== fixture.y
+      || (Object.prototype.hasOwnProperty.call(move, 'rotation')
+        && move.rotation !== fixture.rotation);
+  });
+  if (moves.length === 0) return state;
+
   const idsByType = new Map();
   for (const move of moves) {
     const ids = idsByType.get(move.type) || new Set();
@@ -137,6 +145,9 @@ export function moveFixtures(state, requestedMoves) {
   const cashierIds = idsByType.get('cashierTable') || new Set();
   const washStationIds = idsByType.get('washStation') || new Set();
   const doorMoved = (idsByType.get('door')?.size || 0) > 0;
+  const movedCashierStaffIds = new Set((state.cashierStations || [])
+    .filter(station => cashierIds.has(station.id) && station.assignedStaffId != null)
+    .map(station => station.assignedStaffId));
 
   const chairDeltas = new Map(moves
     .filter(move => move.type === 'chair')
@@ -177,7 +188,9 @@ export function moveFixtures(state, requestedMoves) {
       cancelledPaymentCustomerIds.add(worker.task.customerId);
     }
     if (affectedTask) return cancelTask(worker);
-    return doorMoved ? clearPath(worker) : worker;
+    return doorMoved || (worker.task == null && movedCashierStaffIds.has(worker.id))
+      ? clearPath(worker)
+      : worker;
   });
 
   next.tables = (next.tables || []).map(table => cancelledGuides.reduce(

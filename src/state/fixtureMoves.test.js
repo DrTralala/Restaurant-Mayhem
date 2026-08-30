@@ -175,6 +175,116 @@ describe('moveFixtures', () => {
     expect(result.staff[0]).toMatchObject({ task: null, path: [] });
   });
 
+  it('returns the original state and preserves preparation for an unchanged kitchen station', () => {
+    const state = makeState({
+      tables: [],
+      chairs: [],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items' }],
+      staff: [{
+        id: 'cook1', role: 'cook', path: [{ x: 5, y: 6 }],
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
+      }],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', customerId: 'c1', state: 'preparing', stationId: 'k1',
+        assignedStaffId: 'cook1', preparationStartedAt: 50,
+      }],
+    });
+
+    const result = moveFixtures(state, [
+      { type: 'kitchenStation', id: 'k1', x: 100, y: 120 },
+    ]);
+
+    expect(result).toBe(state);
+    expect(result.staff[0].task).toEqual({
+      type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
+    });
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+      preparationStartedAt: 50,
+    });
+  });
+
+  it('returns the original state and preserves washing for an unchanged wash station', () => {
+    const state = makeState({
+      tables: [],
+      chairs: [],
+      washStations: [{ id: 'wash1', type: 'automatic', x: 300, y: 120, w: 40, h: 40 }],
+      staff: [{
+        id: 'washer', role: 'janitor', path: [{ x: 15, y: 6 }],
+        task: { type: 'wash_item', serviceItemId: 'i1', washStationId: 'wash1' },
+      }],
+      serviceItems: [{
+        id: 'i1', state: 'washing', washStationId: 'wash1', washStartedAt: 80,
+      }],
+    });
+
+    const result = moveFixtures(state, [
+      { type: 'washStation', id: 'wash1', x: 300, y: 120 },
+    ]);
+
+    expect(result).toBe(state);
+    expect(result.staff[0].task).toEqual({
+      type: 'wash_item', serviceItemId: 'i1', washStationId: 'wash1',
+    });
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'washing', washStationId: 'wash1', washStartedAt: 80,
+    });
+  });
+
+  it('returns the original state and preserves table work for an unchanged table', () => {
+    const state = makeState({
+      staff: [{
+        id: 'cleaner', role: 'waiter', path: [{ x: 200, y: 180 }],
+        task: { type: 'clean_table', tableId: 't1' },
+      }],
+    });
+
+    const result = moveFixtures(state, [
+      { type: 'table', id: 't1', x: 200, y: 200 },
+    ]);
+
+    expect(result).toBe(state);
+    expect(result.staff[0].task).toEqual({ type: 'clean_table', tableId: 't1' });
+    expect(result.staff[0].path).toEqual([{ x: 200, y: 180 }]);
+  });
+
+  it('filters unchanged fixtures from a mixed move before cancelling active work', () => {
+    const state = makeState({
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items' }],
+      staff: [
+        {
+          id: 'cleaner', role: 'waiter', path: [{ x: 200, y: 180 }],
+          task: { type: 'clean_table', tableId: 't1' },
+        },
+        {
+          id: 'cook1', role: 'cook', path: [{ x: 5, y: 6 }],
+          task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
+        },
+      ],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', customerId: 'c1', state: 'preparing', stationId: 'k1',
+        assignedStaffId: 'cook1', preparationStartedAt: 50,
+      }],
+    });
+
+    const result = moveFixtures(state, [
+      { type: 'table', id: 't1', x: 300, y: 240 },
+      { type: 'kitchenStation', id: 'k1', x: 100, y: 120 },
+    ]);
+
+    expect(result).not.toBe(state);
+    expect(result.tables[0]).toMatchObject({ x: 300, y: 240 });
+    expect(result.kitchenStations[0]).toBe(state.kitchenStations[0]);
+    expect(result.staff[0]).toMatchObject({ task: null, path: [] });
+    expect(result.staff[1]).toMatchObject({
+      task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
+      path: [{ x: 5, y: 6 }],
+    });
+    expect(result.serviceItems[0]).toBe(state.serviceItems[0]);
+  });
+
   it('does not cancel cashier work when a kitchen station has an identical ID', () => {
     const state = makeCollidingStationState();
 
@@ -260,6 +370,41 @@ describe('moveFixtures', () => {
     expect(result.customers[0]).toMatchObject({
       state: 'paying', path: [], checkoutPosition: null,
     });
+  });
+
+  it('clears stale routing for an idle waiter assigned to a moved cashier', () => {
+    const state = makeState({
+      tables: [],
+      chairs: [],
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'waiter1',
+      }],
+      staff: [{
+        id: 'waiter1', role: 'waiter', task: null, path: [{ x: 840, y: 100 }], stalledFor: 7,
+        pathGoal: { x: 840, y: 100 }, usingStaticFallback: true, minimumSpacing: 6,
+        localConflictTarget: { x: 820, y: 100 }, headOnRecovery: true,
+        recoveredHeadOnDetourTarget: { x: 800, y: 100 },
+      }],
+    });
+
+    const result = moveFixtures(state, [
+      { type: 'cashierTable', id: 'cashier1', x: 600, y: 300 },
+    ]);
+
+    expect(result.cashierStations[0]).toMatchObject({
+      x: 600, y: 300, assignedStaffId: 'waiter1',
+    });
+    expect(result.staff[0]).toMatchObject({ task: null, path: [], stalledFor: 0 });
+    for (const field of [
+      'pathGoal',
+      'usingStaticFallback',
+      'minimumSpacing',
+      'localConflictTarget',
+      'headOnRecovery',
+      'recoveredHeadOnDetourTarget',
+    ]) {
+      expect(result.staff[0]).not.toHaveProperty(field);
+    }
   });
 
   it('cancels work tied to moved tables, seated customers, and service counters', () => {
