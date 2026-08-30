@@ -11,6 +11,48 @@ const phaseKeys = [
   'staticRepathMilliseconds',
   'residualBatchMilliseconds',
 ];
+const localConflictKeys = [
+  'localConflictPreparationMilliseconds',
+  'localConflictSolverMilliseconds',
+  'localConflictCandidateMilliseconds',
+  'localConflictSafetyMilliseconds',
+  'localConflictFallbackMilliseconds',
+  'localConflictResidualMilliseconds',
+];
+const solverKeys = [
+  'solverInitialPlanningMilliseconds',
+  'solverNodeBuildMilliseconds',
+  'solverFrontierOrderingMilliseconds',
+  'solverReplanningMilliseconds',
+  'solverAgedFallbackMilliseconds',
+  'solverResidualMilliseconds',
+];
+const eligibleLocalConflictLeafKeys = localConflictKeys
+  .filter(key => key !== 'localConflictSolverMilliseconds');
+const eligibleLeafKeys = [...eligibleLocalConflictLeafKeys, ...solverKeys];
+
+function name(key) {
+  return key.replace('Milliseconds', '');
+}
+
+function phaseValues(summary, keys) {
+  return Object.fromEntries(keys.map(key => [name(key), summary[key]]));
+}
+
+function breakdown(summary, keys, outerKey) {
+  const milliseconds = phaseValues(summary, keys);
+  const outer = summary[outerKey];
+  const total = Object.values(milliseconds).reduce((sum, value) => sum + value, 0);
+  const difference = outer - total;
+  return {
+    milliseconds,
+    shares: Object.fromEntries(Object.entries(milliseconds).map(([key, value]) => [
+      key,
+      outer === 0 ? 0 : value / outer,
+    ])),
+    accounting: { total, outer, difference, reconciles: Math.abs(difference) <= 1e-6 },
+  };
+}
 
 function median(values) {
   const sorted = [...values].sort((left, right) => left - right);
@@ -57,6 +99,26 @@ try {
   const phaseShareTotal = Object.values(phaseShare).reduce((total, share) => total + share, 0);
   const accountingDifference = representative.summary.batchMilliseconds - measuredPhaseTotal;
   const allTickMilliseconds = runs.flatMap(run => run.tickMilliseconds);
+  const localConflictBreakdown = breakdown(
+    representative.summary, localConflictKeys, 'localConflictMilliseconds',
+  );
+  const solverBreakdown = breakdown(
+    representative.summary, solverKeys, 'localConflictSolverMilliseconds',
+  );
+  const eligibleLeafOrderingByRun = runs.map(run => eligibleLeafKeys
+    .map(key => ({ key: name(key), milliseconds: run.summary[key] }))
+    .sort((left, right) => right.milliseconds - left.milliseconds));
+  const largestEligibleLeafByRun = eligibleLeafOrderingByRun.map(ordering => ordering[0].key);
+  const consistentlyLargestEligibleLeaf = largestEligibleLeafByRun
+    .every(key => key === largestEligibleLeafByRun[0]);
+  const representativeEligibleLeafShare = eligibleLeafOrderingByRun[representativeRunIndex][0].milliseconds
+    / representative.summary.localConflictMilliseconds;
+  const eligibleLeafMajority = representativeEligibleLeafShare > 0.5;
+  const nestedAccountingReconciles = localConflictBreakdown.accounting.reconciles
+    && solverBreakdown.accounting.reconciles;
+  const innerHotspotProven = consistentlyLargestEligibleLeaf
+    && eligibleLeafMajority
+    && nestedAccountingReconciles;
 
   console.log(JSON.stringify({
     ...deterministicProjection.summary,
@@ -81,6 +143,20 @@ try {
     dominantMeasuredPhase: dominantPhase[0],
     dominantPhaseMajority: dominantPhase[1] > 0.5,
     singleHotspotProven: false,
+    localConflictBreakdown,
+    solverBreakdown,
+    localConflictMillisecondsByRun: runs.map(run => phaseValues(run.summary, localConflictKeys)),
+    solverMillisecondsByRun: runs.map(run => phaseValues(run.summary, solverKeys)),
+    eligibleLeafOrderingByRun,
+    innerHotspotCriterion: {
+      largestEligibleLeafByRun,
+      consistentlyLargestEligibleLeaf,
+      representativeEligibleLeaf: largestEligibleLeafByRun[representativeRunIndex],
+      representativeEligibleLeafShare,
+      eligibleLeafMajority,
+      nestedAccountingReconciles,
+    },
+    innerHotspotProven,
     deterministicProjectionCompared: true,
     tickMilliseconds: {
       median: median(allTickMilliseconds),

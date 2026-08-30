@@ -18,6 +18,40 @@ function measureMovementPhase(metrics, key, operation) {
   }
 }
 
+const localConflictPhaseKeys = [
+  'localConflictPreparationMilliseconds',
+  'localConflictSolverMilliseconds',
+  'localConflictCandidateMilliseconds',
+  'localConflictSafetyMilliseconds',
+  'localConflictFallbackMilliseconds',
+];
+
+const solverPhaseKeys = [
+  'solverInitialPlanningMilliseconds',
+  'solverNodeBuildMilliseconds',
+  'solverFrontierOrderingMilliseconds',
+  'solverReplanningMilliseconds',
+  'solverAgedFallbackMilliseconds',
+  'solverResidualMilliseconds',
+];
+
+function measureLocalConflictPhase(metrics, key, operation) {
+  return measureMovementPhase(metrics, key, operation);
+}
+
+function measureLocalConflictFallbackPhase(metrics, operation) {
+  if (!metrics) return operation();
+  const startedAt = movementNow();
+  const safePrefixAtStart = metrics.safePrefixMilliseconds;
+  const result = operation();
+  const nestedSafePrefix = metrics.safePrefixMilliseconds - safePrefixAtStart;
+  metrics.localConflictFallbackMilliseconds += Math.max(
+    0,
+    movementNow() - startedAt - nestedSafePrefix,
+  );
+  return result;
+}
+
 export function clearMovementRecoveryMetadata(character) {
   const cleared = { ...character, stalledFor: 0 };
   delete cleared.pathGoal;
@@ -1269,78 +1303,88 @@ function resolveConflictComponentAttempt(
   allowControlledOverlapId = null,
   metrics = null,
 ) {
+  if (metrics) metrics.localConflictAttempts += 1;
   const isRecoveredStaffHeadOnPair = component.length === 2
     && component.every(intent => Boolean(intent.character.role))
     && isExplicitRecoveredHorizontalHeadOn(component[0], component[1]);
   if (isRecoveredStaffHeadOnPair) {
-    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics);
+    measureLocalConflictFallbackPhase(metrics, () =>
+      resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics));
     return;
   }
 
-  const desiredCellKeys = component.map(intent => {
-    const cell = worldToCell(intent.desired);
-    return `${cell.x},${cell.y}`;
+  const prepared = measureLocalConflictPhase(metrics, 'localConflictPreparationMilliseconds', () => {
+    const desiredCellKeys = component.map(intent => {
+      const cell = worldToCell(intent.desired);
+      return `${cell.x},${cell.y}`;
+    });
+    const hasContestedDesiredCell = new Set(desiredCellKeys).size < desiredCellKeys.length;
+    const actors = component.map(solverActorForIntent);
+    const contestedRouteHorizon = Math.max(1, ...actors.map(actor => {
+      let previous = actor.startCell;
+      return actor.routeCells.reduce((slots, cell) => {
+        const distance = Math.abs(cell.x - previous.x) + Math.abs(cell.y - previous.y);
+        previous = cell;
+        return slots + distance;
+      }, 0);
+    }));
+    const currentIntentHorizon = Math.max(1, ...component.map(intent => {
+      const startCell = worldToCell(intent.start);
+      const desiredCell = worldToCell(intent.desired);
+      return Math.abs(desiredCell.x - startCell.x) + Math.abs(desiredCell.y - startCell.y);
+    }));
+    const maxSpeed = Math.max(0, ...component.map(intent => intent.speed));
+    const executableSlots = Math.max(1, Math.ceil(dt * maxSpeed / GRID_SIZE));
+    const horizon = 8;
+    const hasUnscopedPath = component.some(hasUnscopedLegacyPath);
+    const stalledAges = component.map(intent => intent.character.stalledFor || 0);
+    const hasAgedPriority = Math.max(...stalledAges) > Math.min(...stalledAges);
+    let progressHorizon = horizon;
+    if (hasContestedDesiredCell && hasUnscopedPath) {
+      progressHorizon = Math.min(horizon, currentIntentHorizon, executableSlots);
+    } else if (hasContestedDesiredCell && hasAgedPriority) {
+      progressHorizon = Math.min(horizon, contestedRouteHorizon, executableSlots);
+    }
+    return { actors, blockedCells: buildBlockedCells(state), horizon, progressHorizon };
   });
-  const hasContestedDesiredCell = new Set(desiredCellKeys).size < desiredCellKeys.length;
-  const actors = component.map(solverActorForIntent);
-  const contestedRouteHorizon = Math.max(1, ...actors.map(actor => {
-    let previous = actor.startCell;
-    return actor.routeCells.reduce((slots, cell) => {
-      const distance = Math.abs(cell.x - previous.x) + Math.abs(cell.y - previous.y);
-      previous = cell;
-      return slots + distance;
-    }, 0);
-  }));
-  const currentIntentHorizon = Math.max(1, ...component.map(intent => {
-    const startCell = worldToCell(intent.start);
-    const desiredCell = worldToCell(intent.desired);
-    return Math.abs(desiredCell.x - startCell.x) + Math.abs(desiredCell.y - startCell.y);
-  }));
-  const maxSpeed = Math.max(0, ...component.map(intent => intent.speed));
-  const executableSlots = Math.max(1, Math.ceil(dt * maxSpeed / GRID_SIZE));
-  const horizon = 8;
-  const hasUnscopedPath = component.some(hasUnscopedLegacyPath);
-  const stalledAges = component.map(intent => intent.character.stalledFor || 0);
-  const hasAgedPriority = Math.max(...stalledAges) > Math.min(...stalledAges);
-  let progressHorizon = horizon;
-  if (hasContestedDesiredCell && hasUnscopedPath) {
-    progressHorizon = Math.min(horizon, currentIntentHorizon, executableSlots);
-  } else if (hasContestedDesiredCell && hasAgedPriority) {
-    progressHorizon = Math.min(horizon, contestedRouteHorizon, executableSlots);
-  }
-  if (metrics) metrics.solverCalls += 1;
-  const solved = solveLocalConflictComponent({
-    state,
-    actors,
-    blockedCells: buildBlockedCells(state),
-    horizon,
-    progressHorizon,
-    maxHighLevelNodes: 128,
-    allowControlledOverlapId,
-    metrics,
-  });
+  const solverPhasesAtStart = metrics
+    ? Object.fromEntries(solverPhaseKeys.map(key => [key, metrics[key]]))
+    : null;
+  const solverOuterAtStart = metrics ? metrics.localConflictSolverMilliseconds : 0;
+  const solved = measureLocalConflictPhase(metrics, 'localConflictSolverMilliseconds', () =>
+    solveLocalConflictComponent({
+      state,
+      ...prepared,
+      maxHighLevelNodes: 128,
+      allowControlledOverlapId,
+      metrics,
+    }));
   if (metrics) {
-    if (!solved) metrics.solverNull += 1;
-    else if (solved.mode === 'pbs') metrics.solverPbs += 1;
-    else metrics.solverAgedFallback += 1;
+    const outerDelta = metrics.localConflictSolverMilliseconds - solverOuterAtStart;
+    const measured = solverPhaseKeys.reduce((total, key) =>
+      total + metrics[key] - solverPhasesAtStart[key], 0);
+    metrics.solverResidualMilliseconds += Math.max(0, outerDelta - measured);
   }
   if (!solved) {
-    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics);
+    measureLocalConflictFallbackPhase(metrics, () =>
+      resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics));
     return;
   }
-  const actorsById = new Map(actors.map(actor => [actor.id, actor]));
-  const candidates = new Map(component.map(intent => [
-    intent.character.id,
-    resolutionFromSolverPlan(
-      state,
-      intent,
-      solved.plans.get(intent.character.id),
-      component,
-      dt,
-      horizon,
-      actorsById.get(intent.character.id).goalCell,
-    ),
-  ]));
+  const candidates = measureLocalConflictPhase(metrics, 'localConflictCandidateMilliseconds', () => {
+    const actorsById = new Map(prepared.actors.map(actor => [actor.id, actor]));
+    return new Map(component.map(intent => [
+      intent.character.id,
+      resolutionFromSolverPlan(
+        state,
+        intent,
+        solved.plans.get(intent.character.id),
+        component,
+        dt,
+        prepared.horizon,
+        actorsById.get(intent.character.id).goalCell,
+      ),
+    ]));
+  });
   const collective = new Map(resolutions);
   for (const [id, candidate] of candidates) collective.set(id, candidate);
   for (const intent of component.filter(candidate => candidate.character.state === 'leaving'
@@ -1354,29 +1398,37 @@ function resolveConflictComponentAttempt(
     candidates.set(intent.character.id, exactCandidate);
     collective.set(intent.character.id, exactCandidate);
   }
-  if (componentIsSafe(component, intents, collective)) {
+  const safe = measureLocalConflictPhase(
+    metrics,
+    'localConflictSafetyMilliseconds',
+    () => componentIsSafe(component, intents, collective),
+  );
+  if (safe) {
     for (const [id, candidate] of candidates) resolutions.set(id, candidate);
     return;
   }
 
-  for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
-  for (const intent of [...component].sort(compareIntentsByAgedPriority)) {
-    const candidate = measureMovementPhase(
-      metrics,
-      'safePrefixMilliseconds',
-      () => furthestSafeResolutionPrefix(
-        intent,
-        candidates.get(intent.character.id),
-        intents,
-        resolutions,
-        metrics,
-      ),
-    );
-    resolutions.set(intent.character.id, candidate);
-  }
-  if (!componentIsSafe(component, intents, resolutions)) {
+  if (metrics) metrics.localConflictSafetyFallbacks += 1;
+  measureLocalConflictFallbackPhase(metrics, () => {
     for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
-  }
+    for (const intent of [...component].sort(compareIntentsByAgedPriority)) {
+      const candidate = measureMovementPhase(
+        metrics,
+        'safePrefixMilliseconds',
+        () => furthestSafeResolutionPrefix(
+          intent,
+          candidates.get(intent.character.id),
+          intents,
+          resolutions,
+          metrics,
+        ),
+      );
+      resolutions.set(intent.character.id, candidate);
+    }
+    if (!componentIsSafe(component, intents, resolutions)) {
+      for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
+    }
+  });
 }
 
 function resolveConflictComponent(state, component, resolutions, dt, intents, metrics = null) {
@@ -1386,12 +1438,16 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
     && component.every(intent => exactExitIntents.includes(intent) || intent.speed === 0);
   if (isExactExitOnlyComponent) {
     const exactResolutions = new Map(resolutions);
-    resolveComponentWithExistingSafety(state, component, exactResolutions, dt, intents, metrics);
-    if (exactExitIntents.some(intent => hasMeasurableRouteProgress(
-      intent,
-      exactResolutions.get(intent.character.id)?.endpoint || intent.character,
-    ))) {
-      copyComponentResolutions(component, exactResolutions, resolutions);
+    const exactProgress = measureLocalConflictFallbackPhase(metrics, () => {
+      resolveComponentWithExistingSafety(state, component, exactResolutions, dt, intents, metrics);
+      const progressed = exactExitIntents.some(intent => hasMeasurableRouteProgress(
+        intent,
+        exactResolutions.get(intent.character.id)?.endpoint || intent.character,
+      ));
+      if (progressed) copyComponentResolutions(component, exactResolutions, resolutions);
+      return progressed;
+    });
+    if (exactProgress) {
       return;
     }
   }
@@ -1399,29 +1455,36 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
   const ordinaryResolutions = new Map(resolutions);
   resolveConflictComponentAttempt(state, component, ordinaryResolutions, dt, intents, null, metrics);
   if (componentHasMeasurableRouteProgress(component, ordinaryResolutions)) {
-    copyComponentResolutions(component, ordinaryResolutions, resolutions);
+    if (metrics) metrics.localConflictProgressAccepts += 1;
+    measureLocalConflictFallbackPhase(metrics, () =>
+      copyComponentResolutions(component, ordinaryResolutions, resolutions));
     return;
   }
 
-  for (const intent of component) {
-    const goal = intent.character.state === 'leaving' && intent.target
-      ? null
-      : movementGoalForIntent(intent);
-    intent.hasValidStaticRoute = Boolean(goal
-      && findPath(state, worldToCell(intent.character), worldToCell(goal)).length);
-  }
-  const selectedId = selectControlledOverlapActor(component);
+  const selectedId = measureLocalConflictFallbackPhase(metrics, () => {
+    for (const intent of component) {
+      const goal = intent.character.state === 'leaving' && intent.target
+        ? null
+        : movementGoalForIntent(intent);
+      intent.hasValidStaticRoute = Boolean(goal
+        && findPath(state, worldToCell(intent.character), worldToCell(goal)).length);
+    }
+    return selectControlledOverlapActor(component);
+  });
   if (selectedId == null) {
-    copyComponentResolutions(component, ordinaryResolutions, resolutions);
+    measureLocalConflictFallbackPhase(metrics, () =>
+      copyComponentResolutions(component, ordinaryResolutions, resolutions));
     return;
   }
 
-  const componentIds = new Set(component.map(intent => intent.character.id));
-  for (const intent of component) {
-    intent.controlledOverlapId = selectedId;
-    intent.controlledOverlapComponentIds = componentIds;
-    intent.controlledOverlapSelected = intent.character.id === selectedId;
-  }
+  measureLocalConflictFallbackPhase(metrics, () => {
+    const componentIds = new Set(component.map(intent => intent.character.id));
+    for (const intent of component) {
+      intent.controlledOverlapId = selectedId;
+      intent.controlledOverlapComponentIds = componentIds;
+      intent.controlledOverlapSelected = intent.character.id === selectedId;
+    }
+  });
   const relaxedResolutions = new Map(resolutions);
   resolveConflictComponentAttempt(
     state,
@@ -1432,25 +1495,30 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
     selectedId,
     metrics,
   );
-  const selectedIntent = component.find(intent => intent.character.id === selectedId);
-  if (!hasMeasurableRouteProgress(
-    selectedIntent,
-    relaxedResolutions.get(selectedId)?.endpoint || selectedIntent.character,
-  )) {
-    const detour = findControlledOverlapDetour(
-      state,
+  measureLocalConflictFallbackPhase(metrics, () => {
+    const selectedIntent = component.find(intent => intent.character.id === selectedId);
+    if (!hasMeasurableRouteProgress(
       selectedIntent,
-      dt,
-      intents,
-      relaxedResolutions,
-      component,
-    );
-    if (detour) {
-      selectedIntent.controlledOverlapDetour = true;
-      relaxedResolutions.set(selectedId, detour);
+      relaxedResolutions.get(selectedId)?.endpoint || selectedIntent.character,
+    )) {
+      const detour = findControlledOverlapDetour(
+        state,
+        selectedIntent,
+        dt,
+        intents,
+        relaxedResolutions,
+        component,
+      );
+      if (detour) {
+        selectedIntent.controlledOverlapDetour = true;
+        relaxedResolutions.set(selectedId, detour);
+      }
     }
-  }
-  copyComponentResolutions(component, relaxedResolutions, resolutions);
+    if (componentHasMeasurableRouteProgress(component, relaxedResolutions) && metrics) {
+      metrics.localConflictProgressAccepts += 1;
+    }
+    copyComponentResolutions(component, relaxedResolutions, resolutions);
+  });
 }
 
 function applyBatchRecovery(state, intent, endpoint, dt, intents, metrics = null) {
@@ -1610,12 +1678,17 @@ function resolveCharacterMovementBatchInternal(state, entries, dt, metrics = nul
     }
     const conflictStartedAt = movementNow();
     const safePrefixAtStart = metrics.safePrefixMilliseconds;
+    const phasesAtStart = Object.fromEntries(localConflictPhaseKeys.map(key => [key, metrics[key]]));
     resolveConflictComponent(state, component, resolutions, dt, intents, metrics);
     const nestedSafePrefix = metrics.safePrefixMilliseconds - safePrefixAtStart;
-    metrics.localConflictMilliseconds += Math.max(
+    const localConflictElapsed = Math.max(
       0,
       movementNow() - conflictStartedAt - nestedSafePrefix,
     );
+    metrics.localConflictMilliseconds += localConflictElapsed;
+    const measured = localConflictPhaseKeys.reduce((total, key) =>
+      total + metrics[key] - phasesAtStart[key], 0);
+    metrics.localConflictResidualMilliseconds += Math.max(0, localConflictElapsed - measured);
   }
   const moved = new Map(intents.map(intent => [
     intent.character.id,

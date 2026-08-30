@@ -6,6 +6,18 @@ const metricKeys = [
   'batchMilliseconds',
   'pairBuildMilliseconds',
   'localConflictMilliseconds',
+  'localConflictPreparationMilliseconds',
+  'localConflictSolverMilliseconds',
+  'localConflictCandidateMilliseconds',
+  'localConflictSafetyMilliseconds',
+  'localConflictFallbackMilliseconds',
+  'localConflictResidualMilliseconds',
+  'solverInitialPlanningMilliseconds',
+  'solverNodeBuildMilliseconds',
+  'solverFrontierOrderingMilliseconds',
+  'solverReplanningMilliseconds',
+  'solverAgedFallbackMilliseconds',
+  'solverResidualMilliseconds',
   'safePrefixMilliseconds',
   'dynamicRepathMilliseconds',
   'staticRepathMilliseconds',
@@ -20,6 +32,13 @@ const metricKeys = [
   'solverAgedFallback',
   'solverNull',
   'solverNodePops',
+  'localConflictAttempts',
+  'localConflictProgressAccepts',
+  'localConflictSafetyFallbacks',
+  'spaceTimePlanCalls',
+  'spaceTimeExpandedStates',
+  'solverNodesBuilt',
+  'solverBranchesGenerated',
   'safePrefixProbes',
   'dynamicRepaths',
   'staticRepaths',
@@ -54,7 +73,9 @@ describe('movement metrics', () => {
     metrics.batches = 2;
     metrics.batchMilliseconds = 9;
     metrics.pairBuildMilliseconds = 3;
+    metrics.localConflictPreparationMilliseconds = 2;
     metrics.solverCalls = 4;
+    metrics.spaceTimeExpandedStates = 12;
 
     const summary = summariseMovementMetrics(metrics);
     metrics.solverCalls = 8;
@@ -62,6 +83,8 @@ describe('movement metrics', () => {
     expect(summary).not.toBe(metrics);
     expect(summary.averageBatchMilliseconds).toBe(4.5);
     expect(summary.pairBuildMilliseconds).toBe(3);
+    expect(summary.localConflictPreparationMilliseconds).toBe(2);
     expect(summary.solverCalls).toBe(4);
+    expect(summary.spaceTimeExpandedStates).toBe(12);
   });
 });

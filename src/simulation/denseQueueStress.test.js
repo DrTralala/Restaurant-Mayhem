@@ -13,6 +13,18 @@ const deterministicSummary = result => {
     averageBatchMilliseconds: _averageBatchMilliseconds,
     pairBuildMilliseconds: _pairBuildMilliseconds,
     localConflictMilliseconds: _localConflictMilliseconds,
+    localConflictPreparationMilliseconds: _localConflictPreparationMilliseconds,
+    localConflictSolverMilliseconds: _localConflictSolverMilliseconds,
+    localConflictCandidateMilliseconds: _localConflictCandidateMilliseconds,
+    localConflictSafetyMilliseconds: _localConflictSafetyMilliseconds,
+    localConflictFallbackMilliseconds: _localConflictFallbackMilliseconds,
+    localConflictResidualMilliseconds: _localConflictResidualMilliseconds,
+    solverInitialPlanningMilliseconds: _solverInitialPlanningMilliseconds,
+    solverNodeBuildMilliseconds: _solverNodeBuildMilliseconds,
+    solverFrontierOrderingMilliseconds: _solverFrontierOrderingMilliseconds,
+    solverReplanningMilliseconds: _solverReplanningMilliseconds,
+    solverAgedFallbackMilliseconds: _solverAgedFallbackMilliseconds,
+    solverResidualMilliseconds: _solverResidualMilliseconds,
     safePrefixMilliseconds: _safePrefixMilliseconds,
     dynamicRepathMilliseconds: _dynamicRepathMilliseconds,
     staticRepathMilliseconds: _staticRepathMilliseconds,
@@ -100,5 +112,62 @@ describe('dense queue stress scenario', () => {
     expect(result.actorsCompletingDoorRoutes).toBe(24);
     expect(result.minimumEndpointSpacing).toBeGreaterThanOrEqual(16 - 1e-6);
     expect(result.minimumSweptSpacing).toBeGreaterThanOrEqual(16 - 1e-6);
+    expect(result.summary.localConflictAttempts).toBeGreaterThanOrEqual(result.summary.solverCalls);
+    expect(result.summary.spaceTimePlanCalls).toBeGreaterThanOrEqual(result.summary.solverCalls);
+    expect(result.summary.solverNodesBuilt).toBeGreaterThanOrEqual(result.summary.solverPbs);
+    expect(result.summary.localConflictProgressAccepts).toBeGreaterThan(0);
+    expect(result.summary.localConflictPreparationMilliseconds
+      + result.summary.localConflictSolverMilliseconds
+      + result.summary.localConflictCandidateMilliseconds
+      + result.summary.localConflictSafetyMilliseconds
+      + result.summary.localConflictFallbackMilliseconds
+      + result.summary.localConflictResidualMilliseconds)
+      .toBeCloseTo(result.summary.localConflictMilliseconds, 6);
+    expect(result.summary.solverInitialPlanningMilliseconds
+      + result.summary.solverNodeBuildMilliseconds
+      + result.summary.solverFrontierOrderingMilliseconds
+      + result.summary.solverReplanningMilliseconds
+      + result.summary.solverAgedFallbackMilliseconds
+      + result.summary.solverResidualMilliseconds)
+      .toBeCloseTo(result.summary.localConflictSolverMilliseconds, 6);
+  });
+
+  it('keeps branch counters deterministic while excluding nested timing fields', () => {
+    const first = runDenseQueueScenario({ ticks: 5 });
+    const second = runDenseQueueScenario({ ticks: 5 });
+
+    for (const key of [
+      'localConflictPreparationMilliseconds',
+      'localConflictSolverMilliseconds',
+      'localConflictCandidateMilliseconds',
+      'localConflictSafetyMilliseconds',
+      'localConflictFallbackMilliseconds',
+      'localConflictResidualMilliseconds',
+      'solverInitialPlanningMilliseconds',
+      'solverNodeBuildMilliseconds',
+      'solverFrontierOrderingMilliseconds',
+      'solverReplanningMilliseconds',
+      'solverAgedFallbackMilliseconds',
+      'solverResidualMilliseconds',
+    ]) {
+      second.summary[key] += 1;
+      expect(() => assertDenseQueueDeterministicRuns([first, second]), key).not.toThrow();
+      second.summary[key] -= 1;
+    }
+
+    for (const key of [
+      'localConflictAttempts',
+      'localConflictProgressAccepts',
+      'localConflictSafetyFallbacks',
+      'spaceTimePlanCalls',
+      'spaceTimeExpandedStates',
+      'solverNodesBuilt',
+      'solverBranchesGenerated',
+    ]) {
+      second.summary[key] += 1;
+      expect(() => assertDenseQueueDeterministicRuns([first, second]), key)
+        .toThrow('Dense queue non-timing results changed between measured runs');
+      second.summary[key] -= 1;
+    }
   });
 });

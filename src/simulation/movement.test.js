@@ -549,14 +549,14 @@ describe('movement runtime', () => {
     const entries = threeWayCrossingEntries();
     const metrics = createMovementMetrics();
 
-    const withoutMetrics = JSON.stringify(serialiseById(
+    const withoutMetrics = serialiseById(
       resolveCharacterMovementBatch(openState, entries, 1),
-    ));
-    const withMetrics = JSON.stringify(serialiseById(
+    );
+    const withMetrics = serialiseById(
       resolveCharacterMovementBatch(openState, entries, 1, metrics),
-    ));
+    );
 
-    expect(withMetrics).toBe(withoutMetrics);
+    expect(withMetrics).toEqual(withoutMetrics);
     expect(metrics.batches).toBe(1);
     expect(metrics.batchMilliseconds).toBeGreaterThanOrEqual(0);
     expect(metrics.pairChecks).toBe(3);
@@ -568,18 +568,71 @@ describe('movement runtime', () => {
       metrics.solverPbs + metrics.solverAgedFallback + metrics.solverNull,
     );
     expect(metrics.solverNodePops).toBeGreaterThan(0);
+    expect(metrics.localConflictAttempts).toBeGreaterThanOrEqual(metrics.solverCalls);
+    expect(metrics.localConflictProgressAccepts).toBeGreaterThan(0);
+    expect(metrics.spaceTimePlanCalls).toBeGreaterThanOrEqual(metrics.solverCalls);
+    expect(metrics.spaceTimeExpandedStates).toBeGreaterThan(0);
+    expect(metrics.solverNodesBuilt).toBeGreaterThanOrEqual(metrics.solverPbs);
+    expect(metrics.solverBranchesGenerated).toBeGreaterThan(0);
     expect(metrics.pairBuildMilliseconds).toBeGreaterThanOrEqual(0);
     expect(metrics.localConflictMilliseconds).toBeGreaterThanOrEqual(0);
     expect(metrics.safePrefixMilliseconds).toBeGreaterThanOrEqual(0);
     expect(metrics.dynamicRepathMilliseconds).toBeGreaterThanOrEqual(0);
     expect(metrics.staticRepathMilliseconds).toBeGreaterThanOrEqual(0);
     expect(metrics.residualBatchMilliseconds).toBeGreaterThanOrEqual(0);
+    for (const key of [
+      'localConflictPreparationMilliseconds',
+      'localConflictSolverMilliseconds',
+      'localConflictCandidateMilliseconds',
+      'localConflictSafetyMilliseconds',
+      'localConflictFallbackMilliseconds',
+      'localConflictResidualMilliseconds',
+      'solverInitialPlanningMilliseconds',
+      'solverNodeBuildMilliseconds',
+      'solverFrontierOrderingMilliseconds',
+      'solverReplanningMilliseconds',
+      'solverAgedFallbackMilliseconds',
+      'solverResidualMilliseconds',
+    ]) {
+      expect(Number.isFinite(metrics[key]), key).toBe(true);
+      expect(metrics[key], key).toBeGreaterThanOrEqual(0);
+    }
+    expect(metrics.localConflictPreparationMilliseconds
+      + metrics.localConflictSolverMilliseconds
+      + metrics.localConflictCandidateMilliseconds
+      + metrics.localConflictSafetyMilliseconds
+      + metrics.localConflictFallbackMilliseconds
+      + metrics.localConflictResidualMilliseconds).toBeCloseTo(metrics.localConflictMilliseconds, 6);
+    expect(metrics.solverInitialPlanningMilliseconds
+      + metrics.solverNodeBuildMilliseconds
+      + metrics.solverFrontierOrderingMilliseconds
+      + metrics.solverReplanningMilliseconds
+      + metrics.solverAgedFallbackMilliseconds
+      + metrics.solverResidualMilliseconds).toBeCloseTo(metrics.localConflictSolverMilliseconds, 6);
     expect(metrics.pairBuildMilliseconds
       + metrics.localConflictMilliseconds
       + metrics.safePrefixMilliseconds
       + metrics.dynamicRepathMilliseconds
       + metrics.staticRepathMilliseconds
       + metrics.residualBatchMilliseconds).toBeCloseTo(metrics.batchMilliseconds, 6);
+  });
+
+  it('preserves a stalled result while counting direct dynamic and static re-path branches', () => {
+    const entries = [{
+      character: {
+        id: 'stalled', x: 100, y: 100,
+        path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 }, stalledFor: 2,
+      },
+      speed: 0,
+    }];
+    const metrics = createMovementMetrics();
+
+    const withoutMetrics = resolveCharacterMovementBatch(openState, entries, 1);
+    const withMetrics = resolveCharacterMovementBatch(openState, entries, 1, metrics);
+
+    expect(withMetrics).toEqual(withoutMetrics);
+    expect(metrics.dynamicRepaths).toBeGreaterThan(0);
+    expect(metrics.staticRepaths).toBeGreaterThan(0);
   });
 
   it('exposes the exact resolved trajectories without changing moved characters', () => {
@@ -638,11 +691,16 @@ describe('movement runtime', () => {
   it('prevents production exact-exit intents from swapping an opposing door edge within one tick', () => {
     const left = { id: 'left-exit', state: 'leaving', x: 880, y: 360, path: [] };
     const right = { id: 'right-exit', state: 'leaving', x: 900, y: 360, path: [] };
-    const moved = resolveCharacterMovementBatch(openState, [
+    const entries = [
       { character: left, speed: 20, target: { x: 900, y: 360 } },
       { character: right, speed: 20, target: { x: 880, y: 360 } },
-    ], 1);
+    ];
+    const metrics = createMovementMetrics();
+    const withoutMetrics = resolveCharacterMovementBatch(openState, entries, 1);
+    const moved = resolveCharacterMovementBatch(openState, entries, 1, metrics);
 
+    expect(moved).toEqual(withoutMetrics);
+    expect(metrics.safePrefixProbes).toBeGreaterThan(0);
     expect([moved.get(left.id).x, moved.get(right.id).x]).not.toEqual([900, 880]);
     const leftTrajectory = buildTimeParameterizedTrajectory(left, moved.get(left.id), 20, 1);
     const rightTrajectory = buildTimeParameterizedTrajectory(right, moved.get(right.id), 20, 1);
@@ -886,11 +944,15 @@ describe('movement runtime', () => {
       path: [{ x: 5, y: 5 }],
       pathGoal: { x: 5, y: 5 }, stalledFor: 0,
     };
-    const moved = resolveCharacterMovementBatch(openState, [
+    const entries = [
       { character: actor, speed: 40 },
       { character: peer, speed: 20 },
-    ], 1);
+    ];
+    const metrics = createMovementMetrics();
+    const withoutMetrics = resolveCharacterMovementBatch(openState, entries, 1);
+    const moved = resolveCharacterMovementBatch(openState, entries, 1, metrics);
 
+    expect(moved).toEqual(withoutMetrics);
     expect(moved.get('a')).toMatchObject({ x: 120, y: 100, path: [] });
     expect(moved.get('b')).toMatchObject({ x: 100, y: 90 });
     expect(Math.hypot(moved.get('a').x - actor.x, moved.get('a').y - actor.y))

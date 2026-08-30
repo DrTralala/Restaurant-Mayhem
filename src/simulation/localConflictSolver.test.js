@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addPriorityEdge, findSpaceTimePlan, solveLocalConflictComponent } from './localConflictSolver';
+import { createMovementMetrics } from './movementMetrics';
 
 const openState = {
   restaurant: { expansionLevel: 1 },
@@ -42,7 +43,36 @@ function serialisePlans(plans) {
   return JSON.stringify([...plans.entries()].sort(([left], [right]) => left.localeCompare(right)));
 }
 
+const solverTimingKeys = [
+  'solverInitialPlanningMilliseconds',
+  'solverNodeBuildMilliseconds',
+  'solverFrontierOrderingMilliseconds',
+  'solverReplanningMilliseconds',
+  'solverAgedFallbackMilliseconds',
+  'solverResidualMilliseconds',
+];
+
+function expectFiniteNonNegativeTimings(metrics) {
+  for (const key of solverTimingKeys) {
+    expect(Number.isFinite(metrics[key]), key).toBe(true);
+    expect(metrics[key], key).toBeGreaterThanOrEqual(0);
+  }
+}
+
 describe('findSpaceTimePlan', () => {
+  it('counts each plan call and expanded frontier state', () => {
+    const metrics = createMovementMetrics();
+    const plan = findSpaceTimePlan({
+      state: openState, routeCells: [{ x: 6, y: 5 }],
+      startCell: { x: 5, y: 5 }, goalCell: { x: 6, y: 5 }, blockedCells: new Set(), horizon: 1,
+      vertexReservations: new Map(), edgeReservations: new Set(), metrics,
+    });
+
+    expect(plan).not.toBeNull();
+    expect(metrics.spaceTimePlanCalls).toBe(1);
+    expect(metrics.spaceTimeExpandedStates).toBe(1);
+  });
+
   it('waits rather than entering a vertex reserved for the next slot', () => {
     const plan = findSpaceTimePlan({
       state: openState, routeCells: [{ x: 6, y: 5 }, { x: 7, y: 5 }],
@@ -113,6 +143,71 @@ describe('findSpaceTimePlan', () => {
 });
 
 describe('solveLocalConflictComponent PBS', () => {
+  it('accounts ordinary PBS search work in exclusive solver phases', () => {
+    const actors = [
+      actor('a', { x: 4, y: 5 }, { x: 5, y: 5 }),
+      actor('b', { x: 5, y: 4 }, { x: 5, y: 5 }),
+    ];
+    const metrics = createMovementMetrics();
+    const result = solveLocalConflictComponent({
+      state: openState, actors, blockedCells: new Set(), horizon: 1, metrics,
+    });
+
+    expect(result.mode).toBe('pbs');
+    expect(metrics.solverCalls).toBe(1);
+    expect([metrics.solverPbs, metrics.solverAgedFallback, metrics.solverNull]).toEqual([1, 0, 0]);
+    expect(metrics.spaceTimePlanCalls).toBeGreaterThanOrEqual(actors.length);
+    expect(metrics.spaceTimeExpandedStates).toBeGreaterThan(0);
+    expect(metrics.solverNodesBuilt).toBeGreaterThanOrEqual(1);
+    expect(metrics.solverBranchesGenerated).toBeGreaterThan(0);
+    expect(metrics.solverInitialPlanningMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.solverNodeBuildMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.solverFrontierOrderingMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.solverReplanningMilliseconds).toBeGreaterThanOrEqual(0);
+    expectFiniteNonNegativeTimings(metrics);
+  });
+
+  it('accounts the max-node aged fallback without PBS phase overlap', () => {
+    const metrics = createMovementMetrics();
+    const result = solveLocalConflictComponent({
+      state: openState,
+      actors: [
+        actor('a', { x: 4, y: 5 }, { x: 5, y: 5 }),
+        actor('b', { x: 5, y: 4 }, { x: 5, y: 5 }),
+      ],
+      blockedCells: new Set(), horizon: 1, maxHighLevelNodes: 0, metrics,
+    });
+
+    expect(result.mode).toBe('aged-fallback');
+    expect(metrics.solverCalls).toBe(1);
+    expect([metrics.solverPbs, metrics.solverAgedFallback, metrics.solverNull]).toEqual([0, 1, 0]);
+    expect(metrics.solverAgedFallbackMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.solverInitialPlanningMilliseconds).toBe(0);
+    expect(metrics.solverNodeBuildMilliseconds).toBe(0);
+    expect(metrics.solverFrontierOrderingMilliseconds).toBe(0);
+    expect(metrics.solverReplanningMilliseconds).toBe(0);
+    expectFiniteNonNegativeTimings(metrics);
+  });
+
+  it('accounts an initial-plan null return', () => {
+    const metrics = createMovementMetrics();
+    const result = solveLocalConflictComponent({
+      state: openState,
+      actors: [actor('outside', { x: -10, y: -10 }, { x: 9, y: 5 })],
+      blockedCells: new Set(),
+      horizon: 1,
+      metrics,
+    });
+
+    expect(result).toBeNull();
+    expect(metrics.solverCalls).toBe(1);
+    expect([metrics.solverPbs, metrics.solverAgedFallback, metrics.solverNull]).toEqual([0, 0, 1]);
+    expect(metrics.solverInitialPlanningMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.solverNodesBuilt).toBe(0);
+    expect(metrics.solverBranchesGenerated).toBe(0);
+    expectFiniteNonNegativeTimings(metrics);
+  });
+
   it('rejects a priority edge that would close a PBS cycle', () => {
     const actors = [
       actor('a', { x: 4, y: 5 }, { x: 5, y: 5 }),
