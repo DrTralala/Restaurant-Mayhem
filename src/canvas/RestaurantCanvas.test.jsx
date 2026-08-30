@@ -694,12 +694,17 @@ describe('RestaurantCanvas object movement', () => {
     useDispatch.mockReturnValue(dispatch);
     useGameState.mockReturnValue({
       ...state,
-        tables: [{ id: 't1', seats: 2, x: 60, y: 60, status: 'empty' }],
-        chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 70, rotation: 0 }],
+      tables: [{ id: 't1', seats: 2, x: 60, y: 60, status: 'occupied' }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 70, rotation: 0 }],
+      customers: [{ id: 'c1', state: 'eating', tableId: 't1', chairId: 'ch1', x: 110, y: 80 }],
     });
     findClickedEntity.mockReturnValue(null);
     const { container } = render(<RestaurantCanvas managementOpen={false} />);
     const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { value: 600 });
+    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
 
     fireEvent.mouseDown(canvas, { clientX: 10, clientY: 10, button: 0 });
     fireEvent.mouseMove(canvas, { clientX: 130, clientY: 100, buttons: 1 });
@@ -708,6 +713,13 @@ describe('RestaurantCanvas object movement', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move selected' }));
     fireEvent.mouseMove(canvas, { clientX: 100, clientY: 100, buttons: 0 });
     fireEvent.mouseMove(canvas, { clientX: 140, clientY: 150, buttons: 0 });
+    requestAnimationFrame.mock.calls.at(-1)[0](1000);
+
+    const furniturePreview = drawFurnitureLayer.mock.calls.at(-1)[1];
+    const customerPreview = drawCustomerLayer.mock.calls.at(-1)[1];
+    expect(furniturePreview.tables[0]).toMatchObject({ x: 100, y: 120 });
+    expect(furniturePreview.chairs[0]).toMatchObject({ x: 140, y: 130 });
+    expect(customerPreview.customers[0]).toMatchObject({ x: 150, y: 140 });
     fireEvent.click(canvas, { clientX: 140, clientY: 150 });
 
     expect(dispatch).toHaveBeenCalledWith({
