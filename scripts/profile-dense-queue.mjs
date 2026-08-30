@@ -11,7 +11,6 @@ const phaseKeys = [
   'staticRepathMilliseconds',
   'residualBatchMilliseconds',
 ];
-const timingKeys = new Set(['batchMilliseconds', 'averageBatchMilliseconds', ...phaseKeys]);
 
 function median(values) {
   const sorted = [...values].sort((left, right) => left - right);
@@ -26,72 +25,92 @@ function percentile(values, ratio) {
   return sorted[Math.ceil(sorted.length * ratio) - 1];
 }
 
-function deterministicCounters(summary) {
-  return Object.fromEntries(Object.entries(summary).filter(([key]) => !timingKeys.has(key)));
-}
-
 const server = await createServer({
   logLevel: 'silent',
   server: { middlewareMode: true },
 });
 
 try {
-  const { runDenseQueueScenario } = await server.ssrLoadModule('/src/simulation/denseQueueStress.js');
+  const {
+    assertDenseQueueDeterministicRuns,
+    buildDenseQueueNonTimingProjection,
+    runDenseQueueScenario,
+    selectRepresentativeDenseQueueRun,
+  } = await server.ssrLoadModule('/src/simulation/denseQueueStress.js');
   for (let run = 0; run < WARMUP_RUNS; run += 1) runDenseQueueScenario({ ticks: TICKS });
   const runs = Array.from({ length: MEASURED_RUNS }, () => runDenseQueueScenario({ ticks: TICKS }));
-  const expectedCounters = deterministicCounters(runs[0].summary);
-  if (!runs.every(run => JSON.stringify(deterministicCounters(run.summary))
-    === JSON.stringify(expectedCounters))) {
-    throw new Error('Dense queue operation counters changed between measured runs');
-  }
-
+  assertDenseQueueDeterministicRuns(runs);
+  const { run: representative, index: representativeRunIndex } = selectRepresentativeDenseQueueRun(runs);
+  const deterministicProjection = buildDenseQueueNonTimingProjection(representative);
   const phaseMilliseconds = Object.fromEntries(phaseKeys.map(key => [
     key.replace('Milliseconds', ''),
-    median(runs.map(run => run.summary[key])),
+    representative.summary[key],
   ]));
   const measuredPhaseTotal = Object.values(phaseMilliseconds)
     .reduce((total, milliseconds) => total + milliseconds, 0);
   const phaseShare = Object.fromEntries(Object.entries(phaseMilliseconds).map(([key, milliseconds]) => [
     key,
-    milliseconds / measuredPhaseTotal,
+    milliseconds / representative.summary.batchMilliseconds,
   ]));
   const dominantPhase = Object.entries(phaseShare)
     .sort((left, right) => right[1] - left[1])[0];
-  const batchMilliseconds = median(runs.map(run => run.summary.batchMilliseconds));
+  const phaseShareTotal = Object.values(phaseShare).reduce((total, share) => total + share, 0);
+  const accountingDifference = representative.summary.batchMilliseconds - measuredPhaseTotal;
   const allTickMilliseconds = runs.flatMap(run => run.tickMilliseconds);
-  const first = runs[0];
 
   console.log(JSON.stringify({
-    ...expectedCounters,
-    batchMilliseconds,
-    averageBatchMilliseconds: batchMilliseconds / TICKS,
+    ...deterministicProjection.summary,
+    batchMilliseconds: representative.summary.batchMilliseconds,
+    averageBatchMilliseconds: representative.summary.averageBatchMilliseconds,
     profileRuns: { warmup: WARMUP_RUNS, measured: MEASURED_RUNS, ticksPerRun: TICKS },
+    representativeRunIndex,
+    batchMillisecondsByRun: runs.map(run => run.summary.batchMilliseconds),
     phaseMilliseconds,
     phaseShare,
+    phaseShareTotal,
+    phaseAccounting: {
+      measuredPhaseTotal,
+      batchMilliseconds: representative.summary.batchMilliseconds,
+      difference: accountingDifference,
+      reconciles: Math.abs(accountingDifference) <= 1e-6,
+    },
     phaseMillisecondsByRun: runs.map(run => Object.fromEntries(phaseKeys.map(key => [
       key.replace('Milliseconds', ''),
       run.summary[key],
     ]))),
     dominantMeasuredPhase: dominantPhase[0],
-    singleHotspotProven: dominantPhase[1] > 0.5,
+    dominantPhaseMajority: dominantPhase[1] > 0.5,
+    singleHotspotProven: false,
+    deterministicProjectionCompared: true,
     tickMilliseconds: {
       median: median(allTickMilliseconds),
       p95: percentile(allTickMilliseconds, 0.95),
       max: Math.max(...allTickMilliseconds),
     },
-    displacedActors: first.displacedActors,
-    totalDisplacement: first.totalDisplacement,
-    totalGoalDistanceReduction: first.totalGoalDistanceReduction,
-    actorsApproachingDoor: first.actorsApproachingDoor,
-    actorsPassingDoor: first.actorsPassingDoor,
-    actorsReachingGoals: first.actorsReachingGoals,
-    allCoordinatesFinite: first.allCoordinatesFinite,
-    allActorsInsideWorld: first.allActorsInsideWorld,
-    minimumInitialSpacing: first.minimumInitialSpacing,
-    minimumEndpointSpacing: first.minimumEndpointSpacing,
-    minimumEndpointPair: first.minimumEndpointPair,
-    minimumSweptSpacing: first.minimumSweptSpacing,
-    minimumSweptPair: first.minimumSweptPair,
+    displacedActors: representative.displacedActors,
+    totalDisplacement: representative.totalDisplacement,
+    totalGoalDistanceReduction: representative.totalGoalDistanceReduction,
+    actorsApproachingDoor: representative.actorsApproachingDoor,
+    actorsPassingDoor: representative.actorsPassingDoor,
+    actorsReachingGoals: representative.actorsReachingGoals,
+    actorsCompletingDoorRoutes: representative.actorsCompletingDoorRoutes,
+    doorDensityRadius: representative.doorDensityRadius,
+    doorCorridorBounds: representative.doorCorridorBounds,
+    maximumNearDoorActors: representative.maximumNearDoorActors,
+    meanNearDoorActors: representative.meanNearDoorActors,
+    ticksWithAtLeastEightNearDoorActors: representative.ticksWithAtLeastEightNearDoorActors,
+    maximumDoorCorridorActors: representative.maximumDoorCorridorActors,
+    meanDoorCorridorActors: representative.meanDoorCorridorActors,
+    ticksWithAtLeastFourDoorCorridorActors: representative.ticksWithAtLeastFourDoorCorridorActors,
+    ticksWithConflicts: representative.ticksWithConflicts,
+    ticksWithConflictComponents: representative.ticksWithConflictComponents,
+    allCoordinatesFinite: representative.allCoordinatesFinite,
+    allActorsInsideWorld: representative.allActorsInsideWorld,
+    minimumInitialSpacing: representative.minimumInitialSpacing,
+    minimumEndpointSpacing: representative.minimumEndpointSpacing,
+    minimumEndpointPair: representative.minimumEndpointPair,
+    minimumSweptSpacing: representative.minimumSweptSpacing,
+    minimumSweptPair: representative.minimumSweptPair,
   }));
 } finally {
   await server.close();

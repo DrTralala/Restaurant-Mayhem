@@ -788,6 +788,7 @@ function buildConflictComponents(intents, metrics = null) {
   }
   if (metrics) {
     metrics.components += components.length;
+    if (components.some(component => component.length > 1)) metrics.conflictBatches += 1;
     metrics.maxComponentSize = Math.max(
       metrics.maxComponentSize,
       ...components.map(component => component.length),

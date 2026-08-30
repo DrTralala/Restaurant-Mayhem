@@ -12,6 +12,7 @@ const metricKeys = [
   'residualBatchMilliseconds',
   'pairChecks',
   'conflictPairs',
+  'conflictBatches',
   'components',
   'maxComponentSize',
   'solverCalls',

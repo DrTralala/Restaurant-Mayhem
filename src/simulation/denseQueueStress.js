@@ -4,38 +4,18 @@ import { createMovementMetrics, summariseMovementMetrics } from './movementMetri
 import { getRestaurantWorld } from './world.js';
 
 const TICK_SECONDS = 1 / 30;
-
-const guideCentre = { x: 860, y: 360 };
-const guideStarts = [
-  { id: 'guide-01', kind: 'guide', x: 800, y: 360 },
-  { id: 'guide-02', kind: 'guide', x: 920, y: 360 },
-  { id: 'guide-03', kind: 'guide', x: 860, y: 300 },
-  { id: 'guide-04', kind: 'guide', x: 860, y: 420 },
-];
-const guideParking = [
-  { x: 500, y: 360 }, { x: 640, y: 200 }, { x: 600, y: 280 }, { x: 600, y: 440 },
-];
-const partyPositions = [960, 1020].flatMap(x => [60, 140, 220, 300, 380, 460, 540, 620]
-  .map(y => ({ x, y })));
-const partyGoals = [780, 840].flatMap(x => [60, 660, 140, 580, 220, 500, 300, 420]
-  .map(y => ({ x, y })));
-const partyStarts = partyPositions.map((position, index) => {
-  const party = Math.floor(index / 4) + 1;
-  const member = index % 4 + 1;
-  return {
-    id: `party-${String(party).padStart(2, '0')}-customer-${String(member).padStart(2, '0')}`,
-    kind: 'newly-admitted-customer',
-    partyId: `party-${String(party).padStart(2, '0')}`,
-    ...position,
-  };
-});
-const crossingStarts = [300, 420, 540, 660].map((y, index) => ({
-  id: `opposite-crossing-${String(index + 1).padStart(2, '0')}`,
-  kind: index % 2 === 0 ? 'staff' : 'customer',
-  x: 520,
-  y,
-}));
-const crossingGoals = [320, 360, 400, 440].map(y => ({ x: 1020, y }));
+const DOOR_DENSITY_RADIUS = 180;
+const DOOR_CORRIDOR_BOUNDS = { left: 600, right: 960, top: 300, bottom: 400 };
+const TIMING_SUMMARY_KEYS = new Set([
+  'batchMilliseconds',
+  'averageBatchMilliseconds',
+  'pairBuildMilliseconds',
+  'localConflictMilliseconds',
+  'safePrefixMilliseconds',
+  'dynamicRepathMilliseconds',
+  'staticRepathMilliseconds',
+  'residualBatchMilliseconds',
+]);
 
 const scenarioState = {
   restaurant: { expansionLevel: 1 },
@@ -47,29 +27,61 @@ const scenarioState = {
   washStations: [],
 };
 
-function ticksToDoor(start, doorPosition) {
-  return Math.ceil((Math.abs(start.x - doorPosition.x) + Math.abs(start.y - doorPosition.y)) / 2);
+function buildCellPolyline(waypoints) {
+  const cells = [{ ...waypoints[0] }];
+  for (const target of waypoints.slice(1)) {
+    const current = { ...cells.at(-1) };
+    while (current.x !== target.x) {
+      current.x += Math.sign(target.x - current.x);
+      cells.push({ ...current });
+    }
+    while (current.y !== target.y) {
+      current.y += Math.sign(target.y - current.y);
+      cells.push({ ...current });
+    }
+  }
+  return cells;
 }
 
-function buildRoute(state, start, goal, doorCell = null) {
-  const startCell = worldToCell(start);
-  const goalCell = worldToCell(goal);
-  if (!doorCell) return findPath(state, startCell, goalCell);
-  return [
-    ...findPath(state, startCell, doorCell),
-    ...findPath(state, doorCell, goalCell),
-  ];
-}
+const inboundQueueRoutes = [
+  buildCellPolyline([
+    { x: 51, y: 3 }, { x: 51, y: 31 }, { x: 49, y: 31 },
+    { x: 49, y: 3 }, { x: 47, y: 3 }, { x: 47, y: 17 },
+    { x: 45, y: 17 }, { x: 30, y: 17 },
+  ]),
+  buildCellPolyline([
+    { x: 50, y: 3 }, { x: 50, y: 31 }, { x: 48, y: 31 },
+    { x: 48, y: 3 }, { x: 46, y: 3 }, { x: 46, y: 18 },
+    { x: 45, y: 18 }, { x: 30, y: 18 },
+  ]),
+];
+const inboundGoals = [500, 420, 340, 260, 180].flatMap(x => [460, 220, 540, 140]
+  .map(y => ({ x, y })));
 
-function buildEntry(start, goal, releaseTick = 0, stressKind = 'routed', doorCell = null) {
-  const startCell = worldToCell(start);
+function buildInboundEntry(index) {
+  const laneIndex = Math.floor(index / 10);
+  const route = inboundQueueRoutes[laneIndex];
+  const routeIndex = (index % 10) * 5;
+  const startCell = route[routeIndex];
+  const start = { x: startCell.x * 20, y: startCell.y * 20 };
+  const goal = inboundGoals[index];
   const goalCell = worldToCell(goal);
-  const path = buildRoute(scenarioState, start, goal, doorCell);
-  if (path.length === 0) throw new Error(`Dense queue route is unavailable for ${start.id}`);
+  const partyIndex = Math.max(0, index - 4);
+  const character = index < 4
+    ? { id: `guide-${String(index + 1).padStart(2, '0')}`, kind: 'guide' }
+    : {
+        id: `party-${String(Math.floor(partyIndex / 4) + 1).padStart(2, '0')}-customer-${String(partyIndex % 4 + 1).padStart(2, '0')}`,
+        kind: 'newly-admitted-customer',
+        partyId: `party-${String(Math.floor(partyIndex / 4) + 1).padStart(2, '0')}`,
+      };
   return {
     character: {
+      ...character,
       ...start,
-      path,
+      path: [
+        ...route.slice(routeIndex + 1),
+        ...findPath(scenarioState, route.at(-1), goalCell),
+      ],
       pathGoal: goalCell,
       stalledFor: 0,
       minimumSpacing: 16,
@@ -77,95 +89,85 @@ function buildEntry(start, goal, releaseTick = 0, stressKind = 'routed', doorCel
     },
     speed: 60,
     goal,
-    releaseTick,
-    startPosition: { x: start.x, y: start.y },
-    stressKind,
-    doorCell,
-    released: stressKind === 'guide',
+    released: true,
+  };
+}
+
+function buildCrossingEntry(index) {
+  const start = {
+    x: 540 + index * 100,
+    y: 360,
+  };
+  const goal = { x: 1020, y: 300 + index * 40 };
+  const goalCell = worldToCell(goal);
+  const startCell = worldToCell(start);
+  const doorCell = { x: 45, y: 18 };
+  const crossingRoute = buildCellPolyline([startCell, { x: startCell.x, y: doorCell.y }, doorCell]);
+  return {
+    character: {
+      id: `opposite-crossing-${String(index + 1).padStart(2, '0')}`,
+      kind: index % 2 === 0 ? 'staff' : 'customer',
+      ...start,
+      path: [
+        ...crossingRoute.slice(1),
+        ...findPath(scenarioState, doorCell, goalCell),
+      ],
+      pathGoal: goalCell,
+      stalledFor: 0,
+      minimumSpacing: 16,
+      usingStaticFallback: false,
+    },
+    speed: 60,
+    goal,
+    released: true,
   };
 }
 
 export function buildDenseQueueScenario() {
-  const entries = [
-    ...guideStarts.map((start, index) => buildEntry(start, guideParking[index], 0, 'guide')),
-    ...partyStarts.map((start, index) => buildEntry(
-      start,
-      partyGoals[index],
-      Math.max(0, (index < 8 ? 300 + index * 40 : 620 + (index - 8) * 35)
-        - ticksToDoor(start, { x: 920, y: 340 })),
-      'routed',
-      { x: 45, y: index < 8 ? 17 : 18 },
-    )),
-    ...crossingStarts.map((start, index) => buildEntry(
-      start,
-      crossingGoals[index],
-      Math.max(0, 920 + index * 40 - ticksToDoor(start, { x: 880, y: 360 })),
-      'routed',
-      { x: 45, y: index % 2 === 0 ? 17 : 18 },
-    )),
-  ];
   return {
     state: scenarioState,
-    entries,
+    entries: [
+      ...Array.from({ length: 20 }, (_, index) => buildInboundEntry(index)),
+      ...Array.from({ length: 4 }, (_, index) => buildCrossingEntry(index)),
+    ],
     tickSeconds: TICK_SECONDS,
   };
 }
 
-function prepareEntryForTick(state, entry, tick) {
-  if (entry.stressKind === 'guide') {
-    const guideIndex = Number(entry.character.id.slice(-2)) - 1;
-    if (tick < 300) {
-      const target = tick % 48 < 22 ? guideCentre : guideStarts[guideIndex];
-      const targetCell = worldToCell(target);
-      return {
-        ...entry,
-        target,
-        character: { ...entry.character, path: [targetCell], pathGoal: targetCell },
-      };
-    }
-    if (!entry.guideParked) {
-      const goalCell = worldToCell(guideParking[guideIndex]);
-      return {
-        ...entry,
-        guideParked: true,
-        target: undefined,
-        character: {
-          ...entry.character,
-          path: findPath(state, worldToCell(entry.character), goalCell),
-          pathGoal: goalCell,
-          stalledFor: 0,
-        },
-      };
-    }
-    return { ...entry, target: undefined };
+export function buildDenseQueueNonTimingProjection(result) {
+  const {
+    summary,
+    tickMilliseconds: _tickMilliseconds,
+    actors,
+    ...deterministicResult
+  } = result;
+  return {
+    summary: Object.fromEntries(Object.entries(summary)
+      .filter(([key]) => !TIMING_SUMMARY_KEYS.has(key))),
+    ...deterministicResult,
+    actors: actors.map(actor => ({
+      id: actor.id,
+      x: actor.x,
+      y: actor.y,
+      pathLength: actor.path?.length || 0,
+      stalledFor: actor.stalledFor || 0,
+      usingStaticFallback: actor.usingStaticFallback || false,
+    })),
+  };
+}
+
+export function assertDenseQueueDeterministicRuns(runs) {
+  const expected = JSON.stringify(buildDenseQueueNonTimingProjection(runs[0]));
+  if (!runs.every(run => JSON.stringify(buildDenseQueueNonTimingProjection(run)) === expected)) {
+    throw new Error('Dense queue non-timing results changed between measured runs');
   }
-  if (!entry.released && tick < entry.releaseTick) {
-    const target = {
-      x: entry.startPosition.x + (Math.floor(tick / 6) % 2 === 0 ? 5 : 0),
-      y: entry.startPosition.y,
-    };
-    const targetCell = worldToCell(target);
-    return {
-      ...entry,
-      target,
-      character: { ...entry.character, path: [targetCell], pathGoal: targetCell },
-    };
-  }
-  if (!entry.released) {
-    const goalCell = worldToCell(entry.goal);
-    return {
-      ...entry,
-      released: true,
-      target: undefined,
-      character: {
-        ...entry.character,
-        path: buildRoute(state, entry.character, entry.goal, entry.doorCell),
-        pathGoal: goalCell,
-        stalledFor: 0,
-      },
-    };
-  }
-  return { ...entry, target: undefined };
+}
+
+export function selectRepresentativeDenseQueueRun(runs) {
+  return runs
+    .map((run, index) => ({ run, index }))
+    .sort((left, right) => left.run.summary.batchMilliseconds - right.run.summary.batchMilliseconds
+      || left.index - right.index)[Math.floor(runs.length / 2)];
 }
 
 function elapsedNow() {
@@ -195,6 +197,8 @@ export function runDenseQueueScenario({ ticks, metrics = createMovementMetrics()
   ]));
   const passedDoorIds = new Set();
   const reachedGoalIds = new Set();
+  const exitedActors = new Map();
+  const completedRouteIds = new Set();
   const doorPosition = { x: world.doorX, y: world.doorY + 20 };
   const initialDoorDistance = new Map(entries.map(entry => [
     entry.character.id,
@@ -208,10 +212,18 @@ export function runDenseQueueScenario({ ticks, metrics = createMovementMetrics()
   let minimumSweptSpacing = Infinity;
   let minimumEndpointPair = null;
   let minimumSweptPair = null;
+  let maximumNearDoorActors = 0;
+  let totalNearDoorActors = 0;
+  let ticksWithAtLeastEightNearDoorActors = 0;
+  let maximumDoorCorridorActors = 0;
+  let totalDoorCorridorActors = 0;
+  let ticksWithAtLeastFourDoorCorridorActors = 0;
+  let ticksWithConflicts = 0;
 
   for (let tick = 0; tick < ticks; tick += 1) {
     const startedAt = elapsedNow();
-    entries = entries.map(entry => prepareEntryForTick(state, entry, tick));
+    const exitedThisTick = new Set();
+    const conflictBatchesBefore = metrics.conflictBatches;
     const starts = entries.map(entry => ({
       ...entry,
       character: { ...entry.character, path: [...(entry.character.path || [])] },
@@ -236,6 +248,13 @@ export function runDenseQueueScenario({ ticks, metrics = createMovementMetrics()
       ));
       if ((entry.character.x - world.doorX) * (endpoint.x - world.doorX) < 0) {
         passedDoorIds.add(entry.character.id);
+        if (entry.character.id.startsWith('opposite-crossing-')) {
+          exitedThisTick.add(entry.character.id);
+        }
+      }
+      if (!entry.character.id.startsWith('opposite-crossing-')
+        && passedDoorIds.has(entry.character.id) && endpoint.x <= 700) {
+        exitedThisTick.add(entry.character.id);
       }
       if (entry.released && Math.hypot(
         endpoint.x - entry.goal.x,
@@ -246,6 +265,21 @@ export function runDenseQueueScenario({ ticks, metrics = createMovementMetrics()
       allCoordinatesFinite &&= Number.isFinite(endpoint.x) && Number.isFinite(endpoint.y);
       allActorsInsideWorld &&= isInsideWorld(state, worldToCell(endpoint));
     }
+    const endpoints = starts.map(entry => moved.get(entry.character.id));
+    const nearDoorActors = endpoints.filter(endpoint => Math.hypot(
+      endpoint.x - doorPosition.x,
+      endpoint.y - doorPosition.y,
+    ) <= DOOR_DENSITY_RADIUS).length;
+    const doorCorridorActors = endpoints.filter(endpoint =>
+      endpoint.x >= DOOR_CORRIDOR_BOUNDS.left && endpoint.x <= DOOR_CORRIDOR_BOUNDS.right
+      && endpoint.y >= DOOR_CORRIDOR_BOUNDS.top && endpoint.y <= DOOR_CORRIDOR_BOUNDS.bottom).length;
+    maximumNearDoorActors = Math.max(maximumNearDoorActors, nearDoorActors);
+    totalNearDoorActors += nearDoorActors;
+    if (nearDoorActors >= 8) ticksWithAtLeastEightNearDoorActors += 1;
+    maximumDoorCorridorActors = Math.max(maximumDoorCorridorActors, doorCorridorActors);
+    totalDoorCorridorActors += doorCorridorActors;
+    if (doorCorridorActors >= 4) ticksWithAtLeastFourDoorCorridorActors += 1;
+    if (metrics.conflictBatches > conflictBatchesBefore) ticksWithConflicts += 1;
 
     for (let leftIndex = 0; leftIndex < starts.length; leftIndex += 1) {
       const leftStart = starts[leftIndex].character;
@@ -276,20 +310,26 @@ export function runDenseQueueScenario({ ticks, metrics = createMovementMetrics()
       }
     }
 
-    entries = starts.map(entry => ({
-      ...entry,
-      character: moved.get(entry.character.id),
-    }));
+    entries = starts.flatMap(entry => {
+      const character = moved.get(entry.character.id);
+      if (exitedThisTick.has(entry.character.id)) {
+        exitedActors.set(entry.character.id, character);
+        completedRouteIds.add(entry.character.id);
+        return [];
+      }
+      return [{ ...entry, character }];
+    });
     tickMilliseconds.push(elapsedNow() - startedAt);
   }
 
-  const finalGoalDistance = new Map(entries.map(entry => [
-    entry.character.id,
-    Math.hypot(
-      entry.character.x - entry.goal.x,
-      entry.character.y - entry.goal.y,
-    ),
-  ]));
+  const activeById = new Map(entries.map(entry => [entry.character.id, entry]));
+  const finalGoalDistance = new Map(initialEntries.map(entry => {
+    const character = activeById.get(entry.character.id)?.character || exitedActors.get(entry.character.id);
+    return [
+      entry.character.id,
+      Math.hypot(character.x - entry.goal.x, character.y - entry.goal.y),
+    ];
+  }));
   return {
     summary: summariseMovementMetrics(metrics),
     tickMilliseconds,
@@ -301,6 +341,17 @@ export function runDenseQueueScenario({ ticks, metrics = createMovementMetrics()
     actorsApproachingDoor: [...initialDoorDistance].filter(([id, distance]) =>
       distance - minimumDoorDistance.get(id) >= 16 || passedDoorIds.has(id)).length,
     actorsReachingGoals: reachedGoalIds.size,
+    actorsCompletingDoorRoutes: completedRouteIds.size,
+    doorDensityRadius: DOOR_DENSITY_RADIUS,
+    doorCorridorBounds: DOOR_CORRIDOR_BOUNDS,
+    maximumNearDoorActors,
+    meanNearDoorActors: totalNearDoorActors / Math.max(1, ticks),
+    ticksWithAtLeastEightNearDoorActors,
+    maximumDoorCorridorActors,
+    meanDoorCorridorActors: totalDoorCorridorActors / Math.max(1, ticks),
+    ticksWithAtLeastFourDoorCorridorActors,
+    ticksWithConflicts,
+    ticksWithConflictComponents: ticksWithConflicts,
     allCoordinatesFinite,
     allActorsInsideWorld,
     minimumInitialSpacing,
@@ -308,6 +359,7 @@ export function runDenseQueueScenario({ ticks, metrics = createMovementMetrics()
     minimumSweptSpacing,
     minimumEndpointPair,
     minimumSweptPair,
-    actors: entries.map(entry => entry.character),
+    actors: initialEntries.map(entry =>
+      activeById.get(entry.character.id)?.character || exitedActors.get(entry.character.id)),
   };
 }
