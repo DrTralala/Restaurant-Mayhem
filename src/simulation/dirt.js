@@ -23,7 +23,8 @@ export function isRestaurantFloorPoint(state, point) {
 
 function customerDirtOrigin(state, customer) {
   if (SEATED_VISUAL_STATES.has(customer.state)) {
-    const chair = (state.chairs || []).find(candidate => candidate.id === customer.chairId);
+    const chair = (state.chairs || []).find(candidate => candidate.id === customer.chairId
+      && candidate.tableId === customer.tableId);
     if (chair && Number.isFinite(chair.x) && Number.isFinite(chair.y)) {
       return { x: chair.x + 10, y: chair.y + 10 };
     }
@@ -45,6 +46,7 @@ function customerRect(state, customer) {
 }
 
 function customerPosition(state, customer) {
+  if (SEATED_VISUAL_STATES.has(customer.state)) return customerDirtOrigin(state, customer);
   if (Number.isFinite(customer.x) && Number.isFinite(customer.y)) return { x: customer.x, y: customer.y };
   const table = (state.tables || []).find(candidate => candidate.id === customer.tableId);
   return table && Number.isFinite(table.x) && Number.isFinite(table.y)

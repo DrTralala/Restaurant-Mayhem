@@ -1143,7 +1143,10 @@ describe('updateStaff', () => {
     const state = {
       ...baseState,
       staff: [cashier],
-      customers: [{ id: 'c1', state: 'paying', paymentReady: true, x: 840, y: 180, checkoutPosition: { x: 840, y: 180 }, dishId: 'd1', tableId: 't1', patience: 100 }],
+      customers: [{ id: 'c1', state: 'paying', paymentReady: true, x: 840, y: 180, checkoutPosition: { x: 840, y: 180 }, dishId: 'd1', tableId: 't1', patience: 100,
+        stalledFor: 6, pathGoal: { x: 10, y: 10 }, usingStaticFallback: true, minimumSpacing: 2,
+        localConflictTarget: { x: 11, y: 10 }, headOnRecovery: true,
+        recoveredHeadOnDetourTarget: { x: 12, y: 10 } }],
       dishes: [{ id: 'd1', price: 12 }],
       completedCustomers: [],
       cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
@@ -1159,6 +1162,10 @@ describe('updateStaff', () => {
     expect(result.customers[0]).not.toHaveProperty('pathGoal');
     expect(result.customers[0]).not.toHaveProperty('usingStaticFallback');
     expect(result.customers[0]).not.toHaveProperty('minimumSpacing');
+    expect(result.customers[0]).not.toHaveProperty('localConflictTarget');
+    expect(result.customers[0]).not.toHaveProperty('headOnRecovery');
+    expect(result.customers[0]).not.toHaveProperty('recoveredHeadOnDetourTarget');
+    expect(result.customers[0].stalledFor).toBe(0);
     expect(result.completedCustomers[0]).toMatchObject({ revenue: 14.4, tip: 2.4 });
     expect(result.restaurant.totalServed).toBe(4);
   });
@@ -1587,7 +1594,7 @@ describe('updateStaff', () => {
   it('seats the whole party atomically from distinct completed approaches', () => {
     const approaches = [
       { customerId: 'c1', chairId: 'ch1', approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 } },
-      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 14, y: 10 }, approachPoint: { x: 280, y: 200 } },
+      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 13, y: 10 }, approachPoint: { x: 260, y: 200 } },
     ];
     const state = {
       ...baseState,
@@ -1597,7 +1604,7 @@ describe('updateStaff', () => {
       } }],
       customers: [
         { id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', chairId: 'ch1', x: 160, y: 200, path: [] },
-        { id: 'c2', state: 'guided', guideStaffId: 'w1', tableId: 't1', chairId: 'ch2', x: 280, y: 200, path: [] },
+        { id: 'c2', state: 'guided', guideStaffId: 'w1', tableId: 't1', chairId: 'ch2', x: 260, y: 200, path: [] },
       ],
       tables: [{ id: 't1', status: 'reserved', seats: 2, x: 220, y: 200 }],
       chairs: [
@@ -1613,6 +1620,117 @@ describe('updateStaff', () => {
     expect(result.staff[0].task).toBeNull();
   });
 
+  it('clears every movement-recovery field when guidance cancellation starts an exact departure', () => {
+    const recovery = {
+      pathGoal: { x: 20, y: 20 }, usingStaticFallback: true, minimumSpacing: 2,
+      stalledFor: 7, localConflictTarget: { x: 9, y: 9 }, headOnRecovery: true,
+      recoveredHeadOnDetourTarget: { x: 8, y: 8 },
+    };
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1'], tableId: 't1',
+        chairIds: ['missing-chair'], stage: 'follow_guide', approaches: [],
+      } }],
+      customers: [{
+        id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', chairId: null,
+        x: 100, y: 100, path: [{ x: 9, y: 9 }], ...recovery,
+      }],
+      tables: [{ id: 't1', status: 'reserved', seats: 1, x: 220, y: 200 }],
+      chairs: [],
+    };
+
+    const customer = updateStaff(state, 0).customers[0];
+
+    expect(customer).toMatchObject({ state: 'leaving', stalledFor: 0, path: [] });
+    for (const field of [
+      'pathGoal', 'usingStaticFallback', 'minimumSpacing', 'localConflictTarget',
+      'headOnRecovery', 'recoveredHeadOnDetourTarget',
+    ]) expect(customer).not.toHaveProperty(field);
+  });
+
+  it('clears every movement-recovery field when atomic seating discards movement', () => {
+    const approach = {
+      customerId: 'c1', chairId: 'ch1',
+      approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 },
+    };
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1'], tableId: 't1',
+        chairIds: ['ch1'], stage: 'approach_chairs', approaches: [approach],
+      } }],
+      customers: [{
+        id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', chairId: 'ch1',
+        x: 160, y: 200, path: [], stalledFor: 7, pathGoal: { x: 20, y: 20 },
+        usingStaticFallback: true, minimumSpacing: 2, localConflictTarget: { x: 9, y: 9 },
+        headOnRecovery: true, recoveredHeadOnDetourTarget: { x: 8, y: 8 },
+      }],
+      tables: [{ id: 't1', status: 'reserved', seats: 1, x: 220, y: 200 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 180, y: 200 }],
+    };
+
+    const customer = updateStaff(state, 0).customers[0];
+
+    expect(customer).toMatchObject({ state: 'seated', stalledFor: 0, path: [] });
+    for (const field of [
+      'pathGoal', 'usingStaticFallback', 'minimumSpacing', 'localConflictTarget',
+      'headOnRecovery', 'recoveredHeadOnDetourTarget',
+    ]) expect(customer).not.toHaveProperty(field);
+  });
+
+  it.each(['occupied', 'dirty'])('cancels a stale guide task without releasing a %s table', status => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1'], tableId: 't1',
+        chairIds: ['ch1'], stage: 'follow_guide', approaches: [],
+      } }],
+      customers: [{
+        id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1',
+        x: 100, y: 100, path: [],
+      }],
+      tables: [{ id: 't1', status, seats: 1, x: 220, y: 200 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 180, y: 200 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.tables[0].status).toBe(status);
+    expect(result.customers[0].state).toBe('leaving');
+  });
+
+  it('cancels instead of seating after an arrived stored approach becomes statically blocked', () => {
+    const approach = {
+      customerId: 'c1', chairId: 'ch1',
+      approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 },
+    };
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1'], tableId: 't1',
+        chairIds: ['ch1'], stage: 'approach_chairs', approaches: [approach],
+      } }],
+      customers: [{
+        id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', chairId: 'ch1',
+        x: 160, y: 200, path: [],
+      }],
+      tables: [{ id: 't1', status: 'reserved', seats: 1, x: 220, y: 200 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 180, y: 200 },
+        { id: 'new-blocker', x: 160, y: 200 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.tables[0].status).toBe('empty');
+    expect(result.customers[0].state).toBe('leaving');
+    expect(result.customers[0]).not.toMatchObject({ x: 190, y: 210 });
+  });
+
   it.each([
     ['guided state', { state: 'waiting' }],
     ['guide ownership', { guideStaffId: 'other-waiter' }],
@@ -1620,7 +1738,7 @@ describe('updateStaff', () => {
   ])('cancels the whole party when a member loses %s before atomic seating', (_reason, changedFields) => {
     const approaches = [
       { customerId: 'c1', chairId: 'ch1', approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 } },
-      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 14, y: 10 }, approachPoint: { x: 280, y: 200 } },
+      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 13, y: 10 }, approachPoint: { x: 260, y: 200 } },
     ];
     const state = {
       ...baseState,
@@ -1630,7 +1748,7 @@ describe('updateStaff', () => {
       } }],
       customers: [
         { id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 160, y: 200, path: [] },
-        { id: 'c2', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 280, y: 200, path: [], ...changedFields },
+        { id: 'c2', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 260, y: 200, path: [], ...changedFields },
       ],
       tables: [{ id: 't1', status: 'reserved', seats: 2, x: 220, y: 200 }],
       chairs: [
@@ -1651,7 +1769,7 @@ describe('updateStaff', () => {
   it('keeps the whole party guided until every assigned approach is complete', () => {
     const approaches = [
       { customerId: 'c1', chairId: 'ch1', approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 } },
-      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 14, y: 10 }, approachPoint: { x: 280, y: 200 } },
+      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 13, y: 10 }, approachPoint: { x: 260, y: 200 } },
     ];
     const state = {
       ...baseState,

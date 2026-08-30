@@ -774,11 +774,15 @@ describe('updateCustomers', () => {
 
   it('clears recovery metadata when patience abandonment starts departure', () => {
     const result = updateCustomers({ ...baseState, doors: [{ id: 'door1', y: 340 }], customers: [{ id: 'c1', state: 'waiting', patience: 1, happiness: 80,
-      x: 993, y: 360, path: [{ x: 1, y: 1 }], pathGoal: { x: 3, y: 3 }, usingStaticFallback: true, minimumSpacing: 6 }] }, 2);
+      x: 993, y: 360, path: [{ x: 1, y: 1 }], pathGoal: { x: 3, y: 3 }, usingStaticFallback: true, minimumSpacing: 6,
+      localConflictTarget: { x: 2, y: 2 }, headOnRecovery: true, recoveredHeadOnDetourTarget: { x: 4, y: 4 } }] }, 2);
     expect(result.customers[0]).toMatchObject({ state: 'leaving' });
     expect(result.customers[0]).not.toHaveProperty('pathGoal');
     expect(result.customers[0]).not.toHaveProperty('usingStaticFallback');
     expect(result.customers[0]).not.toHaveProperty('minimumSpacing');
+    expect(result.customers[0]).not.toHaveProperty('localConflictTarget');
+    expect(result.customers[0]).not.toHaveProperty('headOnRecovery');
+    expect(result.customers[0]).not.toHaveProperty('recoveredHeadOnDetourTarget');
   });
 
   it('keeps leaving customers visible while they walk towards an exit', () => {

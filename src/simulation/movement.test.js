@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildTimeParameterizedTrajectory,
+  coincidentStartTrajectoriesSeparateSafely,
   ensureStaffRuntime,
   hasArrived,
   minimumSweptDistance,
@@ -11,7 +12,7 @@ import {
   moveStaffAlongPath,
   resolveCharacterMovementBatch,
 } from './movement';
-import { buildBlockedCells, worldToCell } from './pathfinding';
+import { buildBlockedCells, findPath, worldToCell } from './pathfinding';
 import { getRestaurantWorld } from './world';
 
 const openState = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [] };
@@ -71,6 +72,25 @@ const corridorState = {
 };
 
 describe('movement runtime', () => {
+  it('rejects co-located piecewise trajectories that share a positive-duration first segment', () => {
+    const sharedThenLeft = [
+      { start: { x: 100, y: 100 }, end: { x: 120, y: 100 }, startTime: 0, endTime: 0.5 },
+      { start: { x: 120, y: 100 }, end: { x: 120, y: 120 }, startTime: 0.5, endTime: 1 },
+    ];
+    const sharedThenRight = [
+      { start: { x: 100, y: 100 }, end: { x: 120, y: 100 }, startTime: 0, endTime: 0.5 },
+      { start: { x: 120, y: 100 }, end: { x: 120, y: 80 }, startTime: 0.5, endTime: 1 },
+    ];
+    const immediateLeft = buildTimeParameterizedTrajectory(
+      { x: 100, y: 100 }, { x: 80, y: 100 }, 20, 1,
+    );
+    const immediateRight = buildTimeParameterizedTrajectory(
+      { x: 100, y: 100 }, { x: 120, y: 100 }, 20, 1,
+    );
+
+    expect(coincidentStartTrajectoriesSeparateSafely(sharedThenLeft, sharedThenRight)).toBe(false);
+    expect(coincidentStartTrajectoriesSeparateSafely(immediateLeft, immediateRight)).toBe(true);
+  });
   it('replaces non-finite coordinates (NaN, Infinity) with default positions', () => {
     const state = { restaurant: { expansionLevel: 1 } };
     const staff = [
@@ -533,6 +553,71 @@ describe('movement runtime', () => {
         moved.get(character.id).y - character.y,
       )).toBeLessThanOrEqual(speed * 0.5 + 1e-6);
     }
+  });
+
+  it('charges a bent travelled path rather than only its endpoint chord to the tick budget', () => {
+    const actor = { id: 'bent', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const moved = resolveCharacterMovementBatch(openState, [{
+      character: actor,
+      speed: 40,
+      targetAfterPath: { x: 120, y: 160 },
+    }], 1).get(actor.id);
+
+    const travelled = 20 + Math.hypot(moved.x - 120, moved.y - 100);
+    expect(travelled).toBeLessThanOrEqual(40 + 1e-6);
+    expect(moved).toMatchObject({ x: 120, y: 120 });
+    expect(Math.hypot(moved.x - actor.x, moved.y - actor.y)).toBeLessThan(travelled);
+  });
+
+  it('keeps every swept leg of a bent movement clear of newly placed furniture', () => {
+    const state = { ...openState, chairs: [{ id: 'swept-blocker', x: 120, y: 120 }] };
+    const actor = { id: 'bent', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const moved = resolveCharacterMovementBatch(state, [{
+      character: actor,
+      speed: 80,
+      targetAfterPath: { x: 120, y: 160 },
+    }], 1).get(actor.id);
+
+    expect(moved).toMatchObject({ x: 120, y: 100 });
+    expect(buildBlockedCells(state).has(`${worldToCell(moved).x},${worldToCell(moved).y}`)).toBe(false);
+  });
+
+  it('prevents production exact-exit intents from swapping an opposing door edge within one tick', () => {
+    const left = { id: 'left-exit', state: 'leaving', x: 880, y: 360, path: [] };
+    const right = { id: 'right-exit', state: 'leaving', x: 900, y: 360, path: [] };
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: left, speed: 20, target: { x: 900, y: 360 } },
+      { character: right, speed: 20, target: { x: 880, y: 360 } },
+    ], 1);
+
+    expect([moved.get(left.id).x, moved.get(right.id).x]).not.toEqual([900, 880]);
+    const leftTrajectory = buildTimeParameterizedTrajectory(left, moved.get(left.id), 20, 1);
+    const rightTrajectory = buildTimeParameterizedTrajectory(right, moved.get(right.id), 20, 1);
+    expect(minimumTrajectoryDistance(leftTrajectory, rightTrajectory)).toBeGreaterThan(1e-9);
+  });
+
+  it('keeps an impossible controlled-overlap layout static when a conflicting peer is present', () => {
+    const state = {
+      ...openState,
+      chairs: [
+        { id: 'north', x: 100, y: 80 }, { id: 'south', x: 100, y: 120 },
+        { id: 'west', x: 80, y: 100 },
+      ],
+    };
+    const enclosed = {
+      id: 'enclosed', x: 100, y: 100, path: [{ x: 8, y: 5 }],
+      pathGoal: { x: 8, y: 5 }, stalledFor: 3, usingStaticFallback: true,
+    };
+    const peer = { id: 'peer', x: 102, y: 100, path: [], stalledFor: 0 };
+    const moved = resolveCharacterMovementBatch(state, [
+      { character: enclosed, speed: 60 },
+      { character: peer, speed: 0 },
+    ], 1);
+
+    expect(findPath(state, worldToCell(enclosed), enclosed.pathGoal).length).toBeGreaterThan(0);
+    expect(moved.get(enclosed.id)).toMatchObject({ x: 100, y: 100 });
+    expect(Number.isFinite(moved.get(peer.id).x) && Number.isFinite(moved.get(peer.id).y)).toBe(true);
+    expect(buildBlockedCells(state).has(`${worldToCell(moved.get(enclosed.id)).x},${worldToCell(moved.get(enclosed.id)).y}`)).toBe(false);
   });
 
   it('keeps furniture impassable while resolving a local crossing', () => {

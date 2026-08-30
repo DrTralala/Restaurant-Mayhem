@@ -57,8 +57,25 @@ export function findSpaceTimePlan({
   horizon = 8,
   vertexReservations,
   edgeReservations,
+  progressHorizon = horizon,
 }) {
   const startKey = cellKey(startCell);
+  const scoringSlot = Math.max(1, Math.min(horizon, progressHorizon));
+  const prefixScore = node => {
+    const prefix = buildPlan(node).slice(0, scoringSlot);
+    let previous = startCell;
+    let waits = 0;
+    let routeDeviation = 0;
+    for (const cell of prefix) {
+      if (cellKey(cell) === cellKey(previous)) waits += 1;
+      routeDeviation += distanceFromRoute(cell, routeCells);
+      previous = cell;
+    }
+    return { cell: prefix.at(-1) || startCell, waits, routeDeviation };
+  };
+  const compareByExecutablePrefix = (left, right) =>
+    compareNodes(prefixScore(left), prefixScore(right), goalCell)
+      || compareNodes(left, right, goalCell);
   let frontier = [{
     cell: { ...startCell },
     slot: 0,
@@ -93,7 +110,9 @@ export function findSpaceTimePlan({
 
         const stateKey = `${key}@${slot}`;
         const previous = bestByCellAndSlot.get(stateKey);
-        if (!previous || compareNodes(successor, previous, goalCell) < 0) {
+        if (!previous || (slot > scoringSlot
+          ? compareByExecutablePrefix(successor, previous)
+          : compareNodes(successor, previous, goalCell)) < 0) {
           bestByCellAndSlot.set(stateKey, successor);
         }
       }
@@ -104,7 +123,7 @@ export function findSpaceTimePlan({
     if (frontier.length === 0) return null;
   }
 
-  return buildPlan(frontier[0]);
+  return buildPlan([...frontier].sort(compareByExecutablePrefix)[0]);
 }
 
 function compareActorsById(left, right) {
@@ -177,7 +196,7 @@ function reachableIds(graph, startId) {
   return reached;
 }
 
-function addPriorityEdge(actors, edges, higherId, lowerId) {
+export function addPriorityEdge(actors, edges, higherId, lowerId) {
   const graph = buildPriorityGraph(actors, edges);
   if (higherId === lowerId || reachableIds(graph, lowerId).has(higherId)) return null;
   if (graph.get(higherId).has(lowerId)) return edges;
@@ -225,7 +244,7 @@ function reservePlan(vertexReservations, edgeReservations, actor, plan, horizon)
   }
 }
 
-function planActor({ state, actor, blockedCells, horizon, higherActors, plans, ignoreReservations }) {
+function planActor({ state, actor, blockedCells, horizon, progressHorizon, higherActors, plans, ignoreReservations }) {
   const vertexReservations = new Map();
   const edgeReservations = new Set();
   if (!ignoreReservations) {
@@ -243,14 +262,16 @@ function planActor({ state, actor, blockedCells, horizon, higherActors, plans, i
     horizon,
     vertexReservations,
     edgeReservations,
+    progressHorizon,
   });
 }
 
-function planInitialActors({ state, actors, blockedCells, horizon }) {
+function planInitialActors({ state, actors, blockedCells, horizon, progressHorizon }) {
   const plans = new Map();
   for (const actor of actors) {
     const plan = planActor({
-      state, actor, blockedCells, horizon, higherActors: [], plans, ignoreReservations: false,
+      state, actor, blockedCells, horizon, progressHorizon,
+      higherActors: [], plans, ignoreReservations: false,
     });
     if (!plan) return null;
     plans.set(actor.id, plan);
@@ -264,6 +285,7 @@ function replanPriorityDependants({
   actorMap,
   blockedCells,
   horizon,
+  progressHorizon,
   allowControlledOverlapId,
   edges,
   plans,
@@ -286,6 +308,7 @@ function replanPriorityDependants({
       actor: actorMap.get(id),
       blockedCells,
       horizon,
+      progressHorizon,
       higherActors,
       plans: replanned,
       ignoreReservations: id === allowControlledOverlapId,
@@ -323,14 +346,15 @@ function createHighLevelNode(
   horizon,
   allowControlledOverlapId,
   branchPreference = [],
+  progressHorizon = horizon,
 ) {
   const conflicts = detectConflicts(actors, plans, horizon, allowControlledOverlapId);
   return {
     edges,
     plans,
     conflicts,
-    waits: countWaits(actors, plans, horizon),
-    progress: totalProgress(actors, plans, horizon),
+    waits: countWaits(actors, plans, progressHorizon),
+    progress: totalProgress(actors, plans, progressHorizon),
     branchPreference,
     priorityKey: serialisePriorityEdges(edges),
   };
@@ -353,7 +377,7 @@ function compareBranchPreference(left, right) {
 }
 
 function agedFallback({
-  state, actors, blockedCells, horizon, allowControlledOverlapId,
+  state, actors, blockedCells, horizon, progressHorizon, allowControlledOverlapId,
 }) {
   const orderedActors = [...actors].sort(actorByAgedPriority);
   const plans = new Map();
@@ -364,6 +388,7 @@ function agedFallback({
       actor,
       blockedCells,
       horizon,
+      progressHorizon,
       higherActors: plannedActors,
       plans,
       ignoreReservations: actor.id === allowControlledOverlapId,
@@ -382,11 +407,14 @@ export function solveLocalConflictComponent({
   horizon = 8,
   maxHighLevelNodes = 128,
   allowControlledOverlapId = null,
+  progressHorizon = horizon,
 }) {
+  const boundedProgressHorizon = Math.max(1, Math.min(horizon, progressHorizon));
   const stableActors = [...actors].sort(compareActorsById);
   const movingActorCount = stableActors.filter(actor => actor.moving !== false).length;
   const options = {
-    state, actors: stableActors, blockedCells, horizon, allowControlledOverlapId,
+    state, actors: stableActors, blockedCells, horizon,
+    progressHorizon: boundedProgressHorizon, allowControlledOverlapId,
   };
   if (movingActorCount > 12 || maxHighLevelNodes <= 0) return agedFallback(options);
 
@@ -394,7 +422,7 @@ export function solveLocalConflictComponent({
   const initialPlans = planInitialActors(options);
   if (!initialPlans) return null;
   const frontier = [createHighLevelNode(
-    stableActors, [], initialPlans, horizon, allowControlledOverlapId,
+    stableActors, [], initialPlans, horizon, allowControlledOverlapId, [], boundedProgressHorizon,
   )];
   let poppedNodes = 0;
 
@@ -430,6 +458,7 @@ export function solveLocalConflictComponent({
         horizon,
         allowControlledOverlapId,
         [...node.branchPreference, branchIndex],
+        boundedProgressHorizon,
       ));
     }
   }

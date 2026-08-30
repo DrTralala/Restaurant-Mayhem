@@ -1,6 +1,6 @@
 import { getRushHourMultiplier, isRestaurantOpen } from './clock';
 import { buildBlockedCells, worldToCell } from './pathfinding';
-import { planCharacterPath, resolveCharacterMovementBatch } from './movement';
+import { clearMovementRecoveryMetadata, planCharacterPath, resolveCharacterMovementBatch } from './movement';
 import { getCustomerGuideContext } from './guidance';
 import { getCashierCustomerPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
 import {
@@ -23,7 +23,7 @@ export function getExitHeading(customerId) {
 }
 
 function leavingFields(customer, overrides = {}) {
-  const leaving = {
+  return clearMovementRecoveryMetadata({
     ...customer,
     state: 'leaving',
     exitPhase: 'to_door',
@@ -34,11 +34,7 @@ function leavingFields(customer, overrides = {}) {
     stalledFor: 0,
     checkoutPosition: null,
     ...overrides,
-  };
-  delete leaving.pathGoal;
-  delete leaving.usingStaticFallback;
-  delete leaving.minimumSpacing;
-  return leaving;
+  });
 }
 
 function isOpenCell(state, point) {

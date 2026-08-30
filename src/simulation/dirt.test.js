@@ -119,7 +119,7 @@ describe('updateDirt', () => {
         { id: 'dirt-3', x: 321, y: 200 },
       ],
     };
-    expect(updateDirt(state, 60).customers[0].happiness).toBeCloseTo(79.6);
+    expect(updateDirt(state, 60).customers[0].happiness).toBeCloseTo(79.4);
   });
 
   it('caps happiness loss at one point per minute', () => {
@@ -176,5 +176,38 @@ describe('updateDirt', () => {
       floorDirt: [{ id: 'dirt-1', x: 220, y: 220 }],
     };
     expect(updateDirt(state, 60).customers[0].happiness).toBeCloseTo(79.8);
+  });
+
+  it('uses assigned seated geometry rather than stale live coordinates for nearby happiness', () => {
+    const state = {
+      ...baseState,
+      customers: [{ ...baseState.customers[0], x: 800, y: 600, dirtFactor: 0 }],
+      floorDirt: [{ id: 'dirt-1', x: 210, y: 210 }],
+    };
+
+    expect(updateDirt(state, 60).customers[0].happiness).toBeCloseTo(79.8);
+  });
+
+  it('rejects a foreign chair and falls back to the assigned table for seated dirt effects', () => {
+    const state = {
+      ...baseState,
+      customers: [{ ...baseState.customers[0], chairId: 'foreign', x: 800, y: 600, dirtFactor: 0 }],
+      chairs: [{ id: 'foreign', tableId: 'other-table', x: 600, y: 600 }],
+      floorDirt: [{ id: 'dirt-1', x: 240, y: 200 }],
+    };
+
+    expect(updateDirt(state, 60).customers[0].happiness).toBeCloseTo(79.8);
+  });
+
+  it('rejects a foreign chair and generates dirt from the assigned table origin', () => {
+    const state = {
+      ...baseState,
+      customers: [{ ...baseState.customers[0], chairId: 'foreign', x: 800, y: 600, dirtFactor: 10 }],
+      chairs: [{ id: 'foreign', tableId: 'other-table', x: 600, y: 600 }],
+    };
+
+    const dirt = updateDirt(state, 0, () => 0).floorDirt[0];
+    expect(Math.hypot(dirt.x - 240, dirt.y - 200)).toBeLessThanOrEqual(50);
+    expect(Math.hypot(dirt.x - 610, dirt.y - 610)).toBeGreaterThan(120);
   });
 });

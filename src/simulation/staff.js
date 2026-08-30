@@ -1,5 +1,5 @@
 import { buildBlockedCells, buildOccupiedCharacterCells, cellToWorld, findAdjacentOpenCells, findPath, findPathWithDynamicFallback, isInsideWorld, worldToCell } from './pathfinding';
-import { ensureStaffRuntime, hasArrived, planCharacterPath, resolveCharacterMovementBatch } from './movement';
+import { clearMovementRecoveryMetadata, ensureStaffRuntime, hasArrived, planCharacterPath, resolveCharacterMovementBatch } from './movement';
 import { getCashierCustomerPosition, getCashierWorkPosition, getDoorPosition, getDoors, getQueuePosition, getRestaurantWorld } from './world';
 import { clampReputation, getTipRate, getUpgradeEffect } from './balance';
 import { getAssignedCashierStation } from './cashiers';
@@ -15,7 +15,7 @@ import {
 import { ACTIVITY_DURATIONS } from './activity';
 import { hasWashStationCapacity, markCustomerItemsDirty, releaseClearedTables } from './dishwashing';
 import { getCustomerGuideContext, getGuidePartyContext, taskCustomerIds } from './guidance';
-import { buildChairApproachAssignments, getChairCentre } from './seating';
+import { buildChairApproachAssignments, getChairCentre, validateChairApproachAssignments } from './seating';
 
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
   return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
@@ -234,7 +234,7 @@ function getPartySize(party, lead) {
 }
 
 function leavingFields(customer) {
-  const leaving = {
+  return clearMovementRecoveryMetadata({
     ...customer,
     state: 'leaving',
     exitPhase: 'to_door',
@@ -244,11 +244,7 @@ function leavingFields(customer) {
     path: [],
     stalledFor: 0,
     checkoutPosition: null,
-  };
-  delete leaving.pathGoal;
-  delete leaving.usingStaticFallback;
-  delete leaving.minimumSpacing;
-  return leaving;
+  });
 }
 
 function cancelGuideTask({ staff, customers, queue, tables, serviceItems }) {
@@ -257,7 +253,7 @@ function cancelGuideTask({ staff, customers, queue, tables, serviceItems }) {
     staff: { ...staff, task: null, path: [] },
     serviceItems,
     queue: queue.filter(customer => !ids.includes(customer.id)),
-    tables: tables.map(table => table.id === staff.task.tableId
+    tables: tables.map(table => table.id === staff.task.tableId && table.status === 'reserved'
       ? { ...table, status: 'empty' }
       : table),
     customers: customers.map(customer => ids.includes(customer.id)
@@ -906,7 +902,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       .filter(customer => !ids.includes(customer.id)
         && customer.state !== 'leaving' && customer.chairId)
       .map(customer => customer.chairId));
-    const validReservation = table
+    const validReservation = table?.status === 'reserved'
       && ids.length > 0
       && chairIds.length === ids.length
       && new Set(chairIds).size === chairIds.length
@@ -969,14 +965,9 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     }
 
     const approaches = staff.task.approaches;
-    const validApproaches = Array.isArray(approaches)
-      && approaches.length === ids.length
-      && approaches.every((assignment, index) => assignment?.customerId === ids[index]
-        && assignment.chairId === chairIds[index]
-        && Number.isFinite(assignment.approachPoint?.x)
-        && Number.isFinite(assignment.approachPoint?.y)
-        && Number.isFinite(assignment.approachCell?.x)
-        && Number.isFinite(assignment.approachCell?.y));
+    const validApproaches = validateChairApproachAssignments(
+      { ...state, customers, tables, serviceItems }, ids, chairIds, approaches, table.id,
+    );
     if (stage !== 'approach_chairs' || !validApproaches) {
       return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
     }
@@ -1037,7 +1028,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
         const chair = chairByCustomerId.get(customer.id);
         if (!chair) return customer;
         const centre = getChairCentre(chair);
-        const seated = {
+        return clearMovementRecoveryMetadata({
           ...customer,
           state: 'seated',
           tableId: table.id,
@@ -1047,11 +1038,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
           path: [],
           x: centre.x,
           y: centre.y,
-        };
-        delete seated.pathGoal;
-        delete seated.usingStaticFallback;
-        delete seated.minimumSpacing;
-        return seated;
+        });
       }),
     };
   }

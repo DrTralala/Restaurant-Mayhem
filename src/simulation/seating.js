@@ -109,3 +109,31 @@ export function buildChairApproachAssignments(state, customerIds, chairIds) {
 
   return assignments;
 }
+
+export function validateChairApproachAssignments(state, customerIds, chairIds, assignments, tableId) {
+  if (!Array.isArray(customerIds) || !Array.isArray(chairIds) || !Array.isArray(assignments)
+    || customerIds.length !== chairIds.length || assignments.length !== customerIds.length) return false;
+  const chairsById = new Map((state?.chairs || []).map(chair => [chair?.id, chair]));
+  const blocked = buildBlockedCells(state);
+  const usedCells = new Set();
+  return assignments.every((assignment, index) => {
+    const chair = chairsById.get(chairIds[index]);
+    const cell = assignment?.approachCell;
+    const point = assignment?.approachPoint;
+    if (assignment?.customerId !== customerIds[index]
+      || assignment?.chairId !== chairIds[index]
+      || chair?.tableId !== tableId
+      || !Number.isInteger(cell?.x) || !Number.isInteger(cell?.y)
+      || !Number.isFinite(point?.x) || !Number.isFinite(point?.y)) return false;
+    const key = cellKey(cell);
+    const chairCell = worldToCell(chair);
+    const expectedPoint = cellToWorld(cell);
+    if (usedCells.has(key)
+      || Math.abs(cell.x - chairCell.x) + Math.abs(cell.y - chairCell.y) !== 1
+      || point.x !== expectedPoint.x || point.y !== expectedPoint.y
+      || !isRestaurantInteriorCell(state, cell)
+      || blocked.has(key)) return false;
+    usedCells.add(key);
+    return true;
+  });
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findSpaceTimePlan, solveLocalConflictComponent } from './localConflictSolver';
+import { addPriorityEdge, findSpaceTimePlan, solveLocalConflictComponent } from './localConflictSolver';
 
 const openState = {
   restaurant: { expansionLevel: 1 },
@@ -113,6 +113,18 @@ describe('findSpaceTimePlan', () => {
 });
 
 describe('solveLocalConflictComponent PBS', () => {
+  it('rejects a priority edge that would close a PBS cycle', () => {
+    const actors = [
+      actor('a', { x: 4, y: 5 }, { x: 5, y: 5 }),
+      actor('b', { x: 5, y: 4 }, { x: 5, y: 5 }),
+      actor('c', { x: 6, y: 5 }, { x: 5, y: 5 }),
+    ];
+    const edges = [['a', 'b'], ['b', 'c']];
+
+    expect(addPriorityEdge(actors, edges, 'c', 'a')).toBeNull();
+    expect(addPriorityEdge(actors, edges, 'a', 'c')).toEqual([...edges, ['a', 'c']]);
+  });
+
   it('keeps both plans and makes one actor wait at a crossing vertex', () => {
     const actors = [
       actor('a', { x: 4, y: 5 }, { x: 5, y: 5 }),
@@ -154,6 +166,23 @@ describe('solveLocalConflictComponent PBS', () => {
 
     expect([...result.plans.keys()].sort()).toEqual(['a', 'b', 'c']);
     expectConflictFree(result.plans, actors);
+  });
+
+  it('replans transitive priority dependants and stays stable across input permutations', () => {
+    const actors = [
+      { ...actor('a', { x: 4, y: 5 }, { x: 7, y: 5 }, 3), routeCells: [{ x: 5, y: 5 }, { x: 6, y: 5 }, { x: 7, y: 5 }] },
+      { ...actor('b', { x: 5, y: 4 }, { x: 5, y: 7 }, 2), routeCells: [{ x: 5, y: 5 }, { x: 5, y: 6 }, { x: 5, y: 7 }] },
+      { ...actor('c', { x: 6, y: 5 }, { x: 3, y: 5 }, 1), routeCells: [{ x: 5, y: 5 }, { x: 4, y: 5 }, { x: 3, y: 5 }] },
+    ];
+    const solve = entries => solveLocalConflictComponent({
+      state: openState, actors: entries, blockedCells: new Set(), horizon: 4, maxHighLevelNodes: 128,
+    });
+
+    const first = solve(actors);
+    const permuted = solve([actors[2], actors[0], actors[1]]);
+    expect(first.mode).toBe('pbs');
+    expectConflictFree(first.plans, actors);
+    expect(serialisePlans(first.plans)).toBe(serialisePlans(permuted.plans));
   });
 
   it('returns byte-identical component plans by ID for input permutations', () => {
@@ -199,13 +228,32 @@ describe('solveLocalConflictComponent PBS', () => {
     expectConflictFree(result.plans, actors);
   });
 
-  it('bypasses PBS for a component of 13 moving actors', () => {
-    const actors = Array.from({ length: 13 }, (_, index) => actor(
-      `actor-${String(index).padStart(2, '0')}`,
-      { x: 4 + index, y: 10 },
-      { x: 4 + index, y: 10 },
-      index,
-    ));
+  it('keeps aged executable-prefix progress while reserving the remaining eight-slot route', () => {
+    const actors = [
+      { ...actor('a', { x: 4, y: 5 }, { x: 6, y: 5 }, 1), routeCells: [{ x: 5, y: 5 }, { x: 6, y: 5 }] },
+      actor('b', { x: 5, y: 4 }, { x: 5, y: 5 }, 0),
+    ];
+    const result = solveLocalConflictComponent({
+      state: openState, actors, blockedCells: new Set(), horizon: 8,
+      progressHorizon: 2, maxHighLevelNodes: 128,
+    });
+
+    expect(result.plans.get('a').slice(0, 2)).toEqual([{ x: 5, y: 5 }, { x: 6, y: 5 }]);
+    expect(result.plans.get('a')).toHaveLength(8);
+    expect(result.plans.get('b')).toHaveLength(8);
+    expectConflictFree(result.plans, actors);
+  });
+
+  it('uses deterministic aged fallback for 13 genuinely moving contentious actors', () => {
+    const actors = Array.from({ length: 13 }, (_, index) => ({
+      ...actor(
+        `actor-${String(index).padStart(2, '0')}`,
+        { x: 4 + index, y: 10 },
+        { x: 10, y: 12 },
+        index,
+      ),
+      routeCells: [{ x: 10, y: 10 }, { x: 10, y: 11 }, { x: 10, y: 12 }],
+    }));
     const result = solveLocalConflictComponent({
       state: openState, actors, blockedCells: new Set(), horizon: 8, maxHighLevelNodes: 128,
     });
@@ -213,6 +261,27 @@ describe('solveLocalConflictComponent PBS', () => {
     expect(result.mode).toBe('aged-fallback');
     expect(result.plans.size).toBe(13);
     expectConflictFree(result.plans, actors);
+    const reversed = solveLocalConflictComponent({
+      state: openState, actors: [...actors].reverse(), blockedCells: new Set(), horizon: 8, maxHighLevelNodes: 128,
+    });
+    expect(serialisePlans(result.plans)).toBe(serialisePlans(reversed.plans));
+  });
+
+  it('does not count stationary actors towards the twelve-moving PBS cap', () => {
+    const actors = [
+      ...Array.from({ length: 12 }, (_, index) => actor(
+        `moving-${String(index).padStart(2, '0')}`,
+        { x: 4 + index, y: 10 },
+        { x: 4 + index, y: 10 },
+      )),
+      { ...actor('stationary', { x: 20, y: 10 }, { x: 20, y: 10 }), moving: false },
+    ];
+    const result = solveLocalConflictComponent({
+      state: openState, actors, blockedCells: new Set(), horizon: 2, maxHighLevelNodes: 128,
+    });
+
+    expect(result.mode).toBe('pbs');
+    expect(result.plans.size).toBe(13);
   });
 
   it('uses aged fallback when the PBS node cap is reached', () => {

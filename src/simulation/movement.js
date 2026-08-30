@@ -4,6 +4,17 @@ import { getDefaultStaffPosition, getRestaurantWorld, GRID_SIZE } from './world'
 
 const ROLE_SPEED = { waiter: 75, cook: 55 };
 
+export function clearMovementRecoveryMetadata(character) {
+  const cleared = { ...character, stalledFor: 0 };
+  delete cleared.pathGoal;
+  delete cleared.usingStaticFallback;
+  delete cleared.minimumSpacing;
+  delete cleared.localConflictTarget;
+  delete cleared.headOnRecovery;
+  delete cleared.recoveredHeadOnDetourTarget;
+  return cleared;
+}
+
 function continuousWorldBounds(state) {
   const world = getRestaurantWorld(state.restaurant || {});
   return {
@@ -442,6 +453,48 @@ export function minimumTrajectoryDistance(leftTrajectory, rightTrajectory) {
   return minimum;
 }
 
+export function coincidentStartTrajectoriesSeparateSafely(leftTrajectory, rightTrajectory) {
+  const epsilon = 1e-9;
+  let separatesImmediately = false;
+  for (const leftSegment of leftTrajectory) {
+    for (const rightSegment of rightTrajectory) {
+      const startTime = Math.max(leftSegment.startTime, rightSegment.startTime);
+      const endTime = Math.min(leftSegment.endTime, rightSegment.endTime);
+      if (endTime - startTime <= epsilon) continue;
+      const leftStart = pointAtTrajectorySegment(leftSegment, startTime);
+      const leftEnd = pointAtTrajectorySegment(leftSegment, endTime);
+      const rightStart = pointAtTrajectorySegment(rightSegment, startTime);
+      const rightEnd = pointAtTrajectorySegment(rightSegment, endTime);
+      const relativeStart = { x: leftStart.x - rightStart.x, y: leftStart.y - rightStart.y };
+      const relativeEnd = { x: leftEnd.x - rightEnd.x, y: leftEnd.y - rightEnd.y };
+      const relativeVelocity = {
+        x: relativeEnd.x - relativeStart.x,
+        y: relativeEnd.y - relativeStart.y,
+      };
+      const velocitySquared = relativeVelocity.x ** 2 + relativeVelocity.y ** 2;
+      const startsCoincident = Math.hypot(relativeStart.x, relativeStart.y) <= epsilon;
+      if (startTime <= epsilon && startsCoincident) {
+        if (velocitySquared <= epsilon ** 2) return false;
+        separatesImmediately = true;
+      } else if (startsCoincident) return false;
+      if (Math.hypot(relativeEnd.x, relativeEnd.y) <= epsilon) return false;
+      if (velocitySquared > epsilon ** 2) {
+        const ratio = Math.min(1, Math.max(0,
+          -(relativeStart.x * relativeVelocity.x + relativeStart.y * relativeVelocity.y)
+            / velocitySquared,
+        ));
+        const equalityTime = startTime + (endTime - startTime) * ratio;
+        const distance = Math.hypot(
+          relativeStart.x + relativeVelocity.x * ratio,
+          relativeStart.y + relativeVelocity.y * ratio,
+        );
+        if (distance <= epsilon && equalityTime > epsilon) return false;
+      }
+    }
+  }
+  return separatesImmediately;
+}
+
 function buildMovementIntent(state, entry, dt) {
   const { speed } = entry;
   const sourceCharacter = entry.character;
@@ -635,9 +688,7 @@ function isSafeIntentPair(actor, peer, requiredSpacing) {
     actor.start.y - peer.start.y,
   );
   if (startingDistance <= 1e-9) {
-    const actorEnd = actor.trajectory.at(-1).end;
-    const peerEnd = peer.trajectory.at(-1).end;
-    return Math.hypot(actorEnd.x - peerEnd.x, actorEnd.y - peerEnd.y) > 1e-9;
+    return coincidentStartTrajectoriesSeparateSafely(actor.trajectory, peer.trajectory);
   }
   const effectiveSpacing = getEffectivePairSpacing(actor, peer, requiredSpacing);
   const minimumDistance = minimumTrajectoryDistance(actor.trajectory, peer.trajectory);
@@ -1212,23 +1263,22 @@ function resolveConflictComponentAttempt(
   }));
   const maxSpeed = Math.max(0, ...component.map(intent => intent.speed));
   const executableSlots = Math.max(1, Math.ceil(dt * maxSpeed / GRID_SIZE));
+  const horizon = 8;
   const hasUnscopedPath = component.some(hasUnscopedLegacyPath);
   const stalledAges = component.map(intent => intent.character.stalledFor || 0);
   const hasAgedPriority = Math.max(...stalledAges) > Math.min(...stalledAges);
-  let horizon = 8;
-  // An unscoped route still needs every grid action reachable by this tick's desired movement.
+  let progressHorizon = horizon;
   if (hasContestedDesiredCell && hasUnscopedPath) {
-    horizon = Math.min(8, currentIntentHorizon, executableSlots);
-  }
-  // Do not reward delaying an older actor's contested route until after this tick's budget.
-  else if (hasContestedDesiredCell && hasAgedPriority) {
-    horizon = Math.min(8, contestedRouteHorizon, executableSlots);
+    progressHorizon = Math.min(horizon, currentIntentHorizon, executableSlots);
+  } else if (hasContestedDesiredCell && hasAgedPriority) {
+    progressHorizon = Math.min(horizon, contestedRouteHorizon, executableSlots);
   }
   const solved = solveLocalConflictComponent({
     state,
     actors,
     blockedCells: buildBlockedCells(state),
     horizon,
+    progressHorizon,
     maxHighLevelNodes: 128,
     allowControlledOverlapId,
   });
