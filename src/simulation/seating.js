@@ -51,9 +51,9 @@ export function buildChairApproachAssignments(state, customerIds, chairIds) {
   const customers = Array.isArray(currentState.customers) ? currentState.customers : [];
   const chairs = Array.isArray(currentState.chairs) ? currentState.chairs : [];
   const tables = Array.isArray(currentState.tables) ? currentState.tables : [];
-  const blocked = buildBlockedCells(currentState);
-  const assignments = [];
-  const usedApproachCells = new Set();
+  if (customerIds.length === 0) return [];
+
+  const selectedPairs = [];
   let reservedTableId = null;
 
   for (let index = 0; index < customerIds.length; index += 1) {
@@ -70,6 +70,20 @@ export function buildChairApproachAssignments(state, customerIds, chairIds) {
     if (reservedTableId == null) reservedTableId = chair.tableId;
     if (chair.tableId !== reservedTableId) return null;
 
+    selectedPairs.push({ customerId, chairId, customer, chair });
+  }
+
+  let blocked;
+  try {
+    blocked = buildBlockedCells(currentState);
+  } catch (_error) {
+    return null;
+  }
+
+  const assignments = [];
+  const usedApproachCells = new Set();
+
+  for (const { customerId, chairId, customer, chair } of selectedPairs) {
     const customerCell = worldToCell(customer);
     const chairCell = worldToCell(chair);
     const candidates = APPROACH_DIRECTIONS

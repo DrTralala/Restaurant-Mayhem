@@ -28,7 +28,8 @@ describe('chair approaches', () => {
     const enclosedState = {
       restaurant: { expansionLevel: 1 },
       customers: [{ id: 'c1', x: 100, y: 100 }],
-      tables: [], kitchenStations: [], serviceTables: [], cashierStations: [],
+      tables: [{ id: 't1', x: 220, y: 180 }],
+      kitchenStations: [], serviceTables: [], cashierStations: [],
       chairs: [
         { id: 'ch1', tableId: 't1', x: 240, y: 200 },
         { id: 'north', x: 240, y: 180 }, { id: 'south', x: 240, y: 220 },
@@ -36,6 +37,18 @@ describe('chair approaches', () => {
       ],
     };
     expect(buildChairApproachAssignments(enclosedState, ['c1'], ['ch1'])).toBeNull();
+  });
+
+  it('returns null without throwing when a selected chair record is malformed', () => {
+    const state = {
+      restaurant: { expansionLevel: 1 },
+      customers: [{ id: 'c1', x: 100, y: 100 }],
+      chairs: [null],
+      tables: [], kitchenStations: [], serviceTables: [], cashierStations: [],
+    };
+
+    expect(() => buildChairApproachAssignments(state, ['c1'], ['ch1'])).not.toThrow();
+    expect(buildChairApproachAssignments(state, ['c1'], ['ch1'])).toBeNull();
   });
 
   it('defines the stored seated position as the chair centre', () => {
