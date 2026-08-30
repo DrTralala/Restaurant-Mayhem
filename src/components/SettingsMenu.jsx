@@ -10,7 +10,7 @@ const buttonStyle = {
   fontFamily: 'monospace', textAlign: 'left',
 };
 
-export default function SettingsMenu({ isOpen, onToggle }) {
+export default function SettingsMenu({ isOpen, onToggle, onClose }) {
   const state = useGameState();
   const dispatch = useDispatch();
   const [message, setMessage] = useState('');
@@ -43,6 +43,7 @@ export default function SettingsMenu({ isOpen, onToggle }) {
     if (!window.confirm('Start a new game? All progress will be lost.')) return;
     localStorage.removeItem('restaurant-sim-save');
     dispatch({ type: 'LOAD_STATE', state: createInitialState() });
+    onClose?.();
     setMessage('New game started');
   };
 

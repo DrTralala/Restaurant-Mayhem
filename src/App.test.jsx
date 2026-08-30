@@ -24,14 +24,18 @@ vi.mock('./state/repositorySaves', () => ({
 vi.mock('./state/initialState', () => ({
   createInitialState: () => ({ version: 1, paused: false }),
 }));
-vi.mock('./canvas/RestaurantCanvas', () => ({ default: () => <div>Restaurant</div> }));
+vi.mock('./canvas/RestaurantCanvas', () => ({
+  default: ({ onEmptySpaceClick }) => <button onClick={onEmptySpaceClick}>Empty canvas</button>,
+}));
 vi.mock('./components/StatsBar', () => ({ default: () => null }));
 vi.mock('./components/BookIcon', () => ({
   default: ({ onClick }) => <button onClick={onClick}>Management</button>,
 }));
 vi.mock('./components/SpeedControls', () => ({ default: () => null }));
 vi.mock('./components/Toast', () => ({ default: () => null }));
-vi.mock('./panels/ManagementModal', () => ({ default: () => null }));
+vi.mock('./panels/ManagementModal', () => ({
+  default: ({ isOpen }) => isOpen ? <div>Management panel</div> : null,
+}));
 
 describe('settings menu', () => {
   beforeEach(() => {
@@ -90,6 +94,25 @@ describe('settings menu', () => {
       type: 'LOAD_STATE', state: { version: 1, paused: false },
     });
     expect(localStorage.getItem('restaurant-sim-save')).toBeNull();
-    expect(screen.getByText('New game started')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save Game' })).not.toBeInTheDocument();
+  });
+
+  it('closes Settings when empty canvas space is clicked', () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Empty canvas' }));
+
+    expect(screen.queryByRole('button', { name: 'Save Game' })).not.toBeInTheDocument();
+  });
+
+  it('closes Management when empty canvas space is clicked', () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Management' }));
+    expect(screen.getByText('Management panel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Empty canvas' }));
+
+    expect(screen.queryByText('Management panel')).not.toBeInTheDocument();
   });
 });

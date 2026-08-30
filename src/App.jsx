@@ -14,6 +14,10 @@ function AppInner() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fitRequest, setFitRequest] = useState(0);
   const [placementRequest, setPlacementRequest] = useState(null);
+  const closeTopLevelMenus = () => {
+    setModalOpen(false);
+    setSettingsOpen(false);
+  };
   const startPlacement = itemType => {
     setModalOpen(false);
     setPlacementRequest({ itemType });
@@ -28,6 +32,7 @@ function AppInner() {
           fitRequest={fitRequest}
           placementRequest={placementRequest}
           onPlacementComplete={() => setPlacementRequest(null)}
+          onEmptySpaceClick={closeTopLevelMenus}
         />
         <BookIcon
           onClick={() => {
@@ -42,6 +47,7 @@ function AppInner() {
             setModalOpen(false);
             setSettingsOpen(v => !v);
           }}
+          onClose={closeTopLevelMenus}
         />
       </div>
       <SpeedControls onFit={() => setFitRequest(request => request + 1)} />

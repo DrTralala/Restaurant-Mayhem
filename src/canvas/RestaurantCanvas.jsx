@@ -42,6 +42,7 @@ export default function RestaurantCanvas({
   fitRequest = 0,
   placementRequest = null,
   onPlacementComplete,
+  onEmptySpaceClick,
 }) {
   const canvasRef = useRef(null);
   const cameraRef = useRef(createCamera());
@@ -416,6 +417,7 @@ export default function RestaurantCanvas({
       setSelectedStaffId(null);
       setSelectedItems([]);
       tooltipRef.current = hit?.text || null;
+      if (!hit) onEmptySpaceClick?.();
     }
   };
 

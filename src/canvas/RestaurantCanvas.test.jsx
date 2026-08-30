@@ -270,6 +270,89 @@ describe('RestaurantCanvas object movement', () => {
     expect(screen.queryByRole('button', { name: /Move/ })).not.toBeInTheDocument();
   });
 
+  it('reports a genuine empty-space click to the App owner', () => {
+    const onEmptySpaceClick = vi.fn();
+    findClickedEntity.mockReturnValue(null);
+    const { container } = render(<RestaurantCanvas onEmptySpaceClick={onEmptySpaceClick} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 500, clientY: 500 });
+
+    expect(onEmptySpaceClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report a furniture click as empty space', () => {
+    const onEmptySpaceClick = vi.fn();
+    findClickedEntity.mockReturnValue({ type: 'chair', data: chair, text: 'Chair' });
+    const { container } = render(<RestaurantCanvas onEmptySpaceClick={onEmptySpaceClick} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 20, clientY: 40 });
+
+    expect(onEmptySpaceClick).not.toHaveBeenCalled();
+  });
+
+  it('does not report a non-actionable entity click as empty space', () => {
+    const onEmptySpaceClick = vi.fn();
+    const station = { id: 'k1', x: 100, y: 100 };
+    useGameState.mockReturnValue({ ...state, kitchenStations: [station] });
+    findClickedEntity.mockReturnValue({ type: 'kitchen', data: station, text: 'Station k1 · Empty' });
+    const { container } = render(<RestaurantCanvas onEmptySpaceClick={onEmptySpaceClick} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 100, clientY: 100 });
+
+    expect(onEmptySpaceClick).not.toHaveBeenCalled();
+  });
+
+  it('does not report a staff click as empty space', () => {
+    const onEmptySpaceClick = vi.fn();
+    const staff = { id: 's1', name: 'Sofia', role: 'waiter', morale: 80, salary: 150, skill: 3 };
+    useGameState.mockReturnValue({ ...state, staff: [staff], cashierStations: [] });
+    findClickedEntity.mockReturnValue({ type: 'staff', data: staff, text: 'Sofia' });
+    const { container } = render(<RestaurantCanvas onEmptySpaceClick={onEmptySpaceClick} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 200, clientY: 200 });
+
+    expect(onEmptySpaceClick).not.toHaveBeenCalled();
+  });
+
+  it('does not report a placement click as empty space', () => {
+    const onEmptySpaceClick = vi.fn();
+    useGameState.mockReturnValue(placementState);
+    const { container } = render(
+      <RestaurantCanvas
+        placementRequest={{ itemType: 'table' }}
+        onEmptySpaceClick={onEmptySpaceClick}
+      />,
+    );
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.mouseMove(canvas, { clientX: 600, clientY: 300, buttons: 0 });
+    fireEvent.click(canvas, { clientX: 600, clientY: 300 });
+
+    expect(onEmptySpaceClick).not.toHaveBeenCalled();
+  });
+
+  it('does not report a movement click as empty space', () => {
+    const onEmptySpaceClick = vi.fn();
+    const { container } = render(<RestaurantCanvas onEmptySpaceClick={onEmptySpaceClick} />);
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.click(canvas, { clientX: 20, clientY: 40 });
+    fireEvent.click(screen.getByRole('button', { name: /Move/ }));
+    fireEvent.mouseMove(canvas, { clientX: 137, clientY: 83, buttons: 0 });
+    fireEvent.click(canvas, { clientX: 137, clientY: 83 });
+
+    expect(onEmptySpaceClick).not.toHaveBeenCalled();
+  });
+
+  it('does not report an overlay interaction as empty space', () => {
+    const onEmptySpaceClick = vi.fn();
+    render(<RestaurantCanvas onEmptySpaceClick={onEmptySpaceClick} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+
+    expect(onEmptySpaceClick).not.toHaveBeenCalled();
+  });
+
   it('opens a right-side detail panel when staff are clicked', () => {
     const staff = { id: 's1', name: 'Sofia', role: 'waiter', morale: 79.6, salary: 150, skill: 3 };
     useGameState.mockReturnValue({
