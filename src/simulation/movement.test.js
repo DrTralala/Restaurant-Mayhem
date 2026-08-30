@@ -12,6 +12,7 @@ import {
   moveStaffAlongPath,
   resolveCharacterMovementBatch,
   resolveCharacterMovementBatchWithDiagnostics,
+  solveLocalConflictWithMovementMetrics,
 } from './movement';
 import { buildBlockedCells, findPath, worldToCell } from './pathfinding';
 import { createMovementMetrics } from './movementMetrics';
@@ -30,6 +31,22 @@ const independentEntry = {
 };
 const serialiseById = moved => [...moved.entries()]
   .sort(([left], [right]) => left.localeCompare(right));
+const solverTimingKeys = [
+  'solverInitialPlanningMilliseconds',
+  'solverNodeBuildMilliseconds',
+  'solverFrontierOrderingMilliseconds',
+  'solverReplanningMilliseconds',
+  'solverAgedFallbackMilliseconds',
+  'solverResidualMilliseconds',
+];
+const expectSolverWrapperAccounting = metrics => {
+  for (const key of solverTimingKeys) {
+    expect(Number.isFinite(metrics[key]), key).toBe(true);
+    expect(metrics[key], key).toBeGreaterThanOrEqual(0);
+  }
+  expect(solverTimingKeys.reduce((total, key) => total + metrics[key], 0))
+    .toBeCloseTo(metrics.localConflictSolverMilliseconds, 6);
+};
 const expectAllEndpointPairsAtLeast = (entries, moved, spacing) => {
   for (let left = 0; left < entries.length; left += 1) {
     for (let right = left + 1; right < entries.length; right += 1) {
@@ -617,6 +634,29 @@ describe('movement runtime', () => {
       + metrics.residualBatchMilliseconds).toBeCloseTo(metrics.batchMilliseconds, 6);
   });
 
+  it('reconciles an initial-plan null result through the production movement solver wrapper', () => {
+    const metrics = createMovementMetrics();
+    const result = solveLocalConflictWithMovementMetrics({
+      state: openState,
+      actors: [{
+        id: 'outside',
+        startCell: { x: -10, y: -10 },
+        goalCell: { x: 9, y: 5 },
+        routeCells: [{ x: 9, y: 5 }],
+        stalledFor: 0,
+        moving: true,
+      }],
+      blockedCells: new Set(),
+      horizon: 1,
+      maxHighLevelNodes: 128,
+    }, metrics);
+
+    expect(result).toBeNull();
+    expect(metrics.solverCalls).toBe(1);
+    expect([metrics.solverPbs, metrics.solverAgedFallback, metrics.solverNull]).toEqual([0, 0, 1]);
+    expectSolverWrapperAccounting(metrics);
+  });
+
   it('preserves a stalled result while counting direct dynamic and static re-path branches', () => {
     const entries = [{
       character: {
@@ -806,13 +846,21 @@ describe('movement runtime', () => {
       },
       speed: 200,
     }));
-    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+    const metrics = createMovementMetrics();
+    const withoutMetrics = resolveCharacterMovementBatch(openState, entries, 1);
+    const moved = resolveCharacterMovementBatch(openState, entries, 1, metrics);
 
+    expect(moved).toEqual(withoutMetrics);
     for (const result of moved.values()) {
       expect(Number.isFinite(result.x)).toBe(true);
       expect(Number.isFinite(result.y)).toBe(true);
     }
     expectAllEndpointPairsAtLeast(entries, moved, 16);
+    expect(metrics.maxComponentSize).toBe(13);
+    expect(metrics.solverCalls).toBeGreaterThan(0);
+    expect(metrics.solverAgedFallback).toBe(metrics.solverCalls);
+    expect([metrics.solverPbs, metrics.solverNull]).toEqual([0, 0]);
+    expectSolverWrapperAccounting(metrics);
   });
 
   it('applies guide-party ignored IDs only to the exempt pair', () => {

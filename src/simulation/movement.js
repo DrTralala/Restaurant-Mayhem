@@ -52,6 +52,22 @@ function measureLocalConflictFallbackPhase(metrics, operation) {
   return result;
 }
 
+export function solveLocalConflictWithMovementMetrics(options, metrics = null) {
+  const phasesAtStart = metrics
+    ? Object.fromEntries(solverPhaseKeys.map(key => [key, metrics[key]]))
+    : null;
+  const outerAtStart = metrics ? metrics.localConflictSolverMilliseconds : 0;
+  const solved = measureLocalConflictPhase(metrics, 'localConflictSolverMilliseconds', () =>
+    solveLocalConflictComponent({ ...options, metrics }));
+  if (metrics) {
+    const outerDelta = metrics.localConflictSolverMilliseconds - outerAtStart;
+    const measured = solverPhaseKeys.reduce((total, key) =>
+      total + metrics[key] - phasesAtStart[key], 0);
+    metrics.solverResidualMilliseconds += Math.max(0, outerDelta - measured);
+  }
+  return solved;
+}
+
 export function clearMovementRecoveryMetadata(character) {
   const cleared = { ...character, stalledFor: 0 };
   delete cleared.pathGoal;
@@ -1347,24 +1363,12 @@ function resolveConflictComponentAttempt(
     }
     return { actors, blockedCells: buildBlockedCells(state), horizon, progressHorizon };
   });
-  const solverPhasesAtStart = metrics
-    ? Object.fromEntries(solverPhaseKeys.map(key => [key, metrics[key]]))
-    : null;
-  const solverOuterAtStart = metrics ? metrics.localConflictSolverMilliseconds : 0;
-  const solved = measureLocalConflictPhase(metrics, 'localConflictSolverMilliseconds', () =>
-    solveLocalConflictComponent({
-      state,
-      ...prepared,
-      maxHighLevelNodes: 128,
-      allowControlledOverlapId,
-      metrics,
-    }));
-  if (metrics) {
-    const outerDelta = metrics.localConflictSolverMilliseconds - solverOuterAtStart;
-    const measured = solverPhaseKeys.reduce((total, key) =>
-      total + metrics[key] - solverPhasesAtStart[key], 0);
-    metrics.solverResidualMilliseconds += Math.max(0, outerDelta - measured);
-  }
+  const solved = solveLocalConflictWithMovementMetrics({
+    state,
+    ...prepared,
+    maxHighLevelNodes: 128,
+    allowControlledOverlapId,
+  }, metrics);
   if (!solved) {
     measureLocalConflictFallbackPhase(metrics, () =>
       resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics));
@@ -1514,7 +1518,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
         relaxedResolutions.set(selectedId, detour);
       }
     }
-    if (componentHasMeasurableRouteProgress(component, relaxedResolutions) && metrics) {
+    if (metrics && componentHasMeasurableRouteProgress(component, relaxedResolutions)) {
       metrics.localConflictProgressAccepts += 1;
     }
     copyComponentResolutions(component, relaxedResolutions, resolutions);
