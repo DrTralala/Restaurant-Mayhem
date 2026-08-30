@@ -1,5 +1,6 @@
 import { buildBlockedCells, buildOccupiedCharacterCells, cellToWorld, findPath, findPathWithDynamicFallback, isInsideWorld, worldToCell } from './pathfinding';
-import { getDefaultStaffPosition } from './world';
+import { solveLocalConflictComponent } from './localConflictSolver';
+import { getDefaultStaffPosition, GRID_SIZE } from './world';
 
 const ROLE_SPEED = { waiter: 75, cook: 55 };
 
@@ -395,12 +396,35 @@ export function minimumTrajectoryDistance(leftTrajectory, rightTrajectory) {
 }
 
 function buildMovementIntent(state, entry, dt) {
-  const { character, speed } = entry;
+  const { speed } = entry;
+  const sourceCharacter = entry.character;
+  const useLocalConflictTarget = sourceCharacter.localConflictTarget
+    && !sourceCharacter.usingStaticFallback
+    && (sourceCharacter.path?.length || entry.target || entry.targetAfterPath);
+  const { localConflictTarget: _staleLocalTarget, ...withoutLocalTarget } = sourceCharacter;
+  const character = useLocalConflictTarget ? sourceCharacter : withoutLocalTarget;
+  const normalisedEntry = { ...entry, character };
   const spacing = getMovementSpacing(character);
   const start = { x: character.x, y: character.y };
   let desired;
 
-  if (entry.target) {
+  if (useLocalConflictTarget) {
+    const localTarget = cellToWorld(character.localConflictTarget);
+    const moved = moveCharacterTowards(character, localTarget, dt, [], speed, spacing, state);
+    const reachedLocalTarget = isAtTarget(moved, localTarget);
+    const { localConflictTarget: _localConflictTarget, ...withoutLocalTarget } = moved;
+    desired = reachedLocalTarget
+      ? { ...withoutLocalTarget, path: character.path }
+      : { ...moved, path: character.path };
+    return {
+      ...normalisedEntry,
+      start,
+      desired,
+      spacing,
+      trajectory: buildDirectTrajectory(character, desired, speed, dt),
+      pathConsumedAt: null,
+    };
+  } else if (entry.target) {
     const moved = moveCharacterTowards(character, entry.target, dt, [], speed, spacing, state);
     desired = moved;
     if (entry.consumePath === true && isAtTarget(moved, entry.target) && isQueuedTarget(character, entry.target)) {
@@ -409,7 +433,7 @@ function buildMovementIntent(state, entry, dt) {
       desired = { ...moved, path: character.path };
     }
     return {
-      ...entry,
+      ...normalisedEntry,
       start,
       desired,
       spacing,
@@ -419,10 +443,10 @@ function buildMovementIntent(state, entry, dt) {
         : null,
     };
   } else {
-    const moved = moveAlongPathWithContinuation(state, entry, dt, spacing);
+    const moved = moveAlongPathWithContinuation(state, normalisedEntry, dt, spacing);
     desired = moved.moved;
     return {
-      ...entry,
+      ...normalisedEntry,
       start,
       desired,
       spacing,
@@ -523,6 +547,111 @@ function isSafeIntentPair(actor, peer, requiredSpacing) {
   return minimumTrajectoryDistance(actor.trajectory, peer.trajectory) >= effectiveSpacing - 1e-6;
 }
 
+function cellsEqual(left, right) {
+  return left.x === right.x && left.y === right.y;
+}
+
+function intentMoves(intent) {
+  return Math.hypot(
+    intent.desired.x - intent.start.x,
+    intent.desired.y - intent.start.y,
+  ) > 1e-6;
+}
+
+function desiredCellsConflict(left, right) {
+  if (!intentMoves(left) && !intentMoves(right)) return false;
+  const leftStart = worldToCell(left.start);
+  const rightStart = worldToCell(right.start);
+  const leftEnd = worldToCell(left.desired);
+  const rightEnd = worldToCell(right.desired);
+  return cellsEqual(leftEnd, rightEnd)
+    || (cellsEqual(leftStart, rightEnd) && cellsEqual(leftEnd, rightStart)
+      && (!cellsEqual(leftStart, leftEnd) || !cellsEqual(rightStart, rightEnd)));
+}
+
+function intentsConflict(left, right) {
+  if (ignoresIntentPair(left, right.character.id) || ignoresIntentPair(right, left.character.id)) {
+    return false;
+  }
+  return desiredCellsConflict(left, right)
+    || !isSafeIntentPair(left, right, Math.max(left.spacing, right.spacing));
+}
+
+function buildConflictComponents(intents) {
+  const neighbours = new Map(intents.map(intent => [intent.character.id, new Set()]));
+  for (let leftIndex = 0; leftIndex < intents.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < intents.length; rightIndex += 1) {
+      const left = intents[leftIndex];
+      const right = intents[rightIndex];
+      if (!intentsConflict(left, right)) continue;
+      neighbours.get(left.character.id).add(right.character.id);
+      neighbours.get(right.character.id).add(left.character.id);
+    }
+  }
+
+  const intentsById = new Map(intents.map(intent => [intent.character.id, intent]));
+  const visited = new Set();
+  const components = [];
+  for (const intent of intents) {
+    if (visited.has(intent.character.id)) continue;
+    const pending = [intent.character.id];
+    const component = [];
+    while (pending.length > 0) {
+      const id = pending.shift();
+      if (visited.has(id)) continue;
+      visited.add(id);
+      component.push(intentsById.get(id));
+      pending.push(...[...neighbours.get(id)]
+        .filter(peerId => !visited.has(peerId))
+        .sort((left, right) => String(left).localeCompare(String(right))));
+    }
+    components.push(component.sort((left, right) => String(left.character.id)
+      .localeCompare(String(right.character.id))));
+  }
+  return components;
+}
+
+function solverRouteCells(intent) {
+  const routeCells = [];
+  if (intent.character.localConflictTarget) routeCells.push(intent.character.localConflictTarget);
+  routeCells.push(...(intent.character.path || []));
+  if (intent.targetAfterPath) routeCells.push(worldToCell(intent.targetAfterPath));
+  if (intent.target) routeCells.push(worldToCell(intent.target));
+  return routeCells.filter((cell, index) => index === 0 || !cellsEqual(cell, routeCells[index - 1]));
+}
+
+function solverActorForIntent(intent) {
+  const startCell = worldToCell(intent.start);
+  const moving = intentMoves(intent);
+  const routeCells = solverRouteCells(intent);
+  const goalCell = moving
+    ? (intent.character.pathGoal
+      || routeCells.at(-1)
+      || worldToCell(intent.desired))
+    : startCell;
+  return {
+    id: intent.character.id,
+    startCell,
+    goalCell,
+    routeCells: moving ? routeCells : [startCell],
+    stalledFor: intent.character.stalledFor || 0,
+    moving,
+  };
+}
+
+function componentHasIgnoredPair(component) {
+  for (let leftIndex = 0; leftIndex < component.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < component.length; rightIndex += 1) {
+      const left = component[leftIndex];
+      const right = component[rightIndex];
+      if (ignoresIntentPair(left, right.character.id) || ignoresIntentPair(right, left.character.id)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function trajectoryPositionAt(trajectory, time) {
   const segment = trajectory.find(candidate => time >= candidate.startTime - 1e-9
     && time <= candidate.endTime + 1e-9) || trajectory.at(-1);
@@ -563,15 +692,180 @@ function resolvedAtTrajectoryTime(intent, time) {
   return resolvedIntent(intent, endpoint, trajectoryPrefix(intent.trajectory, time));
 }
 
+function appendTimedSegment(trajectory, start, end, startSeconds, endSeconds, dt) {
+  if (endSeconds < startSeconds || dt <= 0) return;
+  trajectory.push(trajectorySegment(
+    start,
+    end,
+    Math.min(1, startSeconds / dt),
+    Math.min(1, endSeconds / dt),
+  ));
+}
+
+function consumeReachedPathCell(intent, path, cell) {
+  if (!path.length || !cellsEqual(path[0], cell)) return false;
+  if (intent.target && intent.consumePath !== true) return false;
+  path.shift();
+  return true;
+}
+
+function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon = 8) {
+  const startCell = worldToCell(intent.start);
+  const plan = rawPlan?.length === horizon + 1 && cellsEqual(rawPlan[0], startCell)
+    ? rawPlan.slice(1)
+    : (rawPlan || []);
+  const maxSpeed = Math.max(0, ...component.map(candidate => candidate.speed));
+  const slotSeconds = maxSpeed > 0 ? GRID_SIZE / maxSpeed : Infinity;
+  const budget = Math.max(0, intent.speed * dt);
+  const trajectory = [];
+  const path = [...(intent.character.path || [])];
+  const pathConsumptionTimes = [];
+  const plannedArrivals = [];
+  let current = { ...intent.start };
+  let travelled = 0;
+  let nextPlanIndex = 0;
+  let previousPlanCell = startCell;
+
+  for (let index = 0; index < plan.length; index += 1) {
+    const target = cellToWorld(plan[index]);
+    const slotStart = index * slotSeconds;
+    const slotEnd = slotStart + slotSeconds;
+    if (!cellsEqual(plan[index], previousPlanCell)) {
+      plannedArrivals.push({ cell: plan[index], time: dt > 0 ? slotEnd / dt : Infinity });
+    }
+    if (slotStart >= dt - 1e-9 || travelled >= budget - 1e-9) break;
+
+    if (cellsEqual(plan[index], previousPlanCell) || isAtTarget(current, target)) {
+      appendTimedSegment(trajectory, current, current, slotStart, Math.min(dt, slotEnd), dt);
+      nextPlanIndex = index + 1;
+      previousPlanCell = plan[index];
+      continue;
+    }
+
+    const distance = Math.hypot(target.x - current.x, target.y - current.y);
+    const availableSeconds = Math.max(0, Math.min(slotSeconds, dt - slotStart));
+    const allowedDistance = Math.min(distance, budget - travelled, intent.speed * availableSeconds);
+    if (allowedDistance <= 1e-9) break;
+    const ratio = allowedDistance / distance;
+    const endpoint = {
+      x: current.x + (target.x - current.x) * ratio,
+      y: current.y + (target.y - current.y) * ratio,
+    };
+    if (!isSafeSegment(state, current, endpoint)) break;
+    const duration = intent.speed > 0 ? allowedDistance / intent.speed : 0;
+    appendTimedSegment(trajectory, current, endpoint, slotStart, slotStart + duration, dt);
+    current = endpoint;
+    travelled += allowedDistance;
+
+    if (allowedDistance < distance - 1e-6) {
+      nextPlanIndex = index;
+      break;
+    }
+    nextPlanIndex = index + 1;
+    previousPlanCell = plan[index];
+    if (consumeReachedPathCell(intent, path, plan[index])) {
+      pathConsumptionTimes.push(Math.min(1, (slotStart + duration) / dt));
+    }
+    appendTimedSegment(trajectory, current, current, slotStart + duration, Math.min(dt, slotEnd), dt);
+  }
+
+  if (trajectory.length === 0) trajectory.push(...stationaryTrajectory(intent.start));
+  else if (trajectory.at(-1).endTime < 1) {
+    trajectory.push(trajectorySegment(current, current, trajectory.at(-1).endTime, 1));
+  }
+
+  let nextCell = plan[nextPlanIndex];
+  while (nextCell && (cellsEqual(nextCell, previousPlanCell)
+    || isAtTarget(current, cellToWorld(nextCell)))) {
+    nextPlanIndex += 1;
+    nextCell = plan[nextPlanIndex];
+  }
+  const { localConflictTarget: _localConflictTarget, ...baseCharacter } = intent.character;
+  const endpoint = {
+    ...baseCharacter,
+    x: current.x,
+    y: current.y,
+    path,
+    ...(nextCell ? { localConflictTarget: { ...nextCell } } : {}),
+  };
+  return {
+    ...resolvedIntent(intent, endpoint, trajectory),
+    pathConsumptionTimes,
+    plannedArrivals,
+    fromLocalConflictPlan: true,
+  };
+}
+
+function resolutionAtTime(intent, resolution, time) {
+  if (time >= 1) return resolution;
+  const boundedTime = Math.max(0, time);
+  const position = trajectoryPositionAt(resolution.trajectory, boundedTime);
+  const consumedCount = (resolution.pathConsumptionTimes || [])
+    .filter(consumedAt => consumedAt <= boundedTime + 1e-9).length;
+  const nextArrival = (resolution.plannedArrivals || [])
+    .find(arrival => arrival.time > boundedTime + 1e-9
+      && !isAtTarget(position, cellToWorld(arrival.cell)));
+  const { localConflictTarget: _localConflictTarget, ...baseCharacter } = intent.character;
+  const endpoint = {
+    ...baseCharacter,
+    x: position.x,
+    y: position.y,
+    path: (intent.character.path || []).slice(consumedCount),
+    ...(nextArrival ? { localConflictTarget: { ...nextArrival.cell } } : {}),
+  };
+  return {
+    ...resolution,
+    endpoint,
+    trajectory: trajectoryPrefix(resolution.trajectory, boundedTime),
+  };
+}
+
+function isSafeResolvedPair(actor, peer, requiredSpacing) {
+  if (!isSafeIntentPair(actor, peer, requiredSpacing)) return false;
+  if (!actor.fromLocalConflictPlan && !peer.fromLocalConflictPlan) return true;
+  const effectiveSpacing = getEffectivePairSpacing(actor, peer, requiredSpacing);
+  const actorDirect = buildTimeParameterizedTrajectory(
+    actor.start, actor.endpoint, actor.speed, actor.movementDt,
+  );
+  const peerDirect = buildTimeParameterizedTrajectory(
+    peer.start, peer.endpoint, peer.speed, peer.movementDt,
+  );
+  return minimumTrajectoryDistance(actorDirect, peerDirect) >= effectiveSpacing - 1e-6;
+}
+
 function isResolutionSafeForIntent(intent, candidate, intents, resolutions) {
   return intents.every(peer => peer === intent
     || ignoresIntentPair(intent, peer.character.id)
     || ignoresIntentPair(peer, intent.character.id)
-    || isSafeIntentPair(
+    || isSafeResolvedPair(
       candidate,
       resolutions.get(peer.character.id),
       Math.max(intent.spacing, peer.spacing),
     ));
+}
+
+function furthestSafeResolutionPrefix(intent, resolution, intents, resolutions) {
+  if (isResolutionSafeForIntent(intent, resolution, intents, resolutions)) return resolution;
+  let best = resolutionAtTime(intent, resolution, 0);
+  let bestTime = 0;
+  const samples = 256;
+  for (let sample = 1; sample <= samples; sample += 1) {
+    const time = sample / samples;
+    const candidate = resolutionAtTime(intent, resolution, time);
+    if (!isResolutionSafeForIntent(intent, candidate, intents, resolutions)) break;
+    best = candidate;
+    bestTime = time;
+  }
+  if (bestTime === 0) return best;
+  let low = bestTime;
+  let high = Math.min(1, low + 1 / samples);
+  for (let iteration = 0; iteration < 40 && high - low > 1e-10; iteration += 1) {
+    const middle = (low + high) / 2;
+    const candidate = resolutionAtTime(intent, resolution, middle);
+    if (isResolutionSafeForIntent(intent, candidate, intents, resolutions)) low = middle;
+    else high = middle;
+  }
+  return resolutionAtTime(intent, resolution, low);
 }
 
 function furthestSafeTrajectoryPrefix(intent, intents, resolutions) {
@@ -632,7 +926,7 @@ function areIntentPairsSafe(intents, resolutions) {
       const right = intents[rightIndex];
       if (ignoresIntentPair(left, right.character.id) || ignoresIntentPair(right, left.character.id)) continue;
       const spacing = Math.max(left.spacing, right.spacing);
-      if (!isSafeIntentPair(
+      if (!isSafeResolvedPair(
         resolutions.get(left.character.id),
         resolutions.get(right.character.id),
         spacing,
@@ -693,6 +987,96 @@ function resolveIntentPairs(state, intents, resolutions, dt) {
   }
 }
 
+function compareIntentsByAgedPriority(left, right) {
+  return (right.character.stalledFor || 0) - (left.character.stalledFor || 0)
+    || String(left.character.id).localeCompare(String(right.character.id));
+}
+
+function componentIsSafe(component, intents, resolutions) {
+  return component.every(intent => isResolutionSafeForIntent(
+    intent,
+    resolutions.get(intent.character.id),
+    intents,
+    resolutions,
+  ));
+}
+
+function resolveComponentWithExistingSafety(state, component, resolutions, dt, intents) {
+  const ordered = [...component].sort(compareIntentsByAgedPriority);
+  const componentIds = new Set(component.map(intent => intent.character.id));
+  const validationOrder = [
+    ...ordered,
+    ...intents.filter(intent => !componentIds.has(intent.character.id)),
+  ];
+  const trialResolutions = new Map(resolutions);
+  resolveIntentPairs(state, validationOrder, trialResolutions, dt);
+  for (const intent of component) {
+    resolutions.set(intent.character.id, trialResolutions.get(intent.character.id));
+  }
+  if (!componentIsSafe(component, intents, resolutions)) {
+    for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
+  }
+}
+
+function resolveConflictComponent(state, component, resolutions, dt, intents) {
+  if (componentHasIgnoredPair(component)) {
+    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
+    return;
+  }
+
+  const actors = component.map(solverActorForIntent);
+  const horizon = 8;
+  const solved = solveLocalConflictComponent({
+    state,
+    actors,
+    blockedCells: buildBlockedCells(state),
+    horizon,
+    maxHighLevelNodes: 128,
+  });
+  if (!solved) {
+    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
+    return;
+  }
+  if (component.some(intent => intent.character.headOnRecovery)
+    || (component.length === 2
+      && (component[0].character.stalledFor || 0) === (component[1].character.stalledFor || 0))) {
+    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
+    return;
+  }
+
+  const candidates = new Map(component.map(intent => [
+    intent.character.id,
+    resolutionFromSolverPlan(
+      state,
+      intent,
+      solved.plans.get(intent.character.id),
+      component,
+      dt,
+      horizon,
+    ),
+  ]));
+  const collective = new Map(resolutions);
+  for (const [id, candidate] of candidates) collective.set(id, candidate);
+  if (componentIsSafe(component, intents, collective)) {
+    for (const [id, candidate] of candidates) resolutions.set(id, candidate);
+    return;
+  }
+
+  for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
+  for (const intent of [...component].sort(compareIntentsByAgedPriority)) {
+    const candidate = furthestSafeResolutionPrefix(
+      intent,
+      candidates.get(intent.character.id),
+      intents,
+      resolutions,
+    );
+    resolutions.set(intent.character.id, candidate);
+  }
+  if (!componentIsSafe(component, intents, resolutions)) {
+    for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
+  }
+}
+
 function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   const character = intent.character;
   const moved = endpoint || resolvedAtStart(intent).endpoint;
@@ -703,8 +1087,9 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   const targetReached = intent.target && isAtTarget(moved, intent.target);
 
   if (!character.path?.length && (!intent.target || targetReached)) {
+    const { localConflictTarget: _localConflictTarget, ...withoutLocalTarget } = moved;
     return {
-      ...moved,
+      ...withoutLocalTarget,
       stalledFor: 0,
       minimumSpacing: 16,
       usingStaticFallback: false,
@@ -768,11 +1153,14 @@ export function resolveCharacterMovementBatch(state, entries, dt) {
     .map(entry => buildMovementIntent(state, entry, dt))
     .sort((left, right) => String(left.character.id).localeCompare(String(right.character.id)));
   for (const intent of intents) {
+    intent.movementDt = dt;
     intent.startResolution = resolvedIntent(intent, intent.character, stationaryTrajectory(intent.start));
     intent.desiredResolution = resolvedIntent(intent, intent.desired, intent.trajectory);
   }
   const resolutions = new Map(intents.map(intent => [intent.character.id, resolvedAtDesired(intent)]));
-  resolveIntentPairs(state, intents, resolutions, dt);
+  for (const component of buildConflictComponents(intents)) {
+    if (component.length > 1) resolveConflictComponent(state, component, resolutions, dt, intents);
+  }
   return new Map(intents.map(intent => [
     intent.character.id,
     applyBatchRecovery(state, intent, resolutions.get(intent.character.id)?.endpoint, dt, intents),

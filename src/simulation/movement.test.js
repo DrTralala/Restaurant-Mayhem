@@ -15,6 +15,29 @@ import { buildBlockedCells, worldToCell } from './pathfinding';
 
 const openState = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [] };
 
+const threeWayCrossingEntries = () => [
+  { character: { id: 'a', x: 80, y: 100, path: [{ x: 6, y: 5 }], pathGoal: { x: 6, y: 5 } }, speed: 40 },
+  { character: { id: 'b', x: 100, y: 80, path: [{ x: 5, y: 6 }], pathGoal: { x: 5, y: 6 } }, speed: 40 },
+  { character: { id: 'c', x: 120, y: 100, path: [{ x: 4, y: 5 }], pathGoal: { x: 4, y: 5 } }, speed: 40 },
+];
+const conflictEntries = () => threeWayCrossingEntries().slice(0, 2);
+const independentEntry = {
+  character: { id: 'independent', x: 300, y: 100, path: [{ x: 17, y: 5 }] }, speed: 40,
+};
+const serialiseById = moved => [...moved.entries()]
+  .sort(([left], [right]) => left.localeCompare(right));
+const expectAllSweptPairsAtLeast = (entries, moved, spacing) => {
+  for (let left = 0; left < entries.length; left += 1) {
+    for (let right = left + 1; right < entries.length; right += 1) {
+      expect(minimumTrajectoryDistance(
+        buildTimeParameterizedTrajectory(entries[left].character, moved.get(entries[left].character.id), entries[left].speed, 1),
+        buildTimeParameterizedTrajectory(entries[right].character, moved.get(entries[right].character.id), entries[right].speed, 1),
+      ), `${entries[left].character.id}/${entries[right].character.id}`)
+        .toBeGreaterThanOrEqual(spacing - 1e-6);
+    }
+  }
+};
+
 describe('movement runtime', () => {
   it('replaces non-finite coordinates (NaN, Infinity) with default positions', () => {
     const state = { restaurant: { expansionLevel: 1 } };
@@ -445,6 +468,150 @@ describe('movement runtime', () => {
       { x: 80, y: 100 }, { x: 120, y: 100 },
       { x: 100, y: 80 }, { x: 100, y: 120 },
     )).toBeCloseTo(0);
+  });
+
+  it('lets a three-actor crossing component make deterministic progress without unsafe overlap', () => {
+    const entries = threeWayCrossingEntries();
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+    expect(entries.filter(({ character }) => {
+      const result = moved.get(character.id);
+      return Math.hypot(result.x - character.x, result.y - character.y) > 0;
+    }).length).toBeGreaterThanOrEqual(1);
+    expectAllSweptPairsAtLeast(entries, moved, 16);
+  });
+
+  it('does not let a conflicted component stop an independent actor', () => {
+    const moved = resolveCharacterMovementBatch(openState, [...conflictEntries(), independentEntry], 1);
+    expect(moved.get('independent').x).toBe(340);
+  });
+
+  it('returns input-order-independent results for a local conflict component', () => {
+    const entries = threeWayCrossingEntries();
+    expect(serialiseById(resolveCharacterMovementBatch(openState, entries, 1)))
+      .toEqual(serialiseById(resolveCharacterMovementBatch(openState, [...entries].reverse(), 1)));
+  });
+
+  it('keeps local conflict movement within every actor budget', () => {
+    const entries = threeWayCrossingEntries();
+    const moved = resolveCharacterMovementBatch(openState, entries, 0.5);
+
+    for (const { character, speed } of entries) {
+      expect(Math.hypot(
+        moved.get(character.id).x - character.x,
+        moved.get(character.id).y - character.y,
+      )).toBeLessThanOrEqual(speed * 0.5 + 1e-6);
+    }
+  });
+
+  it('keeps furniture impassable while resolving a local crossing', () => {
+    const state = { ...openState, chairs: [{ id: 'detour-blocker', x: 80, y: 80 }] };
+    const entries = threeWayCrossingEntries();
+    const moved = resolveCharacterMovementBatch(state, entries, 1);
+    const blocked = buildBlockedCells(state);
+
+    for (const { character } of entries) {
+      const endpoint = moved.get(character.id);
+      expect(blocked.has(`${worldToCell(endpoint).x},${worldToCell(endpoint).y}`)).toBe(false);
+    }
+  });
+
+  it('lets one actor clear a contested vertex while another explicitly waits', () => {
+    const state = {
+      ...openState,
+      chairs: [
+        { id: 'north-west', x: 80, y: 80 },
+        { id: 'west', x: 60, y: 100 },
+        { id: 'south-west', x: 80, y: 120 },
+      ],
+    };
+    const entries = [
+      {
+        character: {
+          id: 'a-new', x: 80, y: 100,
+          path: [{ x: 5, y: 5 }, { x: 6, y: 5 }, { x: 7, y: 5 }],
+          pathGoal: { x: 7, y: 5 }, stalledFor: 0,
+        },
+        speed: 20,
+      },
+      {
+        character: {
+          id: 'z-old', x: 100, y: 80,
+          path: [{ x: 5, y: 5 }, { x: 5, y: 6 }, { x: 5, y: 7 }],
+          pathGoal: { x: 5, y: 7 }, stalledFor: 4,
+        },
+        speed: 20,
+      },
+      {
+        character: {
+          id: 'z-third', x: 120, y: 100,
+          path: [{ x: 5, y: 5 }, { x: 4, y: 5 }, { x: 3, y: 5 }],
+          pathGoal: { x: 3, y: 5 }, stalledFor: 0,
+        },
+        speed: 20,
+      },
+    ];
+    const moved = resolveCharacterMovementBatch(state, entries, 1);
+
+    const progressed = entries.filter(({ character }) => Math.hypot(
+      moved.get(character.id).x - character.x,
+      moved.get(character.id).y - character.y,
+    ) > 0);
+    expect(progressed.length).toBeGreaterThanOrEqual(1);
+    expect(progressed.length).toBeLessThan(entries.length);
+    expectAllSweptPairsAtLeast(entries, moved, 16);
+  });
+
+  it('returns finite swept-safe endpoints for a contentious 13-actor component', () => {
+    const starts = [
+      [8, 8], [9, 8], [10, 8], [11, 8], [12, 8],
+      [8, 9], [12, 9], [8, 10], [12, 10],
+      [8, 11], [9, 11], [11, 11], [12, 11],
+    ];
+    const entries = starts.map(([x, y], index) => ({
+      character: {
+        id: `crowd-${String(index).padStart(2, '0')}`,
+        x: x * 20,
+        y: y * 20,
+        path: [{ x: 10, y: 10 }],
+        pathGoal: { x: 10, y: 10 },
+        stalledFor: index / 100,
+      },
+      speed: 200,
+    }));
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    for (const result of moved.values()) {
+      expect(Number.isFinite(result.x)).toBe(true);
+      expect(Number.isFinite(result.y)).toBe(true);
+    }
+    expectAllSweptPairsAtLeast(entries, moved, 16);
+  });
+
+  it('applies guide-party ignored IDs only to the exempt pair', () => {
+    const entries = [
+      { character: { id: 'guide', x: 80, y: 100, path: [] }, speed: 20, target: { x: 100, y: 100 }, ignoredIds: ['party'] },
+      { character: { id: 'party', x: 120, y: 100, path: [] }, speed: 20, target: { x: 100, y: 100 }, ignoredIds: ['guide'] },
+      { character: { id: 'outsider', x: 100, y: 80, path: [] }, speed: 20, target: { x: 100, y: 100 } },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('guide')).toMatchObject({ x: 100, y: 100 });
+    expect(moved.get('party')).toMatchObject({ x: 100, y: 100 });
+    for (const id of ['guide', 'party']) {
+      expect(minimumTrajectoryDistance(
+        buildTimeParameterizedTrajectory(entries[2].character, moved.get('outsider'), 20, 1),
+        buildTimeParameterizedTrajectory(entries.find(entry => entry.character.id === id).character, moved.get(id), 20, 1),
+      )).toBeGreaterThanOrEqual(16 - 1e-6);
+    }
+  });
+
+  it('preserves the fast-path endpoint and path consumption for one uncongested actor', () => {
+    const character = { id: 'solo', x: 100, y: 100, path: [{ x: 6, y: 5 }, { x: 8, y: 5 }] };
+    const expected = moveCharacterAlongPath(character, 1, [], 20, 16, openState);
+    const moved = resolveCharacterMovementBatch(openState, [{ character, speed: 20 }], 1).get('solo');
+
+    expect({ x: moved.x, y: moved.y, path: moved.path })
+      .toEqual({ x: expected.x, y: expected.y, path: expected.path });
   });
 
   it('moves an unrelated actor despite a pre-existing stationary overlap elsewhere', () => {
