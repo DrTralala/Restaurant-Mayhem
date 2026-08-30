@@ -47,4 +47,28 @@ describe('UpgradePanel', () => {
 
     expect(startPlacement).toHaveBeenCalledWith('serviceTable');
   });
+
+  it('starts oven placement without purchasing equipment immediately', () => {
+    const dispatch = vi.fn();
+    const startPlacement = vi.fn();
+    useGameState.mockReturnValue({
+      upgrades: [],
+      restaurant: { funds: 500, expansionLevel: 1 },
+      serviceTables: [],
+      equipment: [{
+        id: 'eq2', name: 'Oven', owned: false, level: 1,
+        upgradeCosts: [250], purchaseCost: 500,
+        speedMultiplier: 1, qualityBonus: 0,
+      }],
+    });
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<UpgradePanel onStartPlacement={startPlacement} />);
+    screen.getByRole('button', { name: 'Buy ($500)' }).click();
+
+    expect(startPlacement).toHaveBeenCalledWith({
+      itemType: 'equipmentStation', equipmentId: 'eq2',
+    });
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'BUY_EQUIPMENT' }));
+  });
 });

@@ -18,9 +18,9 @@ function AppInner() {
     setModalOpen(false);
     setSettingsOpen(false);
   };
-  const startPlacement = itemType => {
+  const startPlacement = request => {
     setModalOpen(false);
-    setPlacementRequest({ itemType });
+    setPlacementRequest(typeof request === 'string' ? { itemType: request } : request);
   };
 
   return (

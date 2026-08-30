@@ -17,9 +17,10 @@ function snap(n, grid = GRID) {
   return Math.round(n / grid) * grid;
 }
 
-function buildPlacement(state, itemType, point, rotation = 0) {
+function buildPlacement(state, request, point, rotation = 0) {
+  const placementRequest = typeof request === 'string' ? { itemType: request } : request;
   const candidate = {
-    itemType,
+    ...placementRequest,
     x: point.x,
     y: point.y,
     rotation,
@@ -29,6 +30,7 @@ function buildPlacement(state, itemType, point, rotation = 0) {
 
 function samePlacement(first, second) {
   return first?.itemType === second?.itemType
+    && first?.equipmentId === second?.equipmentId
     && first?.x === second?.x
     && first?.y === second?.y
     && first?.rotation === second?.rotation
@@ -177,13 +179,13 @@ export default function RestaurantCanvas({
 
     const origin = snapPlacement(placementRequest.itemType, { x: 200, y: 200 }, state);
     if (!origin) {
-      const invalidPlacement = buildPlacement(state, placementRequest.itemType, { x: 200, y: 200 });
+      const invalidPlacement = buildPlacement(state, placementRequest, { x: 200, y: 200 });
       placementRef.current = invalidPlacement;
       setPlacement(invalidPlacement);
       return;
     }
 
-    const initialPlacement = buildPlacement(state, placementRequest.itemType, origin);
+    const initialPlacement = buildPlacement(state, placementRequest, origin);
     placementRef.current = initialPlacement;
     setPlacement(initialPlacement);
   }, [placementRequest]);
@@ -192,7 +194,7 @@ export default function RestaurantCanvas({
     const current = placementRef.current;
     if (!placementRequest || !current || current.itemType !== placementRequest.itemType) return;
 
-    const next = buildPlacement(state, current.itemType, current, current.rotation);
+    const next = buildPlacement(state, current, current, current.rotation);
     if (!samePlacement(current, next)) {
       placementRef.current = next;
       setPlacement(next);
@@ -228,7 +230,7 @@ export default function RestaurantCanvas({
       if (currentPlacement && e.key.toLowerCase() === 'r' && currentPlacement.itemType === 'chair') {
         e.preventDefault();
         const rotation = ((currentPlacement.rotation ?? 0) + 1) % 4;
-        const next = buildPlacement(state, currentPlacement.itemType, currentPlacement, rotation);
+        const next = buildPlacement(state, currentPlacement, currentPlacement, rotation);
         placementRef.current = next;
         setPlacement(next);
         return;
@@ -274,7 +276,7 @@ export default function RestaurantCanvas({
       const world = getWorldPos(e);
       const snapped = snapPlacement(currentPlacement.itemType, world, state);
       if (snapped) {
-        const next = buildPlacement(state, currentPlacement.itemType, snapped, currentPlacement.rotation);
+        const next = buildPlacement(state, currentPlacement, snapped, currentPlacement.rotation);
         if (!samePlacement(currentPlacement, next)) {
           placementRef.current = next;
           setPlacement(next);
@@ -374,6 +376,7 @@ export default function RestaurantCanvas({
       dispatch({
         type: 'PLACE_ITEM',
         itemType: currentPlacement.itemType,
+        ...(currentPlacement.equipmentId ? { equipmentId: currentPlacement.equipmentId } : {}),
         x: currentPlacement.x,
         y: currentPlacement.y,
         rotation: currentPlacement.rotation,
@@ -590,7 +593,10 @@ export default function RestaurantCanvas({
           fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
           textAlign: 'center',
         }}>
-          <div>Place {placement.itemType} · Click to buy · R to rotate · Right click/Esc to cancel</div>
+          <div>Place {placement.itemType === 'equipmentStation'
+            ? state.equipment.find(equipment => equipment.id === placement.equipmentId)?.name
+              || placement.itemType
+            : placement.itemType} · Click to buy · R to rotate · Right click/Esc to cancel</div>
           {!placement.valid && (
             <div style={{ color: '#b00000', marginTop: 4 }}>Invalid: {placement.reason}</div>
           )}

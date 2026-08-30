@@ -330,7 +330,6 @@ export function drawFurnitureLayer(ctx, state, camera) {
 }
 
 export function drawPlacementPreview(ctx, state, camera, placement) {
-  void state;
   const rect = getPlacementRect(
     placement?.itemType,
     placement?.x,
@@ -372,6 +371,21 @@ export function drawPlacementPreview(ctx, state, camera, placement) {
      ctx.fillText('SERVICE', rect.x + rect.w / 2, rect.y + rect.h / 2);
      ctx.textAlign = 'start';
      ctx.textBaseline = 'alphabetic';
+  } else if (placement.itemType === 'equipmentStation') {
+    const equipment = state.equipment.find(candidate => candidate.id === placement.equipmentId);
+    if (equipment) {
+      ctx.fillStyle = '#fff';
+      let fontSize = 8;
+      do {
+        ctx.font = `${fontSize}px monospace`;
+        fontSize -= 1;
+      } while (fontSize >= 5 && ctx.measureText(equipment.name).width > rect.w - 14);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(equipment.name, rect.x + rect.w / 2, rect.y + rect.h / 2);
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
+    }
   }
 
   ctx.restore();

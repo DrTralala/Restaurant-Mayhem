@@ -191,15 +191,48 @@ describe('RestaurantCanvas object movement', () => {
     expect(screen.getByText(/chair-table/)).toBeInTheDocument();
   });
 
-  it('cancels placement on right click and Escape without dispatching', () => {
+  it('preserves equipment metadata through preview and confirmed placement', () => {
     const dispatch = vi.fn();
     const complete = vi.fn();
     useDispatch.mockReturnValue(dispatch);
-    useGameState.mockReturnValue({ ...state, tables: [], chairs: [] });
+    useGameState.mockReturnValue({
+      ...placementState,
+      equipment: [{ id: 'eq2', name: 'Oven', owned: false, purchaseCost: 500 }],
+    });
+    const { container } = render(
+      <RestaurantCanvas
+        managementOpen={false}
+        placementRequest={{ itemType: 'equipmentStation', equipmentId: 'eq2' }}
+        onPlacementComplete={complete}
+      />,
+    );
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 120, buttons: 0 });
+
+    expect(screen.getByText(/Place Oven/)).toBeInTheDocument();
+    expect(screen.queryByText(/Invalid:/)).not.toBeInTheDocument();
+    fireEvent.click(canvas, { clientX: 500, clientY: 120 });
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'PLACE_ITEM', itemType: 'equipmentStation', equipmentId: 'eq2',
+      x: 500, y: 120, rotation: 0,
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels equipment placement on right click and Escape without dispatching', () => {
+    const dispatch = vi.fn();
+    const complete = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({
+      ...placementState,
+      equipment: [{ id: 'eq2', name: 'Oven', owned: false, purchaseCost: 500 }],
+    });
     const { container, rerender } = render(
       <RestaurantCanvas
         managementOpen={false}
-        placementRequest={{ itemType: 'table' }}
+        placementRequest={{ itemType: 'equipmentStation', equipmentId: 'eq2' }}
         onPlacementComplete={complete}
       />,
     );
@@ -208,12 +241,12 @@ describe('RestaurantCanvas object movement', () => {
     fireEvent.contextMenu(canvas);
     expect(dispatch).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText(/Place table/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Place Oven/)).not.toBeInTheDocument();
 
     rerender(
       <RestaurantCanvas
         managementOpen={false}
-        placementRequest={{ itemType: 'table' }}
+        placementRequest={{ itemType: 'equipmentStation', equipmentId: 'eq2' }}
         onPlacementComplete={complete}
       />,
     );
@@ -221,7 +254,7 @@ describe('RestaurantCanvas object movement', () => {
 
     expect(dispatch).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText(/Place table/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Place Oven/)).not.toBeInTheDocument();
   });
 
   it('cancels placement when right-clicking an overlay control', () => {

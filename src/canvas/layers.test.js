@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawQueueLayer } from './layers';
+import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawQueueLayer } from './layers';
 import { updateStaff } from '../simulation/staff';
 import { processKitchen } from '../simulation/kitchen';
 
@@ -283,6 +283,23 @@ describe('drawFurnitureLayer', () => {
     const completed = processKitchen({ ...preparing, restaurant: { gameTime: 160 } });
     expect(completed.staff[0].task).toBeNull();
     expect(completed.serviceItems[0].state).toBe('on_service');
+  });
+});
+
+describe('drawPlacementPreview', () => {
+  it('labels an equipment-station preview with the selected equipment name', () => {
+    const ctx = recordCtx();
+
+    drawPlacementPreview(ctx, {
+      equipment: [{ id: 'eq2', name: 'Oven' }],
+    }, { x: 0, y: 0, zoom: 1 }, {
+      itemType: 'equipmentStation', equipmentId: 'eq2',
+      x: 500, y: 120, rotation: 0, valid: true,
+    });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
+      text: 'Oven', x: 520, y: 140,
+    }));
   });
 });
 

@@ -100,6 +100,9 @@ function placeLegacyItem(state, action, itemType) {
 
 function placeItem(state, action) {
   const item = getPlaceable(action.itemType);
+  const equipment = action.itemType === 'equipmentStation'
+    ? state.equipment.find(candidate => candidate.id === action.equipmentId)
+    : null;
   const requestedPlacement = {
     itemType: action.itemType,
     x: action.x,
@@ -113,12 +116,29 @@ function placeItem(state, action) {
     ? { ...requestedPlacement, y: snappedDoor.y }
     : requestedPlacement;
   const result = item && validatePlacement(state, placement);
-  if (!item || !result?.valid || !canAfford(state, item.price)) return state;
+  const price = equipment ? equipment.purchaseCost : item?.price;
+  if (!item || !result?.valid || !canAfford(state, price)
+    || (action.itemType === 'equipmentStation' && (!equipment || equipment.owned))) return state;
 
   const nextState = {
     ...state,
-    restaurant: { ...state.restaurant, funds: state.restaurant.funds - item.price },
+    restaurant: { ...state.restaurant, funds: state.restaurant.funds - price },
   };
+
+  if (action.itemType === 'equipmentStation') {
+    return {
+      ...nextState,
+      equipment: state.equipment.map(candidate => candidate.id === equipment.id
+        ? { ...candidate, owned: true }
+        : candidate),
+      kitchenStations: [...state.kitchenStations, {
+        id: getNextNumericId(state.kitchenStations, 'k'),
+        equipmentId: equipment.id,
+        x: placement.x,
+        y: placement.y,
+      }],
+    };
+  }
 
   if (action.itemType === 'table') {
     const id = getNextNumericId(state.tables, 't');
@@ -288,26 +308,8 @@ function gameReducer(state, action) {
         ),
       };
     }
-    case 'BUY_EQUIPMENT': {
-      const equipment = state.equipment.find(candidate => candidate.id === action.id);
-      const existingStation = state.kitchenStations.find(station => station.equipmentId === action.id);
-      const freeStation = state.kitchenStations.find(station => !station.equipmentId);
-      const targetStation = existingStation || freeStation;
-      if (!equipment || equipment.owned || !targetStation
-        || !canAfford(state, equipment.purchaseCost)) return state;
-      return {
-        ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - equipment.purchaseCost },
-        equipment: state.equipment.map(e =>
-          e.id === action.id ? { ...e, owned: true } : e
-        ),
-        kitchenStations: existingStation
-          ? state.kitchenStations
-          : state.kitchenStations.map(s =>
-              s.id === freeStation.id ? { ...s, equipmentId: action.id } : s
-            ),
-      };
-    }
+    case 'BUY_EQUIPMENT':
+      return state;
     case 'UPGRADE_EQUIPMENT': {
       const equipment = state.equipment.find(candidate => candidate.id === action.id);
       const cost = equipment?.upgradeCosts?.[equipment.level - 1];

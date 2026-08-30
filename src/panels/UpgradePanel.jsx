@@ -107,7 +107,7 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
               <button
                 onClick={() => {
                   if (!owned) {
-                    dispatch({ type: 'BUY_EQUIPMENT', id: eq.id, cost: eq.purchaseCost });
+                    onStartPlacement({ itemType: 'equipmentStation', equipmentId: eq.id });
                   } else if (!maxed) {
                     dispatch({ type: 'UPGRADE_EQUIPMENT', id: eq.id, cost: nextCost });
                   }

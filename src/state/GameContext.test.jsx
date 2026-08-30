@@ -509,58 +509,102 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.upgrades[0].level).toBe(1);
   });
 
-  it('activates an unowned toaster already installed in a full kitchen', () => {
-    const game = renderReducer({
-      restaurant: { funds: 200 },
-      equipment: createInitialState().equipment.map(equipment =>
-        equipment.id === 'eq1' ? { ...equipment, owned: false } : equipment),
-      kitchenStations: [
-        { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
-        { id: 'k2', equipmentId: 'eq3', x: 200, y: 120 },
-      ],
+  it('places unowned equipment and charges its canonical purchase cost exactly once', () => {
+    const game = renderReducer({ restaurant: { funds: 600 } });
+
+    game.dispatch({
+      type: 'PLACE_ITEM', itemType: 'equipmentStation', equipmentId: 'eq2',
+      x: 500, y: 120, rotation: 0, cost: 1,
     });
 
-    game.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq1', cost: 0 });
-
-    expect(game.state.restaurant.funds).toBe(0);
-    expect(game.state.equipment.find(equipment => equipment.id === 'eq1').owned).toBe(true);
-    expect(game.state.kitchenStations).toEqual([
-      { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
-      { id: 'k2', equipmentId: 'eq3', x: 200, y: 120 },
-    ]);
+    expect(game.state.restaurant.funds).toBe(100);
+    expect(game.state.equipment.find(equipment => equipment.id === 'eq2').owned).toBe(true);
+    expect(game.state.kitchenStations.at(-1)).toEqual({
+      id: 'k3', equipmentId: 'eq2', x: 500, y: 120,
+    });
   });
 
-  it('only buys equipment when it exists, is unowned, is affordable, and has a free station', () => {
-    const game = renderReducer({ restaurant: { funds: 500 } });
+  it('rejects overlapping equipment placement without charging or adding a station', () => {
+    const game = renderReducer({ restaurant: { funds: 600 } });
+    const before = game.state;
 
-    game.dispatch({ type: 'BUY_EQUIPMENT', id: 'missing', cost: 0 });
-    expect(game.state.restaurant.funds).toBe(500);
+    game.dispatch({
+      type: 'PLACE_ITEM', itemType: 'equipmentStation', equipmentId: 'eq2',
+      x: 100, y: 120, rotation: 0,
+    });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(600);
+    expect(game.state.kitchenStations).toHaveLength(2);
+  });
+
+  it('rejects unaffordable equipment placement without charging or adding a station', () => {
+    const game = renderReducer({ restaurant: { funds: 499 } });
+    const before = game.state;
+
+    game.dispatch({
+      type: 'PLACE_ITEM', itemType: 'equipmentStation', equipmentId: 'eq2',
+      x: 500, y: 120, rotation: 0,
+    });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(499);
+    expect(game.state.kitchenStations).toHaveLength(2);
+  });
+
+  it('rejects unknown equipment placement without charging or adding a station', () => {
+    const game = renderReducer({ restaurant: { funds: 600 } });
+    const before = game.state;
+
+    game.dispatch({
+      type: 'PLACE_ITEM', itemType: 'equipmentStation', equipmentId: 'missing',
+      x: 500, y: 120, rotation: 0,
+    });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(600);
+    expect(game.state.kitchenStations).toHaveLength(2);
+  });
+
+  it('rejects already-owned equipment placement without charging or adding a station', () => {
+    const game = renderReducer({ restaurant: { funds: 600 } });
+    const before = game.state;
+
+    game.dispatch({
+      type: 'PLACE_ITEM', itemType: 'equipmentStation', equipmentId: 'eq1',
+      x: 500, y: 120, rotation: 0,
+    });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(600);
+    expect(game.state.kitchenStations).toHaveLength(2);
+  });
+
+  it('rejects a repeated equipment placement action after the first purchase', () => {
+    const game = renderReducer({ restaurant: { funds: 600 } });
+    const action = {
+      type: 'PLACE_ITEM', itemType: 'equipmentStation', equipmentId: 'eq2',
+      x: 500, y: 120, rotation: 0,
+    };
+
+    game.dispatch(action);
+    const afterPurchase = game.state;
+    game.dispatch(action);
+
+    expect(game.state).toBe(afterPurchase);
+    expect(game.state.restaurant.funds).toBe(100);
+    expect(game.state.kitchenStations).toHaveLength(3);
+  });
+
+  it('ignores legacy equipment purchase actions without charging or adding a station', () => {
+    const game = renderReducer({ restaurant: { funds: 600 } });
+    const before = game.state;
 
     game.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq2', cost: 0 });
-    expect(game.state.restaurant.funds).toBe(0);
-    expect(game.state.equipment.find(equipment => equipment.id === 'eq2').owned).toBe(true);
-    expect(game.state.kitchenStations.find(station => station.id === 'k2').equipmentId).toBe('eq2');
 
-    game.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq2', cost: -500 });
-    expect(game.state.restaurant.funds).toBe(0);
-  });
-
-  it('rejects equipment purchases without enough funds or a free station', () => {
-    const noFunds = renderReducer({ restaurant: { funds: 499 } });
-    noFunds.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq2', cost: 0 });
-    expect(noFunds.state.equipment.find(equipment => equipment.id === 'eq2').owned).toBe(false);
-    expect(noFunds.state.restaurant.funds).toBe(499);
-
-    const fullKitchen = renderReducer({
-      restaurant: { funds: 500 },
-      kitchenStations: [
-        { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
-        { id: 'k2', equipmentId: 'eq3', x: 200, y: 120 },
-      ],
-    });
-    fullKitchen.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq2', cost: 0 });
-    expect(fullKitchen.state.equipment.find(equipment => equipment.id === 'eq2').owned).toBe(false);
-    expect(fullKitchen.state.restaurant.funds).toBe(500);
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(600);
+    expect(game.state.kitchenStations).toHaveLength(2);
   });
 
   it('updates equipment level multipliers using the canonical upgrade cost', () => {
