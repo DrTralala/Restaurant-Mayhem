@@ -241,7 +241,9 @@ describe('runTick', () => {
   it('creates floor dirt before staff assignment so a janitor can claim it in the same tick', () => {
     const state = {
       ...emptyState,
-      customers: [{ id: 'c1', state: 'seated', x: 200, y: 200, dirtFactor: 9.5, happiness: 80, patience: 100 }],
+      tables: [{ id: 't1', status: 'occupied', seats: 1, x: 220, y: 180 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 200, y: 200 }],
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1', chairId: 'ch1', x: 200, y: 200, dirtFactor: 9.5, happiness: 80, patience: 100 }],
       staff: [{ id: 'j1', role: 'janitor', morale: 80, x: 180, y: 220, path: [], task: null }],
       floorDirt: [],
     };
