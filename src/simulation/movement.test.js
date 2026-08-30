@@ -1663,6 +1663,39 @@ describe('movement runtime', () => {
     expect(cleared).toMatchObject({ stalledFor: 0, minimumSpacing: 16, usingStaticFallback: false });
   });
 
+  it('resets a continuing recovered head-on detour only for progress toward its tagged waypoint', () => {
+    const detourTarget = { x: 5, y: 3 };
+    const baseCharacter = {
+      id: 'waiter', role: 'waiter', x: 100, y: 100,
+      path: [detourTarget, { x: 10, y: 5 }], pathGoal: { x: 10, y: 5 },
+      recoveredHeadOnDetourTarget: detourTarget,
+      stalledFor: 1.5, usingStaticFallback: false, minimumSpacing: 16,
+    };
+    const interrupted = resolveCharacterMovementBatch(openState, [{
+      character: { ...baseCharacter, localConflictTarget: { x: 3, y: 5 } },
+      speed: 60,
+    }], 0.1).get(baseCharacter.id);
+
+    expect(interrupted.x).toBeLessThan(baseCharacter.x);
+    expect(interrupted.y).toBe(baseCharacter.y);
+    expect(interrupted.stalledFor).toBeGreaterThan(baseCharacter.stalledFor);
+    expect(interrupted).not.toHaveProperty('recoveredHeadOnDetourTarget');
+
+    const continuing = resolveCharacterMovementBatch(openState, [{ character: baseCharacter, speed: 60 }], 0.1)
+      .get(baseCharacter.id);
+    expect(continuing.y).toBeLessThan(baseCharacter.y);
+    expect(Math.hypot(continuing.x - detourTarget.x * 20, continuing.y - detourTarget.y * 20))
+      .toBeLessThan(Math.hypot(
+        baseCharacter.x - detourTarget.x * 20,
+        baseCharacter.y - detourTarget.y * 20,
+      ));
+    expect(continuing).toMatchObject({ stalledFor: 0, recoveredHeadOnDetourTarget: detourTarget });
+
+    const { entries } = simulateMovementTicks(openState, [{ character: continuing, speed: 60 }], 20, 0.1);
+    expect(entries[0].character).not.toHaveProperty('recoveredHeadOnDetourTarget');
+    expect(entries[0].character.x).toBeGreaterThan(baseCharacter.x);
+  });
+
   it('serialises converging exit traffic through the door within a bounded number of ticks', () => {
     const world = getRestaurantWorld(openState.restaurant);
     const doorCell = worldToCell({ x: world.doorX, y: world.doorY + 20 });

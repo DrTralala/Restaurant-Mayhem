@@ -1091,6 +1091,7 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
       );
       if (detour) {
         intent.acceptedRecoveredHeadOnDetour = true;
+        intent.acceptedRecoveredHeadOnDetourEndpoint = positionOf(detour.endpoint);
         const detourTarget = detour.endpoint.path?.[0];
         if (detourTarget && !cellsEqual(detourTarget, intent.character.path?.[0])) {
           intent.acceptedRecoveredHeadOnDetourTarget = { ...detourTarget };
@@ -1356,12 +1357,25 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   const displacement = Math.hypot(moved.x - intent.start.x, moved.y - intent.start.y);
   const recoveredHeadOnDetourTarget = intent.acceptedRecoveredHeadOnDetourTarget
     || character.recoveredHeadOnDetourTarget;
+  const acceptedRecoveredHeadOnDetour = intent.acceptedRecoveredHeadOnDetour
+    && intent.acceptedRecoveredHeadOnDetourEndpoint
+    && isAtTarget(moved, intent.acceptedRecoveredHeadOnDetourEndpoint);
   const continuingRecoveredHeadOnDetour = recoveredHeadOnDetourTarget
     && character.path?.[0]
     && cellsEqual(recoveredHeadOnDetourTarget, character.path[0]);
+  const recoveredHeadOnDetourWorld = recoveredHeadOnDetourTarget
+    && cellToWorld(recoveredHeadOnDetourTarget);
+  const continuingRecoveredHeadOnDetourProgress = continuingRecoveredHeadOnDetour
+    && Math.hypot(
+      moved.x - recoveredHeadOnDetourWorld.x,
+      moved.y - recoveredHeadOnDetourWorld.y,
+    ) < Math.hypot(
+      intent.start.x - recoveredHeadOnDetourWorld.x,
+      intent.start.y - recoveredHeadOnDetourWorld.y,
+    ) - 0.1;
   const progress = hasMeasurableRouteProgress(intent, moved)
-    || ((intent.acceptedRecoveredHeadOnDetour || continuingRecoveredHeadOnDetour)
-      && displacement >= 0.1);
+    || (acceptedRecoveredHeadOnDetour && displacement >= 0.1)
+    || continuingRecoveredHeadOnDetourProgress;
   const targetReached = intent.target && isAtTarget(moved, intent.target);
 
   if (!character.path?.length && (!intent.target || targetReached)) {
@@ -1379,7 +1393,10 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   if (progress) {
     const keepsRecoveredHeadOnDetour = recoveredHeadOnDetourTarget
       && moved.path?.[0]
-      && cellsEqual(recoveredHeadOnDetourTarget, moved.path[0]);
+      && cellsEqual(recoveredHeadOnDetourTarget, moved.path[0])
+      && (acceptedRecoveredHeadOnDetour
+        || continuingRecoveredHeadOnDetourProgress
+        || displacement < 0.1);
     const { recoveredHeadOnDetourTarget: _completedHeadOnDetour, ...withoutCompletedHeadOnDetour } = moved;
     return {
       ...withoutCompletedHeadOnDetour,
@@ -1404,8 +1421,12 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   }
 
   const stalledFor = (character.stalledFor || 0) + dt;
+  const unrelatedRecoveredHeadOnDetourMovement = continuingRecoveredHeadOnDetour
+    && displacement >= 0.1
+    && !continuingRecoveredHeadOnDetourProgress;
+  const { recoveredHeadOnDetourTarget: _interruptedHeadOnDetour, ...withoutInterruptedHeadOnDetour } = moved;
   let recovered = {
-    ...moved,
+    ...(unrelatedRecoveredHeadOnDetourMovement ? withoutInterruptedHeadOnDetour : moved),
     stalledFor,
     minimumSpacing: 16,
     usingStaticFallback: intent.controlledOverlapSelected
