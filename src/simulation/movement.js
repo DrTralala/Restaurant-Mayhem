@@ -857,9 +857,7 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
 
   let nextCell = plan[nextPlanIndex];
   while (nextCell && (cellsEqual(nextCell, previousPlanCell)
-    || (preserveCurrentIntent
-      ? cellsEqual(worldToCell(current), nextCell)
-      : isAtTarget(current, cellToWorld(nextCell))))) {
+    || (!preserveCurrentIntent && isAtTarget(current, cellToWorld(nextCell))))) {
     nextPlanIndex += 1;
     nextCell = plan[nextPlanIndex];
   }

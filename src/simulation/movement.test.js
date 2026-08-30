@@ -876,6 +876,13 @@ describe('movement runtime', () => {
     }
     expect(Math.max(...[...reversedPriority.values()].map(character => character.x)))
       .toBeCloseTo(world.queueX + world.queueW, 6);
+    expect(reversedPriority.get('a')).toMatchObject({
+      x: world.queueX + world.queueW,
+      y: actor.y,
+      path: actor.path,
+      localConflictTarget: { x: 51, y: 5 },
+      stalledFor: 1.5,
+    });
     expect(minimumTrajectoryDistance(
       buildTimeParameterizedTrajectory(actor, moved.get('a'), 60, 0.5),
       buildTimeParameterizedTrajectory(peer, moved.get('b'), 60, 0.5),
@@ -911,6 +918,13 @@ describe('movement runtime', () => {
     }
     expect(moved.get('b').y).toBeCloseTo(bottom, 6);
     expect(moved.get('b').y).not.toBe(660);
+    expect(moved.get('b')).toMatchObject({
+      x: peer.x,
+      y: bottom,
+      path: peer.path,
+      localConflictTarget: { x: 6, y: 33 },
+      stalledFor: 1.5,
+    });
     expect(minimumTrajectoryDistance(
       buildTimeParameterizedTrajectory(actor, moved.get('a'), 60, 0.5),
       buildTimeParameterizedTrajectory(peer, moved.get('b'), 60, 0.5),
