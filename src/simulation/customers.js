@@ -1,7 +1,7 @@
 import { getRushHourMultiplier, isRestaurantOpen } from './clock';
 import { buildBlockedCells, worldToCell } from './pathfinding';
 import { clearMovementRecoveryMetadata, planCharacterPath, resolveCharacterMovementBatch } from './movement';
-import { getCustomerGuideContext } from './guidance';
+import { getCustomerGuideContext, releaseTableReservation } from './guidance';
 import { getCashierCustomerPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
 import {
   ABANDONMENT_REPUTATION_PENALTY,
@@ -299,7 +299,7 @@ export function prepareCustomersForMovement(state, gameDt) {
   if (leavingTableIds.size > 0) {
     updatedTables = updatedTables.map(t =>
       leavingTableIds.has(t.id) && !updatedCustomers.some(customer => customer.tableId === t.id && customer.state !== 'leaving')
-        ? { ...t, status: 'dirty' }
+        ? releaseTableReservation(t, 'dirty')
         : t
     );
   }

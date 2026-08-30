@@ -14,7 +14,14 @@ import {
 } from './serviceItems';
 import { ACTIVITY_DURATIONS } from './activity';
 import { hasWashStationCapacity, markCustomerItemsDirty, releaseClearedTables } from './dishwashing';
-import { getCustomerGuideContext, getGuidePartyContext, taskCustomerIds } from './guidance';
+import {
+  getCustomerGuideContext,
+  getGuidePartyContext,
+  normaliseTableReservationOwners,
+  releaseTableReservation,
+  reserveTableForGuide,
+  taskCustomerIds,
+} from './guidance';
 import { buildChairApproachAssignments, getChairCentre, validateChairApproachAssignments } from './seating';
 
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
@@ -253,8 +260,10 @@ function cancelGuideTask({ staff, customers, queue, tables, serviceItems }) {
     staff: { ...staff, task: null, path: [] },
     serviceItems,
     queue: queue.filter(customer => !ids.includes(customer.id)),
-    tables: tables.map(table => table.id === staff.task.tableId && table.status === 'reserved'
-      ? { ...table, status: 'empty' }
+    tables: tables.map(table => table.id === staff.task.tableId
+      && table.status === 'reserved'
+      && table.reservationOwnerStaffId === staff.id
+      ? releaseTableReservation(table, 'empty')
       : table),
     customers: customers.map(customer => ids.includes(customer.id)
       ? leavingFields({ ...customer, tableId: null, guideStaffId: null, chairId: null })
@@ -627,7 +636,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
           customers: customers.map(c => party.some(member => member.id === c.id)
             ? { ...c, state: 'guided', guideStaffId: staff.id, chairId: null }
             : c),
-          tables: tables.map(t => t.id === table.id ? { ...t, status: 'reserved' } : t),
+          tables: tables.map(t => t.id === table.id ? reserveTableForGuide(t, staff.id) : t),
           claimedCustomerIds: partyIds,
         };
       }
@@ -682,7 +691,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
           },
           customers: [...customers, ...newCustomers],
           queue: remainingQueue,
-          tables: tables.map(t => t.id === table.id ? { ...t, status: 'reserved' } : t),
+          tables: tables.map(t => t.id === table.id ? reserveTableForGuide(t, staff.id) : t),
           claimedCustomerIds: partyIds,
         };
       }
@@ -831,7 +840,8 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
        serviceItems: markCustomerItemsDirty(serviceItems.filter(item => item.customerId !== customer.id
           || !['ordered', 'preparing'].includes(item.state)), customer.id, state.restaurant.gameTime),
         clearCarriedServiceItemIds: carriedServiceItemIds,
-       tables: tables.map(table => table.id === customer.tableId && !remainingAtTable ? { ...table, status: 'dirty' } : table),
+       tables: tables.map(table => table.id === customer.tableId && !remainingAtTable
+         ? releaseTableReservation(table, 'dirty') : table),
       completedCustomers: [...(state.completedCustomers || []), payment],
       restaurant: {
         ...state.restaurant,
@@ -862,7 +872,8 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     }
     return {
       staff: { ...completedStaff, path: [] }, queue, customers, serviceItems,
-      tables: tables.map(t => t.id === staff.task.tableId ? { ...t, status: 'empty' } : t),
+      tables: tables.map(t => t.id === staff.task.tableId
+        ? releaseTableReservation(t, 'empty') : t),
     };
   }
 
@@ -896,19 +907,17 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     ).slice(0, ids.length).map(chair => chair.id);
     const chairsById = new Map((state.chairs || []).map(chair => [chair?.id, chair]));
     const chairs = chairIds.map(chairId => chairsById.get(chairId));
-    const otherReservedChairIds = new Set(getActiveGuideTasks(state.staff, staff.id)
-      .flatMap(task => task.chairIds || task.reservedChairIds || []));
     const conflictingChairIds = new Set(customers
       .filter(customer => !ids.includes(customer.id)
         && customer.state !== 'leaving' && customer.chairId)
       .map(customer => customer.chairId));
     const validReservation = table?.status === 'reserved'
+      && table.reservationOwnerStaffId === staff.id
       && ids.length > 0
       && chairIds.length === ids.length
       && new Set(chairIds).size === chairIds.length
       && chairs.every(chair => chair?.tableId === table.id && getChairCentre(chair))
-      && chairIds.every(chairId => !otherReservedChairIds.has(chairId)
-        && !conflictingChairIds.has(chairId));
+      && chairIds.every(chairId => !conflictingChairIds.has(chairId));
 
     if (!validReservation) {
       return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
@@ -1022,7 +1031,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       serviceItems,
       queue: queue.filter(customer => !ids.includes(customer.id)),
       tables: tables.map(candidate => candidate.id === table.id
-        ? { ...candidate, status: 'occupied' }
+        ? releaseTableReservation(candidate, 'occupied')
         : candidate),
       customers: customers.map(customer => {
         const chair = chairByCustomerId.get(customer.id);
@@ -1357,7 +1366,7 @@ export function prepareStaffForMovement(state, gameDt) {
   state = normaliseServiceItemOwnership(state);
   let customers = [...(state.customers || [])];
   let queue = [...(state.queue || [])];
-  let tables = [...(state.tables || [])];
+  let tables = normaliseTableReservationOwners(state.tables, state.staff);
   let serviceItems = [...(state.serviceItems || [])];
   let completedCustomers = [...(state.completedCustomers || [])];
   let floorDirt = [...(state.floorDirt || [])];
@@ -1415,8 +1424,10 @@ export function prepareStaffForMovement(state, gameDt) {
     if (current.task?.type !== 'guide_customer') continue;
     const ids = taskCustomerIds(current.task);
     if (ids.length && ids.some(id => !customers.some(customer => customer.id === id && customer.state !== 'leaving'))) {
-      tables = tables.map(table => table.id === current.task.tableId && table.status === 'reserved'
-        ? { ...table, status: 'empty' }
+      tables = tables.map(table => table.id === current.task.tableId
+        && table.status === 'reserved'
+        && table.reservationOwnerStaffId === current.id
+        ? releaseTableReservation(table, 'empty')
         : table);
       customers = customers.map(customer => {
         if (!ids.includes(customer.id)) return customer;
@@ -1518,7 +1529,8 @@ export function getStaffMovementEntries(state) {
 }
 
 export function resolveStaffAfterMovement(state, gameDt) {
-  let { staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt, restaurant } = state;
+  let { staff, customers, queue, serviceItems, completedCustomers, floorDirt, restaurant } = state;
+  let tables = normaliseTableReservationOwners(state.tables, staff);
   const claimedCustomerIds = new Set();
   const claimedServiceItemIds = new Set();
   const claimedTableIds = new Set();

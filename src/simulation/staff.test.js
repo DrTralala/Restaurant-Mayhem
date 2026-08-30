@@ -1364,6 +1364,69 @@ describe('updateStaff', () => {
       stage: 'follow_guide',
       approaches: [],
     });
+    expect(result.tables[0]).toMatchObject({
+      status: 'reserved',
+      reservationOwnerStaffId: 'w1',
+    });
+  });
+
+  it.each([
+    ['owner first', ['guide-a', 'guide-b']],
+    ['stale guide first', ['guide-b', 'guide-a']],
+  ])('prevents a stale guide from releasing or stealing another guide reservation when processed %s', (_order, staffOrder) => {
+    const approachFor = customerId => ({
+      customerId,
+      chairId: 'ch1',
+      approachCell: { x: 8, y: 10 },
+      approachPoint: { x: 160, y: 200 },
+    });
+    const staffById = {
+      'guide-a': {
+        id: 'guide-a', role: 'waiter', x: 240, y: 220, path: [],
+        task: {
+          type: 'guide_customer', customerIds: ['party-a'], tableId: 't1',
+          chairIds: ['ch1'], stage: 'approach_chairs', approaches: [approachFor('party-a')],
+        },
+      },
+      'guide-b': {
+        id: 'guide-b', role: 'waiter', x: 260, y: 220, path: [],
+        task: {
+          type: 'guide_customer', customerIds: ['party-b'], tableId: 't1',
+          chairIds: ['ch1'], stage: 'approach_chairs', approaches: [approachFor('party-b')],
+        },
+      },
+    };
+    const state = {
+      ...baseState,
+      staff: staffOrder.map(id => staffById[id]),
+      customers: [
+        {
+          id: 'party-a', state: 'guided', guideStaffId: 'guide-a', tableId: 't1',
+          chairId: 'ch1', x: 160, y: 200, path: [],
+        },
+        {
+          id: 'party-b', state: 'guided', guideStaffId: 'guide-b', tableId: 't1',
+          chairId: null, x: 160, y: 200, path: [],
+        },
+      ],
+      tables: [{
+        id: 't1', status: 'reserved', reservationOwnerStaffId: 'guide-a',
+        seats: 1, x: 220, y: 200,
+      }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 180, y: 200 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.tables[0]).toEqual({ id: 't1', status: 'occupied', seats: 1, x: 220, y: 200 });
+    expect(result.staff.find(worker => worker.id === 'guide-a').task).toBeNull();
+    expect(result.staff.find(worker => worker.id === 'guide-b').task).toBeNull();
+    expect(result.customers.find(customer => customer.id === 'party-a')).toMatchObject({
+      state: 'seated', tableId: 't1', chairId: 'ch1', guideStaffId: null,
+    });
+    expect(result.customers.find(customer => customer.id === 'party-b')).toMatchObject({
+      state: 'leaving', tableId: null, chairId: null, guideStaffId: null,
+    });
   });
 
   it('does not seat a waiting customer or fall back to the table centre when no chairs exist', () => {

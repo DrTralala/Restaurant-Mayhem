@@ -2,6 +2,7 @@ import { getUpgradeEffect } from './balance';
 import { findAvailableServiceSlot } from './serviceItems';
 import { markCustomerItemsDirty } from './dishwashing';
 import { ACTIVITY_DURATIONS } from './activity';
+import { releaseTableReservation } from './guidance';
 
 const PHYSICAL_ITEM_STATES = new Set(['on_service', 'carried', 'delivered']);
 const DIRTY_ITEM_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
@@ -114,6 +115,6 @@ export function processKitchen(state) {
     tables: (state.tables || []).map(table => newlyPaying.some(customer => customer.tableId === table.id)
       && !customers.some(candidate => !newlyPaying.some(customer => customer.id === candidate.id)
         && candidate.tableId === table.id && candidate.state !== 'leaving')
-      ? { ...table, status: 'dirty' } : table) };
+      ? releaseTableReservation(table, 'dirty') : table) };
   return result;
 }

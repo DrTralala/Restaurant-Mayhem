@@ -74,6 +74,41 @@ describe('hydrateState', () => {
     });
   });
 
+  it('restores a unique active guide as owner of an ownerless legacy table reservation', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      staff: [{
+        id: 'guide-a', role: 'waiter',
+        task: { type: 'guide_customer', customerIds: ['party-a'], tableId: 't1' },
+      }],
+      tables: fresh.tables.map(table => table.id === 't1'
+        ? { ...table, status: 'reserved' }
+        : table),
+    };
+
+    const hydrated = hydrateState(saved, fresh);
+
+    expect(hydrated.tables.find(table => table.id === 't1')).toMatchObject({
+      status: 'reserved',
+      reservationOwnerStaffId: 'guide-a',
+    });
+  });
+
+  it('removes stale reservation ownership from a legacy non-reserved table', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      tables: fresh.tables.map(table => table.id === 't1'
+        ? { ...table, status: 'occupied', reservationOwnerStaffId: 'old-guide' }
+        : table),
+    };
+
+    const hydrated = hydrateState(saved, fresh);
+
+    expect(hydrated.tables.find(table => table.id === 't1')).not.toHaveProperty('reservationOwnerStaffId');
+  });
+
   it('hydrates missing wash collections from fresh state and preserves populated saves', () => {
     const fresh = createInitialState();
     const missing = hydrateState({ ...fresh, floorDirt: undefined, washStations: undefined }, fresh);

@@ -1,4 +1,5 @@
 import { ACTIVITY_DURATIONS } from './activity';
+import { releaseTableReservation } from './guidance';
 
 const DIRTY_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
 const WASH_STATION_CAPACITY = Object.freeze({ manual: 8, automatic: 12 });
@@ -48,7 +49,7 @@ export function releaseClearedTables(tables, customers, serviceItems) {
     const dirty = (serviceItems || []).some(item => item.tableId === table.id
       && item.state === 'dirty_at_table');
     return !occupied && !dirty && table.status === 'dirty'
-      ? { ...table, status: 'empty' }
+      ? releaseTableReservation(table, 'empty')
       : table;
   });
 }
