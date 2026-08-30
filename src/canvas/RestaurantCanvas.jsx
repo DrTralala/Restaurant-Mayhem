@@ -11,6 +11,7 @@ import { normaliseSelectionRect, selectFurnitureInRect } from './selection';
 import { getFixture, getFixtureDescriptor, getFixtureLabel, getFixtureRect, listFixtures } from '../data/fixtures';
 import { getPlaceable } from '../data/placeables';
 import { snapPlacement, validateFixtureMoves, validatePlacement } from '../simulation/placement';
+import { getServiceSlotPosition } from '../simulation/serviceItems';
 
 function fixtureKey(type, id) {
   return `${type}:${id}`;
@@ -89,12 +90,34 @@ function snapMoveItem(state, item) {
 function buildMoveItems(state, originalItems, anchor, world) {
   const deltaX = world.x - anchor.x;
   const deltaY = world.y - anchor.y;
-  return originalItems
-    .map(item => snapMoveItem(state, {
+  const snappedItems = originalItems.map(item => snapMoveItem(state, {
+    ...item,
+    x: item.x + deltaX,
+    y: item.y + deltaY,
+  }));
+  const tableDeltas = new Map();
+
+  originalItems.forEach((item, index) => {
+    if (item.type !== 'table') return;
+    const snapped = snappedItems[index];
+    tableDeltas.set(item.id, {
+      x: snapped.x - item.x,
+      y: snapped.y - item.y,
+    });
+  });
+
+  return snappedItems.map((item, index) => {
+    if (item.type !== 'chair') return item;
+    const original = originalItems[index];
+    const chair = getFixture(state, 'chair', original.id)?.data;
+    const tableDelta = tableDeltas.get(chair?.tableId);
+    if (!tableDelta) return item;
+    return {
       ...item,
-      x: item.x + deltaX,
-      y: item.y + deltaY,
-    }));
+      x: original.x + tableDelta.x,
+      y: original.y + tableDelta.y,
+    };
+  });
 }
 
 const PHYSICALLY_SEATED_CUSTOMER_STATES = new Set([
@@ -159,23 +182,20 @@ function applyMovePreview(renderState, state, move) {
     });
   }
 
-  const serviceTableDeltas = new Map((move.items || [])
+  const movedServiceTableIds = new Set((move.items || [])
     .filter(item => item.type === 'serviceTable')
-    .map(item => {
-      const original = move.originalItems.find(candidate =>
-        candidate.type === item.type && candidate.id === item.id);
-      return [item.id, {
-        x: item.x - original?.x,
-        y: item.y - original?.y,
-      }];
-    }));
-  if (Array.isArray(renderState?.serviceItems) && serviceTableDeltas.size > 0) {
+    .map(item => item.id));
+  const movedServiceTables = new Map((Array.isArray(preview.serviceTables) ? preview.serviceTables : [])
+    .filter(serviceTable => movedServiceTableIds.has(serviceTable.id))
+    .map(serviceTable => [serviceTable.id, serviceTable]));
+  if (Array.isArray(renderState?.serviceItems) && movedServiceTables.size > 0) {
     preview.serviceItems = renderState.serviceItems.map(serviceItem => {
-      const delta = serviceTableDeltas.get(serviceItem.serviceTableId);
-      if (!delta || !Number.isFinite(serviceItem.x) || !Number.isFinite(serviceItem.y)) {
+      if (serviceItem.state !== 'on_service') return serviceItem;
+      const serviceTable = movedServiceTables.get(serviceItem.serviceTableId);
+      if (!serviceTable || !Number.isInteger(serviceItem.serviceSlotIndex)) {
         return serviceItem;
       }
-      return { ...serviceItem, x: serviceItem.x + delta.x, y: serviceItem.y + delta.y };
+      return { ...serviceItem, ...getServiceSlotPosition(serviceTable, serviceItem.serviceSlotIndex) };
     });
   }
 
