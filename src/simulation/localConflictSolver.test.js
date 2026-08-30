@@ -184,6 +184,21 @@ describe('solveLocalConflictComponent PBS', () => {
     expectConflictFree(result.plans, actors);
   });
 
+  it('gives the older stalled actor the preferred PBS branch', () => {
+    const actors = [
+      actor('a-new', { x: 4, y: 5 }, { x: 5, y: 5 }, 0),
+      actor('z-old', { x: 5, y: 4 }, { x: 5, y: 5 }, 4),
+    ];
+    const result = solveLocalConflictComponent({
+      state: openState, actors, blockedCells: new Set(), horizon: 1, maxHighLevelNodes: 128,
+    });
+
+    expect(result.mode).toBe('pbs');
+    expect(result.plans.get('z-old')[0]).toEqual({ x: 5, y: 5 });
+    expect(result.plans.get('a-new')[0]).not.toEqual({ x: 5, y: 5 });
+    expectConflictFree(result.plans, actors);
+  });
+
   it('bypasses PBS for a component of 13 moving actors', () => {
     const actors = Array.from({ length: 13 }, (_, index) => actor(
       `actor-${String(index).padStart(2, '0')}`,

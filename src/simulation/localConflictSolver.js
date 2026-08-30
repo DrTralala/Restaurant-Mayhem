@@ -316,7 +316,14 @@ function totalProgress(actors, plans, horizon) {
     - manhattan(planCellAt(actor, plans.get(actor.id), horizon), actor.goalCell), 0);
 }
 
-function createHighLevelNode(actors, edges, plans, horizon, allowControlledOverlapId) {
+function createHighLevelNode(
+  actors,
+  edges,
+  plans,
+  horizon,
+  allowControlledOverlapId,
+  branchPreference = [],
+) {
   const conflicts = detectConflicts(actors, plans, horizon, allowControlledOverlapId);
   return {
     edges,
@@ -324,6 +331,7 @@ function createHighLevelNode(actors, edges, plans, horizon, allowControlledOverl
     conflicts,
     waits: countWaits(actors, plans, horizon),
     progress: totalProgress(actors, plans, horizon),
+    branchPreference,
     priorityKey: serialisePriorityEdges(edges),
   };
 }
@@ -332,7 +340,16 @@ function compareHighLevelNodes(left, right) {
   return left.conflicts.length - right.conflicts.length
     || left.waits - right.waits
     || right.progress - left.progress
+    || compareBranchPreference(left.branchPreference, right.branchPreference)
     || compareKeys(left.priorityKey, right.priorityKey);
+}
+
+function compareBranchPreference(left, right) {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return left.length - right.length;
 }
 
 function agedFallback({
@@ -392,7 +409,10 @@ export function solveLocalConflictComponent({
     const right = actorMap.get(conflict.rightId);
     const preferredHigher = actorByAgedPriority(left, right) <= 0 ? left : right;
     const other = preferredHigher === left ? right : left;
-    for (const [higher, lower] of [[preferredHigher, other], [other, preferredHigher]]) {
+    for (const [branchIndex, [higher, lower]] of [
+      [0, [preferredHigher, other]],
+      [1, [other, preferredHigher]],
+    ]) {
       const edges = addPriorityEdge(stableActors, node.edges, higher.id, lower.id);
       if (!edges || edges === node.edges) continue;
       const plans = replanPriorityDependants({
@@ -404,7 +424,12 @@ export function solveLocalConflictComponent({
       });
       if (!plans) continue;
       frontier.push(createHighLevelNode(
-        stableActors, edges, plans, horizon, allowControlledOverlapId,
+        stableActors,
+        edges,
+        plans,
+        horizon,
+        allowControlledOverlapId,
+        [...node.branchPreference, branchIndex],
       ));
     }
   }
