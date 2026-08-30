@@ -2,11 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { getChairFacingRadians, getPlaceSettingPositions } from './tableGeometry';
 
 describe('table geometry', () => {
-  it('places dual top settings inside the nearest table edge', () => {
-    const positions = getPlaceSettingPositions({ x: 200, y: 200 }, { x: 210, y: 180, rotation: 2 }, ['dish', 'drink']);
-    expect(positions.dish.y).toBeGreaterThanOrEqual(200);
-    expect(positions.drink.y).toBeGreaterThanOrEqual(200);
-    expect(positions.dish).not.toEqual(positions.drink);
+  it.each([
+    ['top', { x: 210, y: 180 }, { dish: { x: 226, y: 200 }, drink: { x: 214, y: 200 } }],
+    ['right', { x: 240, y: 210 }, { dish: { x: 240, y: 226 }, drink: { x: 240, y: 214 } }],
+    ['bottom', { x: 210, y: 240 }, { dish: { x: 214, y: 240 }, drink: { x: 226, y: 240 } }],
+    ['left', { x: 180, y: 210 }, { dish: { x: 200, y: 214 }, drink: { x: 200, y: 226 } }],
+  ])('places food left and drink right for the %s chair', (_side, chair, expected) => {
+    expect(getPlaceSettingPositions({ x: 200, y: 200 }, chair, ['dish', 'drink']))
+      .toEqual(expected);
+  });
+
+  it('uses the chair-facing rotation', () => {
     expect(getChairFacingRadians(2)).toBe(Math.PI);
   });
 

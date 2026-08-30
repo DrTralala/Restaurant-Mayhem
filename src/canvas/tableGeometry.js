@@ -25,10 +25,11 @@ export function getPlaceSettingPositions(table, chair, kinds) {
   if (![anchor.x, anchor.y].every(Number.isFinite)) return {};
   const requested = Array.isArray(kinds) ? kinds : [];
   const result = {};
-  const dual = requested.length > 1;
-  requested.forEach((kind, index) => {
-    const offset = dual && index === 1 ? 6 : 0;
-    result[kind] = { x: anchor.x - uy * offset, y: anchor.y + ux * offset };
-  });
+  const hasPair = requested.includes('dish') && requested.includes('drink');
+  const left = { x: uy, y: -ux };
+  for (const kind of requested) {
+    const side = hasPair ? (kind === 'dish' ? 1 : kind === 'drink' ? -1 : 0) : 0;
+    result[kind] = { x: anchor.x + left.x * 6 * side, y: anchor.y + left.y * 6 * side };
+  }
   return result;
 }
