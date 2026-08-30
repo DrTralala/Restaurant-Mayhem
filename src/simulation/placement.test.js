@@ -3,6 +3,7 @@ import { getPlaceable } from '../data/placeables';
 import {
   getPlacementRect,
   snapPlacement,
+  validateFixtureMoves,
   validatePlacement,
 } from './placement';
 
@@ -93,4 +94,111 @@ it('rejects a cashier table whose open work cell is unreachable', () => {
 it('requires a purchasable chair to be adjacent to a table with an open seat', () => {
   expect(validatePlacement(state, { itemType: 'chair', x: 210, y: 240, rotation: 0 })).toMatchObject({ valid: true, tableId: 't1' });
   expect(validatePlacement(state, { itemType: 'chair', x: 600, y: 300, rotation: 0 }).valid).toBe(false);
+});
+
+describe('fixture movement validation', () => {
+  it('validates related moves against the proposed final layout without mutating state', () => {
+    const before = structuredClone(state);
+
+    expect(validateFixtureMoves(state, [
+      { type: 'table', id: 't1', x: 400, y: 300 },
+      { type: 'chair', id: 'ch1', x: 410, y: 280, rotation: 2 },
+    ])).toMatchObject({ valid: true });
+    expect(state).toEqual(before);
+  });
+
+  it('allows a fixture to occupy space vacated in the same atomic move', () => {
+    expect(validateFixtureMoves(state, [
+      { type: 'table', id: 't1', x: 400, y: 300 },
+      { type: 'chair', id: 'ch1', x: 410, y: 280, rotation: 2 },
+      { type: 'kitchenStation', id: 'k1', x: 200, y: 200 },
+    ])).toMatchObject({ valid: true });
+  });
+
+  it('rejects overlap with an unmoved fixture', () => {
+    expect(validateFixtureMoves(state, [
+      { type: 'kitchenStation', id: 'k1', x: 200, y: 200 },
+    ])).toMatchObject({ valid: false, reason: 'overlap' });
+  });
+
+  it('rejects a door submitted away from its wall', () => {
+    expect(validateFixtureMoves(state, [
+      { type: 'door', id: 'door1', x: 500, y: 440 },
+    ])).toMatchObject({ valid: false, reason: 'door-wall' });
+  });
+
+  it('returns the validated wall coordinate for a valid door move', () => {
+    expect(validateFixtureMoves(state, [
+      { type: 'door', id: 'door1', x: 907, y: 440 },
+    ])).toMatchObject({
+      valid: true,
+      moves: [{ type: 'door', id: 'door1', x: 907, y: 440 }],
+    });
+  });
+
+  it('rejects a moved chair that is no longer adjacent to its one linked table', () => {
+    expect(validateFixtureMoves(state, [
+      { type: 'chair', id: 'ch1', x: 500, y: 300, rotation: 2 },
+    ])).toMatchObject({ valid: false, reason: 'chair-table' });
+  });
+
+  it('rejects two moved candidates that overlap in the final layout', () => {
+    expect(validateFixtureMoves(state, [
+      { type: 'table', id: 't1', x: 400, y: 300 },
+      { type: 'chair', id: 'ch1', x: 410, y: 280, rotation: 2 },
+      { type: 'kitchenStation', id: 'k1', x: 400, y: 300 },
+    ])).toMatchObject({ valid: false, reason: 'overlap' });
+  });
+
+  it('rejects a candidate outside the restaurant floor', () => {
+    expect(validateFixtureMoves(state, [
+      { type: 'table', id: 't1', x: 40, y: 300 },
+    ])).toMatchObject({ valid: false, reason: 'outside-floor' });
+  });
+
+  it('rejects a cashier whose final work cell is blocked', () => {
+    const blocked = {
+      ...state,
+      chairs: [
+        ...state.chairs,
+        { id: 'work-blocker', tableId: 't1', x: 640, y: 280, rotation: 0 },
+      ],
+    };
+
+    expect(validateFixtureMoves(blocked, [
+      { type: 'cashierTable', id: 'cashier1', x: 600, y: 300 },
+    ])).toMatchObject({ valid: false, reason: 'cashier-work-cell' });
+  });
+
+  it('rejects a cashier whose open final work cell is unreachable', () => {
+    const enclosed = {
+      ...state,
+      chairs: [
+        ...state.chairs,
+        { id: 'work-top', tableId: 't1', x: 640, y: 260, rotation: 0 },
+        { id: 'work-left', tableId: 't1', x: 620, y: 280, rotation: 0 },
+        { id: 'work-right', tableId: 't1', x: 660, y: 280, rotation: 0 },
+      ],
+    };
+
+    expect(validateFixtureMoves(enclosed, [
+      { type: 'cashierTable', id: 'cashier1', x: 600, y: 300 },
+    ])).toMatchObject({ valid: false, reason: 'cashier-work-cell' });
+  });
+
+  it('rejects malformed, duplicate, and missing fixture moves', () => {
+    expect(validateFixtureMoves(state, [
+      { type: 'table', id: 't1', x: 400, y: 300 },
+      { type: 'table', id: 't1', x: 500, y: 300 },
+    ])).toMatchObject({ valid: false, reason: 'duplicate-move' });
+    expect(validateFixtureMoves(state, [
+      { type: 'table', id: 'missing', x: 400, y: 300 },
+    ])).toMatchObject({ valid: false, reason: 'missing-fixture' });
+    expect(validateFixtureMoves(state, [
+      { type: 'table', id: 't1', x: Number.NaN, y: 300 },
+    ])).toMatchObject({ valid: false, reason: 'non-finite-coordinate' });
+    expect(validateFixtureMoves(state, [
+      { type: 'chair', id: 'ch1', x: 210, y: 180, rotation: 1.5 },
+    ])).toMatchObject({ valid: false, reason: 'malformed-rotation' });
+  });
 });

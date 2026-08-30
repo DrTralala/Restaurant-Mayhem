@@ -1,4 +1,10 @@
 import { getPlaceable } from '../data/placeables';
+import {
+  getFixture,
+  getFixtureDescriptor,
+  getFixtureRect,
+  listFixtures,
+} from '../data/fixtures';
 import { findPath, worldToCell } from './pathfinding';
 import { GRID_SIZE, getCashierWorkPosition, getDoorPosition, getDoors, getRestaurantWorld } from './world';
 
@@ -100,6 +106,22 @@ function areAdjacent(first, second) {
     || (touchesTopOrBottom && horizontalOverlap);
 }
 
+function hasValidCashierWorkCell(state, rect, furnitureRects) {
+  const world = getRestaurantWorld(state.restaurant || {});
+  const workPosition = getCashierWorkPosition(rect);
+  const workCell = getGridCellRect(workPosition);
+  const workTarget = worldToCell(workPosition);
+  const workCellReachable = getDoors(state).some(door => {
+    const start = worldToCell(getDoorPosition(state, door).inside);
+    return (start.x === workTarget.x && start.y === workTarget.y)
+      || findPath(state, start, workTarget).length > 0;
+  });
+
+  return isWithinFloor(world, workCell, 'cashierTable')
+    && !furnitureRects.some(existing => rectangleIntersects(workCell, existing))
+    && workCellReachable;
+}
+
 export function getPlacementRect(itemType, x, y, rotation = 0) {
   const item = getPlaceable(itemType);
   if (!item || !Number.isFinite(x) || !Number.isFinite(y)) return null;
@@ -156,21 +178,11 @@ export function validatePlacement(state = {}, placement = {}) {
   }
 
   if (requestedPlacement.itemType === 'cashierTable') {
-    const workPosition = getCashierWorkPosition(rect);
-    const workCell = getGridCellRect(workPosition);
-    const workTarget = worldToCell(workPosition);
     const stateWithCandidate = {
       ...currentState,
       cashierStations: [...(currentState.cashierStations || []), rect],
     };
-    const workCellReachable = getDoors(currentState).some(door => {
-      const start = worldToCell(getDoorPosition(currentState, door).inside);
-      return (start.x === workTarget.x && start.y === workTarget.y)
-        || findPath(stateWithCandidate, start, workTarget).length > 0;
-    });
-    if (!isWithinFloor(world, workCell, requestedPlacement.itemType)
-      || existingFurniture.some(existing => rectangleIntersects(workCell, existing))
-      || !workCellReachable) {
+    if (!hasValidCashierWorkCell(stateWithCandidate, rect, existingFurniture)) {
       return invalid('cashier-work-cell');
     }
   }
@@ -198,6 +210,144 @@ export function validatePlacement(state = {}, placement = {}) {
   }
 
   return { valid: true, reason: null };
+}
+
+function fixtureIdentityMatches(first, second) {
+  return first.type === second.type && first.id === second.id;
+}
+
+function getFixturePlacementType(fixture) {
+  const descriptor = getFixtureDescriptor(fixture.type);
+  return typeof descriptor?.placementType === 'function'
+    ? descriptor.placementType(fixture.data)
+    : descriptor?.placementType;
+}
+
+function hasValidChairRelationships(state, fixtures) {
+  const tables = fixtures.filter(fixture => fixture.type === 'table');
+  const chairs = fixtures.filter(fixture => fixture.type === 'chair');
+
+  return chairs.every(chair => {
+    const chairRect = getFixtureRect(state, chair);
+    const adjacentTables = tables.filter(table => {
+      const tableRect = getFixtureRect(state, table);
+      return tableRect && areAdjacent(chairRect, tableRect);
+    });
+    const linkedTable = adjacentTables.length === 1
+      && adjacentTables[0].id === chair.data.tableId
+      ? adjacentTables[0]
+      : null;
+    if (!linkedTable || !Number.isFinite(linkedTable.data.seats)) return false;
+
+    return chairs.filter(candidate => candidate.data.tableId === linkedTable.id).length
+      <= linkedTable.data.seats;
+  });
+}
+
+export function validateFixtureMoves(state = {}, moves = []) {
+  const currentState = state || {};
+  if (!Array.isArray(moves)) return invalid('malformed-moves');
+
+  const world = getRestaurantWorld(currentState.restaurant || {});
+  const seenByType = new Map();
+  const finalState = { ...currentState };
+  const clonedCollections = new Set();
+  const normalisedMoves = [];
+
+  for (const move of moves) {
+    const descriptor = getFixtureDescriptor(move?.type);
+    if (!descriptor) return invalid('unknown-fixture-type');
+
+    const seenIds = seenByType.get(move.type) || new Set();
+    if (seenIds.has(move.id)) return invalid('duplicate-move');
+    seenIds.add(move.id);
+    seenByType.set(move.type, seenIds);
+
+    const fixture = getFixture(currentState, move.type, move.id);
+    if (!fixture) return invalid('missing-fixture');
+    if (!isFinitePoint(move)) return invalid('non-finite-coordinate');
+    if (Object.prototype.hasOwnProperty.call(move, 'rotation')
+      && (!Number.isInteger(move.rotation) || move.rotation < 0 || move.rotation > 3)) {
+      return invalid('malformed-rotation');
+    }
+    if (move.type === 'door' && move.x !== world.doorX) return invalid('door-wall');
+
+    if (!clonedCollections.has(descriptor.collection)) {
+      finalState[descriptor.collection] = [...currentState[descriptor.collection]];
+      clonedCollections.add(descriptor.collection);
+    }
+
+    const normalisedMove = {
+      type: move.type,
+      id: move.id,
+      x: move.type === 'door' ? world.doorX : move.x,
+      y: move.y,
+    };
+    if (Object.prototype.hasOwnProperty.call(move, 'rotation')) {
+      normalisedMove.rotation = move.rotation;
+    }
+    normalisedMoves.push(normalisedMove);
+
+    finalState[descriptor.collection] = finalState[descriptor.collection].map(record => (
+      record.id === move.id
+        ? {
+          ...record,
+          x: normalisedMove.x,
+          y: normalisedMove.y,
+          ...(Object.prototype.hasOwnProperty.call(normalisedMove, 'rotation')
+            ? { rotation: normalisedMove.rotation }
+            : {}),
+        }
+        : record
+    ));
+  }
+
+  const finalFixtures = listFixtures(finalState);
+  const movedFixtures = normalisedMoves.map(move => getFixture(
+    finalState,
+    move.type,
+    move.id,
+  ));
+
+  for (const fixture of movedFixtures) {
+    const rect = getFixtureRect(finalState, fixture);
+    const placementType = getFixturePlacementType(fixture);
+    if (!rect || rect.w <= 0 || rect.h <= 0) return invalid('malformed-fixture');
+    if (!isWithinFloor(world, rect, placementType)) return invalid('outside-floor');
+  }
+
+  for (const fixture of movedFixtures.filter(candidate => candidate.type === 'door')) {
+    const rect = getFixtureRect(finalState, fixture);
+    const overlapsDoor = finalFixtures.some(candidate => candidate.type === 'door'
+      && !fixtureIdentityMatches(fixture, candidate)
+      && rectangleIntersects(rect, getFixtureRect(finalState, candidate)));
+    if (overlapsDoor) return invalid('door-overlap');
+  }
+
+  for (const fixture of movedFixtures) {
+    const rect = getFixtureRect(finalState, fixture);
+    const overlapsFixture = finalFixtures.some(candidate => {
+      if (fixtureIdentityMatches(fixture, candidate)) return false;
+      if (fixture.type === 'door' && candidate.type === 'door') return false;
+      return rectangleIntersects(rect, getFixtureRect(finalState, candidate));
+    });
+    if (overlapsFixture) return invalid('overlap');
+  }
+
+  const furnitureFixtures = finalFixtures.filter(fixture => fixture.type !== 'door');
+  for (const cashier of finalFixtures.filter(fixture => fixture.type === 'cashierTable')) {
+    const cashierRect = getFixtureRect(finalState, cashier);
+    const otherFurnitureRects = furnitureFixtures
+      .filter(fixture => !fixtureIdentityMatches(cashier, fixture))
+      .map(fixture => getFixtureRect(finalState, fixture));
+    if (!hasValidCashierWorkCell(finalState, cashierRect, otherFurnitureRects)) {
+      return invalid('cashier-work-cell');
+    }
+  }
+
+  if (!hasValidChairRelationships(finalState, finalFixtures)) return invalid('chair-table');
+
+  return { valid: true, reason: null, moves: normalisedMoves };
 }
 
 export function getNextNumericId(items, prefix) {
