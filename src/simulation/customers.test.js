@@ -1,5 +1,12 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { getExitHeading, spawnCustomers, updateCustomers } from './customers';
+import {
+  getExitHeading,
+  getCustomerMovementEntries,
+  prepareCustomersForMovement,
+  resolveCustomersAfterMovement,
+  spawnCustomers,
+  updateCustomers,
+} from './customers';
 import { buildBlockedCells, worldToCell } from './pathfinding';
 import { UPGRADES } from '../data/upgrades';
 
@@ -169,6 +176,200 @@ describe('spawnCustomers', () => {
 });
 
 describe('updateCustomers', () => {
+  it('prepares patience changes without moving customer coordinates', () => {
+    const state = {
+      ...baseState,
+      customers: [{ id: 'c1', state: 'waiting', patience: 10, happiness: 50, x: 400, y: 300, path: [] }],
+    };
+
+    const prepared = prepareCustomersForMovement(state, 2);
+
+    expect(prepared.customers[0]).toMatchObject({ patience: 8, x: 400, y: 300 });
+  });
+
+  it('prepares a paying route without moving customer coordinates', () => {
+    const state = {
+      ...baseState,
+      chairs: [], kitchenStations: [], serviceTables: [],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      customers: [{ id: 'c1', state: 'paying', x: 400, y: 300, patience: 100, paymentQueuedAt: 10 }],
+    };
+
+    const prepared = prepareCustomersForMovement(state, 1);
+
+    expect(prepared.customers[0]).toMatchObject({ x: 400, y: 300, checkoutPosition: { x: 840, y: 180 } });
+    expect(prepared.customers[0].path.length).toBeGreaterThan(0);
+  });
+
+  it('prepares customer routes without moving customer coordinates', () => {
+    const stateWithLeavingCustomer = {
+      ...baseState,
+      doors: [{ id: 'door1', y: 340 }],
+      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+        x: 900, y: 280, path: [], patience: 10, happiness: 50,
+      }],
+    };
+    const prepared = prepareCustomersForMovement(stateWithLeavingCustomer, 1);
+    expect(prepared.customers[0]).toMatchObject({ x: 900, y: 280 });
+    expect(prepared.customers[0].path.length).toBeGreaterThan(0);
+  });
+
+  it('starts exit fading only in post-movement resolution', () => {
+    const state = {
+      ...baseState,
+      doors: [{ id: 'door1', y: 340 }],
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+        x: 993, y: 360, path: [], patience: 10, happiness: 50,
+      }],
+    };
+    expect(resolveCustomersAfterMovement(state, 1).customers[0].exitPhase).toBe('fading');
+  });
+
+  it('does not advance or remove a customer that starts fading after arrival', () => {
+    const state = {
+      ...baseState,
+      doors: [{ id: 'door1', y: 340 }],
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+        x: 993, y: 360, path: [], patience: 10, happiness: 50,
+      }],
+    };
+
+    const result = updateCustomers(state, { gameDt: 0, movementDt: 10 });
+
+    expect(result.customers).toHaveLength(1);
+    expect(result.customers[0]).toMatchObject({ exitPhase: 'fading', exitFadeProgress: 0 });
+  });
+
+  it('does not advance fading progress when its displacement is rejected', () => {
+    const state = {
+      ...baseState,
+      doors: [{ id: 'door1', y: 340 }],
+      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
+      staff: [{ id: 'staff-blocker', role: 'waiter', x: 990, y: 360, path: [] }],
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
+        exitHeading: { angleDegrees: 0, x: 1, y: 0 }, exitFadeProgress: 0.5,
+        x: 980, y: 360, path: [], patience: 10, happiness: 50,
+      }],
+    };
+
+    const result = updateCustomers(state, { gameDt: 0, movementDt: 1 });
+
+    expect(result.customers[0]).toMatchObject({ x: 980, y: 360, exitFadeProgress: 0.5 });
+  });
+
+  it('requires explicit movement evidence to advance an already-fading customer', () => {
+    const state = {
+      ...baseState,
+      doors: [{ id: 'door1', y: 340 }],
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
+        exitHeading: { angleDegrees: 0, x: 1, y: 0 }, exitFadeProgress: 0.5,
+        x: 980, y: 360, path: [], patience: 10, happiness: 50,
+      }],
+    };
+
+    const result = resolveCustomersAfterMovement(state, 1);
+
+    expect(result.customers[0]).toMatchObject({ x: 980, y: 360, exitFadeProgress: 0.5 });
+  });
+
+  it('stops at the furthest safe prefix before stationary compatibility blockers', () => {
+    const moving = {
+      id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+      x: 960, y: 360, path: [{ x: 49, y: 18 }], pathGoal: { x: 49, y: 18 },
+      patience: 10, happiness: 50,
+    };
+    const baseMovementState = {
+      ...baseState,
+      doors: [{ id: 'door1', y: 340 }],
+      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
+    };
+
+    const staffBlocked = updateCustomers({
+      ...baseMovementState,
+      staff: [{ id: 'staff-blocker', role: 'waiter', x: 980, y: 360, path: [] }],
+      customers: [moving],
+    }, 1);
+    const customerBlocked = updateCustomers({
+      ...baseMovementState,
+      customers: [moving, { id: 'stationary', state: 'eating', x: 980, y: 360, path: [] }],
+    }, 1);
+
+    expect(staffBlocked.customers[0].x).toBeCloseTo(964, 5);
+    expect(customerBlocked.customers[0].x).toBeCloseTo(964, 5);
+    expect(staffBlocked.customers[0]).toMatchObject({ y: 360, exitPhase: 'to_door' });
+    expect(customerBlocked.customers[0]).toMatchObject({ y: 360, exitPhase: 'to_door' });
+  });
+
+  it('describes the exact outside-door continuation after the final cell route', () => {
+    const state = {
+      ...baseState,
+      doors: [{ id: 'door1', y: 340 }],
+      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+        x: 960, y: 360, path: [{ x: 49, y: 18 }], pathGoal: { x: 49, y: 18 },
+        patience: 10, happiness: 50,
+      }],
+    };
+
+    const [entry] = getCustomerMovementEntries(state, 1);
+
+    expect(entry).toMatchObject({
+      targetAfterPath: { x: 993, y: 360 },
+      ignoredIds: [],
+    });
+  });
+
+  it.each([
+    ['missing guide', [], 'missing'],
+    ['null guide task', [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [], task: null }], 'guide'],
+    ['non-guide task', [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [], task: { type: 'clean_table', tableId: 't1' } }], 'guide'],
+    ['excluded party member', [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [],
+      task: { type: 'guide_customer', customerIds: ['other-party'], tableId: 't1' } }], 'guide'],
+  ])('does not emit customer movement for a stale guided customer with a %s', (_name, staff, guideStaffId) => {
+    const entries = getCustomerMovementEntries({
+      ...baseState,
+      staff,
+      customers: [{
+        id: 'party-1', state: 'guided', guideStaffId, x: 80, y: 120,
+        path: [{ x: 7, y: 6 }],
+      }],
+    }, 1);
+
+    expect(entries).toEqual([]);
+  });
+
+  it.each([
+    ['plural', { customerIds: ['party-1', 'party-2'] }],
+    ['legacy singular', { customerId: 'party-1' }],
+  ])('emits mutually ignored guide movement for a genuine %s party', (_name, partyFields) => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [{ x: 8, y: 5 }],
+        task: { type: 'guide_customer', ...partyFields, tableId: 't1' } }],
+      customers: [
+        { id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 80, y: 120, path: [{ x: 7, y: 6 }] },
+        ...('customerIds' in partyFields
+          ? [{ id: 'party-2', state: 'guided', guideStaffId: 'guide', x: 60, y: 140, path: [{ x: 6, y: 7 }] }]
+          : []),
+      ],
+    };
+
+    const entries = getCustomerMovementEntries(state, 1);
+
+    expect(entries.find(entry => entry.character.id === 'party-1')).toMatchObject({
+      speed: 62,
+      ignoredIds: ['guide', ...('customerIds' in partyFields ? partyFields.customerIds : [partyFields.customerId])],
+      provenance: 'guide',
+    });
+  });
+
   it('sends outside queued parties away without a reputation penalty when closed', () => {
     const queue = [
       { id: 'q1', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
@@ -258,7 +459,7 @@ describe('updateCustomers', () => {
     const customer = result.customers[0];
     expect(Math.hypot(customer.x - 975, customer.y - 360)).toBeLessThanOrEqual(55 * 0.5 + 1e-6);
     expect(buildBlockedCells(result).has(`${worldToCell(customer).x},${worldToCell(customer).y}`)).toBe(false);
-    expect(customer.exitPhase).toBe('to_door');
+    expect(customer).toMatchObject({ x: 993, exitPhase: 'fading', exitFadeProgress: 0 });
   });
 
   it('keeps near-door waypoint traversal within a tiny whole-update budget', () => {

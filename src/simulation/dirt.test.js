@@ -15,15 +15,20 @@ describe('updateDirt', () => {
   });
 
   it('creates deterministic floor dirt when a customer reaches the threshold', () => {
-    const result = updateDirt(baseState, 60, () => 0.5);
+    const result = updateDirt({ ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 9.5 }] }, 60, () => 0.5);
     expect(result.floorDirt).toHaveLength(1);
     expect(result.floorDirt[0]).toMatchObject({ id: 'dirt-1', createdAt: 1000 });
     expect(result.customers[0].dirtFactor).toBeCloseTo(0);
   });
 
-  it('adds two dirt-factor units per minute while eating', () => {
+  it('adds half a dirt-factor unit per minute in an active non-eating state', () => {
+    const state = { ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 0 }] };
+    expect(updateDirt(state, 60).customers[0].dirtFactor).toBe(0.5);
+  });
+
+  it('adds one dirt-factor unit per minute while eating', () => {
     const state = { ...baseState, customers: [{ ...baseState.customers[0], state: 'eating', dirtFactor: 0 }] };
-    expect(updateDirt(state, 60).customers[0].dirtFactor).toBe(2);
+    expect(updateDirt(state, 60).customers[0].dirtFactor).toBe(1);
   });
 
   it('does not accumulate dirt factor for queued or leaving customers', () => {
@@ -36,7 +41,7 @@ describe('updateDirt', () => {
   });
 
   it('places generated dirt outside blocked cells', () => {
-    const result = updateDirt(baseState, 60, () => 0.5);
+    const result = updateDirt({ ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 9.5 }] }, 60, () => 0.5);
     const dirtCell = worldToCell(result.floorDirt[0]);
     expect(buildBlockedCells(result).has(`${dirtCell.x},${dirtCell.y}`)).toBe(false);
   });
@@ -87,9 +92,22 @@ describe('updateDirt', () => {
       customers: [{ ...baseState.customers[0], dirtFactor: 0 }],
     };
     const result = updateDirt(state, 600);
-    expect(result.customers[0].dirtFactor).toBe(1);
+    expect(result.customers[0].dirtFactor).toBe(0.5);
     expect(result.customers[0].happiness).toBeCloseTo(79);
     expect(result.restaurant.reputation).toBeCloseTo(2.99);
+  });
+
+  it('keeps the unchanged dirt threshold at ten units', () => {
+    const result = updateDirt(baseState, 60, () => 0.5);
+    expect(result.floorDirt).toHaveLength(0);
+    expect(result.customers[0].dirtFactor).toBeCloseTo(9.5);
+  });
+
+  it('creates exactly one mess at a 9.5 start and resets the factor to zero', () => {
+    const state = { ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 9.5 }] };
+    const result = updateDirt(state, 60, () => 0.5);
+    expect(result.floorDirt).toHaveLength(1);
+    expect(result.customers[0].dirtFactor).toBeCloseTo(0);
   });
 
   it('applies nearby happiness penalties using a table position when customer coordinates are absent', () => {

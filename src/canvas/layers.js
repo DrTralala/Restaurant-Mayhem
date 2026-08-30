@@ -2,7 +2,7 @@ import { getDoors, getRestaurantWorld, getQueuePosition, getDefaultStaffPosition
 import { getPlacementRect } from '../simulation/placement';
 import { getCharacterPalette } from './characterAppearance';
 import { getServiceItemEmoji } from './serviceItemEmoji';
-import { getChairFacingRadians, getPlaceSettingPositions } from './tableGeometry';
+import { getPlaceSettingPositions } from './tableGeometry';
 import { ACTIVITY_DURATIONS, getRemainingFraction } from '../simulation/activity';
 import { getUpgradeEffect } from '../simulation/balance';
 import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/dishwashing';
@@ -457,7 +457,7 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
     drawStickFigure(ctx, cx, cy, getCharacterPalette(c).figure, {
       seated,
       scale: seated ? 0.7 : 1,
-      rotation: seated ? getChairFacingRadians(chair?.rotation ?? 0) : 0,
+      rotation: 0,
       walking: c.state === 'leaving'
         ? !renderOptions.reducedMotion
         : c.state === 'guided' && Boolean(c.path?.length),

@@ -290,8 +290,10 @@ function gameReducer(state, action) {
     }
     case 'BUY_EQUIPMENT': {
       const equipment = state.equipment.find(candidate => candidate.id === action.id);
-      const freeStation = state.kitchenStations.find(s => !s.equipmentId);
-      if (!equipment || equipment.owned || !freeStation
+      const existingStation = state.kitchenStations.find(station => station.equipmentId === action.id);
+      const freeStation = state.kitchenStations.find(station => !station.equipmentId);
+      const targetStation = existingStation || freeStation;
+      if (!equipment || equipment.owned || !targetStation
         || !canAfford(state, equipment.purchaseCost)) return state;
       return {
         ...state,
@@ -299,11 +301,11 @@ function gameReducer(state, action) {
         equipment: state.equipment.map(e =>
           e.id === action.id ? { ...e, owned: true } : e
         ),
-        kitchenStations: freeStation
-          ? state.kitchenStations.map(s =>
+        kitchenStations: existingStation
+          ? state.kitchenStations
+          : state.kitchenStations.map(s =>
               s.id === freeStation.id ? { ...s, equipmentId: action.id } : s
-            )
-          : state.kitchenStations,
+            ),
       };
     }
     case 'UPGRADE_EQUIPMENT': {

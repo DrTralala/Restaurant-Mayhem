@@ -1,8 +1,15 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { updateStaff } from './staff';
+import {
+  getStaffMovementEntries,
+  prepareStaffForMovement,
+  resolveStaffAfterMovement,
+  updateStaff,
+} from './staff';
 import { updateCustomers } from './customers';
-import { buildBlockedCells, worldToCell } from './pathfinding';
+import { buildBlockedCells, isInsideWorld, worldToCell } from './pathfinding';
+import { minimumSweptDistance, resolveCharacterMovementBatch } from './movement';
 import { updateAutomaticDishwashers } from './dishwashing';
+import { getQueuePosition } from './world';
 
 const baseState = {
   staff: [],
@@ -18,6 +25,356 @@ const baseState = {
   serviceTables: [],
 };
 
+it('prepares staff paths without changing positions', () => {
+  const stateWithWalkingWaiter = {
+    ...baseState,
+    staff: [{
+      id: 'guide', role: 'waiter', morale: 80, x: 100, y: 100,
+      path: [{ x: 8, y: 5 }], task: null,
+    }],
+  };
+  const prepared = prepareStaffForMovement(stateWithWalkingWaiter, 1);
+  expect(prepared.staff[0]).toMatchObject({ x: 100, y: 100 });
+});
+
+it('marks guide and party movement entries as mutually ignored', () => {
+  const stateWithGuidedParty = {
+    ...baseState,
+    staff: [{
+      id: 'guide', role: 'waiter', morale: 80, x: 100, y: 100,
+      path: [{ x: 8, y: 5 }],
+      task: { type: 'guide_customer', customerIds: ['party-1', 'party-2'], tableId: 't1' },
+    }],
+    customers: [
+      { id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 88, y: 112, path: [{ x: 7, y: 5 }] },
+      { id: 'party-2', state: 'guided', guideStaffId: 'guide', x: 76, y: 124, path: [{ x: 6, y: 6 }] },
+    ],
+  };
+  const entries = getStaffMovementEntries(stateWithGuidedParty);
+  expect(entries.find(entry => entry.character.id === 'guide').ignoredIds)
+    .toEqual(expect.arrayContaining(['guide', 'party-1', 'party-2']));
+});
+
+it('emits guide provenance only on genuine guided-customer descriptors, never guide staff', () => {
+  const state = {
+    ...baseState,
+    staff: [{
+      id: 'guide', role: 'waiter', x: 100, y: 100, path: [{ x: 8, y: 5 }],
+      task: { type: 'guide_customer', customerIds: ['party-1'], tableId: 't1' },
+    }, {
+      id: 'walker', role: 'waiter', x: 140, y: 100, path: [{ x: 9, y: 5 }], task: null,
+    }],
+    customers: [
+      { id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 88, y: 112, path: [{ x: 7, y: 5 }] },
+      { id: 'idle', state: 'eating', x: 300, y: 300, path: [] },
+    ],
+  };
+  const entries = getStaffMovementEntries(state);
+  const guideEntry = entries.find(entry => entry.character.id === 'guide');
+  const partyEntry = entries.find(entry => entry.character.id === 'party-1');
+  const walkerEntry = entries.find(entry => entry.character.id === 'walker');
+  const idleEntry = entries.find(entry => entry.character.id === 'idle');
+  expect(guideEntry.provenance).toBeUndefined();
+  expect(guideEntry.ignoredIds).toEqual(['guide', 'party-1']);
+  expect(partyEntry.provenance).toBe('guide');
+  expect(partyEntry.ignoredIds).toEqual(['guide', 'party-1']);
+  expect(walkerEntry.provenance).toBeUndefined();
+  expect(idleEntry.provenance).toBeUndefined();
+});
+
+it('keeps a pathful guided customer safe when its referenced guide has a null task', () => {
+  const entries = getStaffMovementEntries({
+    ...baseState,
+    staff: [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [], task: null }],
+    customers: [{ id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 88, y: 112, path: [{ x: 7, y: 5 }] }],
+  });
+  const entry = entries.find(candidate => candidate.character.id === 'party-1');
+  expect(entry.provenance).toBeUndefined();
+  expect(entry.ignoredIds).toEqual([]);
+  expect(entry.speed).toBe(0);
+});
+
+it('keeps a pathful guided customer safe when its referenced guide has a non-guide task', () => {
+  const entries = getStaffMovementEntries({
+    ...baseState,
+    staff: [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [], task: { type: 'clean_table', tableId: 't1' } }],
+    customers: [{ id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 88, y: 112, path: [{ x: 7, y: 5 }] }],
+  });
+  const entry = entries.find(candidate => candidate.character.id === 'party-1');
+  expect(entry.provenance).toBeUndefined();
+  expect(entry.ignoredIds).toEqual([]);
+  expect(entry.speed).toBe(0);
+});
+
+it('keeps a pathful guided customer safe when an active guide task excludes it from the party', () => {
+  const entries = getStaffMovementEntries({
+    ...baseState,
+    staff: [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [{ x: 8, y: 5 }],
+      task: { type: 'guide_customer', customerIds: ['other-party'], tableId: 't1' } }],
+    customers: [{ id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 88, y: 112, path: [{ x: 7, y: 5 }] }],
+  });
+  const entry = entries.find(candidate => candidate.character.id === 'party-1');
+  expect(entry.provenance).toBeUndefined();
+  expect(entry.ignoredIds).toEqual([]);
+  expect(entry.speed).toBe(0);
+});
+
+
+
+it('keeps pathless guided followers stationary and safely handles a missing guide', () => {
+  const entries = getStaffMovementEntries({
+    ...baseState,
+    staff: [],
+    customers: [{ id: 'party-1', state: 'guided', guideStaffId: 'missing', x: 88, y: 112, path: [] }],
+  });
+  expect(entries).toHaveLength(1);
+  expect(entries[0]).toMatchObject({ character: { id: 'party-1' }, speed: 0, ignoredIds: [] });
+  expect(entries[0].target).toBeUndefined();
+});
+
+it.each([
+  ['null task', null],
+  ['non-guide task', { type: 'clean_table', tableId: 't1' }],
+])('keeps a pathless guided customer stationary when its referenced guide has a %s', (_name, task) => {
+  const entries = getStaffMovementEntries({
+    ...baseState,
+    staff: [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [], task }],
+    customers: [{ id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 88, y: 112, path: [] }],
+  });
+
+  expect(entries.find(entry => entry.character.id === 'party-1'))
+    .toMatchObject({ speed: 0, ignoredIds: [] });
+});
+
+it('does not plan a follower path for a guided customer excluded from the active guide party', () => {
+  const state = {
+    ...baseState,
+    staff: [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [{ x: 8, y: 5 }],
+      task: { type: 'guide_customer', customerIds: ['other-party'], tableId: 't1' } }],
+    customers: [{ id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 80, y: 120, path: [] }],
+  };
+
+  const prepared = prepareStaffForMovement(state, 0);
+
+  expect(prepared.customers[0].path).toEqual([]);
+  expect(prepared.customers[0].pathGoal).toBeUndefined();
+});
+
+it('assigns a guide task without changing existing customer or staff coordinates after movement', () => {
+  const state = {
+    ...baseState,
+    staff: [{ id: 'guide', role: 'waiter', morale: 80, x: 860, y: 360, path: [], task: null }],
+    customers: [{ id: 'party-1', state: 'waiting', patience: 100, happiness: 80, x: 900, y: 360, path: [] }],
+    tables: [{ id: 't1', seats: 1, status: 'empty', x: 200, y: 220 }],
+    chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+  };
+
+  const resolved = resolveStaffAfterMovement(state, 0);
+
+  expect(resolved.staff[0]).toMatchObject({ x: 860, y: 360, task: { type: 'guide_customer' } });
+  expect(resolved.customers[0]).toMatchObject({
+    id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 900, y: 360,
+  });
+});
+
+it('normalises a coordinate-less assigned customer only in the next preparation and moves it through the batch', () => {
+  const state = {
+    ...baseState,
+    staff: [{ id: 'guide', role: 'waiter', morale: 80, x: 860, y: 360, path: [], task: null }],
+    customers: [{ id: 'party-1', state: 'waiting', patience: 100, happiness: 80, path: [] }],
+    tables: [{ id: 't1', seats: 1, status: 'empty', x: 200, y: 220 }],
+    chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+  };
+
+  const assigned = resolveStaffAfterMovement(state, 0);
+  expect(assigned.customers[0]).toMatchObject({ state: 'guided', guideStaffId: 'guide' });
+  expect(assigned.customers[0].x).toBeUndefined();
+  expect(assigned.customers[0].y).toBeUndefined();
+
+  const prepared = prepareStaffForMovement(assigned, 0);
+  const preparedCustomer = prepared.customers[0];
+  expect(Number.isFinite(preparedCustomer.x)).toBe(true);
+  expect(Number.isFinite(preparedCustomer.y)).toBe(true);
+  expect(preparedCustomer.path.length).toBeGreaterThan(0);
+
+  const customerEntry = getStaffMovementEntries(prepared)
+    .find(entry => entry.character.id === preparedCustomer.id);
+  expect(customerEntry).toMatchObject({ speed: 62, provenance: 'guide' });
+
+  const movedCustomer = resolveCharacterMovementBatch(prepared, getStaffMovementEntries(prepared), 0.1)
+    .get(preparedCustomer.id);
+  expect(Number.isFinite(movedCustomer.x)).toBe(true);
+  expect(Number.isFinite(movedCustomer.y)).toBe(true);
+  expect(Math.hypot(movedCustomer.x - preparedCustomer.x, movedCustomer.y - preparedCustomer.y))
+    .toBeGreaterThan(0);
+});
+
+it('normalises a late genuine guided customer inside pathfinding world bounds', () => {
+  const guidedCustomer = { id: 'guided', state: 'guided', guideStaffId: 'guide', path: [] };
+  const state = {
+    ...baseState,
+    staff: [{
+      id: 'guide', role: 'waiter', x: 700, y: 300, path: [{ x: 10, y: 10 }],
+      task: { type: 'guide_customer', customerId: 'guided', tableId: 't1' },
+    }],
+    customers: [
+      ...Array.from({ length: 20 }, (_, index) => ({
+        id: `existing-${index}`, state: 'eating', x: 100 + index * 20, y: 600,
+      })),
+      guidedCustomer,
+    ],
+  };
+
+  expect(isInsideWorld(state, worldToCell(getQueuePosition(state, 20)))).toBe(false);
+
+  const preparedCustomer = prepareStaffForMovement(state, 0).customers
+    .find(customer => customer.id === guidedCustomer.id);
+
+  expect(Number.isFinite(preparedCustomer.x)).toBe(true);
+  expect(Number.isFinite(preparedCustomer.y)).toBe(true);
+  expect(isInsideWorld(state, worldToCell(preparedCustomer))).toBe(true);
+});
+
+it('chooses a deterministic legal unoccupied alternative when the preferred guided start is occupied', () => {
+  const preferred = getQueuePosition(baseState, 0);
+  const state = {
+    ...baseState,
+    staff: [{
+      id: 'guide', role: 'waiter', x: 700, y: 300, path: [{ x: 10, y: 10 }],
+      task: { type: 'guide_customer', customerId: 'guided', tableId: 't1' },
+    }],
+    customers: [
+      { id: 'guided', state: 'guided', guideStaffId: 'guide', path: [] },
+      { id: 'occupier', state: 'eating', ...preferred, path: [] },
+    ],
+  };
+
+  const first = prepareStaffForMovement(state, 0).customers.find(customer => customer.id === 'guided');
+  const second = prepareStaffForMovement(state, 0).customers.find(customer => customer.id === 'guided');
+
+  expect(first).toMatchObject(getQueuePosition(state, 1));
+  expect({ x: first.x, y: first.y }).toEqual({ x: second.x, y: second.y });
+  expect(isInsideWorld(state, worldToCell(first))).toBe(true);
+  expect(Math.hypot(first.x - preferred.x, first.y - preferred.y)).toBeGreaterThanOrEqual(16);
+});
+
+it.each([
+  ['x', { x: 777, y: Number.NaN }, 'x', 777],
+  ['y', { x: Number.POSITIVE_INFINITY, y: 333 }, 'y', 333],
+])('preserves a finite %s coordinate while normalising only the missing guided coordinate', (_axis, coordinates, preservedKey, preservedValue) => {
+  const state = {
+    ...baseState,
+    staff: [{
+      id: 'guide', role: 'waiter', x: 700, y: 300, path: [{ x: 10, y: 10 }],
+      task: { type: 'guide_customer', customerId: 'guided', tableId: 't1' },
+    }],
+    customers: [{ id: 'guided', state: 'guided', guideStaffId: 'guide', path: [], ...coordinates }],
+  };
+
+  const preparedCustomer = prepareStaffForMovement(state, 0).customers[0];
+
+  expect(preparedCustomer[preservedKey]).toBe(preservedValue);
+  expect(Number.isFinite(preparedCustomer.x)).toBe(true);
+  expect(Number.isFinite(preparedCustomer.y)).toBe(true);
+  expect(isInsideWorld(state, worldToCell(preparedCustomer))).toBe(true);
+});
+
+it.each([
+  ['x', { x: -100, y: Number.NaN }, 'x', -100],
+  ['y', { x: Number.NaN, y: 10000 }, 'y', 10000],
+])('replaces an out-of-bounds finite %s while filling the missing guided coordinate', (_axis, coordinates, invalidKey, invalidValue) => {
+  const preferred = getQueuePosition(baseState, 0);
+  const state = {
+    ...baseState,
+    staff: [{
+      id: 'guide', role: 'waiter', x: 700, y: 300, path: [{ x: 10, y: 10 }],
+      task: { type: 'guide_customer', customerId: 'guided', tableId: 't1' },
+    }],
+    customers: [
+      { id: 'guided', state: 'guided', guideStaffId: 'guide', path: [], ...coordinates },
+      { id: 'occupier', state: 'eating', ...preferred, path: [] },
+    ],
+  };
+
+  const first = prepareStaffForMovement(state, 0).customers.find(customer => customer.id === 'guided');
+  const second = prepareStaffForMovement(state, 0).customers.find(customer => customer.id === 'guided');
+
+  expect(first).toMatchObject(getQueuePosition(state, 1));
+  expect(first[invalidKey]).not.toBe(invalidValue);
+  expect(Number.isFinite(first.x)).toBe(true);
+  expect(Number.isFinite(first.y)).toBe(true);
+  expect(isInsideWorld(state, worldToCell(first))).toBe(true);
+  expect(Math.hypot(first.x - preferred.x, first.y - preferred.y)).toBeGreaterThanOrEqual(16);
+  expect({ x: first.x, y: first.y }).toEqual({ x: second.x, y: second.y });
+});
+
+it('completes guide seating without changing customer or staff coordinates after movement', () => {
+  const state = {
+    ...baseState,
+    staff: [{
+      id: 'guide', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
+      task: { type: 'guide_customer', customerId: 'party-1', tableId: 't1', reservedChairIds: ['ch1'] },
+    }],
+    customers: [{
+      id: 'party-1', state: 'guided', guideStaffId: 'guide', tableId: 't1',
+      x: 168, y: 232, path: [], patience: 100, happiness: 80,
+    }],
+    tables: [{ id: 't1', seats: 1, status: 'reserved', x: 200, y: 220 }],
+    chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+  };
+
+  const resolved = resolveStaffAfterMovement(state, 0);
+
+  expect(resolved.staff[0]).toMatchObject({ x: 180, y: 220, task: null });
+  expect(resolved.customers[0]).toMatchObject({
+    state: 'seated', chairId: 'ch1', guideStaffId: null, x: 168, y: 232,
+  });
+  expect(resolved.tables[0].status).toBe('occupied');
+});
+
+it('marks only staff already in static-fallback recovery as head-on detour eligible', () => {
+  const entries = getStaffMovementEntries({
+    ...baseState,
+    staff: [
+      { id: 'eligible', role: 'waiter', x: 100, y: 100, path: [{ x: 8, y: 5 }],
+        stalledFor: 2, usingStaticFallback: true, task: null },
+      { id: 'not-stalled', role: 'waiter', x: 100, y: 120, path: [{ x: 8, y: 6 }],
+        stalledFor: 0, usingStaticFallback: true, task: null },
+      { id: 'not-static', role: 'waiter', x: 100, y: 140, path: [{ x: 8, y: 7 }],
+        stalledFor: 2, usingStaticFallback: false, task: null },
+    ],
+  });
+
+  expect(entries.find(entry => entry.character.id === 'eligible').headOnDetourEligible).toBe(true);
+  expect(entries.find(entry => entry.character.id === 'not-stalled').headOnDetourEligible).toBeUndefined();
+  expect(entries.find(entry => entry.character.id === 'not-static').headOnDetourEligible).toBeUndefined();
+});
+
+it('uses the rear-left formation and complete singular guide party IDs', () => {
+  const state = {
+    ...baseState,
+    staff: [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [{ x: 8, y: 5 }],
+      task: { type: 'guide_customer', customerId: 'party-1', tableId: 't1' } }],
+    customers: [{ id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 80, y: 120, path: [] }],
+  };
+  const prepared = prepareStaffForMovement(state, 0);
+  expect(prepared.customers[0].pathGoal).toEqual({ x: 4, y: 5 });
+  const guideEntry = getStaffMovementEntries(prepared).find(entry => entry.character.id === 'guide');
+  const partyEntry = getStaffMovementEntries(prepared).find(entry => entry.character.id === 'party-1');
+  expect(guideEntry.ignoredIds).toEqual(['guide', 'party-1']);
+  expect(partyEntry.ignoredIds).toEqual(['guide', 'party-1']);
+});
+
+it('keeps every actor in the batch while granting deterministic corridor priority', () => {
+  const state = congestionState([
+    { id: 'a-worker', role: 'waiter', x: 100, y: 100, path: [{ x: 16, y: 5 }], task: null },
+    { id: 'b-worker', role: 'waiter', x: 260, y: 100, path: [{ x: 3, y: 5 }], task: null },
+  ]);
+  const result = updateStaff(state, 0.1);
+  expect(result.staff.find(worker => worker.id === 'a-worker').x).toBeGreaterThan(100);
+  expect(result.staff.find(worker => worker.id === 'b-worker').x).toBeLessThanOrEqual(260);
+});
+
 it('reduces morale by 0.01 per game minute without using movement time', () => {
   const state = {
     ...baseState,
@@ -31,7 +388,7 @@ it('reduces morale by 0.01 per game minute without using movement time', () => {
 });
 
 function corridorWalls(endX) {
-  return [80, 120].flatMap(y => Array.from(
+  return [20, 180].flatMap(y => Array.from(
     { length: (endX - 60) / 20 + 1 },
     (_, index) => ({ id: `corridor-${y}-${index}`, x: 60 + index * 20, y }),
   ));
@@ -82,6 +439,7 @@ function runCongestionScenario(state, isComplete) {
     .toBeGreaterThan(0);
   return { current, histories };
 }
+
 
 function congestionState(staff, customers = [], corridorEndX = 340) {
   return { ...baseState, staff, customers, chairs: corridorWalls(corridorEndX), tables: [], serviceItems: [] };
@@ -391,27 +749,32 @@ describe('updateStaff', () => {
 
   it('recovers two workers meeting head-on in a narrow corridor within ten seconds', () => {
     const state = congestionState([
-      { id: 'a-worker', role: 'waiter', x: 100, y: 100, path: [{ x: 16, y: 5 }], task: { type: 'clean_service_item', serviceItemId: 'right' } },
-      { id: 'b-worker', role: 'waiter', x: 260, y: 100, path: [{ x: 3, y: 5 }], task: { type: 'clean_service_item', serviceItemId: 'left' } },
+      { id: 'a-worker', role: 'waiter', x: 100, y: 100, stalledFor: 2, usingStaticFallback: true, path: [{ x: 16, y: 5 }], task: { type: 'clean_service_item', serviceItemId: 'right' } },
+      { id: 'b-worker', role: 'waiter', x: 260, y: 100, stalledFor: 2, usingStaticFallback: true, path: [{ x: 3, y: 5 }], task: { type: 'clean_service_item', serviceItemId: 'left' } },
     ]);
     const { histories } = runCongestionScenario({
       ...state,
-      serviceItems: [
-        { id: 'left', kind: 'dish', state: 'to_clean', x: 60, y: 100 },
-        { id: 'right', kind: 'dish', state: 'to_clean', x: 320, y: 100 },
-      ],
+      staff: state.staff.map(worker => ({ ...worker, task: null })),
+      serviceItems: [],
     }, current => current.staff.find(worker => worker.id === 'a-worker').x > 260
       && current.staff.find(worker => worker.id === 'b-worker').x < 100);
 
-    expect(histories.get('a-worker').every(point => point.y === 100)).toBe(true);
-    expect(histories.get('b-worker').every(point => point.y === 100)).toBe(true);
+    expect(histories.get('a-worker').some(point => point.y !== 100)).toBe(true);
+    expect(histories.get('b-worker').some(point => point.y !== 100)
+      || histories.get('a-worker').some(point => point.y !== 100)).toBe(true);
     expect(Math.max(...histories.get('a-worker').map(point => point.x))).toBeGreaterThan(260);
     expect(Math.min(...histories.get('b-worker').map(point => point.x))).toBeLessThan(100);
     const pairwiseSeparations = histories.get('a-worker').map((point, tick) => {
       const peer = histories.get('b-worker')[tick];
       return Math.hypot(point.x - peer.x, point.y - peer.y);
     });
-    expect(Math.min(...pairwiseSeparations)).toBeGreaterThanOrEqual(2 - 1e-6);
+    expect(Math.min(...pairwiseSeparations)).toBeGreaterThanOrEqual(16 - 1e-6);
+    for (let tick = 1; tick < histories.get('a-worker').length; tick += 1) {
+      expect(minimumSweptDistance(
+        histories.get('a-worker')[tick - 1], histories.get('a-worker')[tick],
+        histories.get('b-worker')[tick - 1], histories.get('b-worker')[tick],
+      )).toBeGreaterThanOrEqual(16 - 1e-6);
+    }
   });
 
   it('recovers a worker whose work point is temporarily occupied within ten seconds', () => {
@@ -1062,8 +1425,8 @@ describe('updateStaff', () => {
     const result = updateStaff(state, 1);
 
     expect(result.customers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'c1', state: 'seated', chairId: 'ch1', x: 220, y: 190 }),
-      expect.objectContaining({ id: 'c2', state: 'seated', chairId: 'ch2', x: 220, y: 270 }),
+      expect.objectContaining({ id: 'c1', state: 'seated', chairId: 'ch1', x: 860, y: 360 }),
+      expect.objectContaining({ id: 'c2', state: 'seated', chairId: 'ch2', x: 870, y: 360 }),
     ]));
     expect(result.tables[0].status).toBe('occupied');
   });
@@ -2201,7 +2564,7 @@ describe('updateStaff', () => {
     const result = updateStaff(state, 1);
     expect(result.staff[0].x).toBeCloseTo(175, -1);
     expect(result.staff[0].y).toBeCloseTo(100, -1);
-    expect(result.customers[0].x).toBeGreaterThan(100);
+    expect(result.customers[0].x).toBeLessThanOrEqual(100);
     expect(result.customers[0].y).toBeGreaterThanOrEqual(100);
     expect(result.customers[0].guideStaffId).toBe('w1');
     expect(result.customers[0].state).toBe('guided');

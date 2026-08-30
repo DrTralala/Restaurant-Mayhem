@@ -1,6 +1,6 @@
-import { buildOccupiedCharacterCells, findAdjacentOpenCells, findPath, findPathWithDynamicFallback, worldToCell } from './pathfinding';
-import { ensureStaffRuntime, hasArrived, moveCharacterWithRecovery, planCharacterPath } from './movement';
-import { getCashierCustomerPosition, getCashierWorkPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
+import { buildOccupiedCharacterCells, cellToWorld, findAdjacentOpenCells, findPath, findPathWithDynamicFallback, isInsideWorld, worldToCell } from './pathfinding';
+import { ensureStaffRuntime, hasArrived, planCharacterPath, resolveCharacterMovementBatch } from './movement';
+import { getCashierCustomerPosition, getCashierWorkPosition, getDoorPosition, getDoors, getQueuePosition, getRestaurantWorld } from './world';
 import { clampReputation, getTipRate, getUpgradeEffect } from './balance';
 import { getAssignedCashierStation } from './cashiers';
 import { getDrink } from '../data/drinks';
@@ -14,9 +14,67 @@ import {
 } from './serviceItems';
 import { ACTIVITY_DURATIONS } from './activity';
 import { hasWashStationCapacity, markCustomerItemsDirty, releaseClearedTables } from './dishwashing';
+import { getCustomerGuideContext, getGuidePartyContext, taskCustomerIds } from './guidance';
 
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
   return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
+}
+
+const CHARACTER_START_SPACING = 16;
+
+function findGuidedCustomerStart(state, customer, guideContext, occupiedActors) {
+  const memberIndex = Math.max(0, guideContext.genuinePartyIds.indexOf(customer.id));
+  const preferred = getQueuePosition(state, memberIndex);
+  const legalReference = getQueuePosition(state, 0);
+  const world = getRestaurantWorld(state.restaurant || {});
+  const preserveX = Number.isFinite(customer.x)
+    && isInsideWorld(state, worldToCell({ x: customer.x, y: legalReference.y }));
+  const preserveY = Number.isFinite(customer.y)
+    && isInsideWorld(state, worldToCell({ x: legalReference.x, y: customer.y }));
+  const maxQueueIndex = Math.ceil((world.doorY + 80 - world.kitchenY) / 25) + 1;
+  const queueIndexes = Array.from({ length: maxQueueIndex + 1 }, (_, index) => index)
+    .sort((left, right) => Math.abs(left - memberIndex) - Math.abs(right - memberIndex)
+      || left - right);
+  const candidates = queueIndexes.map(index => {
+    const queuePosition = getQueuePosition(state, index);
+    return {
+      x: preserveX ? customer.x : queuePosition.x,
+      y: preserveY ? customer.y : queuePosition.y,
+    };
+  });
+
+  const firstCell = worldToCell({ x: world.floorX, y: world.kitchenY });
+  const lastCell = worldToCell({
+    x: world.queueX + world.queueW,
+    y: world.diningY + world.areaH + 50,
+  });
+  const fallbackCandidates = [];
+  for (let y = firstCell.y; y <= lastCell.y; y += 1) {
+    for (let x = firstCell.x; x <= lastCell.x; x += 1) {
+      const point = cellToWorld({ x, y });
+      fallbackCandidates.push({
+        x: preserveX ? customer.x : point.x,
+        y: preserveY ? customer.y : point.y,
+      });
+    }
+  }
+  fallbackCandidates.sort((left, right) =>
+    Math.hypot(left.x - preferred.x, left.y - preferred.y)
+      - Math.hypot(right.x - preferred.x, right.y - preferred.y)
+    || left.y - right.y
+    || left.x - right.x);
+
+  const seen = new Set();
+  return [...candidates, ...fallbackCandidates].find(candidate => {
+    const key = `${candidate.x},${candidate.y}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return Number.isFinite(candidate.x)
+      && Number.isFinite(candidate.y)
+      && isInsideWorld(state, worldToCell(candidate))
+      && occupiedActors.every(actor => Math.hypot(candidate.x - actor.x, candidate.y - actor.y)
+        >= CHARACTER_START_SPACING);
+  }) || null;
 }
 
 function targetForTable(state, table, staff) {
@@ -81,10 +139,6 @@ function getParty(members, lead) {
 
 function getPartySize(party, lead) {
   return Math.max(party.length, Number.isFinite(lead?.partySize) ? lead.partySize : 0);
-}
-
-function taskCustomerIds(task) {
-  return task.customerIds || (task.customerId ? [task.customerId] : []);
 }
 
 function leavingFields(customer) {
@@ -438,7 +492,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
             },
           },
           customers: customers.map(c => party.some(member => member.id === c.id)
-            ? { ...c, state: 'guided', guideStaffId: staff.id, chairId: null, x: staff.x, y: staff.y }
+            ? { ...c, state: 'guided', guideStaffId: staff.id, chairId: null }
             : c),
           tables: tables.map(t => t.id === table.id ? { ...t, status: 'reserved' } : t),
           claimedCustomerIds: partyIds,
@@ -734,9 +788,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
           ...c,
           state: 'seated', tableId: table?.id || c.tableId,
           chairId: chairs[index].id,
-          x: chairs[index].x + 10,
-          y: chairs[index].y + 10,
-          guideStaffId: null, seatTime,
+          guideStaffId: null, seatTime, path: [],
         };
       }),
     };
@@ -1051,9 +1103,8 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
   return { staff: completedStaff, customers, queue, tables, serviceItems };
 }
 
-export function updateStaff(state, timing) {
-  const gameDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.gameDt) || 0);
-  const movementDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.movementDt) || 0);
+export function prepareStaffForMovement(state, gameDt) {
+  gameDt = Math.max(0, Number(gameDt) || 0);
   state = normaliseServiceItemOwnership(state);
   let customers = [...(state.customers || [])];
   let queue = [...(state.queue || [])];
@@ -1073,6 +1124,10 @@ export function updateStaff(state, timing) {
     morale: Math.max(0, s.morale - 0.01 * gameDt / 60),
     carryingServiceItemId: s.carryingServiceItemId ?? null,
   }));
+  const staleTaskServiceItemIds = staff
+    .filter(worker => worker.task?.type === 'prepare_drink')
+    .map(worker => worker.task.serviceItemId)
+    .filter(Boolean);
 
   // Drop stale drink reservations before selecting new work. A reservation is
   // valid only when its worker, item, counter, and slot all agree exactly.
@@ -1131,66 +1186,102 @@ export function updateStaff(state, timing) {
     }
   }
 
-  staff = staff.map((s, index, allStaff) => moveCharacterWithRecovery({ ...state, customers, tables, serviceItems }, s, movementDt, [
-    ...allStaff.filter((_, candidateIndex) => candidateIndex !== index),
-    ...customers,
-  ], s.role === 'waiter' ? 75 : 55, s.task?.type === 'guide_customer'
-    ? [s.id, ...taskCustomerIds(s.task)] : []));
+  // Legacy waiting customers can enter guidance without world coordinates.
+  // Materialise them only in this pre-batch phase at deterministic queue slots;
+  // subsequent route planning and movement still go through shared descriptors.
+  const occupiedActors = [...staff, ...customers]
+    .filter(actor => Number.isFinite(actor.x) && Number.isFinite(actor.y));
+  customers = customers.map(customer => {
+    if (Number.isFinite(customer.x) && Number.isFinite(customer.y)) return customer;
+    const guideContext = getCustomerGuideContext({ ...state, staff, customers }, customer);
+    if (!guideContext) return customer;
+    const start = findGuidedCustomerStart(state, customer, guideContext, occupiedActors);
+    if (!start) return customer;
+    const normalised = { ...customer, ...start };
+    occupiedActors.push(normalised);
+    return normalised;
+  });
 
+  // Followers must have routes before the shared movement commit; planning here
+  // keeps the batch deterministic and prevents a follower from moving twice.
   for (const s of staff) {
-    if (s.task && s.task.type === 'guide_customer' && !hasArrived(s)) {
-      const ids = taskCustomerIds(s.task);
-      customers = customers.map((c, customerIndex, allCustomers) => {
-        if (c.guideStaffId !== s.id) return c;
-        const memberIndex = Math.max(0, ids.indexOf(c.id));
-        const preceding = memberIndex > 0
-          ? allCustomers.find(candidate => candidate.id === ids[memberIndex - 1])
-          : s;
-        const others = [
-          ...staff,
-          ...allCustomers.filter((_, index) => index !== customerIndex),
-        ];
-        const followed = c.path?.length
-          ? c
-          : planCharacterPath(
-            { ...state, customers, tables, serviceItems },
-            c,
-            { world: { x: preceding.x - 12, y: preceding.y + 12 } },
-            others,
-            [s.id, ...ids],
-          );
-        let movedCustomer = followed;
-        let remainingDistance = Math.max(0, 62 * movementDt);
-        for (let step = 0; step < 16 && movedCustomer.path?.length; step += 1) {
-          const beforeStep = movedCustomer;
-          const candidate = moveCharacterWithRecovery(
-            { ...state, customers, tables, serviceItems },
-            movedCustomer,
-            movementDt / 16,
-            others,
-            62,
-            [s.id, ...ids],
-          );
-          const displacement = Math.hypot(candidate.x - beforeStep.x, candidate.y - beforeStep.y);
-          if (displacement > remainingDistance) {
-            const ratio = remainingDistance / displacement;
-            movedCustomer = {
-              ...candidate,
-              x: beforeStep.x + (candidate.x - beforeStep.x) * ratio,
-              y: beforeStep.y + (candidate.y - beforeStep.y) * ratio,
-              path: beforeStep.path,
-              stalledFor: 0,
-              minimumSpacing: 16,
-              usingStaticFallback: false,
-            };
-            break;
-          }
-          movedCustomer = candidate;
-          remainingDistance -= displacement;
-        }
-        return movedCustomer;
+    if (s.task?.type !== 'guide_customer' || hasArrived(s)) continue;
+    const ids = taskCustomerIds(s.task);
+    customers = customers.map((customer, index, allCustomers) => {
+      const guideContext = getCustomerGuideContext({ ...state, staff, customers }, customer);
+      if (!guideContext || guideContext.guide.id !== s.id || customer.path?.length) return customer;
+      const memberIndex = Math.max(0, ids.indexOf(customer.id));
+      const preceding = memberIndex > 0
+        ? allCustomers.find(candidate => candidate.id === ids[memberIndex - 1])
+        : s;
+      return planCharacterPath(
+        { ...state, staff, customers, tables, serviceItems },
+        customer,
+        { world: { x: preceding.x - 12, y: preceding.y + 12 } },
+        [...staff, ...allCustomers.filter((_, candidateIndex) => candidateIndex !== index)],
+        [s.id, ...ids],
+      );
+    });
+  }
+
+  return {
+    ...state, staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt, restaurant,
+    __staffClaimedServiceItemIds: staleTaskServiceItemIds,
+  };
+}
+
+export function getStaffMovementEntries(state) {
+  const entries = [];
+  const movingIds = new Set();
+  for (const staff of state.staff || []) {
+    if (!Number.isFinite(staff.x) || !Number.isFinite(staff.y)) continue;
+    const ids = getGuidePartyContext(state, staff)?.ignoredIds || [];
+    if (staff.path?.length) {
+      const movementRecovery = Boolean(staff.headOnRecovery
+        || (staff.usingStaticFallback && (staff.stalledFor || 0) >= 2));
+      entries.push({
+        character: staff,
+        speed: staff.role === 'waiter' ? 75 : 55,
+        ignoredIds: ids,
+        ...(movementRecovery ? { headOnDetourEligible: true } : {}),
       });
+      movingIds.add(staff.id);
     }
+  }
+  for (const customer of state.customers || []) {
+    if (!Number.isFinite(customer.x) || !Number.isFinite(customer.y)) continue;
+    const guideContext = getCustomerGuideContext(state, customer);
+    if (guideContext && customer.path?.length) {
+      entries.push({
+        character: customer,
+        speed: 62,
+        ignoredIds: guideContext.ignoredIds,
+        provenance: 'guide',
+      });
+      movingIds.add(customer.id);
+    }
+  }
+  for (const character of [...(state.staff || []), ...(state.customers || [])]) {
+    if (!Number.isFinite(character.x) || !Number.isFinite(character.y) || movingIds.has(character.id)) continue;
+    entries.push({ character, speed: 0, ignoredIds: [] });
+  }
+  return entries;
+}
+
+export function resolveStaffAfterMovement(state, gameDt) {
+  let { staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt, restaurant } = state;
+  const claimedCustomerIds = new Set();
+  const claimedServiceItemIds = new Set();
+  const claimedTableIds = new Set();
+  const claimedDirtIds = new Set();
+  (state.__staffClaimedServiceItemIds || []).forEach(id => claimedServiceItemIds.add(id));
+  for (const worker of staff) {
+    if (!worker.task) continue;
+    if (worker.task.customerId) claimedCustomerIds.add(worker.task.customerId);
+    if (worker.task.customerIds) worker.task.customerIds.forEach(id => claimedCustomerIds.add(id));
+    if (worker.task.serviceItemId) claimedServiceItemIds.add(worker.task.serviceItemId);
+    if (worker.task.type === 'clean_table' && worker.task.tableId) claimedTableIds.add(worker.task.tableId);
+    if (worker.task.type === 'clean_floor' && worker.task.dirtId) claimedDirtIds.add(worker.task.dirtId);
   }
 
   for (let i = 0; i < staff.length; i += 1) {
@@ -1246,6 +1337,21 @@ export function updateStaff(state, timing) {
       : item;
   });
 
-  const result = { ...state, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt };
+  const { __staffClaimedServiceItemIds, ...cleanState } = state;
+  const result = { ...cleanState, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt };
   return result;
+}
+
+export function updateStaff(state, timing) {
+  const gameDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.gameDt) || 0);
+  const movementDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.movementDt) || 0);
+  const prepared = prepareStaffForMovement(state, gameDt);
+  const movementEntries = getStaffMovementEntries(prepared);
+  const moved = resolveCharacterMovementBatch(prepared, movementEntries, movementDt);
+  const committed = {
+    ...prepared,
+    staff: prepared.staff.map(character => moved.get(character.id) || character),
+    customers: prepared.customers.map(character => moved.get(character.id) || character),
+  };
+  return resolveStaffAfterMovement(committed, gameDt);
 }

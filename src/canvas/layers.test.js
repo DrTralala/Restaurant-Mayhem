@@ -19,7 +19,9 @@ function recordCtx(extraCanvas = {}) {
     save: () => { calls.saves = (calls.saves || 0) + 1; transforms.push([offsetX, offsetY, figureScale]); },
     restore: () => { calls.restores = (calls.restores || 0) + 1; [offsetX, offsetY, figureScale] = transforms.pop(); },
     translate: (x, y) => { offsetX += x; offsetY += y; },
-    rotate: () => {},
+    rotate: radians => {
+      calls.rotations = [...(calls.rotations || []), radians];
+    },
     scale: (x, y) => { calls.scales = [...(calls.scales || []), { x, y }]; figureScale *= x; },
     measureText: (text) => ({ width: String(text).length }),
     beginPath: () => {},
@@ -603,6 +605,20 @@ describe('drawCustomerLayer', () => {
     expect(ctx._calls.strokeRects).toContainEqual({
       x: 208, y: 191, w: 24, h: 16, colour: '#4d3a1f',
     });
+  });
+
+  it.each([0, 1, 2, 3])('keeps a seated customer upright at chair rotation %s', rotation => {
+    const ctx = recordCtx();
+    drawCustomerLayer(ctx, {
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1', chairId: 'ch1' }],
+      tables: [{ id: 't1', x: 200, y: 200 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180, rotation }],
+      restaurant: {},
+    }, camera);
+    expect(ctx._calls.rotations).toContain(0);
+    expect(ctx._calls.rotations).not.toContain(Math.PI / 2);
+    expect(ctx._calls.rotations).not.toContain(Math.PI);
+    expect(ctx._calls.rotations).not.toContain(-Math.PI / 2);
   });
 
   it('keeps the menu visible while a customer is ordering', () => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { runTick } from './gameLoop';
+import { mergeMovementEntries, runTick } from './gameLoop';
 import { createInitialState } from '../state/initialState';
 
 const emptyState = {
@@ -44,10 +44,204 @@ describe('runTick', () => {
     expect(result.restaurant.gameTime).toBe(104);
   });
 
+  it('resolves customer and staff movement from one tick snapshot', () => {
+    const state = {
+      ...emptyState,
+      restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, openHour: 10, closeHour: 22, reputation: 3 },
+      doors: [{ id: 'door1', y: 340 }],
+      floorDirt: [], washStations: [], cashierStations: [],
+      customers: [{
+        id: 'z-customer', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+        x: 940, y: 360, path: [{ x: 48, y: 18 }, { x: 49, y: 18 }],
+        pathGoal: { x: 49, y: 18 }, patience: 10, happiness: 50,
+      }],
+      staff: [{
+        id: 'a-staff', role: 'waiter', morale: 80, x: 960, y: 340,
+        path: [{ x: 48, y: 18 }, { x: 48, y: 19 }], task: null,
+      }],
+    };
+
+    const result = runTick(state, { gameDt: 1, movementDt: 1 });
+    expect(Math.hypot(
+      result.customers[0].x - result.staff[0].x,
+      result.customers[0].y - result.staff[0].y,
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+    expect([result.customers[0], result.staff[0]].filter(actor => actor.x === 960 && actor.y === 360))
+      .toHaveLength(1);
+    expect(result.staff[0]).toMatchObject({ x: 960, y: 360 });
+    expect(result.customers[0]).not.toMatchObject({ x: 960, y: 360 });
+  });
+
+  it('prefers the guide-provenance staff descriptor over the duplicate customer descriptor', () => {
+    const customerEntry = {
+      character: { id: 'party-1', state: 'guided', guideStaffId: 'guide' },
+      speed: 62, ignoredIds: [],
+    };
+    const guideStaffEntry = {
+      character: { id: 'party-1', state: 'guided', guideStaffId: 'guide' },
+      speed: 0, ignoredIds: ['guide', 'party-1'], provenance: 'guide',
+    };
+
+    const merged = mergeMovementEntries([customerEntry], [guideStaffEntry]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toBe(guideStaffEntry);
+    expect(merged[0].ignoredIds).toEqual(['guide', 'party-1']);
+    expect(merged[0].provenance).toBe('guide');
+  });
+
+  it('never lets a stationary staff filler override a moving customer descriptor', () => {
+    const customerEntry = {
+      character: { id: 'z-customer', state: 'leaving', exitPhase: 'fading' },
+      speed: 30, ignoredIds: [],
+    };
+    const fillerEntry = {
+      character: { id: 'z-customer', state: 'leaving', exitPhase: 'fading' },
+      speed: 0, ignoredIds: [],
+    };
+
+    const merged = mergeMovementEntries([customerEntry], [fillerEntry]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toBe(customerEntry);
+  });
+
+  it('keeps a stale guided customer stationary when only the staff filler reaches the merge', () => {
+    const staleFillerEntry = {
+      character: { id: 'party-1', state: 'guided', guideStaffId: 'guide' },
+      speed: 0, ignoredIds: [],
+    };
+
+    const merged = mergeMovementEntries([], [staleFillerEntry]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toBe(staleFillerEntry);
+    expect(merged[0].speed).toBe(0);
+    expect(merged[0].ignoredIds).toEqual([]);
+    expect(merged[0].provenance).toBeUndefined();
+  });
+
+  it.each([
+    ['null task', null, []],
+    ['non-guide task', { type: 'clean_table', tableId: 'missing' }, []],
+    ['excluded party', { type: 'guide_customer', customerIds: ['other-party'], tableId: 't1' }, [
+      { id: 'other-party', state: 'guided', guideStaffId: 'guide', x: 60, y: 140, path: [{ x: 6, y: 7 }], patience: 100, happiness: 80 },
+    ]],
+  ])('keeps a stale pathful guided customer stationary through the world batch for a %s', (_name, task, otherCustomers) => {
+    const state = {
+      ...emptyState,
+      restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, reputation: 3 },
+      floorDirt: [], washStations: [], cashierStations: [],
+      tables: task?.type === 'guide_customer'
+        ? [{ id: 't1', seats: 1, status: 'reserved', x: 400, y: 300 }]
+        : [],
+      staff: [{
+        id: 'guide', role: 'waiter', morale: 80, x: 100, y: 100,
+        path: task ? [{ x: 8, y: 5 }] : [], task,
+      }],
+      customers: [{
+        id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 80, y: 120,
+        path: [{ x: 7, y: 6 }], patience: 100, happiness: 80,
+      }, ...otherCustomers],
+    };
+
+    const result = runTick(state, { gameDt: 0, movementDt: 1 });
+    const stale = result.customers.find(customer => customer.id === 'party-1');
+
+    expect(stale).toMatchObject({ x: 80, y: 120 });
+  });
+
+  it.each([
+    ['plural', { customerIds: ['party-1'] }],
+    ['legacy singular', { customerId: 'party-1' }],
+  ])('moves a genuine %s guided party through the merged world batch', (_name, partyFields) => {
+    const state = {
+      ...emptyState,
+      restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, reputation: 3 },
+      floorDirt: [], washStations: [], cashierStations: [],
+      tables: [{ id: 't1', seats: 1, status: 'reserved', x: 500, y: 300 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 510, y: 280 }],
+      staff: [{
+        id: 'guide', role: 'waiter', morale: 80, x: 100, y: 100,
+        path: [{ x: 20, y: 5 }], task: { type: 'guide_customer', ...partyFields, tableId: 't1' },
+      }],
+      customers: [{
+        id: 'party-1', state: 'guided', guideStaffId: 'guide', tableId: 't1',
+        x: 80, y: 120, path: [{ x: 10, y: 6 }], patience: 100, happiness: 80,
+      }],
+    };
+
+    const result = runTick(state, { gameDt: 0, movementDt: 0.1 });
+
+    expect(result.staff[0].x).toBeGreaterThan(100);
+    expect(result.customers[0].x).toBeGreaterThan(80);
+  });
+
+  it('emits exactly one entry per actor including stationary actors', () => {
+    const entries = mergeMovementEntries([
+      { character: { id: 'moving', state: 'leaving' }, speed: 55, ignoredIds: [] },
+      { character: { id: 'filler', state: 'eating' }, speed: 0, ignoredIds: [] },
+    ], [
+      { character: { id: 'moving', state: 'leaving' }, speed: 0, ignoredIds: [] },
+      { character: { id: 'moving', state: 'leaving' }, speed: 0, ignoredIds: [] },
+      { character: { id: 'guide', state: 'guided' }, speed: 62, ignoredIds: [], provenance: 'guide' },
+      { character: { id: 'filler', state: 'eating' }, speed: 0, ignoredIds: [] },
+    ]);
+
+    const ids = entries.map(entry => entry.character.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.sort()).toEqual(['filler', 'guide', 'moving']);
+  });
+
+  it('serialises customers converging on one exit without overlap or deadlock', () => {
+    let state = {
+      ...emptyState,
+      restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, openHour: 10, closeHour: 22, reputation: 3 },
+      doors: [{ id: 'door1', y: 340 }],
+      floorDirt: [], washStations: [], cashierStations: [],
+      tables: [{ id: 'blocker', x: 500, y: 260, status: 'occupied' }],
+      customers: [
+        { id: 'c1', state: 'leaving', x: 900, y: 280, exitPhase: 'to_door', exitDoorId: 'door1', path: [], patience: 10, happiness: 50 },
+        { id: 'c2', state: 'leaving', x: 900, y: 440, exitPhase: 'to_door', exitDoorId: 'door1', path: [], patience: 10, happiness: 50 },
+      ],
+    };
+    let observedFading = false;
+    for (let tick = 0; tick < 20 && state.customers.length; tick += 1) {
+      state = runTick(state, { gameDt: 1, movementDt: 1 });
+      if (state.customers.some(customer => customer.exitPhase === 'fading')) observedFading = true;
+      if (state.customers.length === 2) {
+        expect(Math.hypot(
+          state.customers[0].x - state.customers[1].x,
+          state.customers[0].y - state.customers[1].y,
+        )).toBeGreaterThanOrEqual(16 - 1e-6);
+      }
+    }
+    expect(observedFading).toBe(true);
+    expect(state.customers).toHaveLength(0);
+  });
+
+  it('advances only fading customers whose committed batch displacement is proven', () => {
+    const state = {
+      ...emptyState,
+      restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, openHour: 10, closeHour: 22, reputation: 3 },
+      doors: [{ id: 'door1', y: 340 }],
+      floorDirt: [], washStations: [], cashierStations: [],
+      customers: [{
+        id: 'fading-customer', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
+        exitHeading: { angleDegrees: 0, x: 1, y: 0 }, exitFadeProgress: 0.5,
+        x: 940, y: 360, path: [], patience: 10, happiness: 50,
+      }],
+    };
+
+    const result = runTick(state, { gameDt: 0, movementDt: 1 });
+
+    expect(result.customers[0]).toMatchObject({ exitPhase: 'fading', x: 970, exitFadeProgress: 0.75 });
+  });
+
   it('creates floor dirt before staff assignment so a janitor can claim it in the same tick', () => {
     const state = {
       ...emptyState,
-      customers: [{ id: 'c1', state: 'seated', x: 200, y: 200, dirtFactor: 9, happiness: 80, patience: 100 }],
+      customers: [{ id: 'c1', state: 'seated', x: 200, y: 200, dirtFactor: 9.5, happiness: 80, patience: 100 }],
       staff: [{ id: 'j1', role: 'janitor', morale: 80, x: 180, y: 220, path: [], task: null }],
       floorDirt: [],
     };
@@ -415,8 +609,8 @@ describe('runTick', () => {
     const lifecycleDish = initial.dishes.find(dish => dish.id === 'starter-toast');
     const expectedRevenue = lifecycleDish.price
       + Math.round(lifecycleDish.price * (observedPaymentHappiness / 400) * 100) / 100;
-    expect(Math.round(expectedRevenue * 100) / 100).toBe(14.38);
-    expect(Math.round(finalState.restaurant.dailyRevenue * 100) / 100).toBe(14.38);
+    expect(Math.round(expectedRevenue * 100) / 100).toBe(14.4);
+    expect(Math.round(finalState.restaurant.dailyRevenue * 100) / 100).toBe(14.4);
     expect(JSON.stringify(finalState)).not.toContain('revenueProcessed');
 
     expect(stageIndex('take_order')).toBeLessThan(stageIndex('prepare_dish'));

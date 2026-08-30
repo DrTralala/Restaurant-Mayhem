@@ -46,7 +46,7 @@ export function buildOccupiedCharacterCells(characters, excludedIds = []) {
     .map(character => cellKey(worldToCell(character))));
 }
 
-function isInsideWorld(state, cell) {
+export function isInsideWorld(state, cell) {
   const world = getRestaurantWorld(state.restaurant || {});
   const point = cellToWorld(cell);
   return point.x >= world.floorX && point.x <= world.queueX + world.queueW && point.y >= world.kitchenY && point.y <= world.diningY + world.areaH + 50;

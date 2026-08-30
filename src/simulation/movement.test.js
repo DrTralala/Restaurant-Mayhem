@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { ensureStaffRuntime, moveStaffAlongPath, hasArrived, moveCharacterAlongPath, moveCharacterTowards, moveCharacterWithRecovery } from './movement';
+import {
+  buildTimeParameterizedTrajectory,
+  ensureStaffRuntime,
+  hasArrived,
+  minimumSweptDistance,
+  minimumTrajectoryDistance,
+  moveCharacterAlongPath,
+  moveCharacterTowards,
+  moveCharacterWithRecovery,
+  moveStaffAlongPath,
+  resolveCharacterMovementBatch,
+} from './movement';
 import { buildBlockedCells, worldToCell } from './pathfinding';
 
 const openState = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [] };
@@ -427,5 +438,426 @@ describe('movement runtime', () => {
     const moving = { id: 'z', x: 100, y: 100, path: [{ x: 8, y: 5 }] };
     const parallel = { id: 'a', x: 110, y: 115, path: [{ x: 7, y: 5 }] };
     expect(moveCharacterWithRecovery(openState, moving, 0.2, [parallel], 60).x).toBeGreaterThan(moving.x);
+  });
+
+  it('detects perpendicular segments crossing between their endpoints', () => {
+    expect(minimumSweptDistance(
+      { x: 80, y: 100 }, { x: 120, y: 100 },
+      { x: 100, y: 80 }, { x: 100, y: 120 },
+    )).toBeCloseTo(0);
+  });
+
+  it('gives the lower ID priority when movement segments cross', () => {
+    const a = { id: 'a', x: 80, y: 100, path: [{ x: 6, y: 5 }] };
+    const b = { id: 'b', x: 100, y: 80, path: [{ x: 5, y: 6 }] };
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: b, speed: 40 },
+      { character: a, speed: 40 },
+    ], 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 120, y: 100, path: [] });
+    expect(moved.get('b').x).toBe(100);
+    expect(moved.get('b').y).toBeCloseTo(84, 5);
+    expect(moved.get('b').stalledFor).toBe(0);
+  });
+
+  it('does not commit two actors to one endpoint', () => {
+    const entries = [
+      { character: { id: 'a', x: 80, y: 100, path: [{ x: 5, y: 5 }] }, speed: 20 },
+      { character: { id: 'b', x: 120, y: 100, path: [{ x: 5, y: 5 }] }, speed: 20 },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
+  it('advances the yielding actor by the furthest safe timed-trajectory prefix', () => {
+    const entries = [
+      { character: { id: 'a', x: 80, y: 100, path: [{ x: 5, y: 5 }] }, speed: 20 },
+      { character: { id: 'b', x: 120, y: 100, path: [{ x: 5, y: 5 }] }, speed: 20 },
+    ];
+
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 100, y: 100, path: [] });
+    expect(moved.get('b').x).toBeCloseTo(116, 5);
+    expect(moved.get('b')).toMatchObject({ y: 100, path: [{ x: 5, y: 5 }], stalledFor: 0 });
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
+  it('preserves a consumed first leg while selecting a safe prefix of a bent continuation', () => {
+    const actor = { id: 'a', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const blocker = { id: 'z-blocker', x: 120, y: 140, path: [] };
+
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: actor, speed: 60, targetAfterPath: { x: 120, y: 160 } },
+      { character: blocker, speed: 0 },
+    ], 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 120, path: [], stalledFor: 0 });
+    expect(moved.get('a').y).toBeCloseTo(124, 5);
+    expect(Math.hypot(moved.get('a').x - blocker.x, moved.get('a').y - blocker.y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
+    expect(Math.hypot(moved.get('a').x - actor.x, moved.get('a').y - actor.y))
+      .toBeLessThanOrEqual(60 + 1e-6);
+  });
+
+  it('returns identical ID-keyed results when entries are reversed', () => {
+    const entries = [
+      { character: { id: 'a', x: 80, y: 100, path: [{ x: 6, y: 5 }] }, speed: 40 },
+      { character: { id: 'b', x: 100, y: 80, path: [{ x: 5, y: 6 }] }, speed: 40 },
+    ];
+    const serialise = result => [...result].sort(([left], [right]) => left.localeCompare(right));
+    expect(serialise(resolveCharacterMovementBatch(openState, entries, 1)))
+      .toEqual(serialise(resolveCharacterMovementBatch(openState, [...entries].reverse(), 1)));
+  });
+
+  it('never exceeds each entry movement budget', () => {
+    const character = { id: 'a', x: 80, y: 100, path: [{ x: 20, y: 5 }] };
+    const moved = resolveCharacterMovementBatch(openState, [{ character, speed: 30 }], 0.5).get('a');
+    expect(Math.hypot(moved.x - character.x, moved.y - character.y)).toBeLessThanOrEqual(15 + 1e-6);
+  });
+
+  it('never accepts an endpoint inside static geometry', () => {
+    const state = { ...openState, chairs: [{ id: 'chair', x: 100, y: 100 }] };
+    const character = { id: 'a', x: 80, y: 100, path: [{ x: 5, y: 5 }] };
+    const moved = resolveCharacterMovementBatch(state, [{ character, speed: 20 }], 1).get('a');
+    expect(buildBlockedCells(state).has(`${worldToCell(moved).x},${worldToCell(moved).y}`)).toBe(false);
+  });
+
+  it('does not let a priority actor pass through a yielding actor start', () => {
+    const moving = { id: 'a', x: 80, y: 100, path: [{ x: 6, y: 5 }] };
+    const clearing = { id: 'b', x: 100, y: 100, path: [{ x: 5, y: 7 }] };
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: moving, speed: 40 },
+      { character: clearing, speed: 40 },
+    ], 1);
+    expect(moved.get('a').x).toBeCloseTo(84, 5);
+    expect(moved.get('a').y).toBe(100);
+    expect(moved.get('b').y).toBeGreaterThan(100);
+  });
+
+  it('rejects an unsafe early-arrival detour and keeps lexical progress on the desired line', () => {
+    const state = { ...openState, chairs: [{ id: 'south-side-blocker', x: 180, y: 140 }] };
+    const entries = [
+      { character: { id: 'a', x: 180, y: 100, path: [{ x: 16, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 75, headOnDetourEligible: true },
+      { character: { id: 'b', x: 200, y: 100, path: [{ x: 3, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 75, headOnDetourEligible: true },
+      { character: { id: 'third', x: 100, y: 60, path: [] }, speed: 75, target: { x: 175, y: 60 } },
+    ];
+    const moved = resolveCharacterMovementBatch(state, entries, 1);
+
+    const earlyArrival = buildTimeParameterizedTrajectory(
+      entries[0].character,
+      { x: 180, y: 60 },
+      entries[0].speed,
+      1,
+    );
+    const thirdActor = buildTimeParameterizedTrajectory(
+      entries[2].character,
+      entries[2].target,
+      entries[2].speed,
+      1,
+    );
+
+    expect(minimumTrajectoryDistance(earlyArrival, thirdActor)).toBeLessThan(16);
+    expect(moved.get('a').x).toBeCloseTo(194, 5);
+    expect(moved.get('a')).toMatchObject({ y: 100, path: [{ x: 16, y: 5 }] });
+    expect(moved.get('third')).toMatchObject({ x: 175, y: 60 });
+  });
+
+  it('does not detour a flagged horizontal crossing before explicit recovery', () => {
+    const entries = [
+      { character: { id: 'a', x: 180, y: 100, path: [{ x: 16, y: 5 }] }, speed: 75, headOnDetourEligible: true },
+      { character: { id: 'b', x: 200, y: 100, path: [{ x: 3, y: 5 }] }, speed: 75, headOnDetourEligible: true },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+    expect(moved.get('a').y).toBe(100);
+    expect(moved.get('b').y).toBe(100);
+  });
+
+  it('does not detour recovered flagged actors without opposing horizontal head-on geometry', () => {
+    const entries = [
+      { character: { id: 'a', x: 100, y: 100, path: [], stalledFor: 2, usingStaticFallback: true }, speed: 75,
+        target: { x: 140, y: 120 }, headOnDetourEligible: true },
+      { character: { id: 'b', x: 140, y: 120, path: [], stalledFor: 2, usingStaticFallback: true }, speed: 75,
+        target: { x: 100, y: 100 }, headOnDetourEligible: true },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a').x).toBeGreaterThan(100);
+    expect(moved.get('a').x).toBeLessThan(140);
+    expect(moved.get('a').y - 100).toBeCloseTo((moved.get('a').x - 100) / 2, 5);
+    expect(moved.get('b').x).toBeCloseTo(140, 5);
+    expect(moved.get('b').y).toBeCloseTo(120, 5);
+  });
+
+  it('does not detour a production-flagged ordinary diagonal convergence', () => {
+    const entries = [
+      { character: { id: 'a', x: 100, y: 100, path: [{ x: 7, y: 6 }], stalledFor: 2, usingStaticFallback: true }, speed: 75,
+        allowStaticFallbackCrossing: true, movementRecovery: true, headOnDetourEligible: true },
+      { character: { id: 'b', x: 140, y: 120, path: [{ x: 5, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 75,
+        allowStaticFallbackCrossing: true, movementRecovery: true, headOnDetourEligible: true },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a').x).toBeGreaterThan(100);
+    expect(moved.get('a').x).toBeLessThan(140);
+    expect(moved.get('a').y - 100).toBeCloseTo((moved.get('a').x - 100) / 2, 5);
+    expect(moved.get('b').x).toBeCloseTo(140, 5);
+    expect(moved.get('b').y).toBeCloseTo(120, 5);
+  });
+
+  it('keeps a production-flagged ordinary perpendicular crossing on-line', () => {
+    const entries = [
+      { character: { id: 'a', x: 80, y: 100, path: [{ x: 6, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 40,
+        headOnDetourEligible: true },
+      { character: { id: 'b', x: 100, y: 80, path: [{ x: 5, y: 6 }], stalledFor: 2, usingStaticFallback: true }, speed: 40,
+        headOnDetourEligible: true },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 120, y: 100 });
+    expect(moved.get('b').x).toBe(100);
+    expect(moved.get('b').y).toBeCloseTo(94, 5);
+  });
+
+  it('uses a side-space detour for two explicitly recovered horizontal head-on actors', () => {
+    const entries = [
+      { character: { id: 'a', x: 180, y: 100, path: [{ x: 16, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 75, headOnDetourEligible: true },
+      { character: { id: 'b', x: 200, y: 100, path: [{ x: 3, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 75, headOnDetourEligible: true },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 180, y: 60 });
+    expect(moved.get('b')).toMatchObject({ x: 200, y: 100 });
+  });
+
+  it('uses the legal side when a recovered head-on detour is beside the kitchen boundary', () => {
+    const entries = [
+      { character: { id: 'a', x: 180, y: 60, path: [{ x: 16, y: 3 }], stalledFor: 2, usingStaticFallback: true }, speed: 75, headOnDetourEligible: true },
+      { character: { id: 'b', x: 200, y: 60, path: [{ x: 3, y: 3 }], stalledFor: 2, usingStaticFallback: true }, speed: 75, headOnDetourEligible: true },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 180, y: 100 });
+    expect(moved.get('b')).toMatchObject({ x: 200, y: 60 });
+  });
+
+  it('rejects a low-budget partial detour whose complete side leg is statically blocked', () => {
+    const state = { ...openState, chairs: [{ id: 'blocked-north-target', x: 180, y: 60 }] };
+    const entries = [
+      { character: { id: 'a', x: 180, y: 100, path: [{ x: 16, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 10, headOnDetourEligible: true },
+      { character: { id: 'b', x: 200, y: 100, path: [{ x: 3, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 10, headOnDetourEligible: true },
+    ];
+    const moved = resolveCharacterMovementBatch(state, entries, 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 180, y: 110 });
+    expect(moved.get('a').path[0]).toEqual({ x: 9, y: 7 });
+    expect(moved.get('b')).toMatchObject({ x: 200, y: 100 });
+  });
+
+  it('gives the recovered lower ID its furthest safe prefix when both detour sides are blocked', () => {
+    const state = {
+      ...openState,
+      chairs: [
+        { id: 'north-blocker', x: 180, y: 60 },
+        { id: 'south-blocker', x: 180, y: 140 },
+      ],
+    };
+    const entries = [
+      { character: { id: 'a', x: 180, y: 100, path: [{ x: 16, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 20, headOnDetourEligible: true },
+      { character: { id: 'b', x: 200, y: 100, path: [{ x: 3, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 20, headOnDetourEligible: true },
+    ];
+
+    const moved = resolveCharacterMovementBatch(state, entries, 1);
+
+    expect(moved.get('a').x).toBeCloseTo(194, 5);
+    expect(moved.get('a')).toMatchObject({ y: 100, path: [{ x: 16, y: 5 }], stalledFor: 0 });
+    expect(moved.get('b')).toMatchObject({ x: 200, y: 100 });
+    expect(minimumTrajectoryDistance(
+      buildTimeParameterizedTrajectory(entries[0].character, moved.get('a'), 20, 1),
+      buildTimeParameterizedTrajectory(entries[1].character, moved.get('b'), 20, 1),
+    )).toBeGreaterThanOrEqual(6 - 1e-6);
+  });
+
+  it('times sub-unit movement from the actual positive movement budget', () => {
+    const trajectory = buildTimeParameterizedTrajectory(
+      { x: 100, y: 100 },
+      { x: 100.5, y: 100 },
+      0.75,
+      1,
+    );
+
+    expect(trajectory).toEqual([
+      { start: { x: 100, y: 100 }, end: { x: 100.5, y: 100 }, startTime: 0, endTime: 2 / 3 },
+      { start: { x: 100.5, y: 100 }, end: { x: 100.5, y: 100 }, startTime: 2 / 3, endTime: 1 },
+    ]);
+  });
+
+  it('preserves a queued path for direct-target movement unless consumption is explicit', () => {
+    const character = { id: 'direct', x: 80, y: 100, path: [{ x: 6, y: 5 }, { x: 7, y: 5 }] };
+    const target = { x: 120, y: 100 };
+
+    const defaultResult = resolveCharacterMovementBatch(openState, [{ character, speed: 40, target }], 1).get('direct');
+    expect(defaultResult.path).toEqual(character.path);
+
+    const explicitResult = resolveCharacterMovementBatch(openState, [{ character, speed: 40, target, consumePath: true }], 1).get('direct');
+    expect(explicitResult.path).toEqual(character.path.slice(1));
+
+    const unrelatedTargetResult = resolveCharacterMovementBatch(openState, [{
+      character, speed: 60, target: { x: 140, y: 100 }, consumePath: true,
+    }], 1).get('direct');
+    expect(unrelatedTargetResult.path).toEqual(character.path);
+  });
+
+  it('makes the furthest safe progress towards a dynamically blocked pathless direct target', () => {
+    const direct = { id: 'direct', x: 80, y: 100, path: [] };
+    const clearing = { id: 'clearing', x: 100, y: 100, path: [{ x: 5, y: 7 }] };
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: direct, speed: 40, target: { x: 120, y: 100 } },
+      { character: clearing, speed: 40 },
+    ], 1);
+
+    expect(moved.get('direct').x).toBeGreaterThan(80);
+    expect(moved.get('direct').x).toBeLessThan(120);
+    expect(moved.get('direct')).toMatchObject({ y: 100, stalledFor: 0 });
+
+    const alreadyThere = resolveCharacterMovementBatch(openState, [{
+      character: { id: 'already-there', x: 100, y: 100, path: [] },
+      speed: 0,
+      target: { x: 100, y: 100 },
+    }], 1).get('already-there');
+    expect(alreadyThere.stalledFor).toBe(0);
+  });
+
+  it('keeps dynamic recovery separate from the two-second static fallback', () => {
+    const peers = [
+      { id: 'north', x: 100, y: 80, path: [] },
+      { id: 'south', x: 100, y: 120, path: [] },
+      { id: 'west', x: 80, y: 100, path: [] },
+      { id: 'east', x: 120, y: 100, path: [] },
+    ];
+    const actor = {
+      id: 'actor', x: 100, y: 100, path: [{ x: 7, y: 5 }], pathGoal: { x: 7, y: 5 },
+    };
+    const entries = [
+      { character: actor, speed: 0 },
+      ...peers.map(character => ({ character, speed: 0 })),
+    ];
+
+    const dynamicOnly = resolveCharacterMovementBatch(openState, entries, 0.75).get('actor');
+    expect(dynamicOnly).toMatchObject({ usingStaticFallback: false, minimumSpacing: 16, stalledFor: 0.75 });
+    expect(dynamicOnly.path).toEqual(actor.path);
+
+    const staticFallback = resolveCharacterMovementBatch(openState, entries, 2).get('actor');
+    expect(staticFallback).toMatchObject({ usingStaticFallback: true, minimumSpacing: 6, stalledFor: 2 });
+  });
+
+  it('preserves an existing static fallback during pre-two-second no-progress recovery', () => {
+    const character = {
+      id: 'fallback', x: 100, y: 100, path: [{ x: 7, y: 5 }], pathGoal: { x: 7, y: 5 },
+      stalledFor: 1, minimumSpacing: 6, usingStaticFallback: true,
+    };
+    const moved = resolveCharacterMovementBatch(openState, [{ character, speed: 0 }], 0.25).get('fallback');
+
+    expect(moved).toMatchObject({ stalledFor: 1.25, usingStaticFallback: true, minimumSpacing: 6 });
+  });
+
+  it('does not create static fallback during a normal 0.75-second dynamic replan', () => {
+    const character = {
+      id: 'normal', x: 100, y: 100, path: [{ x: 7, y: 5 }], pathGoal: { x: 7, y: 5 },
+      stalledFor: 0, minimumSpacing: 16, usingStaticFallback: false,
+    };
+    const moved = resolveCharacterMovementBatch(openState, [{ character, speed: 0 }], 0.75).get('normal');
+
+    expect(moved).toMatchObject({ stalledFor: 0.75, usingStaticFallback: false, minimumSpacing: 16 });
+  });
+
+  it('preserves the unreached path when dynamic and static replanning both fail', () => {
+    const state = { ...openState, chairs: [{ id: 'blocked-goal', x: 100, y: 100 }] };
+    const character = {
+      id: 'stuck', x: 80, y: 100, path: [{ x: 5, y: 5 }], pathGoal: { x: 5, y: 5 },
+    };
+    const moved = resolveCharacterMovementBatch(state, [{ character, speed: 0 }], 2).get('stuck');
+
+    expect(moved.path).toEqual(character.path);
+    expect(moved).toMatchObject({ stalledFor: 2, usingStaticFallback: true, minimumSpacing: 6 });
+  });
+
+  it('returns swept-safe endpoints when pair resolution reaches its safety limit', () => {
+    const entries = [
+      { character: { id: 'a', x: 360, y: 345, path: [] }, speed: 500, target: { x: 280, y: 290 } },
+      { character: { id: 'b', x: 360, y: 395, path: [] }, speed: 500, target: { x: 320, y: 240 } },
+      { character: { id: 'c', x: 295, y: 295, path: [] }, speed: 500, target: { x: 380, y: 395 } },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+    const starts = new Map(entries.map(({ character }) => [character.id, character]));
+    const ids = entries.map(({ character }) => character.id);
+
+    for (let leftIndex = 0; leftIndex < ids.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < ids.length; rightIndex += 1) {
+        const left = starts.get(ids[leftIndex]);
+        const right = starts.get(ids[rightIndex]);
+        const leftEntry = entries.find(entry => entry.character.id === left.id);
+        const rightEntry = entries.find(entry => entry.character.id === right.id);
+        expect(minimumTrajectoryDistance(
+          buildTimeParameterizedTrajectory(left, moved.get(left.id), leftEntry.speed, 1),
+          buildTimeParameterizedTrajectory(right, moved.get(right.id), rightEntry.speed, 1),
+        ))
+          .toBeGreaterThanOrEqual(16 - 1e-6);
+      }
+    }
+  });
+
+  it('allows an explicitly ignored actor pair to share its direct endpoint', () => {
+    const entries = [
+      { character: { id: 'a', x: 80, y: 100, path: [] }, speed: 20, target: { x: 100, y: 100 }, ignoredIds: ['b'] },
+      { character: { id: 'b', x: 120, y: 100, path: [] }, speed: 20, target: { x: 100, y: 100 } },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 100, y: 100 });
+    expect(moved.get('b')).toMatchObject({ x: 100, y: 100 });
+  });
+
+  it('continues to the exact target after consuming a final path waypoint', () => {
+    const character = { id: 'a', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const moved = resolveCharacterMovementBatch(openState, [{
+      character, speed: 60, targetAfterPath: { x: 180, y: 100 },
+    }], 1).get('a');
+
+    expect(moved).toMatchObject({ x: 160, y: 100, path: [] });
+    expect(Math.hypot(moved.x - character.x, moved.y - character.y)).toBeLessThanOrEqual(60 + 1e-6);
+  });
+
+  it('stops final-target continuation at static geometry', () => {
+    const state = { ...openState, chairs: [{ id: 'wall', x: 140, y: 100 }] };
+    const character = { id: 'a', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const moved = resolveCharacterMovementBatch(state, [{
+      character, speed: 60, targetAfterPath: { x: 180, y: 100 },
+    }], 1).get('a');
+
+    expect(moved).toMatchObject({ x: 120, y: 100, path: [] });
+    expect(buildBlockedCells(state).has(`${worldToCell(moved).x},${worldToCell(moved).y}`)).toBe(false);
+  });
+
+  it('resolves a moving peer crossing the first leg of a bent continuation', () => {
+    const actor = { id: 'a', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const peer = { id: 'b', x: 120, y: 80, path: [] };
+    const actorEndpoint = { x: 120, y: 140 };
+    const peerEndpoint = { x: 120, y: 120 };
+
+    expect(minimumSweptDistance(actor, actorEndpoint, peer, peerEndpoint))
+      .toBeGreaterThanOrEqual(16);
+
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: actor, speed: 60, targetAfterPath: actorEndpoint },
+      { character: peer, speed: 40, target: peerEndpoint },
+    ], 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 120, y: 140, path: [] });
+    expect(moved.get('b').x).toBe(120);
+    expect(moved.get('b').y).toBeCloseTo(84, 5);
   });
 });

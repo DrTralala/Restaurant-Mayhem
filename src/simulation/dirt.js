@@ -1,6 +1,9 @@
 import { findAdjacentOpenCells, cellToWorld } from './pathfinding';
 import { clampReputation } from './balance';
 
+const DIRT_PER_MINUTE = 0.5;
+const EATING_DIRT_PER_MINUTE = 1;
+
 export function getNextDirtId(floorDirt = []) {
   const next = floorDirt.reduce((maximum, dirt) => {
     const match = /^dirt-(\d+)$/.exec(dirt.id || '');
@@ -36,7 +39,8 @@ export function updateDirt(state, gameDt, random = Math.random) {
     if (customer.state === 'leaving' || customer.state === 'queued' || customer.state === 'waiting') continue;
     const rect = customerRect(state, customer);
     if (!rect) continue;
-    const increment = (boundedDt / 60) * (customer.state === 'eating' ? 2 : 1);
+    const rate = customer.state === 'eating' ? EATING_DIRT_PER_MINUTE : DIRT_PER_MINUTE;
+    const increment = (boundedDt / 60) * rate;
     let dirtFactor = Math.max(0, Number(customer.dirtFactor) || 0) + increment;
     if (dirtFactor >= 10) {
       const candidates = findAdjacentOpenCells(state, rect);

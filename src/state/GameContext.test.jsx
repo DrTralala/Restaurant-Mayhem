@@ -509,6 +509,27 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.upgrades[0].level).toBe(1);
   });
 
+  it('activates an unowned toaster already installed in a full kitchen', () => {
+    const game = renderReducer({
+      restaurant: { funds: 200 },
+      equipment: createInitialState().equipment.map(equipment =>
+        equipment.id === 'eq1' ? { ...equipment, owned: false } : equipment),
+      kitchenStations: [
+        { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
+        { id: 'k2', equipmentId: 'eq3', x: 200, y: 120 },
+      ],
+    });
+
+    game.dispatch({ type: 'BUY_EQUIPMENT', id: 'eq1', cost: 0 });
+
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.equipment.find(equipment => equipment.id === 'eq1').owned).toBe(true);
+    expect(game.state.kitchenStations).toEqual([
+      { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
+      { id: 'k2', equipmentId: 'eq3', x: 200, y: 120 },
+    ]);
+  });
+
   it('only buys equipment when it exists, is unowned, is affordable, and has a free station', () => {
     const game = renderReducer({ restaurant: { funds: 500 } });
 
