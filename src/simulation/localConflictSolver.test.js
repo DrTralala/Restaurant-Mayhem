@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { addPriorityEdge, findSpaceTimePlan, solveLocalConflictComponent } from './localConflictSolver';
+import {
+  addPriorityEdge,
+  advanceExecutablePrefixScore,
+  findSpaceTimePlan,
+  solveLocalConflictComponent,
+} from './localConflictSolver';
 import { createMovementMetrics } from './movementMetrics';
 
 const openState = {
@@ -43,6 +48,25 @@ function serialisePlans(plans) {
   return JSON.stringify([...plans.entries()].sort(([left], [right]) => left.localeCompare(right)));
 }
 
+function referencePrefixScore(node, startCell, routeCells, scoringSlot) {
+  const plan = [];
+  let current = node;
+  while (current.parent) {
+    plan.unshift(current.cell);
+    current = current.parent;
+  }
+  let previous = startCell;
+  let waits = 0;
+  let routeDeviation = 0;
+  for (const cell of plan.slice(0, scoringSlot)) {
+    if (cell.x === previous.x && cell.y === previous.y) waits += 1;
+    routeDeviation += Math.min(...routeCells.map(routeCell =>
+      Math.abs(cell.x - routeCell.x) + Math.abs(cell.y - routeCell.y)));
+    previous = cell;
+  }
+  return { cell: plan.slice(0, scoringSlot).at(-1) || startCell, waits, routeDeviation };
+}
+
 const solverTimingKeys = [
   'solverInitialPlanningMilliseconds',
   'solverNodeBuildMilliseconds',
@@ -60,6 +84,55 @@ function expectFiniteNonNegativeTimings(metrics) {
 }
 
 describe('findSpaceTimePlan', () => {
+  it('advances immutable executable-prefix scores exactly through the scoring horizon', () => {
+    const startCell = { x: 5, y: 5 };
+    const routeCells = [{ x: 6, y: 5 }, { x: 7, y: 5 }, { x: 8, y: 5 }];
+    const cells = [
+      { x: 5, y: 5 }, { x: 6, y: 5 }, { x: 6, y: 5 },
+      { x: 6, y: 4 }, { x: 7, y: 4 }, { x: 8, y: 4 },
+    ];
+    let node = { cell: startCell, slot: 0, parent: null };
+    let score = { cell: { ...startCell }, waits: 0, routeDeviation: 0 };
+    const nodes = [];
+    const scores = [];
+    for (const [index, cell] of cells.entries()) {
+      const successor = {
+        cell,
+        slot: index + 1,
+        waited: cell.x === node.cell.x && cell.y === node.cell.y,
+        parent: node,
+      };
+      const routeDistance = Math.min(...routeCells.map(routeCell =>
+        Math.abs(cell.x - routeCell.x) + Math.abs(cell.y - routeCell.y)));
+      score = advanceExecutablePrefixScore(score, successor, 3, routeDistance);
+      node = successor;
+      nodes.push(node);
+      scores.push(score);
+    }
+
+    expect(scores[1]).toEqual(referencePrefixScore(nodes[1], startCell, routeCells, 3));
+    expect(scores[2]).toEqual(referencePrefixScore(nodes[2], startCell, routeCells, 3));
+    expect(scores[5]).toEqual(referencePrefixScore(nodes[5], startCell, routeCells, 3));
+    expect(scores[5].cell).not.toBe(scores[2].cell);
+  });
+
+  it('returns the exact unreserved executable-prefix plan when progress horizon is shorter', () => {
+    expect(findSpaceTimePlan({
+      state: openState,
+      startCell: { x: 5, y: 5 },
+      goalCell: { x: 8, y: 5 },
+      routeCells: [{ x: 6, y: 5 }, { x: 7, y: 5 }, { x: 8, y: 5 }],
+      blockedCells: new Set(),
+      horizon: 6,
+      progressHorizon: 3,
+      vertexReservations: new Map(),
+      edgeReservations: new Set(),
+    })).toEqual([
+      { x: 6, y: 5 }, { x: 7, y: 5 }, { x: 8, y: 5 },
+      { x: 8, y: 5 }, { x: 8, y: 5 }, { x: 8, y: 5 },
+    ]);
+  });
+
   it('counts each plan call and expanded frontier state', () => {
     const metrics = createMovementMetrics();
     const plan = findSpaceTimePlan({
@@ -143,6 +216,44 @@ describe('findSpaceTimePlan', () => {
 });
 
 describe('solveLocalConflictComponent PBS', () => {
+  it('returns the exact reserved dependent re-planning snapshot through a PBS conflict', () => {
+    const result = solveLocalConflictComponent({
+      state: openState,
+      actors: [
+        actor('a', { x: 4, y: 5 }, { x: 5, y: 5 }),
+        actor('b', { x: 5, y: 4 }, { x: 5, y: 5 }),
+      ],
+      blockedCells: new Set(), horizon: 3, progressHorizon: 2, maxHighLevelNodes: 128,
+    });
+
+    expect({ mode: result.mode, plans: [...result.plans.entries()].sort() }).toEqual({
+      mode: 'pbs',
+      plans: [
+        ['a', [{ x: 5, y: 5 }, { x: 5, y: 5 }, { x: 5, y: 5 }]],
+        ['b', [{ x: 4, y: 4 }, { x: 4, y: 5 }, { x: 4, y: 5 }]],
+      ],
+    });
+  });
+
+  it('returns the exact max-node aged-fallback plan snapshot', () => {
+    const result = solveLocalConflictComponent({
+      state: openState,
+      actors: [
+        actor('a-new', { x: 4, y: 5 }, { x: 5, y: 5 }, 0),
+        actor('z-old', { x: 5, y: 4 }, { x: 5, y: 5 }, 4),
+      ],
+      blockedCells: new Set(), horizon: 3, progressHorizon: 2, maxHighLevelNodes: 0,
+    });
+
+    expect({ mode: result.mode, plans: [...result.plans.entries()].sort() }).toEqual({
+      mode: 'aged-fallback',
+      plans: [
+        ['a-new', [{ x: 3, y: 5 }, { x: 4, y: 5 }, { x: 4, y: 5 }]],
+        ['z-old', [{ x: 5, y: 5 }, { x: 5, y: 5 }, { x: 5, y: 5 }]],
+      ],
+    });
+  });
+
   it('accounts ordinary PBS search work in exclusive solver phases', () => {
     const actors = [
       actor('a', { x: 4, y: 5 }, { x: 5, y: 5 }),

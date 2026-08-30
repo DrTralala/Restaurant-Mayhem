@@ -51,6 +51,21 @@ function distanceFromRoute(cell, routeCells) {
   return Math.min(...routeCells.map(routeCell => manhattan(cell, routeCell)));
 }
 
+export function advanceExecutablePrefixScore(parentScore, successor, scoringSlot, routeDistance) {
+  if (successor.slot <= scoringSlot) {
+    return {
+      cell: { ...successor.cell },
+      waits: parentScore.waits + (successor.waited ? 1 : 0),
+      routeDeviation: parentScore.routeDeviation + routeDistance,
+    };
+  }
+  return {
+    cell: { ...parentScore.cell },
+    waits: parentScore.waits,
+    routeDeviation: parentScore.routeDeviation,
+  };
+}
+
 function compareNodes(left, right, goalCell) {
   return manhattan(left.cell, goalCell) - manhattan(right.cell, goalCell)
     || left.waits - right.waits
@@ -86,18 +101,11 @@ export function findSpaceTimePlan({
   const scoringSlot = Math.max(1, Math.min(horizon, progressHorizon));
   const prefixScore = node => {
     if (metrics) metrics.solverExecutablePrefixScores += 1;
-    const prefix = buildPlan(node, metrics
-      ? () => { metrics.solverExecutablePrefixNodeVisits += 1; }
-      : null).slice(0, scoringSlot);
-    let previous = startCell;
-    let waits = 0;
-    let routeDeviation = 0;
-    for (const cell of prefix) {
-      if (cellKey(cell) === cellKey(previous)) waits += 1;
-      routeDeviation += distanceFromRoute(cell, routeCells);
-      previous = cell;
-    }
-    return { cell: prefix.at(-1) || startCell, waits, routeDeviation };
+    return {
+      cell: node.executableCell,
+      waits: node.executableWaits,
+      routeDeviation: node.executableRouteDeviation,
+    };
   };
   const compareByExecutablePrefix = (left, right) =>
     compareNodes(prefixScore(left), prefixScore(right), goalCell)
@@ -107,6 +115,9 @@ export function findSpaceTimePlan({
     slot: 0,
     waits: 0,
     routeDeviation: 0,
+    executableCell: { ...startCell },
+    executableWaits: 0,
+    executableRouteDeviation: 0,
     parent: null,
   }];
 
@@ -119,11 +130,20 @@ export function findSpaceTimePlan({
       const successors = actions.map(action => {
         const cell = { x: current.cell.x + action.x, y: current.cell.y + action.y };
         const waited = action.x === 0 && action.y === 0;
+        const routeDistance = distanceFromRoute(cell, routeCells);
+        const executableScore = advanceExecutablePrefixScore({
+          cell: current.executableCell,
+          waits: current.executableWaits,
+          routeDeviation: current.executableRouteDeviation,
+        }, { cell, slot, waited }, scoringSlot, routeDistance);
         return {
           cell,
           slot,
           waits: current.waits + (waited ? 1 : 0),
-          routeDeviation: current.routeDeviation + distanceFromRoute(cell, routeCells),
+          routeDeviation: current.routeDeviation + routeDistance,
+          executableCell: executableScore.cell,
+          executableWaits: executableScore.waits,
+          executableRouteDeviation: executableScore.routeDeviation,
           parent: current,
         };
       }).sort((left, right) => compareNodes(left, right, goalCell));

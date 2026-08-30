@@ -52,7 +52,7 @@ describe('dense queue stress scenario', () => {
     expect(first.summary.conflictPairs).toBeGreaterThan(0);
     expect(first.summary.maxComponentSize).toBeGreaterThan(1);
     expect(first.summary.solverExecutablePrefixScores).toBeGreaterThan(0);
-    expect(first.summary.solverExecutablePrefixNodeVisits).toBeGreaterThan(0);
+    expect(first.summary.solverExecutablePrefixNodeVisits).toBe(0);
     expect(first.displacedActors).toBeGreaterThanOrEqual(12);
     expect(first.totalDisplacement).toBeGreaterThan(1000);
     expect(first.actorsPassingDoor).toBeGreaterThan(0);
@@ -115,7 +115,10 @@ describe('dense queue stress scenario', () => {
     expect(result.minimumEndpointSpacing).toBeGreaterThanOrEqual(16 - 1e-6);
     expect(result.minimumSweptSpacing).toBeGreaterThanOrEqual(16 - 1e-6);
     expect(result.summary.localConflictAttempts).toBeGreaterThanOrEqual(result.summary.solverCalls);
-    expect(result.summary.spaceTimePlanCalls).toBeGreaterThanOrEqual(result.summary.solverCalls);
+    expect(result.summary.solverExecutablePrefixScores).toBeGreaterThan(0);
+    expect(result.summary.solverExecutablePrefixNodeVisits).toBe(0);
+    expect(result.summary.spaceTimePlanCalls).toBe(200);
+    expect(result.summary.spaceTimeExpandedStates).toBe(63105);
     expect(result.summary.solverNodesBuilt).toBeGreaterThanOrEqual(result.summary.solverPbs);
     expect(result.summary.localConflictProgressAccepts).toBeGreaterThan(0);
     expect(result.summary.localConflictPreparationMilliseconds

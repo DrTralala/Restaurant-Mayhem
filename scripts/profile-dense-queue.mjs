@@ -3,6 +3,13 @@ import { createServer } from 'vite';
 const WARMUP_RUNS = 1;
 const MEASURED_RUNS = 5;
 const TICKS = 900;
+const TASK_1_INITIAL_PLANNING_MILLISECONDS = [
+  556.0645100000002,
+  522.5600380000028,
+  559.5139229999995,
+  521.1914290000027,
+  515.3672089999982,
+];
 const phaseKeys = [
   'pairBuildMilliseconds',
   'localConflictMilliseconds',
@@ -119,6 +126,14 @@ try {
   const innerHotspotProven = consistentlyLargestEligibleLeaf
     && eligibleLeafMajority
     && nestedAccountingReconciles;
+  const initialPlanningMillisecondsByRun = runs
+    .map(run => run.summary.solverInitialPlanningMilliseconds);
+  const baselineInitialPlanningMedian = median(TASK_1_INITIAL_PLANNING_MILLISECONDS);
+  const optimisedInitialPlanningMedian = median(initialPlanningMillisecondsByRun);
+  const initialPlanningImprovement = (baselineInitialPlanningMedian
+    - optimisedInitialPlanningMedian) / baselineInitialPlanningMedian;
+  const parentNodeVisits = representative.summary.solverExecutablePrefixNodeVisits;
+  const performanceAccepted = parentNodeVisits === 0 && initialPlanningImprovement >= 0.30;
 
   console.log(JSON.stringify({
     ...deterministicProjection.summary,
@@ -149,9 +164,19 @@ try {
     solverMillisecondsByRun: runs.map(run => phaseValues(run.summary, solverKeys)),
     executablePrefixWork: {
       scores: representative.summary.solverExecutablePrefixScores,
-      parentNodeVisits: representative.summary.solverExecutablePrefixNodeVisits,
+      parentNodeVisits,
       scoresByRun: runs.map(run => run.summary.solverExecutablePrefixScores),
       parentNodeVisitsByRun: runs.map(run => run.summary.solverExecutablePrefixNodeVisits),
+    },
+    initialPlanningOptimisation: {
+      baselineMillisecondsByRun: TASK_1_INITIAL_PLANNING_MILLISECONDS,
+      baselineMedianMilliseconds: baselineInitialPlanningMedian,
+      optimisedMillisecondsByRun: initialPlanningMillisecondsByRun,
+      optimisedMedianMilliseconds: optimisedInitialPlanningMedian,
+      improvement: initialPlanningImprovement,
+      requiredImprovement: 0.30,
+      parentNodeVisits,
+      performanceAccepted,
     },
     eligibleLeafOrderingByRun,
     innerHotspotCriterion: {

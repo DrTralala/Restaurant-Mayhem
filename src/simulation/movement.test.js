@@ -574,6 +574,26 @@ describe('movement runtime', () => {
     );
 
     expect(withMetrics).toEqual(withoutMetrics);
+    expect(withMetrics).toEqual([
+      ['a', {
+        id: 'a', x: 80, y: 100,
+        path: [{ x: 6, y: 5 }], pathGoal: { x: 6, y: 5 },
+        localConflictTarget: { x: 5, y: 5 }, stalledFor: 1,
+        minimumSpacing: 16, usingStaticFallback: false, headOnRecovery: true,
+      }],
+      ['b', {
+        id: 'b', x: 120, y: 100,
+        path: [{ x: 5, y: 6 }], pathGoal: { x: 5, y: 6 },
+        localConflictTarget: { x: 6, y: 6 }, stalledFor: 0,
+        minimumSpacing: 16, usingStaticFallback: false, headOnRecovery: false,
+      }],
+      ['c', {
+        id: 'c', x: 100, y: 80,
+        path: [{ x: 4, y: 5 }], pathGoal: { x: 4, y: 5 },
+        localConflictTarget: { x: 4, y: 4 }, stalledFor: 0,
+        minimumSpacing: 16, usingStaticFallback: false, headOnRecovery: false,
+      }],
+    ]);
     expect(metrics.batches).toBe(1);
     expect(metrics.batchMilliseconds).toBeGreaterThanOrEqual(0);
     expect(metrics.pairChecks).toBe(3);
