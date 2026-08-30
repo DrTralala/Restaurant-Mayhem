@@ -15,6 +15,7 @@ import {
 import { ACTIVITY_DURATIONS } from './activity';
 import { hasWashStationCapacity, markCustomerItemsDirty, releaseClearedTables } from './dishwashing';
 import { getCustomerGuideContext, getGuidePartyContext, taskCustomerIds } from './guidance';
+import { buildChairApproachAssignments, getChairCentre } from './seating';
 
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
   return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
@@ -248,6 +249,33 @@ function leavingFields(customer) {
   delete leaving.usingStaticFallback;
   delete leaving.minimumSpacing;
   return leaving;
+}
+
+function cancelGuideTask({ staff, customers, queue, tables, serviceItems }) {
+  const ids = taskCustomerIds(staff.task);
+  return {
+    staff: { ...staff, task: null, path: [] },
+    serviceItems,
+    queue: queue.filter(customer => !ids.includes(customer.id)),
+    tables: tables.map(table => table.id === staff.task.tableId
+      ? { ...table, status: 'empty' }
+      : table),
+    customers: customers.map(customer => ids.includes(customer.id)
+      ? leavingFields({ ...customer, tableId: null, guideStaffId: null, chairId: null })
+      : customer),
+  };
+}
+
+function getStaticApproachPath(state, customer, assignment) {
+  if (Math.hypot(
+    customer.x - assignment.approachPoint.x,
+    customer.y - assignment.approachPoint.y,
+  ) <= 2) return [];
+  const start = worldToCell(customer);
+  if (start.x === assignment.approachCell.x && start.y === assignment.approachCell.y) {
+    return [{ ...assignment.approachCell }];
+  }
+  return findPath(state, start, assignment.approachCell);
 }
 
 function targetForRectOrCurrent(state, rect, staff) {
@@ -579,7 +607,9 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
               customerIds: partyIds,
               partyId: waiting.partyId,
               tableId: table.id,
-              reservedChairIds: chairs.map(chair => chair.id),
+              chairIds: chairs.map(chair => chair.id),
+              stage: 'follow_guide',
+              approaches: [],
             },
           },
           customers: customers.map(c => party.some(member => member.id === c.id)
@@ -633,7 +663,9 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
               customerIds: partyIds,
               partyId: queued.partyId,
               tableId: table.id,
-              reservedChairIds: chairs.map(chair => chair.id),
+              chairIds: chairs.map(chair => chair.id),
+              stage: 'follow_guide',
+              approaches: [],
             },
           },
           customers: [...customers, ...newCustomers],
@@ -842,45 +874,160 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
 
   if (staff.task.type === 'guide_customer') {
     const table = tables.find(t => t.id === staff.task.tableId);
-    const seatTime = state.restaurant.gameTime;
     const ids = taskCustomerIds(staff.task);
-    const availableChairs = getAvailableChairs(
+    const legacyChairIds = staff.task.reservedChairIds;
+    const chairIds = staff.task.chairIds || legacyChairIds || getAvailableChairs(
       table?.id,
       customers,
       getActiveGuideTasks(state.staff, staff.id),
       state.chairs || [],
-    );
-    const reservedChairIds = new Set(staff.task.reservedChairIds || staff.task.chairIds || []);
-    const chairs = [
-      ...availableChairs.filter(chair => reservedChairIds.has(chair.id)),
-      ...availableChairs.filter(chair => !reservedChairIds.has(chair.id)),
-    ].filter((chair, index, allChairs) => allChairs.findIndex(candidate => candidate.id === chair.id) === index);
+    ).slice(0, ids.length).map(chair => chair.id);
+    const chairsById = new Map((state.chairs || []).map(chair => [chair?.id, chair]));
+    const chairs = chairIds.map(chairId => chairsById.get(chairId));
+    const otherReservedChairIds = new Set(getActiveGuideTasks(state.staff, staff.id)
+      .flatMap(task => task.chairIds || task.reservedChairIds || []));
+    const conflictingChairIds = new Set(customers
+      .filter(customer => !ids.includes(customer.id)
+        && customer.state !== 'leaving' && customer.chairId)
+      .map(customer => customer.chairId));
+    const validReservation = table
+      && ids.length > 0
+      && chairIds.length === ids.length
+      && new Set(chairIds).size === chairIds.length
+      && chairs.every(chair => chair?.tableId === table.id && getChairCentre(chair))
+      && chairIds.every(chairId => !otherReservedChairIds.has(chairId)
+        && !conflictingChairIds.has(chairId));
 
-    if (!table || ids.length === 0 || chairs.length < ids.length) {
+    if (!validReservation) {
+      return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
+    }
+
+    const stage = staff.task.stage || 'follow_guide';
+    if (stage === 'follow_guide') {
+      const approaches = buildChairApproachAssignments(
+        { ...state, customers, tables, serviceItems },
+        ids,
+        chairIds,
+      );
+      if (!approaches) {
+        return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
+      }
+
+      const approachesByCustomerId = new Map(approaches
+        .map(assignment => [assignment.customerId, assignment]));
+      let failed = false;
+      const approachingCustomers = customers.map(customer => {
+        const assignment = approachesByCustomerId.get(customer.id);
+        if (!assignment) return customer;
+        const path = getStaticApproachPath(
+          { ...state, customers, tables, serviceItems },
+          customer,
+          assignment,
+        );
+        const atApproach = Math.hypot(
+          customer.x - assignment.approachPoint.x,
+          customer.y - assignment.approachPoint.y,
+        ) <= 2;
+        if (!atApproach && path.length === 0) failed = true;
+        return { ...customer, state: 'guided', path };
+      });
+      if (failed) {
+        return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
+      }
+
       return {
-        staff: completedStaff, serviceItems,
-        queue: queue.filter(q => !ids.includes(q.id)),
-        tables: tables.map(t => t.id === staff.task.tableId ? { ...t, status: 'empty' } : t),
-        customers: customers.map(c => ids.includes(c.id)
-          ? leavingFields({ ...c, tableId: null, guideStaffId: null, chairId: null })
-          : c),
+        staff: {
+          ...staff,
+          path: [],
+          task: { ...staff.task, chairIds, stage: 'approach_chairs', approaches },
+        },
+        customers: approachingCustomers,
+        queue,
+        tables,
+        serviceItems,
       };
     }
 
+    const approaches = staff.task.approaches;
+    const validApproaches = Array.isArray(approaches)
+      && approaches.length === ids.length
+      && approaches.every((assignment, index) => assignment?.customerId === ids[index]
+        && assignment.chairId === chairIds[index]
+        && Number.isFinite(assignment.approachPoint?.x)
+        && Number.isFinite(assignment.approachPoint?.y)
+        && Number.isFinite(assignment.approachCell?.x)
+        && Number.isFinite(assignment.approachCell?.y));
+    if (stage !== 'approach_chairs' || !validApproaches) {
+      return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
+    }
+
+    const customersById = new Map(customers.map(customer => [customer.id, customer]));
+    let failed = false;
+    let replanned = false;
+    const replannedCustomers = customers.map(customer => {
+      const assignment = approaches.find(candidate => candidate.customerId === customer.id);
+      if (!assignment || customer.path?.length) return customer;
+      if (Math.hypot(
+        customer.x - assignment.approachPoint.x,
+        customer.y - assignment.approachPoint.y,
+      ) <= 2) return customer;
+      const path = getStaticApproachPath(
+        { ...state, customers, tables, serviceItems },
+        customer,
+        assignment,
+      );
+      if (!path.length) failed = true;
+      else replanned = true;
+      return { ...customer, path };
+    });
+    if (failed) {
+      return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
+    }
+    if (replanned) {
+      return { staff: { ...staff, path: [] }, customers: replannedCustomers, queue, tables, serviceItems };
+    }
+
+    const allAtApproaches = staff.task.approaches.every(assignment => {
+      const customer = customersById.get(assignment.customerId);
+      return customer
+        && (!customer.path || customer.path.length === 0)
+        && Math.hypot(
+          customer.x - assignment.approachPoint.x,
+          customer.y - assignment.approachPoint.y,
+        ) <= 2;
+    });
+    if (!allAtApproaches) {
+      return { staff: { ...staff, path: [] }, customers, queue, tables, serviceItems };
+    }
+
+    const seatTime = state.restaurant.gameTime;
+    const chairByCustomerId = new Map(ids.map((id, index) => [id, chairs[index]]));
     return {
-      staff: completedStaff, serviceItems,
-      queue: queue.filter(q => !ids.includes(q.id)),
-      tables: tables.map(t => t.id === staff.task.tableId ? { ...t, status: 'occupied' } : t),
-      customers: customers.map(c => {
-        const index = ids.indexOf(c.id);
-        if (index < 0) return c;
-        const chair = chairs[index];
-        return {
-          ...c,
-          state: 'seated', tableId: table?.id || c.tableId,
-          chairId: chairs[index].id,
-          guideStaffId: null, seatTime, path: [],
+      staff: completedStaff,
+      serviceItems,
+      queue: queue.filter(customer => !ids.includes(customer.id)),
+      tables: tables.map(candidate => candidate.id === table.id
+        ? { ...candidate, status: 'occupied' }
+        : candidate),
+      customers: customers.map(customer => {
+        const chair = chairByCustomerId.get(customer.id);
+        if (!chair) return customer;
+        const centre = getChairCentre(chair);
+        const seated = {
+          ...customer,
+          state: 'seated',
+          tableId: table.id,
+          chairId: chair.id,
+          guideStaffId: null,
+          seatTime,
+          path: [],
+          x: centre.x,
+          y: centre.y,
         };
+        delete seated.pathGoal;
+        delete seated.usingStaticFallback;
+        delete seated.minimumSpacing;
+        return seated;
       }),
     };
   }

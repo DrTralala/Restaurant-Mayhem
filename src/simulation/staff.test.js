@@ -308,7 +308,7 @@ it.each([
   expect({ x: first.x, y: first.y }).toEqual({ x: second.x, y: second.y });
 });
 
-it('completes guide seating without changing customer or staff coordinates after movement', () => {
+it('starts chair approach routing without changing customer or staff coordinates after movement', () => {
   const state = {
     ...baseState,
     staff: [{
@@ -325,11 +325,14 @@ it('completes guide seating without changing customer or staff coordinates after
 
   const resolved = resolveStaffAfterMovement(state, 0);
 
-  expect(resolved.staff[0]).toMatchObject({ x: 180, y: 220, task: null });
-  expect(resolved.customers[0]).toMatchObject({
-    state: 'seated', chairId: 'ch1', guideStaffId: null, x: 168, y: 232,
+  expect(resolved.staff[0]).toMatchObject({
+    x: 180, y: 220, task: { type: 'guide_customer', stage: 'approach_chairs' },
   });
-  expect(resolved.tables[0].status).toBe('occupied');
+  expect(resolved.customers[0]).toMatchObject({
+    state: 'guided', guideStaffId: 'guide', x: 168, y: 232,
+  });
+  expect(resolved.customers[0].path.length).toBeGreaterThan(0);
+  expect(resolved.tables[0].status).toBe('reserved');
 });
 
 it('marks only staff already in static-fallback recovery as head-on detour eligible', () => {
@@ -1330,6 +1333,32 @@ describe('updateStaff', () => {
     expect(result.tables[0].status).toBe('reserved');
   });
 
+  it('persists chair reservations in customer assignment order when guidance starts', () => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 860, y: 360, path: [], task: null }],
+      customers: [
+        { id: 'c1', partyId: 'p1', partySize: 2, state: 'waiting', patience: 100, happiness: 80, x: 880, y: 360 },
+        { id: 'c2', partyId: 'p1', partySize: 2, state: 'waiting', patience: 100, happiness: 80, x: 900, y: 360 },
+      ],
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 220 }],
+      chairs: [
+        { id: 'ch2', tableId: 't1', x: 210, y: 260 },
+        { id: 'ch1', tableId: 't1', x: 210, y: 180 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toMatchObject({
+      type: 'guide_customer',
+      customerIds: ['c1', 'c2'],
+      chairIds: ['ch2', 'ch1'],
+      stage: 'follow_guide',
+      approaches: [],
+    });
+  });
+
   it('does not seat a waiting customer or fall back to the table centre when no chairs exist', () => {
     const state = {
       ...baseState,
@@ -1469,7 +1498,7 @@ describe('updateStaff', () => {
     expect(result.customers[0].path.length).toBeGreaterThan(0);
   });
 
-  it('waiter completes seating on arrival', () => {
+  it('waiter starts the chair approach stage on arrival', () => {
     const waiter = {
       id: 'w1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150,
       x: 180, y: 220, path: [], task: { type: 'guide_customer', customerId: 'c1', tableId: 't1' },
@@ -1488,12 +1517,236 @@ describe('updateStaff', () => {
       restaurant: { ...baseState.restaurant, gameTime: 100 },
     };
     const result = updateStaff(state, 1);
-    expect(result.customers[0].state).toBe('seated');
-    expect(result.customers[0].guideStaffId).toBeNull();
-    expect(result.customers[0].seatTime).toBe(100);
-    expect(result.customers[0].chairId).toBe('ch1');
-    expect(result.tables[0].status).toBe('occupied');
+    expect(result.customers[0].state).toBe('guided');
+    expect(result.customers[0].guideStaffId).toBe('w1');
+    expect(result.customers[0].path.length).toBeGreaterThan(0);
+    expect(result.tables[0].status).toBe('reserved');
+    expect(result.staff[0].task).toMatchObject({
+      type: 'guide_customer', chairIds: ['ch1'], stage: 'approach_chairs',
+    });
+  });
+
+  it('waits at the table instead of seating followers that have not reached their chair approaches', () => {
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', x: 220, y: 220, path: [],
+        task: {
+          type: 'guide_customer', customerIds: ['c1'], tableId: 't1',
+          chairIds: ['ch1'], stage: 'follow_guide', approaches: [],
+        },
+      }],
+      customers: [{
+        id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', chairId: 'ch1',
+        x: 100, y: 100, path: [],
+      }],
+      tables: [{ id: 't1', status: 'reserved', seats: 1, x: 200, y: 200 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 180, y: 200 }],
+    };
+    const result = updateStaff(state, 0);
+    expect(result.staff[0].task).toMatchObject({
+      type: 'guide_customer',
+      stage: 'approach_chairs',
+    });
+    expect(result.customers[0]).toMatchObject({ state: 'guided', guideStaffId: 'w1' });
+    expect(result.customers[0].path.at(-1)).toEqual(result.staff[0].task.approaches[0].approachCell);
+    expect(result.customers[0].x).not.toBe(190);
+  });
+
+  it('seats the whole party atomically from distinct completed approaches', () => {
+    const approaches = [
+      { customerId: 'c1', chairId: 'ch1', approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 } },
+      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 14, y: 10 }, approachPoint: { x: 280, y: 200 } },
+    ];
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1', 'c2'], tableId: 't1',
+        chairIds: ['ch1', 'ch2'], stage: 'approach_chairs', approaches,
+      } }],
+      customers: [
+        { id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', chairId: 'ch1', x: 160, y: 200, path: [] },
+        { id: 'c2', state: 'guided', guideStaffId: 'w1', tableId: 't1', chairId: 'ch2', x: 280, y: 200, path: [] },
+      ],
+      tables: [{ id: 't1', status: 'reserved', seats: 2, x: 220, y: 200 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 180, y: 200 },
+        { id: 'ch2', tableId: 't1', x: 280, y: 200 },
+      ],
+    };
+    const result = updateStaff(state, 0);
+    expect(result.customers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'c1', state: 'seated', x: 190, y: 210 }),
+      expect.objectContaining({ id: 'c2', state: 'seated', x: 290, y: 210 }),
+    ]));
     expect(result.staff[0].task).toBeNull();
+  });
+
+  it('keeps the whole party guided until every assigned approach is complete', () => {
+    const approaches = [
+      { customerId: 'c1', chairId: 'ch1', approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 } },
+      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 14, y: 10 }, approachPoint: { x: 280, y: 200 } },
+    ];
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1', 'c2'], tableId: 't1',
+        chairIds: ['ch1', 'ch2'], stage: 'approach_chairs', approaches,
+      } }],
+      customers: [
+        { id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 160, y: 200, path: [] },
+        { id: 'c2', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 260, y: 180, path: [{ x: 14, y: 10 }] },
+      ],
+      tables: [{ id: 't1', status: 'reserved', seats: 2, x: 220, y: 200 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 180, y: 200 },
+        { id: 'ch2', tableId: 't1', x: 280, y: 200 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers.every(customer => customer.state === 'guided')).toBe(true);
+    expect(result.staff[0].task).toMatchObject({ stage: 'approach_chairs', approaches });
+    expect(result.tables[0].status).toBe('reserved');
+  });
+
+  it('replans only a stalled follower to its stored chair approach', () => {
+    const approaches = [
+      { customerId: 'c1', chairId: 'ch1', approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 } },
+      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 13, y: 10 }, approachPoint: { x: 260, y: 200 } },
+    ];
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1', 'c2'], tableId: 't1',
+        chairIds: ['ch1', 'ch2'], stage: 'approach_chairs', approaches,
+      } }],
+      customers: [
+        { id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 160, y: 200, path: [] },
+        { id: 'c2', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 100, y: 100, path: [] },
+      ],
+      tables: [{ id: 't1', status: 'reserved', seats: 2, x: 220, y: 200 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 180, y: 200 },
+        { id: 'ch2', tableId: 't1', x: 280, y: 200 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers.find(customer => customer.id === 'c1').path).toEqual([]);
+    expect(result.customers.find(customer => customer.id === 'c2').path.length).toBeGreaterThan(0);
+    expect(result.customers.find(customer => customer.id === 'c2').path.at(-1)).toEqual({ x: 13, y: 10 });
+    expect(result.staff[0].task).toMatchObject({ stage: 'approach_chairs', approaches });
+  });
+
+  it('never teleports to a chair enclosed after guidance starts', () => {
+    const initial = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 220, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1'], tableId: 't1',
+        chairIds: ['ch1'], stage: 'follow_guide', approaches: [],
+      } }],
+      customers: [{
+        id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1',
+        x: 100, y: 100, path: [], patience: 100, happiness: 80,
+      }],
+      tables: [{ id: 't1', status: 'reserved', seats: 1, x: 200, y: 200 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 180, y: 200 }],
+    };
+    const approaching = updateStaff(initial, 0);
+    const assignment = approaching.staff[0].task.approaches[0];
+    const enclosed = {
+      ...approaching,
+      chairs: [
+        ...approaching.chairs,
+        { id: 'enclosed-approach', x: assignment.approachPoint.x, y: assignment.approachPoint.y },
+      ],
+      customers: approaching.customers.map(customer => ({ ...customer, x: 100, y: 100, path: [] })),
+    };
+
+    let result = enclosed;
+    for (let tick = 0; tick < 3; tick += 1) result = updateStaff(result, 0.1);
+
+    const customer = result.customers[0];
+    expect(Number.isFinite(customer.x) && Number.isFinite(customer.y)).toBe(true);
+    expect(customer.state).not.toBe('seated');
+    expect(customer).not.toMatchObject({ x: 190, y: 210 });
+    expect(['guided', 'leaving']).toContain(customer.state);
+  });
+
+  it('cancels the whole guide task when chair approaches cannot be assigned', () => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 220, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1'], tableId: 't1',
+        chairIds: ['ch1'], stage: 'follow_guide', approaches: [],
+      } }],
+      customers: [{
+        id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1',
+        x: 100, y: 100, path: [], patience: 100, happiness: 80,
+      }],
+      tables: [{ id: 't1', status: 'reserved', seats: 1, x: 220, y: 180 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 200, y: 200 },
+        { id: 'north', x: 200, y: 180 },
+        { id: 'south', x: 200, y: 220 },
+        { id: 'west', x: 180, y: 200 },
+        { id: 'east', x: 220, y: 200 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.tables[0].status).toBe('empty');
+    expect(result.customers[0]).toMatchObject({
+      state: 'leaving', tableId: null, guideStaffId: null, chairId: null,
+    });
+    expect(result.customers[0]).not.toMatchObject({ x: 210, y: 210 });
+  });
+
+  it('moves an admitted queued customer continuously through a door before seating', () => {
+    const initial = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 860, y: 360, path: [], task: null }],
+      queue: [{ id: 'q1', partyId: 'p1', partySize: 1, state: 'queued', patience: 100, happiness: 80 }],
+      doors: [{ id: 'door1', y: 340 }],
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 200, y: 220 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+    };
+    const world = getRestaurantWorld(initial.restaurant || {});
+    let state = updateStaff(initial, 0);
+    let previous = state.customers[0];
+    let firstInteriorTransition = null;
+    let lastGuided = previous;
+    let approachPoint = null;
+
+    expect(previous.x).toBeGreaterThan(world.doorX);
+    for (let tick = 0; tick < 3000 && state.customers[0].state !== 'seated'; tick += 1) {
+      state = updateStaff(state, 0.1);
+      const current = state.customers[0];
+      if (current.state !== 'seated') {
+        const displacement = Math.hypot(current.x - previous.x, current.y - previous.y);
+        expect(displacement).toBeLessThanOrEqual(62 * 0.1 + 1e-6);
+        if (!firstInteriorTransition && previous.x > world.doorX && current.x <= world.doorX) {
+          firstInteriorTransition = { previous, current, displacement };
+        }
+        lastGuided = current;
+      }
+      approachPoint = state.staff[0].task?.stage === 'approach_chairs'
+        ? state.staff[0].task.approaches[0].approachPoint
+        : approachPoint;
+      previous = current;
+    }
+
+    expect(firstInteriorTransition).not.toBeNull();
+    expect(firstInteriorTransition.current.state).toBe('guided');
+    expect(firstInteriorTransition.displacement).toBeGreaterThan(0);
+    expect(approachPoint).not.toBeNull();
+    expect(Math.hypot(lastGuided.x - approachPoint.x, lastGuided.y - approachPoint.y)).toBeLessThanOrEqual(2);
+    expect(state.customers[0]).toMatchObject({ state: 'seated', chairId: 'ch1' });
   });
 
   it('clears a queued customer table reservation when chairs disappear during guidance', () => {
@@ -1540,11 +1793,14 @@ describe('updateStaff', () => {
       restaurant: { ...baseState.restaurant, gameTime: 100 },
     };
 
-    const result = updateStaff(state, 1);
+    let result = state;
+    for (let tick = 0; tick < 100 && result.customers.some(customer => customer.state !== 'seated'); tick += 1) {
+      result = updateStaff(result, 1);
+    }
 
     expect(result.customers).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'c1', state: 'seated', chairId: 'ch1', x: 860, y: 360 }),
-      expect.objectContaining({ id: 'c2', state: 'seated', chairId: 'ch2', x: 870, y: 360 }),
+      expect.objectContaining({ id: 'c1', state: 'seated', chairId: 'ch1', x: 220, y: 190 }),
+      expect.objectContaining({ id: 'c2', state: 'seated', chairId: 'ch2', x: 220, y: 270 }),
     ]));
     expect(result.tables[0].status).toBe('occupied');
   });
