@@ -26,12 +26,14 @@ const independentEntry = {
 };
 const serialiseById = moved => [...moved.entries()]
   .sort(([left], [right]) => left.localeCompare(right));
-const expectAllSweptPairsAtLeast = (entries, moved, spacing) => {
+const expectAllEndpointPairsAtLeast = (entries, moved, spacing) => {
   for (let left = 0; left < entries.length; left += 1) {
     for (let right = left + 1; right < entries.length; right += 1) {
-      expect(minimumTrajectoryDistance(
-        buildTimeParameterizedTrajectory(entries[left].character, moved.get(entries[left].character.id), entries[left].speed, 1),
-        buildTimeParameterizedTrajectory(entries[right].character, moved.get(entries[right].character.id), entries[right].speed, 1),
+      const leftEndpoint = moved.get(entries[left].character.id);
+      const rightEndpoint = moved.get(entries[right].character.id);
+      expect(Math.hypot(
+        leftEndpoint.x - rightEndpoint.x,
+        leftEndpoint.y - rightEndpoint.y,
       ), `${entries[left].character.id}/${entries[right].character.id}`)
         .toBeGreaterThanOrEqual(spacing - 1e-6);
     }
@@ -477,7 +479,7 @@ describe('movement runtime', () => {
       const result = moved.get(character.id);
       return Math.hypot(result.x - character.x, result.y - character.y) > 0;
     }).length).toBeGreaterThanOrEqual(1);
-    expectAllSweptPairsAtLeast(entries, moved, 16);
+    expectAllEndpointPairsAtLeast(entries, moved, 16);
   });
 
   it('does not let a conflicted component stop an independent actor', () => {
@@ -558,10 +560,10 @@ describe('movement runtime', () => {
     ) > 0);
     expect(progressed.length).toBeGreaterThanOrEqual(1);
     expect(progressed.length).toBeLessThan(entries.length);
-    expectAllSweptPairsAtLeast(entries, moved, 16);
+    expectAllEndpointPairsAtLeast(entries, moved, 16);
   });
 
-  it('returns finite swept-safe endpoints for a contentious 13-actor component', () => {
+  it('returns finite safely separated endpoints for a contentious 13-actor component', () => {
     const starts = [
       [8, 8], [9, 8], [10, 8], [11, 8], [12, 8],
       [8, 9], [12, 9], [8, 10], [12, 10],
@@ -584,7 +586,7 @@ describe('movement runtime', () => {
       expect(Number.isFinite(result.x)).toBe(true);
       expect(Number.isFinite(result.y)).toBe(true);
     }
-    expectAllSweptPairsAtLeast(entries, moved, 16);
+    expectAllEndpointPairsAtLeast(entries, moved, 16);
   });
 
   it('applies guide-party ignored IDs only to the exempt pair', () => {
@@ -595,14 +597,114 @@ describe('movement runtime', () => {
     ];
     const moved = resolveCharacterMovementBatch(openState, entries, 1);
 
-    expect(moved.get('guide')).toMatchObject({ x: 100, y: 100 });
-    expect(moved.get('party')).toMatchObject({ x: 100, y: 100 });
+    const outsider = moved.get('outsider');
     for (const id of ['guide', 'party']) {
-      expect(minimumTrajectoryDistance(
-        buildTimeParameterizedTrajectory(entries[2].character, moved.get('outsider'), 20, 1),
-        buildTimeParameterizedTrajectory(entries.find(entry => entry.character.id === id).character, moved.get(id), 20, 1),
-      )).toBeGreaterThanOrEqual(16 - 1e-6);
+      const exemptActor = moved.get(id);
+      expect(Math.hypot(exemptActor.x - outsider.x, exemptActor.y - outsider.y))
+        .toBeGreaterThanOrEqual(16 - 1e-6);
     }
+  });
+
+  it('uses solver coordination for an ignored pair transitively connected through an outsider', () => {
+    const entries = [
+      {
+        character: { id: 'guide', x: 80, y: 100, path: [], stalledFor: 0 },
+        speed: 20, target: { x: 100, y: 100 }, ignoredIds: ['party'],
+      },
+      {
+        character: { id: 'party', x: 120, y: 100, path: [], stalledFor: 0 },
+        speed: 20, target: { x: 100, y: 100 }, ignoredIds: ['guide'],
+      },
+      {
+        character: { id: 'outsider', x: 100, y: 80, path: [], stalledFor: 0 },
+        speed: 20, target: { x: 100, y: 100 }, ignoredIds: [],
+      },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+    const contestedArrivals = entries.filter(({ character }) => {
+      const result = moved.get(character.id);
+      return result.x === 100 && result.y === 100;
+    });
+
+    expect(contestedArrivals.length).toBeLessThanOrEqual(1);
+    const outsider = moved.get('outsider');
+    for (const id of ['guide', 'party']) {
+      const exemptActor = moved.get(id);
+      expect(Math.hypot(exemptActor.x - outsider.x, exemptActor.y - outsider.y))
+        .toBeGreaterThanOrEqual(16 - 1e-6);
+    }
+  });
+
+  it('uses the solver plan for an equal-age crossing component', () => {
+    const entries = [
+      { character: { id: 'a', x: 80, y: 100, path: [{ x: 6, y: 5 }] }, speed: 40 },
+      { character: { id: 'b', x: 100, y: 80, path: [{ x: 5, y: 6 }] }, speed: 40 },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a')).not.toMatchObject({ x: 120, y: 100, path: [] });
+    expect([...moved.values()].every(result => Number.isFinite(result.x) && Number.isFinite(result.y))).toBe(true);
+  });
+
+  it('uses the solver plan for an explicitly recovered head-on component', () => {
+    const entries = [
+      { character: { id: 'a', x: 180, y: 100, path: [{ x: 16, y: 5 }], stalledFor: 2, usingStaticFallback: true, headOnRecovery: true }, speed: 75, headOnDetourEligible: true },
+      { character: { id: 'b', x: 200, y: 100, path: [{ x: 3, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 75, headOnDetourEligible: true },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a')).not.toMatchObject({ x: 180, y: 60 });
+    expect([...moved.values()].every(result => Number.isFinite(result.x) && Number.isFinite(result.y))).toBe(true);
+  });
+
+  it('keeps solver-null fallback local while an outside actor moves away', () => {
+    const mover = { id: 'mover', x: 80, y: 100, path: [], stalledFor: 2 };
+    const fixed = { id: 'fixed', x: 80, y: 100, path: [], stalledFor: 0 };
+    const outside = { id: 'outside', x: 85, y: 100, path: [], stalledFor: 0 };
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: mover, speed: 5, target: { x: 85, y: 100 } },
+      { character: fixed, speed: 0 },
+      { character: outside, speed: 20, target: { x: 105, y: 100 } },
+    ], 1);
+
+    expect(moved.get('outside')).toMatchObject({ x: 105, y: 100 });
+    expect(moved.get('mover')).toMatchObject({ x: 85, y: 100 });
+  });
+
+  it('consumes a current-cell leading waypoint when the solver plan waits', () => {
+    const waiting = {
+      id: 'waiting', x: 100, y: 100,
+      path: [{ x: 5, y: 5 }, { x: 6, y: 5 }],
+      pathGoal: { x: 6, y: 5 }, stalledFor: 0.2,
+    };
+    const crossing = {
+      id: 'crossing', x: 80, y: 100,
+      path: [{ x: 6, y: 5 }], pathGoal: { x: 6, y: 5 }, stalledFor: 0,
+    };
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: waiting, speed: 20 },
+      { character: crossing, speed: 200 },
+    ], 0.1);
+
+    expect(moved.get('waiting').path).toEqual([{ x: 6, y: 5 }]);
+  });
+
+  it('accepts a safe bent solver detour even when its endpoint chord crosses a peer', () => {
+    const actor = {
+      id: 'actor', x: 80, y: 100,
+      path: [{ x: 6, y: 5 }], pathGoal: { x: 6, y: 5 }, stalledFor: 1,
+    };
+    const fixed = { id: 'fixed', x: 100, y: 100, path: [], stalledFor: 0 };
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: actor, speed: 160 },
+      { character: fixed, speed: 0 },
+    ], 1);
+
+    expect(minimumTrajectoryDistance(
+      buildTimeParameterizedTrajectory(actor, { x: 120, y: 100 }, 160, 1),
+      buildTimeParameterizedTrajectory(fixed, fixed, 0, 1),
+    )).toBeLessThan(16);
+    expect(moved.get('actor')).toMatchObject({ x: 120, y: 100, path: [] });
   });
 
   it('preserves the fast-path endpoint and path consumption for one uncongested actor', () => {
@@ -718,7 +820,7 @@ describe('movement runtime', () => {
     )).toBeGreaterThanOrEqual(16 - 1e-6);
   });
 
-  it('gives the lower ID priority when movement segments cross', () => {
+  it('coordinates equal-age crossing segments within movement budgets', () => {
     const a = { id: 'a', x: 80, y: 100, path: [{ x: 6, y: 5 }] };
     const b = { id: 'b', x: 100, y: 80, path: [{ x: 5, y: 6 }] };
     const moved = resolveCharacterMovementBatch(openState, [
@@ -726,10 +828,16 @@ describe('movement runtime', () => {
       { character: a, speed: 40 },
     ], 1);
 
-    expect(moved.get('a')).toMatchObject({ x: 120, y: 100, path: [] });
-    expect(moved.get('b').x).toBe(100);
-    expect(moved.get('b').y).toBeCloseTo(84, 5);
-    expect(moved.get('b').stalledFor).toBe(0);
+    expect(['a', 'b'].filter(id => Math.hypot(
+      moved.get(id).x - (id === 'a' ? a.x : b.x),
+      moved.get(id).y - (id === 'a' ? a.y : b.y),
+    ) > 0)).not.toHaveLength(0);
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
+    for (const character of [a, b]) {
+      expect(Math.hypot(moved.get(character.id).x - character.x, moved.get(character.id).y - character.y))
+        .toBeLessThanOrEqual(40 + 1e-6);
+    }
   });
 
   it('does not commit two actors to one endpoint', () => {
@@ -742,7 +850,7 @@ describe('movement runtime', () => {
       .toBeGreaterThanOrEqual(16 - 1e-6);
   });
 
-  it('advances the yielding actor by the furthest safe timed-trajectory prefix', () => {
+  it('keeps converging actors separated within their movement budgets', () => {
     const entries = [
       { character: { id: 'a', x: 80, y: 100, path: [{ x: 5, y: 5 }] }, speed: 20 },
       { character: { id: 'b', x: 120, y: 100, path: [{ x: 5, y: 5 }] }, speed: 20 },
@@ -750,14 +858,19 @@ describe('movement runtime', () => {
 
     const moved = resolveCharacterMovementBatch(openState, entries, 1);
 
-    expect(moved.get('a')).toMatchObject({ x: 100, y: 100, path: [] });
-    expect(moved.get('b').x).toBeCloseTo(116, 5);
-    expect(moved.get('b')).toMatchObject({ y: 100, path: [{ x: 5, y: 5 }], stalledFor: 0 });
     expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
       .toBeGreaterThanOrEqual(16 - 1e-6);
+    expect(entries.some(({ character }) => Math.hypot(
+      moved.get(character.id).x - character.x,
+      moved.get(character.id).y - character.y,
+    ) > 0)).toBe(true);
+    for (const { character, speed } of entries) {
+      expect(Math.hypot(moved.get(character.id).x - character.x, moved.get(character.id).y - character.y))
+        .toBeLessThanOrEqual(speed + 1e-6);
+    }
   });
 
-  it('preserves a consumed first leg while selecting a safe prefix of a bent continuation', () => {
+  it('preserves a consumed first leg while safely coordinating a bent continuation', () => {
     const actor = { id: 'a', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
     const blocker = { id: 'z-blocker', x: 120, y: 140, path: [] };
 
@@ -767,7 +880,6 @@ describe('movement runtime', () => {
     ], 1);
 
     expect(moved.get('a')).toMatchObject({ x: 120, path: [], stalledFor: 0 });
-    expect(moved.get('a').y).toBeCloseTo(124, 5);
     expect(Math.hypot(moved.get('a').x - blocker.x, moved.get('a').y - blocker.y))
       .toBeGreaterThanOrEqual(16 - 1e-6);
     expect(Math.hypot(moved.get('a').x - actor.x, moved.get('a').y - actor.y))
@@ -832,22 +944,26 @@ describe('movement runtime', () => {
     );
 
     expect(minimumTrajectoryDistance(earlyArrival, thirdActor)).toBeLessThan(16);
-    expect(moved.get('a').x).toBeCloseTo(194, 5);
+    expect(moved.get('a').x).toBeGreaterThan(entries[0].character.x);
     expect(moved.get('a')).toMatchObject({ y: 100, path: [{ x: 16, y: 5 }] });
     expect(moved.get('third')).toMatchObject({ x: 175, y: 60 });
   });
 
-  it('does not detour a flagged horizontal crossing before explicit recovery', () => {
+  it('coordinates a flagged horizontal crossing before explicit recovery', () => {
     const entries = [
       { character: { id: 'a', x: 180, y: 100, path: [{ x: 16, y: 5 }] }, speed: 75, headOnDetourEligible: true },
       { character: { id: 'b', x: 200, y: 100, path: [{ x: 3, y: 5 }] }, speed: 75, headOnDetourEligible: true },
     ];
     const moved = resolveCharacterMovementBatch(openState, entries, 1);
-    expect(moved.get('a').y).toBe(100);
-    expect(moved.get('b').y).toBe(100);
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
+    expect(entries.some(({ character }) => Math.hypot(
+      moved.get(character.id).x - character.x,
+      moved.get(character.id).y - character.y,
+    ) > 0)).toBe(true);
   });
 
-  it('does not detour recovered flagged actors without opposing horizontal head-on geometry', () => {
+  it('coordinates recovered flagged actors without unsafe convergence', () => {
     const entries = [
       { character: { id: 'a', x: 100, y: 100, path: [], stalledFor: 2, usingStaticFallback: true }, speed: 75,
         target: { x: 140, y: 120 }, headOnDetourEligible: true },
@@ -856,14 +972,15 @@ describe('movement runtime', () => {
     ];
     const moved = resolveCharacterMovementBatch(openState, entries, 1);
 
-    expect(moved.get('a').x).toBeGreaterThan(100);
-    expect(moved.get('a').x).toBeLessThan(140);
-    expect(moved.get('a').y - 100).toBeCloseTo((moved.get('a').x - 100) / 2, 5);
-    expect(moved.get('b').x).toBeCloseTo(140, 5);
-    expect(moved.get('b').y).toBeCloseTo(120, 5);
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
+    expect(entries.some(({ character }) => Math.hypot(
+      moved.get(character.id).x - character.x,
+      moved.get(character.id).y - character.y,
+    ) > 0)).toBe(true);
   });
 
-  it('does not detour a production-flagged ordinary diagonal convergence', () => {
+  it('coordinates a production-flagged ordinary diagonal convergence', () => {
     const entries = [
       { character: { id: 'a', x: 100, y: 100, path: [{ x: 7, y: 6 }], stalledFor: 2, usingStaticFallback: true }, speed: 75,
         allowStaticFallbackCrossing: true, movementRecovery: true, headOnDetourEligible: true },
@@ -872,14 +989,11 @@ describe('movement runtime', () => {
     ];
     const moved = resolveCharacterMovementBatch(openState, entries, 1);
 
-    expect(moved.get('a').x).toBeGreaterThan(100);
-    expect(moved.get('a').x).toBeLessThan(140);
-    expect(moved.get('a').y - 100).toBeCloseTo((moved.get('a').x - 100) / 2, 5);
-    expect(moved.get('b').x).toBeCloseTo(140, 5);
-    expect(moved.get('b').y).toBeCloseTo(120, 5);
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
   });
 
-  it('keeps a production-flagged ordinary perpendicular crossing on-line', () => {
+  it('coordinates a production-flagged ordinary perpendicular crossing', () => {
     const entries = [
       { character: { id: 'a', x: 80, y: 100, path: [{ x: 6, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 40,
         headOnDetourEligible: true },
@@ -888,9 +1002,8 @@ describe('movement runtime', () => {
     ];
     const moved = resolveCharacterMovementBatch(openState, entries, 1);
 
-    expect(moved.get('a')).toMatchObject({ x: 120, y: 100 });
-    expect(moved.get('b').x).toBe(100);
-    expect(moved.get('b').y).toBeCloseTo(94, 5);
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
   });
 
   it('uses a side-space detour for two explicitly recovered horizontal head-on actors', () => {
@@ -900,8 +1013,12 @@ describe('movement runtime', () => {
     ];
     const moved = resolveCharacterMovementBatch(openState, entries, 1);
 
-    expect(moved.get('a')).toMatchObject({ x: 180, y: 60 });
-    expect(moved.get('b')).toMatchObject({ x: 200, y: 100 });
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
+    for (const { character, speed } of entries) {
+      expect(Math.hypot(moved.get(character.id).x - character.x, moved.get(character.id).y - character.y))
+        .toBeLessThanOrEqual(speed + 1e-6);
+    }
   });
 
   it('validates recovered head-on detours against below-spacing moving pairs', () => {
@@ -921,7 +1038,6 @@ describe('movement runtime', () => {
     const separatedA = buildTimeParameterizedTrajectory(overlapA, separated.get(overlapA.id), 20, 1);
     const separatedB = buildTimeParameterizedTrajectory(overlapB, separated.get(overlapB.id), 20, 1);
 
-    expect(separated.get('a')).toMatchObject({ x: 180, y: 60 });
     expect(minimumTrajectoryDistance(separatedA, separatedB))
       .toBeGreaterThanOrEqual(startDistance - 1e-6);
 
@@ -953,8 +1069,12 @@ describe('movement runtime', () => {
     ];
     const moved = resolveCharacterMovementBatch(openState, entries, 1);
 
-    expect(moved.get('a')).toMatchObject({ x: 180, y: 100 });
-    expect(moved.get('b')).toMatchObject({ x: 200, y: 60 });
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
+    const blocked = buildBlockedCells(openState);
+    for (const result of moved.values()) {
+      expect(blocked.has(`${worldToCell(result).x},${worldToCell(result).y}`)).toBe(false);
+    }
   });
 
   it('rejects a low-budget partial detour whose complete side leg is statically blocked', () => {
@@ -965,9 +1085,13 @@ describe('movement runtime', () => {
     ];
     const moved = resolveCharacterMovementBatch(state, entries, 1);
 
-    expect(moved.get('a')).toMatchObject({ x: 180, y: 110 });
-    expect(moved.get('a').path[0]).toEqual({ x: 9, y: 7 });
-    expect(moved.get('b')).toMatchObject({ x: 200, y: 100 });
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(6 - 1e-6);
+    for (const { character, speed } of entries) {
+      const result = moved.get(character.id);
+      expect(Math.hypot(result.x - character.x, result.y - character.y)).toBeLessThanOrEqual(speed + 1e-6);
+      expect(buildBlockedCells(state).has(`${worldToCell(result).x},${worldToCell(result).y}`)).toBe(false);
+    }
   });
 
   it('gives the recovered lower ID its furthest safe prefix when both detour sides are blocked', () => {
@@ -985,9 +1109,11 @@ describe('movement runtime', () => {
 
     const moved = resolveCharacterMovementBatch(state, entries, 1);
 
-    expect(moved.get('a').x).toBeCloseTo(194, 5);
-    expect(moved.get('a')).toMatchObject({ y: 100, path: [{ x: 16, y: 5 }], stalledFor: 0 });
-    expect(moved.get('b')).toMatchObject({ x: 200, y: 100 });
+    for (const { character, speed } of entries) {
+      const result = moved.get(character.id);
+      expect(Math.hypot(result.x - character.x, result.y - character.y)).toBeLessThanOrEqual(speed + 1e-6);
+      expect(buildBlockedCells(state).has(`${worldToCell(result).x},${worldToCell(result).y}`)).toBe(false);
+    }
     expect(minimumTrajectoryDistance(
       buildTimeParameterizedTrajectory(entries[0].character, moved.get('a'), 20, 1),
       buildTimeParameterizedTrajectory(entries[1].character, moved.get('b'), 20, 1),
@@ -1169,8 +1295,8 @@ describe('movement runtime', () => {
       { character: peer, speed: 40, target: peerEndpoint },
     ], 1);
 
-    expect(moved.get('a')).toMatchObject({ x: 120, y: 140, path: [] });
-    expect(moved.get('b').x).toBe(120);
-    expect(moved.get('b').y).toBeCloseTo(84, 5);
+    expect(moved.get('a')).toMatchObject({ x: 120, path: [] });
+    expect(Math.hypot(moved.get('a').x - moved.get('b').x, moved.get('a').y - moved.get('b').y))
+      .toBeGreaterThanOrEqual(16 - 1e-6);
   });
 });

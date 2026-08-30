@@ -505,7 +505,7 @@ function isExplicitRecoveredHorizontalHeadOn(intent, peer) {
     && isHorizontalHeadOnGeometry(intent, peer);
 }
 
-function findSafeDetour(state, intent, spacing, dt, intents, resolutions) {
+function findSafeDetour(state, intent, spacing, dt, intents, resolutions, checkedIntents = intents) {
   for (const y of [intent.start.y - 40, intent.start.y + 40]) {
     const sideTarget = { x: intent.start.x, y };
     if (!isInsideWorld(state, worldToCell(sideTarget))
@@ -527,7 +527,7 @@ function findSafeDetour(state, intent, spacing, dt, intents, resolutions) {
     if (!isSafeSegment(state, intent.start, endpoint)) continue;
     const candidateResolutions = new Map(resolutions);
     candidateResolutions.set(intent.character.id, candidate);
-    if (areIntentPairsSafe(intents, candidateResolutions)) {
+    if (areIntentPairsSafeFor(checkedIntents, intents, candidateResolutions)) {
       return candidate;
     }
   }
@@ -539,7 +539,10 @@ function getEffectivePairSpacing(actor, peer, requiredSpacing) {
     actor.start.x - peer.start.x,
     actor.start.y - peer.start.y,
   );
-  return Math.min(requiredSpacing, startingDistance);
+  // Do not let accepted floating-point tolerance ratchet normal spacing down each tick.
+  return startingDistance >= requiredSpacing - 1e-5
+    ? requiredSpacing
+    : startingDistance;
 }
 
 function isSafeIntentPair(actor, peer, requiredSpacing) {
@@ -639,19 +642,6 @@ function solverActorForIntent(intent) {
   };
 }
 
-function componentHasIgnoredPair(component) {
-  for (let leftIndex = 0; leftIndex < component.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < component.length; rightIndex += 1) {
-      const left = component[leftIndex];
-      const right = component[rightIndex];
-      if (ignoresIntentPair(left, right.character.id) || ignoresIntentPair(right, left.character.id)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 function trajectoryPositionAt(trajectory, time) {
   const segment = trajectory.find(candidate => time >= candidate.startTime - 1e-9
     && time <= candidate.endTime + 1e-9) || trajectory.at(-1);
@@ -726,6 +716,11 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
   let nextPlanIndex = 0;
   let previousPlanCell = startCell;
 
+  while (path.length > 0 && isAtTarget(current, cellToWorld(path[0]))
+    && consumeReachedPathCell(intent, path, path[0])) {
+    pathConsumptionTimes.push(0);
+  }
+
   for (let index = 0; index < plan.length; index += 1) {
     const target = cellToWorld(plan[index]);
     const slotStart = index * slotSeconds;
@@ -736,6 +731,9 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
     if (slotStart >= dt - 1e-9 || travelled >= budget - 1e-9) break;
 
     if (cellsEqual(plan[index], previousPlanCell) || isAtTarget(current, target)) {
+      if (isAtTarget(current, target) && consumeReachedPathCell(intent, path, plan[index])) {
+        pathConsumptionTimes.push(dt > 0 ? Math.min(1, slotStart / dt) : 0);
+      }
       appendTimedSegment(trajectory, current, current, slotStart, Math.min(dt, slotEnd), dt);
       nextPlanIndex = index + 1;
       previousPlanCell = plan[index];
@@ -767,6 +765,13 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
       pathConsumptionTimes.push(Math.min(1, (slotStart + duration) / dt));
     }
     appendTimedSegment(trajectory, current, current, slotStart + duration, Math.min(dt, slotEnd), dt);
+    // Reaching a contested desired waypoint completes this tick's original intent.
+    if (isAtTarget(current, intent.desired)
+      && component.some(peer => peer !== intent
+        && cellsEqual(worldToCell(peer.desired), worldToCell(intent.desired)))) {
+      nextPlanIndex = plan.length;
+      break;
+    }
   }
 
   if (trajectory.length === 0) trajectory.push(...stationaryTrajectory(intent.start));
@@ -821,16 +826,7 @@ function resolutionAtTime(intent, resolution, time) {
 }
 
 function isSafeResolvedPair(actor, peer, requiredSpacing) {
-  if (!isSafeIntentPair(actor, peer, requiredSpacing)) return false;
-  if (!actor.fromLocalConflictPlan && !peer.fromLocalConflictPlan) return true;
-  const effectiveSpacing = getEffectivePairSpacing(actor, peer, requiredSpacing);
-  const actorDirect = buildTimeParameterizedTrajectory(
-    actor.start, actor.endpoint, actor.speed, actor.movementDt,
-  );
-  const peerDirect = buildTimeParameterizedTrajectory(
-    peer.start, peer.endpoint, peer.speed, peer.movementDt,
-  );
-  return minimumTrajectoryDistance(actorDirect, peerDirect) >= effectiveSpacing - 1e-6;
+  return isSafeIntentPair(actor, peer, requiredSpacing);
 }
 
 function isResolutionSafeForIntent(intent, candidate, intents, resolutions) {
@@ -919,26 +915,16 @@ function furthestSafeTrajectoryPrefix(intent, intents, resolutions) {
 }
 
 
-function areIntentPairsSafe(intents, resolutions) {
-  for (let leftIndex = 0; leftIndex < intents.length; leftIndex += 1) {
-    const left = intents[leftIndex];
-    for (let rightIndex = leftIndex + 1; rightIndex < intents.length; rightIndex += 1) {
-      const right = intents[rightIndex];
-      if (ignoresIntentPair(left, right.character.id) || ignoresIntentPair(right, left.character.id)) continue;
-      const spacing = Math.max(left.spacing, right.spacing);
-      if (!isSafeResolvedPair(
-        resolutions.get(left.character.id),
-        resolutions.get(right.character.id),
-        spacing,
-      )) {
-        return false;
-      }
-    }
-  }
-  return true;
+function areIntentPairsSafeFor(checkedIntents, intents, resolutions) {
+  return checkedIntents.every(intent => isResolutionSafeForIntent(
+    intent,
+    resolutions.get(intent.character.id),
+    intents,
+    resolutions,
+  ));
 }
 
-function resolveIntentPairs(state, intents, resolutions, dt) {
+function resolveIntentPairs(state, intents, resolutions, dt, validationIntents = intents) {
   for (const intent of intents) resolutions.set(intent.character.id, resolvedAtStart(intent));
   const yieldedHeadOnIds = new Set();
 
@@ -962,27 +948,28 @@ function resolveIntentPairs(state, intents, resolutions, dt) {
         intent,
         Math.max(intent.spacing, headOnPeer.spacing),
         dt,
-        intents,
+        validationIntents,
         detourResolutions,
+        intents,
       );
       if (detour) {
         resolutions.set(intent.character.id, detour);
         yieldedHeadOnIds.add(headOnPeer.character.id);
       } else {
-        resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(intent, intents, resolutions));
+        resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(intent, validationIntents, resolutions));
       }
       continue;
     }
 
-    if (isResolutionSafeForIntent(intent, resolvedAtDesired(intent), intents, resolutions)) {
+    if (isResolutionSafeForIntent(intent, resolvedAtDesired(intent), validationIntents, resolutions)) {
       resolutions.set(intent.character.id, resolvedAtDesired(intent));
       continue;
     }
 
-    resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(intent, intents, resolutions));
+    resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(intent, validationIntents, resolutions));
   }
 
-  if (!areIntentPairsSafe(intents, resolutions)) {
+  if (!areIntentPairsSafeFor(intents, validationIntents, resolutions)) {
     for (const intent of intents) resolutions.set(intent.character.id, resolvedAtStart(intent));
   }
 }
@@ -1003,27 +990,13 @@ function componentIsSafe(component, intents, resolutions) {
 
 function resolveComponentWithExistingSafety(state, component, resolutions, dt, intents) {
   const ordered = [...component].sort(compareIntentsByAgedPriority);
-  const componentIds = new Set(component.map(intent => intent.character.id));
-  const validationOrder = [
-    ...ordered,
-    ...intents.filter(intent => !componentIds.has(intent.character.id)),
-  ];
-  const trialResolutions = new Map(resolutions);
-  resolveIntentPairs(state, validationOrder, trialResolutions, dt);
-  for (const intent of component) {
-    resolutions.set(intent.character.id, trialResolutions.get(intent.character.id));
-  }
+  resolveIntentPairs(state, ordered, resolutions, dt, intents);
   if (!componentIsSafe(component, intents, resolutions)) {
     for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
   }
 }
 
 function resolveConflictComponent(state, component, resolutions, dt, intents) {
-  if (componentHasIgnoredPair(component)) {
-    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
-    return;
-  }
-
   const actors = component.map(solverActorForIntent);
   const horizon = 8;
   const solved = solveLocalConflictComponent({
@@ -1037,13 +1010,6 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
     resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
     return;
   }
-  if (component.some(intent => intent.character.headOnRecovery)
-    || (component.length === 2
-      && (component[0].character.stalledFor || 0) === (component[1].character.stalledFor || 0))) {
-    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
-    return;
-  }
-
   const candidates = new Map(component.map(intent => [
     intent.character.id,
     resolutionFromSolverPlan(
@@ -1083,7 +1049,18 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   const beforeLength = character.path?.length || 0;
   const displacement = Math.hypot(moved.x - intent.start.x, moved.y - intent.start.y);
   const consumedWaypoint = (moved.path?.length || 0) < beforeLength;
-  const progress = displacement >= 0.1 || consumedWaypoint;
+  const desiredDistanceBefore = Math.hypot(
+    intent.desired.x - intent.start.x,
+    intent.desired.y - intent.start.y,
+  );
+  const desiredDistanceAfter = Math.hypot(
+    intent.desired.x - moved.x,
+    intent.desired.y - moved.y,
+  );
+  // A solver side-step must not erase age unless it advances the original intent.
+  const progress = consumedWaypoint
+    || (displacement >= 0.1
+      && (!moved.localConflictTarget || desiredDistanceAfter < desiredDistanceBefore - 0.1));
   const targetReached = intent.target && isAtTarget(moved, intent.target);
 
   if (!character.path?.length && (!intent.target || targetReached)) {
