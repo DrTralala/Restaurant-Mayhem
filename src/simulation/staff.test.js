@@ -1553,6 +1553,37 @@ describe('updateStaff', () => {
     expect(result.customers[0].x).not.toBe(190);
   });
 
+  it.each([
+    ['guided state', { state: 'waiting' }],
+    ['guide ownership', { guideStaffId: 'other-waiter' }],
+    ['table ownership', { tableId: 'other-table' }],
+  ])('cancels the whole party when a member loses %s before the chair approach transition', (_reason, changedFields) => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1', 'c2'], tableId: 't1',
+        chairIds: ['ch1', 'ch2'], stage: 'follow_guide', approaches: [],
+      } }],
+      customers: [
+        { id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 100, y: 100, path: [] },
+        { id: 'c2', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 120, y: 100, path: [], ...changedFields },
+      ],
+      tables: [{ id: 't1', status: 'reserved', seats: 2, x: 220, y: 200 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 180, y: 200 },
+        { id: 'ch2', tableId: 't1', x: 280, y: 200 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.tables[0].status).toBe('empty');
+    expect(result.customers.every(customer => customer.state === 'leaving')).toBe(true);
+    expect(result.customers.every(customer => customer.guideStaffId === null
+      && customer.tableId === null)).toBe(true);
+  });
+
   it('seats the whole party atomically from distinct completed approaches', () => {
     const approaches = [
       { customerId: 'c1', chairId: 'ch1', approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 } },
@@ -1580,6 +1611,41 @@ describe('updateStaff', () => {
       expect.objectContaining({ id: 'c2', state: 'seated', x: 290, y: 210 }),
     ]));
     expect(result.staff[0].task).toBeNull();
+  });
+
+  it.each([
+    ['guided state', { state: 'waiting' }],
+    ['guide ownership', { guideStaffId: 'other-waiter' }],
+    ['table ownership', { tableId: 'other-table' }],
+  ])('cancels the whole party when a member loses %s before atomic seating', (_reason, changedFields) => {
+    const approaches = [
+      { customerId: 'c1', chairId: 'ch1', approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 } },
+      { customerId: 'c2', chairId: 'ch2', approachCell: { x: 14, y: 10 }, approachPoint: { x: 280, y: 200 } },
+    ];
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
+        type: 'guide_customer', customerIds: ['c1', 'c2'], tableId: 't1',
+        chairIds: ['ch1', 'ch2'], stage: 'approach_chairs', approaches,
+      } }],
+      customers: [
+        { id: 'c1', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 160, y: 200, path: [] },
+        { id: 'c2', state: 'guided', guideStaffId: 'w1', tableId: 't1', x: 280, y: 200, path: [], ...changedFields },
+      ],
+      tables: [{ id: 't1', status: 'reserved', seats: 2, x: 220, y: 200 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 180, y: 200 },
+        { id: 'ch2', tableId: 't1', x: 280, y: 200 },
+      ],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.tables[0].status).toBe('empty');
+    expect(result.customers.every(customer => customer.state === 'leaving')).toBe(true);
+    expect(result.customers.every(customer => customer.guideStaffId === null
+      && customer.tableId === null && customer.chairId == null)).toBe(true);
   });
 
   it('keeps the whole party guided until every assigned approach is complete', () => {

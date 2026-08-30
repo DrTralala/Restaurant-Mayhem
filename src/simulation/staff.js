@@ -278,6 +278,16 @@ function getStaticApproachPath(state, customer, assignment) {
   return findPath(state, start, assignment.approachCell);
 }
 
+function hasGenuineGuideParty(customers, ids, staff) {
+  const customersById = new Map(customers.map(customer => [customer.id, customer]));
+  return ids.every(id => {
+    const customer = customersById.get(id);
+    return customer?.state === 'guided'
+      && customer.guideStaffId === staff.id
+      && customer.tableId === staff.task.tableId;
+  });
+}
+
 function targetForRectOrCurrent(state, rect, staff) {
   const current = worldToCell(staff);
   const alreadyAdjacent = findAdjacentOpenCells(state, rect, current)
@@ -904,6 +914,9 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
 
     const stage = staff.task.stage || 'follow_guide';
     if (stage === 'follow_guide') {
+      if (!hasGenuineGuideParty(customers, ids, staff)) {
+        return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
+      }
       const approaches = buildChairApproachAssignments(
         { ...state, customers, tables, serviceItems },
         ids,
@@ -958,6 +971,9 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
         && Number.isFinite(assignment.approachCell?.x)
         && Number.isFinite(assignment.approachCell?.y));
     if (stage !== 'approach_chairs' || !validApproaches) {
+      return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
+    }
+    if (!hasGenuineGuideParty(customers, ids, staff)) {
       return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
     }
 
