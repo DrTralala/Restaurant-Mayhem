@@ -1707,6 +1707,45 @@ describe('updateStaff', () => {
     expect(result.staff[0].task).toMatchObject({ stage: 'approach_chairs', approaches });
   });
 
+  it('routes a chair approach around stationary starter staff without deadlocking', () => {
+    let state = {
+      ...baseState,
+      staff: [
+        { id: 'starter-waiter', role: 'waiter', x: 240, y: 240, path: [], task: {
+          type: 'guide_customer', customerIds: ['c1'], tableId: 't1',
+          chairIds: ['ch1'], stage: 'follow_guide', approaches: [],
+        } },
+        { id: 'starter-host', role: 'waiter', morale: 80, x: 530, y: 360, path: [], task: null },
+        { id: 'starter-janitor', role: 'janitor', morale: 80, x: 560, y: 360, path: [], task: null },
+      ],
+      customers: [{
+        id: 'c1', state: 'guided', guideStaffId: 'starter-waiter', tableId: 't1',
+        x: 620, y: 360, path: [], patience: 1000, happiness: 80,
+      }],
+      tables: [{ id: 't1', status: 'reserved', seats: 1, x: 200, y: 200 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+    };
+    const guidedPositions = [];
+
+    state = updateStaff(state, 0);
+    expect(state.staff[0].task).toMatchObject({ stage: 'approach_chairs' });
+    for (let tick = 0; tick < 120 && state.customers[0].state === 'guided'; tick += 1) {
+      state = updateStaff(state, 1);
+      if (state.customers[0].state === 'guided') {
+        guidedPositions.push({ x: state.customers[0].x, y: state.customers[0].y });
+      }
+    }
+
+    expect(state.customers[0]).toMatchObject({ state: 'seated', chairId: 'ch1', x: 220, y: 190 });
+    expect(state.staff[0].task).toBeNull();
+    expect(state.staff.find(worker => worker.id === 'starter-host')).toMatchObject({ x: 530, y: 360 });
+    expect(state.staff.find(worker => worker.id === 'starter-janitor')).toMatchObject({ x: 560, y: 360 });
+    for (const position of guidedPositions) {
+      expect(Math.hypot(position.x - 530, position.y - 360)).toBeGreaterThanOrEqual(16 - 1e-6);
+      expect(Math.hypot(position.x - 560, position.y - 360)).toBeGreaterThanOrEqual(16 - 1e-6);
+    }
+  });
+
   it('never teleports to a chair enclosed after guidance starts', () => {
     const initial = {
       ...baseState,

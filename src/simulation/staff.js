@@ -266,16 +266,22 @@ function cancelGuideTask({ staff, customers, queue, tables, serviceItems }) {
   };
 }
 
-function getStaticApproachPath(state, customer, assignment) {
+function getStaticApproachPath(state, customer, assignment, ignoredIds = []) {
   if (Math.hypot(
     customer.x - assignment.approachPoint.x,
     customer.y - assignment.approachPoint.y,
   ) <= 2) return [];
   const start = worldToCell(customer);
+  const occupiedCells = occupiedCharacterCells(
+    state.staff || [],
+    state.customers || [],
+    customer.id,
+    ignoredIds,
+  );
   if (start.x === assignment.approachCell.x && start.y === assignment.approachCell.y) {
-    return [{ ...assignment.approachCell }];
+    return occupiedCells.has(`${start.x},${start.y}`) ? [] : [{ ...assignment.approachCell }];
   }
-  return findPath(state, start, assignment.approachCell);
+  return findPath(state, start, assignment.approachCell, { occupiedCells });
 }
 
 function hasGenuineGuideParty(customers, ids, staff) {
@@ -936,6 +942,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
           { ...state, customers, tables, serviceItems },
           customer,
           assignment,
+          [staff.id, ...ids],
         );
         const atApproach = Math.hypot(
           customer.x - assignment.approachPoint.x,
@@ -991,6 +998,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
         { ...state, customers, tables, serviceItems },
         customer,
         assignment,
+        [staff.id, ...ids],
       );
       if (!path.length) failed = true;
       else replanned = true;
