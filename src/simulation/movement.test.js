@@ -1716,6 +1716,107 @@ describe('movement runtime', () => {
     expect(stableId.get('a').x - 92).toBeGreaterThan(108 - stableId.get('z').x);
   });
 
+  it('selects falsey non-null stable ID zero for controlled overlap', () => {
+    const entries = [
+      {
+        character: {
+          id: 0, x: 92, y: 100,
+          path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+          stalledFor: 3, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'peer', x: 108, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: 2, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+    ];
+
+    const moved = resolveCharacterMovementBatch(corridorState, entries, 0.2);
+
+    expect(moved.get(0).x).toBeGreaterThan(92);
+    expect(moved.get(0).x - 92).toBeGreaterThan(108 - moved.get('peer').x);
+  });
+
+  it('removes controlled overlap policy when a detour clears without goal progress', () => {
+    const entries = [
+      {
+        character: {
+          id: 'selected', x: 100, y: 100,
+          path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+          stalledFor: 3, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'peer', x: 102, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: 2, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+    ];
+
+    const conflicted = resolveCharacterMovementBatch(openState, entries, 1 / 30);
+    expect(conflicted.get('selected')).toHaveProperty('localConflictTarget');
+
+    const cleared = resolveCharacterMovementBatch(openState, [{
+      ...entries[0], character: conflicted.get('selected'),
+    }], 1 / 30).get('selected');
+
+    expect(cleared).toMatchObject({ minimumSpacing: 16, usingStaticFallback: false });
+    expect(cleared.localConflictTarget).toEqual(conflicted.get('selected').localConflictTarget);
+    expect(routeDistance(cleared)).toBeGreaterThanOrEqual(routeDistance(conflicted.get('selected')) - 0.1);
+  });
+
+  it('activates controlled overlap below sixteen while protecting every outside pair', () => {
+    const entries = [
+      {
+        character: {
+          id: 'selected', x: 92, y: 100,
+          path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+          stalledFor: 3, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'peer', x: 108, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: 2, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+      { character: { id: 'outside', x: 100, y: 84, path: [] }, speed: 0 },
+    ];
+    const dt = 0.2;
+    const moved = resolveCharacterMovementBatch(openState, entries, dt);
+    const trajectories = new Map(entries.map(entry => [
+      entry.character.id,
+      buildTimeParameterizedTrajectory(
+        entry.character,
+        moved.get(entry.character.id),
+        entry.speed,
+        dt,
+      ),
+    ]));
+    const relaxedDistance = minimumTrajectoryDistance(
+      trajectories.get('selected'), trajectories.get('peer'),
+    );
+
+    expect(relaxedDistance).toBeLessThan(16);
+    expect(relaxedDistance).toBeGreaterThanOrEqual(2 - 1e-6);
+    for (const id of ['selected', 'peer']) {
+      expect(minimumTrajectoryDistance(trajectories.get(id), trajectories.get('outside')), id)
+        .toBeGreaterThanOrEqual(16 - 1e-6);
+    }
+  });
+
   it('keeps every same-component swept pair at least two units apart during controlled overlap', () => {
     const initialEntries = [
       {

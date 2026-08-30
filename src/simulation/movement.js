@@ -446,7 +446,7 @@ function buildMovementIntent(state, entry, dt) {
   const { speed } = entry;
   const sourceCharacter = entry.character;
   const useLocalConflictTarget = sourceCharacter.localConflictTarget
-    && (!sourceCharacter.usingStaticFallback || sourceCharacter.minimumSpacing === 2)
+    && !sourceCharacter.usingStaticFallback
     && (sourceCharacter.path?.length || entry.target || entry.targetAfterPath);
   const { localConflictTarget: _staleLocalTarget, ...withoutLocalTarget } = sourceCharacter;
   const character = useLocalConflictTarget ? sourceCharacter : withoutLocalTarget;
@@ -1271,7 +1271,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
       && findPath(state, worldToCell(intent.character), worldToCell(goal)).length);
   }
   const selectedId = selectControlledOverlapActor(component);
-  if (!selectedId) {
+  if (selectedId == null) {
     copyComponentResolutions(component, ordinaryResolutions, resolutions);
     return;
   }
@@ -1304,7 +1304,10 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
       relaxedResolutions,
       component,
     );
-    if (detour) relaxedResolutions.set(selectedId, detour);
+    if (detour) {
+      selectedIntent.controlledOverlapDetour = true;
+      relaxedResolutions.set(selectedId, detour);
+    }
   }
   copyComponentResolutions(component, relaxedResolutions, resolutions);
 }
@@ -1337,14 +1340,24 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
     };
   }
 
+  if (intent.controlledOverlapDetour) {
+    return {
+      ...moved,
+      stalledFor: 0,
+      minimumSpacing: 16,
+      usingStaticFallback: false,
+      headOnRecovery: false,
+    };
+  }
+
   const stalledFor = (character.stalledFor || 0) + dt;
-  const retainsControlledOverlap = intent.controlledOverlapSelected
-    || (character.minimumSpacing === 2 && moved.localConflictTarget);
   let recovered = {
     ...moved,
     stalledFor,
-    minimumSpacing: retainsControlledOverlap ? 2 : 16,
-    usingStaticFallback: character.usingStaticFallback || false,
+    minimumSpacing: 16,
+    usingStaticFallback: intent.controlledOverlapSelected
+      ? false
+      : character.usingStaticFallback || false,
   };
   const pathGoal = character.pathGoal || character.path?.at(-1);
   if (stalledFor >= 0.75 && pathGoal) {
@@ -1369,7 +1382,7 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
       }
     }
   }
-  if (stalledFor >= 2 && pathGoal) {
+  if (stalledFor >= 2 && pathGoal && !intent.controlledOverlapSelected) {
     const staticPath = findPath(state, worldToCell(recovered), pathGoal);
     recovered = staticPath.length
       ? { ...recovered, path: staticPath, usingStaticFallback: true }
