@@ -4,6 +4,12 @@ import { createMovementMetrics, summariseMovementMetrics } from './movementMetri
 const metricKeys = [
   'batches',
   'batchMilliseconds',
+  'pairBuildMilliseconds',
+  'localConflictMilliseconds',
+  'safePrefixMilliseconds',
+  'dynamicRepathMilliseconds',
+  'staticRepathMilliseconds',
+  'residualBatchMilliseconds',
   'pairChecks',
   'conflictPairs',
   'components',
@@ -46,6 +52,7 @@ describe('movement metrics', () => {
     const metrics = createMovementMetrics();
     metrics.batches = 2;
     metrics.batchMilliseconds = 9;
+    metrics.pairBuildMilliseconds = 3;
     metrics.solverCalls = 4;
 
     const summary = summariseMovementMetrics(metrics);
@@ -53,6 +60,7 @@ describe('movement metrics', () => {
 
     expect(summary).not.toBe(metrics);
     expect(summary.averageBatchMilliseconds).toBe(4.5);
+    expect(summary.pairBuildMilliseconds).toBe(3);
     expect(summary.solverCalls).toBe(4);
   });
 });

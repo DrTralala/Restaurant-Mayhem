@@ -11,6 +11,7 @@ import {
   moveCharacterWithRecovery,
   moveStaffAlongPath,
   resolveCharacterMovementBatch,
+  resolveCharacterMovementBatchWithDiagnostics,
 } from './movement';
 import { buildBlockedCells, findPath, worldToCell } from './pathfinding';
 import { createMovementMetrics } from './movementMetrics';
@@ -567,6 +568,32 @@ describe('movement runtime', () => {
       metrics.solverPbs + metrics.solverAgedFallback + metrics.solverNull,
     );
     expect(metrics.solverNodePops).toBeGreaterThan(0);
+    expect(metrics.pairBuildMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.localConflictMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.safePrefixMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.dynamicRepathMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.staticRepathMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.residualBatchMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.pairBuildMilliseconds
+      + metrics.localConflictMilliseconds
+      + metrics.safePrefixMilliseconds
+      + metrics.dynamicRepathMilliseconds
+      + metrics.staticRepathMilliseconds
+      + metrics.residualBatchMilliseconds).toBeCloseTo(metrics.batchMilliseconds, 6);
+  });
+
+  it('exposes the exact resolved trajectories without changing moved characters', () => {
+    const entries = threeWayCrossingEntries();
+    const ordinary = resolveCharacterMovementBatch(openState, entries, 1);
+    const diagnostic = resolveCharacterMovementBatchWithDiagnostics(openState, entries, 1);
+
+    expect(serialiseById(diagnostic.moved)).toEqual(serialiseById(ordinary));
+    expect([...diagnostic.trajectories.keys()].sort()).toEqual(['a', 'b', 'c']);
+    for (const trajectory of diagnostic.trajectories.values()) {
+      expect(trajectory.length).toBeGreaterThan(0);
+      expect(trajectory[0].startTime).toBe(0);
+      expect(trajectory.at(-1).endTime).toBe(1);
+    }
   });
 
   it('keeps local conflict movement within every actor budget', () => {

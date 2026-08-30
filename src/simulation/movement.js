@@ -4,6 +4,20 @@ import { getDefaultStaffPosition, getRestaurantWorld, GRID_SIZE } from './world'
 
 const ROLE_SPEED = { waiter: 75, cook: 55 };
 
+function movementNow() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function measureMovementPhase(metrics, key, operation) {
+  if (!metrics) return operation();
+  const startedAt = movementNow();
+  try {
+    return operation();
+  } finally {
+    metrics[key] += movementNow() - startedAt;
+  }
+}
+
 export function clearMovementRecoveryMetadata(character) {
   const cleared = { ...character, stalledFor: 0 };
   delete cleared.pathGoal;
@@ -1161,8 +1175,10 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
         resolutions.set(intent.character.id, detour);
         yieldedHeadOnIds.add(headOnPeer.character.id);
       } else {
-        resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(
-          intent, validationIntents, resolutions, metrics,
+        resolutions.set(intent.character.id, measureMovementPhase(
+          metrics,
+          'safePrefixMilliseconds',
+          () => furthestSafeTrajectoryPrefix(intent, validationIntents, resolutions, metrics),
         ));
       }
       continue;
@@ -1173,8 +1189,10 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
       continue;
     }
 
-    resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(
-      intent, validationIntents, resolutions, metrics,
+    resolutions.set(intent.character.id, measureMovementPhase(
+      metrics,
+      'safePrefixMilliseconds',
+      () => furthestSafeTrajectoryPrefix(intent, validationIntents, resolutions, metrics),
     ));
   }
 
@@ -1327,7 +1345,11 @@ function resolveConflictComponentAttempt(
   for (const intent of component.filter(candidate => candidate.character.state === 'leaving'
     && (candidate.target || candidate.targetAfterPath))) {
     collective.set(intent.character.id, resolvedAtStart(intent));
-    const exactCandidate = furthestSafeTrajectoryPrefix(intent, intents, collective, metrics);
+    const exactCandidate = measureMovementPhase(
+      metrics,
+      'safePrefixMilliseconds',
+      () => furthestSafeTrajectoryPrefix(intent, intents, collective, metrics),
+    );
     candidates.set(intent.character.id, exactCandidate);
     collective.set(intent.character.id, exactCandidate);
   }
@@ -1338,12 +1360,16 @@ function resolveConflictComponentAttempt(
 
   for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
   for (const intent of [...component].sort(compareIntentsByAgedPriority)) {
-    const candidate = furthestSafeResolutionPrefix(
-      intent,
-      candidates.get(intent.character.id),
-      intents,
-      resolutions,
+    const candidate = measureMovementPhase(
       metrics,
+      'safePrefixMilliseconds',
+      () => furthestSafeResolutionPrefix(
+        intent,
+        candidates.get(intent.character.id),
+        intents,
+        resolutions,
+        metrics,
+      ),
     );
     resolutions.set(intent.character.id, candidate);
   }
@@ -1522,7 +1548,11 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents, metrics = null
         .map(peer => peer.character);
       const occupiedCells = buildOccupiedCharacterCells(others, [character.id, ...(intent.ignoredIds || [])]);
       if (metrics) metrics.dynamicRepaths += 1;
-      const dynamicPath = findPath(state, worldToCell(recovered), pathGoal, { occupiedCells });
+      const dynamicPath = measureMovementPhase(
+        metrics,
+        'dynamicRepathMilliseconds',
+        () => findPath(state, worldToCell(recovered), pathGoal, { occupiedCells }),
+      );
       if (dynamicPath.length) {
         recovered = {
           ...recovered,
@@ -1534,7 +1564,11 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents, metrics = null
   }
   if (stalledFor >= 2 && pathGoal && !intent.controlledOverlapSelected) {
     if (metrics) metrics.staticRepaths += 1;
-    const staticPath = findPath(state, worldToCell(recovered), pathGoal);
+    const staticPath = measureMovementPhase(
+      metrics,
+      'staticRepathMilliseconds',
+      () => findPath(state, worldToCell(recovered), pathGoal),
+    );
     recovered = staticPath.length
       ? { ...recovered, path: staticPath, usingStaticFallback: true }
       : { ...recovered, usingStaticFallback: true };
@@ -1542,10 +1576,15 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents, metrics = null
   return recovered;
 }
 
-export function resolveCharacterMovementBatch(state, entries, dt, metrics = null) {
-  const startedAt = metrics
-    ? (globalThis.performance?.now?.() ?? Date.now())
-    : 0;
+function resolveCharacterMovementBatchInternal(state, entries, dt, metrics = null) {
+  const startedAt = metrics ? movementNow() : 0;
+  const phaseAtStart = metrics ? {
+    pairBuildMilliseconds: metrics.pairBuildMilliseconds,
+    localConflictMilliseconds: metrics.localConflictMilliseconds,
+    safePrefixMilliseconds: metrics.safePrefixMilliseconds,
+    dynamicRepathMilliseconds: metrics.dynamicRepathMilliseconds,
+    staticRepathMilliseconds: metrics.staticRepathMilliseconds,
+  } : null;
   if (metrics) metrics.batches += 1;
   const intents = entries
     .filter(entry => entry?.character?.id != null)
@@ -1557,9 +1596,24 @@ export function resolveCharacterMovementBatch(state, entries, dt, metrics = null
     intent.desiredResolution = resolvedIntent(intent, intent.desired, intent.trajectory);
   }
   const resolutions = new Map(intents.map(intent => [intent.character.id, resolvedAtDesired(intent)]));
-  for (const component of buildConflictComponents(intents, metrics)) {
-    if (component.length > 1) resolveConflictComponent(
-      state, component, resolutions, dt, intents, metrics,
+  const components = measureMovementPhase(
+    metrics,
+    'pairBuildMilliseconds',
+    () => buildConflictComponents(intents, metrics),
+  );
+  for (const component of components) {
+    if (component.length <= 1) continue;
+    if (!metrics) {
+      resolveConflictComponent(state, component, resolutions, dt, intents, metrics);
+      continue;
+    }
+    const conflictStartedAt = movementNow();
+    const safePrefixAtStart = metrics.safePrefixMilliseconds;
+    resolveConflictComponent(state, component, resolutions, dt, intents, metrics);
+    const nestedSafePrefix = metrics.safePrefixMilliseconds - safePrefixAtStart;
+    metrics.localConflictMilliseconds += Math.max(
+      0,
+      movementNow() - conflictStartedAt - nestedSafePrefix,
     );
   }
   const moved = new Map(intents.map(intent => [
@@ -1569,10 +1623,27 @@ export function resolveCharacterMovementBatch(state, entries, dt, metrics = null
     ),
   ]));
   if (metrics) {
-    const finishedAt = globalThis.performance?.now?.() ?? Date.now();
-    metrics.batchMilliseconds += finishedAt - startedAt;
+    const elapsed = movementNow() - startedAt;
+    const measured = Object.keys(phaseAtStart).reduce((total, key) =>
+      total + metrics[key] - phaseAtStart[key], 0);
+    metrics.residualBatchMilliseconds += Math.max(0, elapsed - measured);
+    metrics.batchMilliseconds += elapsed;
   }
-  return moved;
+  return {
+    moved,
+    trajectories: new Map(intents.map(intent => [
+      intent.character.id,
+      resolutions.get(intent.character.id)?.trajectory || stationaryTrajectory(intent.start),
+    ])),
+  };
+}
+
+export function resolveCharacterMovementBatch(state, entries, dt, metrics = null) {
+  return resolveCharacterMovementBatchInternal(state, entries, dt, metrics).moved;
+}
+
+export function resolveCharacterMovementBatchWithDiagnostics(state, entries, dt, metrics = null) {
+  return resolveCharacterMovementBatchInternal(state, entries, dt, metrics);
 }
 
 export function hasArrived(staff) {
