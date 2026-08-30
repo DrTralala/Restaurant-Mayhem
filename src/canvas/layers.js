@@ -3,6 +3,7 @@ import { getPlacementRect } from '../simulation/placement';
 import { getCharacterPalette } from './characterAppearance';
 import { getServiceItemEmoji } from './serviceItemEmoji';
 import { getPlaceSettingPositions } from './tableGeometry';
+import { getSeatedDisplayGeometry } from './seatedGeometry';
 import { ACTIVITY_DURATIONS, getRemainingFraction } from '../simulation/activity';
 import { getUpgradeEffect } from '../simulation/balance';
 import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/dishwashing';
@@ -89,22 +90,21 @@ function drawStickFigure(ctx, x, y, color, { seated = false, walking = false, cl
   ctx.restore();
 }
 
-function drawMenu(ctx, x, y) {
-  const left = x - 12;
-  const top = y + 1;
+function drawMenu(ctx, { x, y, width, height }) {
+  const centreX = x + width / 2;
   ctx.save();
   ctx.fillStyle = '#f3e6bd';
   ctx.strokeStyle = '#4d3a1f';
   ctx.lineWidth = 1.5;
-  ctx.fillRect(left, top, 24, 16);
-  ctx.strokeRect(left, top, 24, 16);
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeRect(x, y, width, height);
   ctx.beginPath();
-  ctx.moveTo(x, top + 1);
-  ctx.lineTo(x, top + 15);
-  ctx.moveTo(left + 3, top + 5);
-  ctx.lineTo(x - 3, top + 5);
-  ctx.moveTo(x + 3, top + 5);
-  ctx.lineTo(left + 21, top + 5);
+  ctx.moveTo(centreX, y + 1);
+  ctx.lineTo(centreX, y + height - 1);
+  ctx.moveTo(x + 3, y + 5);
+  ctx.lineTo(centreX - 3, y + 5);
+  ctx.moveTo(centreX + 3, y + 5);
+  ctx.lineTo(x + width - 3, y + 5);
   ctx.stroke();
   ctx.restore();
 }
@@ -430,18 +430,20 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
 
   for (const c of state.customers) {
     let cx, cy;
+    let seatedGeometry = null;
     const seated = ['seated', 'ordering', 'eating', 'waiting_for_items'].includes(c.state);
-    const tableExists = c.tableId
-      && (state.tables || []).some(table => table.id === c.tableId);
-    const chair = c.chairId && tableExists
+    const table = c.tableId
+      ? (state.tables || []).find(candidate => candidate.id === c.tableId)
+      : null;
+    const chair = c.chairId && table
       ? (state.chairs || []).find(candidate =>
           candidate.id === c.chairId && candidate.tableId === c.tableId)
       : null;
 
     if (seated) {
-      if (!chair) continue;
-      cx = chair.x + 10;
-      cy = chair.y + 10;
+      seatedGeometry = getSeatedDisplayGeometry(chair, table);
+      if (!seatedGeometry) continue;
+      ({ x: cx, y: cy } = seatedGeometry.figure);
     } else if (Number.isFinite(c.x) && Number.isFinite(c.y)) {
       cx = c.x;
       cy = c.y;
@@ -465,7 +467,7 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
     });
-    if (deciding) drawMenu(ctx, cx, cy);
+    if (deciding) drawMenu(ctx, seatedGeometry.menu);
     const consuming = c.state === 'eating' && !c.path?.length;
     drawVerticalProgress(ctx, cx + 14, cy - 7, consuming
       ? getRemainingFraction(state.restaurant?.gameTime, c.consumptionStartedAt, c.consumptionDuration)

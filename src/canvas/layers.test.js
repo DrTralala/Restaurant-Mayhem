@@ -216,7 +216,7 @@ describe('drawFurnitureLayer', () => {
       { id: 'moving', state: 'eating', tableId: 't', chairId: 'ch', path: [{ x: 5, y: 5 }], consumptionStartedAt: 0, consumptionDuration: 180 },
     ] }, { x: 0, y: 0, zoom: 1 });
     expect(moving._calls.arcs).toHaveLength(1);
-    expect(moving._calls.arcs[0]).toMatchObject({ x: 100, y: 100 });
+    expect(moving._calls.arcs[0]).toMatchObject({ x: 100, y: 95 });
     expect(moving._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14)).toHaveLength(0);
 
     const stationary = recordCtx();
@@ -561,6 +561,37 @@ describe('drawStaffLayer', () => {
 describe('drawCustomerLayer', () => {
   const camera = { x: 0, y: 0, zoom: 1 };
 
+  it('fits an upright deciding customer into its chair and places its menu towards the table', () => {
+    const ctx = recordCtx();
+    drawCustomerLayer(ctx, {
+      customers: [{ id: 'c1', state: 'seated', chairId: 'ch1', tableId: 't1', x: 800, y: 400 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 100 }],
+      tables: [{ id: 't1', x: 140, y: 90 }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.arcs).toContainEqual(expect.objectContaining({ x: 110, y: 105 }));
+    expect(ctx._calls.rects).toContainEqual({ x: 108, y: 102, w: 24, h: 16 });
+    expect(ctx._calls.rotations.at(-1)).toBe(0);
+  });
+
+  it.each([
+    ['seated', { state: 'seated', dishId: null }, { x: 110, y: 105 }],
+    ['ordering', { state: 'ordering', dishId: 'dish' }, { x: 110, y: 105 }],
+    ['eating', { state: 'eating', dishId: 'dish' }, { x: 110, y: 105 }],
+    ['waiting_for_items', { state: 'waiting_for_items', dishId: 'dish' }, { x: 110, y: 105 }],
+    ['moving', { state: 'guided', path: [{ x: 801, y: 401 }] }, { x: 800, y: 400 }],
+    ['paying', { state: 'paying' }, { x: 800, y: 400 }],
+  ])('uses chair geometry only for seated visual states: %s', (_label, customer, expected) => {
+    const ctx = recordCtx();
+    drawCustomerLayer(ctx, {
+      customers: [{ id: 'c1', chairId: 'ch1', tableId: 't1', x: 800, y: 400, ...customer }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 100 }],
+      tables: [{ id: 't1', x: 140, y: 90 }],
+    }, camera);
+
+    expect(ctx._calls.arcs).toContainEqual(expect.objectContaining(expected));
+  });
+
   it('renders guided customer at dynamic x/y even without tableId', () => {
     const customers = [
       { id: 'c1', archetype: 'regular', state: 'guided', x: 850, y: 370, guideStaffId: 'w1' },
@@ -584,7 +615,7 @@ describe('drawCustomerLayer', () => {
     drawCustomerLayer(ctx, state, camera);
     expect(ctx._calls.arcs.length).toBe(1);
     expect(ctx._calls.arcs[0].x).toBe(220);
-    expect(ctx._calls.arcs[0].y).toBe(190);
+    expect(ctx._calls.arcs[0].y).toBe(185);
   });
 
   it('shows a cream open-book menu held by a seated customer who is deciding', () => {
@@ -600,10 +631,10 @@ describe('drawCustomerLayer', () => {
 
     expect(ctx._calls.lines.length).toBeGreaterThanOrEqual(5);
     expect(ctx._calls.rectColours).toContainEqual({
-      x: 208, y: 191, w: 24, h: 16, colour: '#f3e6bd',
+      x: 208, y: 192, w: 24, h: 16, colour: '#f3e6bd',
     });
     expect(ctx._calls.strokeRects).toContainEqual({
-      x: 208, y: 191, w: 24, h: 16, colour: '#4d3a1f',
+      x: 208, y: 192, w: 24, h: 16, colour: '#4d3a1f',
     });
   });
 
@@ -632,7 +663,7 @@ describe('drawCustomerLayer', () => {
 
     drawCustomerLayer(ctx, state, camera);
 
-    expect(ctx._calls.rects).toContainEqual({ x: 208, y: 191, w: 24, h: 16 });
+    expect(ctx._calls.rects).toContainEqual({ x: 208, y: 192, w: 24, h: 16 });
     expect(ctx._calls.strokes).toContainEqual({ colour: '#e66a9c' });
     expect(ctx._calls.texts.some(call => call.text === 'ordering')).toBe(false);
   });
@@ -651,9 +682,9 @@ describe('drawCustomerLayer', () => {
 
     drawCustomerLayer(ctx, state, camera);
 
-    expect(ctx._calls.rects).toContainEqual({ x: 208, y: 191, w: 24, h: 16 });
-    expect(ctx._calls.moves).toContainEqual({ x: 220, y: 192 });
-    expect(ctx._calls.lines).toContainEqual({ x: 220, y: 206 });
+    expect(ctx._calls.rects).toContainEqual({ x: 208, y: 192, w: 24, h: 16 });
+    expect(ctx._calls.moves).toContainEqual({ x: 220, y: 193 });
+    expect(ctx._calls.lines).toContainEqual({ x: 220, y: 207 });
   });
 
   it('hides the menu after the order while waiting for items', () => {
@@ -670,7 +701,7 @@ describe('drawCustomerLayer', () => {
 
     drawCustomerLayer(ctx, state, camera);
 
-    expect(ctx._calls.rects).not.toContainEqual({ x: 208, y: 191, w: 24, h: 16 });
+    expect(ctx._calls.rects).not.toContainEqual({ x: 208, y: 192, w: 24, h: 16 });
   });
 
   it('does not render seated customers without an explicit valid chair', () => {
