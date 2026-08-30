@@ -1,8 +1,55 @@
 import { buildBlockedCells, buildOccupiedCharacterCells, cellToWorld, findPath, findPathWithDynamicFallback, isInsideWorld, worldToCell } from './pathfinding';
 import { solveLocalConflictComponent } from './localConflictSolver';
-import { getDefaultStaffPosition, GRID_SIZE } from './world';
+import { getDefaultStaffPosition, getRestaurantWorld, GRID_SIZE } from './world';
 
 const ROLE_SPEED = { waiter: 75, cook: 55 };
+
+function continuousWorldBounds(state) {
+  const world = getRestaurantWorld(state.restaurant || {});
+  return {
+    left: world.floorX,
+    right: world.queueX + world.queueW,
+    top: world.kitchenY,
+    bottom: world.diningY + world.areaH + 50,
+  };
+}
+
+function isSafeWorldAxis(start, end, minimum, maximum) {
+  if (start < minimum) return end >= start && end <= maximum;
+  if (start > maximum) return end <= start && end >= minimum;
+  return end >= minimum && end <= maximum;
+}
+
+function isSafeWorldSegment(state, start, end) {
+  if (!state) return true;
+  const bounds = continuousWorldBounds(state);
+  return isSafeWorldAxis(start.x, end.x, bounds.left, bounds.right)
+    && isSafeWorldAxis(start.y, end.y, bounds.top, bounds.bottom);
+}
+
+function furthestWorldSegmentEndpoint(state, start, end) {
+  if (!state || isSafeWorldSegment(state, start, end)) return end;
+  const bounds = continuousWorldBounds(state);
+  let ratio = 1;
+  for (const [coordinate, minimum, maximum] of [
+    ['x', bounds.left, bounds.right],
+    ['y', bounds.top, bounds.bottom],
+  ]) {
+    const origin = start[coordinate];
+    const delta = end[coordinate] - origin;
+    if ((origin < minimum && delta <= 0) || (origin > maximum && delta >= 0)) return start;
+    if (delta > 0 && origin + delta > maximum) {
+      ratio = Math.min(ratio, (maximum - origin) / delta);
+    } else if (delta < 0 && origin + delta < minimum) {
+      ratio = Math.min(ratio, (minimum - origin) / delta);
+    }
+  }
+  if (ratio <= 0) return start;
+  return {
+    x: start.x + (end.x - start.x) * ratio,
+    y: start.y + (end.y - start.y) * ratio,
+  };
+}
 
 export function ensureStaffRuntime(staff, state) {
   return (staff || []).map((s, index) => {
@@ -777,17 +824,20 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
     const allowedDistance = Math.min(distance, budget - travelled, intent.speed * availableSeconds);
     if (allowedDistance <= 1e-9) break;
     const ratio = allowedDistance / distance;
-    const endpoint = {
+    const requestedEndpoint = {
       x: current.x + (target.x - current.x) * ratio,
       y: current.y + (target.y - current.y) * ratio,
     };
+    const endpoint = furthestWorldSegmentEndpoint(state, current, requestedEndpoint);
+    const safeDistance = Math.hypot(endpoint.x - current.x, endpoint.y - current.y);
+    if (safeDistance <= 1e-9) break;
     if (!isSafeSegment(state, current, endpoint)) break;
-    const duration = intent.speed > 0 ? allowedDistance / intent.speed : 0;
+    const duration = intent.speed > 0 ? safeDistance / intent.speed : 0;
     appendTimedSegment(trajectory, current, endpoint, slotStart, slotStart + duration, dt);
     current = endpoint;
-    travelled += allowedDistance;
+    travelled += safeDistance;
 
-    if (allowedDistance < distance - 1e-6) {
+    if (safeDistance < distance - 1e-6) {
       nextPlanIndex = index;
       break;
     }

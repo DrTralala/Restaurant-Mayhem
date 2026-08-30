@@ -12,6 +12,7 @@ import {
   resolveCharacterMovementBatch,
 } from './movement';
 import { buildBlockedCells, worldToCell } from './pathfinding';
+import { getRestaurantWorld } from './world';
 
 const openState = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [] };
 
@@ -838,6 +839,81 @@ describe('movement runtime', () => {
     expect(minimumTrajectoryDistance(
       buildTimeParameterizedTrajectory(actor, moved.get('a'), 60, 1),
       buildTimeParameterizedTrajectory(peer, moved.get('b'), 60, 1),
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
+  it('stops an offset-preserving solver detour at the right world boundary', () => {
+    const state = {
+      ...openState,
+      chairs: [
+        { id: 'upper', x: 1000, y: 80 },
+        { id: 'left-a', x: 980, y: 100 },
+        { id: 'left-b', x: 980, y: 120 },
+        { id: 'lower', x: 1000, y: 140 },
+      ],
+    };
+    const actor = {
+      id: 'a', x: 1019, y: 100,
+      path: [{ x: 50, y: 6 }], stalledFor: 0,
+    };
+    const peer = {
+      id: 'b', x: 1019, y: 120,
+      path: [{ x: 50, y: 5 }], stalledFor: 1,
+    };
+    const moved = resolveCharacterMovementBatch(state, [
+      { character: actor, speed: 60 },
+      { character: peer, speed: 60 },
+    ], 0.5);
+    const reversedPriority = resolveCharacterMovementBatch(state, [
+      { character: { ...actor, stalledFor: 1 }, speed: 60 },
+      { character: { ...peer, stalledFor: 0 }, speed: 60 },
+    ], 0.5);
+    const world = getRestaurantWorld(state.restaurant);
+    for (const result of [moved, reversedPriority]) {
+      for (const character of result.values()) {
+        expect(character.x).toBeLessThanOrEqual(world.queueX + world.queueW);
+      }
+    }
+    expect(Math.max(...[...reversedPriority.values()].map(character => character.x)))
+      .toBeCloseTo(world.queueX + world.queueW, 6);
+    expect(minimumTrajectoryDistance(
+      buildTimeParameterizedTrajectory(actor, moved.get('a'), 60, 0.5),
+      buildTimeParameterizedTrajectory(peer, moved.get('b'), 60, 0.5),
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
+  it('stops an offset-preserving solver detour at the bottom world boundary', () => {
+    const state = {
+      ...openState,
+      chairs: [
+        { id: 'left', x: 80, y: 640 },
+        { id: 'upper-a', x: 100, y: 620 },
+        { id: 'upper-b', x: 120, y: 620 },
+        { id: 'right', x: 140, y: 640 },
+      ],
+    };
+    const actor = {
+      id: 'a', x: 100, y: 659,
+      path: [{ x: 6, y: 32 }], stalledFor: 0,
+    };
+    const peer = {
+      id: 'b', x: 120, y: 659,
+      path: [{ x: 5, y: 32 }], stalledFor: 1,
+    };
+    const moved = resolveCharacterMovementBatch(state, [
+      { character: actor, speed: 60 },
+      { character: peer, speed: 60 },
+    ], 0.5);
+    const world = getRestaurantWorld(state.restaurant);
+    const bottom = world.diningY + world.areaH + 50;
+    for (const character of moved.values()) {
+      expect(character.y).toBeLessThanOrEqual(bottom);
+    }
+    expect(moved.get('b').y).toBeCloseTo(bottom, 6);
+    expect(moved.get('b').y).not.toBe(660);
+    expect(minimumTrajectoryDistance(
+      buildTimeParameterizedTrajectory(actor, moved.get('a'), 60, 0.5),
+      buildTimeParameterizedTrajectory(peer, moved.get('b'), 60, 0.5),
     )).toBeGreaterThanOrEqual(16 - 1e-6);
   });
 
