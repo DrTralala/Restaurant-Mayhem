@@ -283,7 +283,10 @@ export function moveCharacterTowards(character, target, dt, others = [], speed =
 }
 
 function getMovementSpacing(character) {
-  return 16;
+  return character.state === 'leaving'
+    && (character.usingStaticFallback || (character.stalledFor || 0) >= 2)
+    ? 6
+    : 16;
 }
 
 function isAtTarget(position, target) {
@@ -1177,6 +1180,13 @@ function resolveConflictComponentAttempt(
   intents,
   allowControlledOverlapId = null,
 ) {
+  const hasRecoveredStaffHeadOn = component.some(intent => intent.character.role
+    && intent.headOnDetourEligible === true);
+  if (hasRecoveredStaffHeadOn) {
+    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
+    return;
+  }
+
   const desiredCellKeys = component.map(intent => {
     const cell = worldToCell(intent.desired);
     return `${cell.x},${cell.y}`;
@@ -1258,6 +1268,11 @@ function resolveConflictComponentAttempt(
 }
 
 function resolveConflictComponent(state, component, resolutions, dt, intents) {
+  if (component.some(intent => intent.character.state === 'leaving')) {
+    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
+    return;
+  }
+
   const ordinaryResolutions = new Map(resolutions);
   resolveConflictComponentAttempt(state, component, ordinaryResolutions, dt, intents);
   if (componentHasMeasurableRouteProgress(component, ordinaryResolutions)) {
@@ -1315,7 +1330,21 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
 function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   const character = intent.character;
   const moved = endpoint || resolvedAtStart(intent).endpoint;
-  const progress = hasMeasurableRouteProgress(intent, moved);
+  const displacement = Math.hypot(moved.x - intent.start.x, moved.y - intent.start.y);
+  const desiredDistanceBefore = Math.hypot(
+    intent.desired.x - intent.start.x,
+    intent.desired.y - intent.start.y,
+  );
+  const desiredDistanceAfter = Math.hypot(
+    intent.desired.x - moved.x,
+    intent.desired.y - moved.y,
+  );
+  const leavingProgress = (moved.path?.length || 0) < (character.path?.length || 0)
+    || (displacement >= 0.1
+      && (!moved.localConflictTarget || desiredDistanceAfter < desiredDistanceBefore - 0.1));
+  const progress = character.state === 'leaving'
+    ? leavingProgress
+    : hasMeasurableRouteProgress(intent, moved) || (character.role && displacement >= 0.1);
   const targetReached = intent.target && isAtTarget(moved, intent.target);
 
   if (!character.path?.length && (!intent.target || targetReached)) {
@@ -1351,10 +1380,12 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   }
 
   const stalledFor = (character.stalledFor || 0) + dt;
+  const leavingFallback = character.state === 'leaving'
+    && (character.usingStaticFallback || stalledFor >= 2);
   let recovered = {
     ...moved,
     stalledFor,
-    minimumSpacing: 16,
+    minimumSpacing: leavingFallback ? 6 : 16,
     usingStaticFallback: intent.controlledOverlapSelected
       ? false
       : character.usingStaticFallback || false,
@@ -1385,8 +1416,10 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   if (stalledFor >= 2 && pathGoal && !intent.controlledOverlapSelected) {
     const staticPath = findPath(state, worldToCell(recovered), pathGoal);
     recovered = staticPath.length
-      ? { ...recovered, path: staticPath, usingStaticFallback: true }
-      : { ...recovered, usingStaticFallback: true };
+      ? { ...recovered, path: staticPath, usingStaticFallback: true,
+          ...(character.state === 'leaving' ? { minimumSpacing: 6 } : {}) }
+      : { ...recovered, usingStaticFallback: true,
+          ...(character.state === 'leaving' ? { minimumSpacing: 6 } : {}) };
   }
   return recovered;
 }
