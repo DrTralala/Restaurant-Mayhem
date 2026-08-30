@@ -739,13 +739,15 @@ function intentsConflict(left, right) {
     || !isSafeIntentPair(left, right, requiredSpacingForPair(left, right));
 }
 
-function buildConflictComponents(intents) {
+function buildConflictComponents(intents, metrics = null) {
   const neighbours = new Map(intents.map(intent => [intent.character.id, new Set()]));
   for (let leftIndex = 0; leftIndex < intents.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < intents.length; rightIndex += 1) {
       const left = intents[leftIndex];
       const right = intents[rightIndex];
+      if (metrics) metrics.pairChecks += 1;
       if (!intentsConflict(left, right)) continue;
+      if (metrics) metrics.conflictPairs += 1;
       neighbours.get(left.character.id).add(right.character.id);
       neighbours.get(right.character.id).add(left.character.id);
     }
@@ -769,6 +771,13 @@ function buildConflictComponents(intents) {
     }
     components.push(component.sort((left, right) => String(left.character.id)
       .localeCompare(String(right.character.id))));
+  }
+  if (metrics) {
+    metrics.components += components.length;
+    metrics.maxComponentSize = Math.max(
+      metrics.maxComponentSize,
+      ...components.map(component => component.length),
+    );
   }
   return components;
 }
@@ -1028,7 +1037,7 @@ function isResolutionSafeForIntent(intent, candidate, intents, resolutions) {
     ));
 }
 
-function furthestSafeResolutionPrefix(intent, resolution, intents, resolutions) {
+function furthestSafeResolutionPrefix(intent, resolution, intents, resolutions, metrics = null) {
   if (isResolutionSafeForIntent(intent, resolution, intents, resolutions)) return resolution;
   let best = resolutionAtTime(intent, resolution, 0);
   let bestTime = 0;
@@ -1046,13 +1055,14 @@ function furthestSafeResolutionPrefix(intent, resolution, intents, resolutions) 
   for (let iteration = 0; iteration < 40 && high - low > 1e-10; iteration += 1) {
     const middle = (low + high) / 2;
     const candidate = resolutionAtTime(intent, resolution, middle);
+    if (metrics) metrics.safePrefixProbes += 1;
     if (isResolutionSafeForIntent(intent, candidate, intents, resolutions)) low = middle;
     else high = middle;
   }
   return resolutionAtTime(intent, resolution, low);
 }
 
-function furthestSafeTrajectoryPrefix(intent, intents, resolutions) {
+function furthestSafeTrajectoryPrefix(intent, intents, resolutions, metrics = null) {
   if (isResolutionSafeForIntent(intent, resolvedAtDesired(intent), intents, resolutions)) {
     return resolvedAtDesired(intent);
   }
@@ -1088,6 +1098,7 @@ function furthestSafeTrajectoryPrefix(intent, intents, resolutions) {
       for (let iteration = 0; iteration < 40 && high - low > 1e-10; iteration += 1) {
         const middle = (low + high) / 2;
         const middleCandidate = resolvedAtTrajectoryTime(intent, middle);
+        if (metrics) metrics.safePrefixProbes += 1;
         if (isResolutionSafeForIntent(intent, middleCandidate, intents, resolutions)) low = middle;
         else high = middle;
       }
@@ -1112,7 +1123,7 @@ function areIntentPairsSafeFor(checkedIntents, intents, resolutions) {
   ));
 }
 
-function resolveIntentPairs(state, intents, resolutions, dt, validationIntents = intents) {
+function resolveIntentPairs(state, intents, resolutions, dt, validationIntents = intents, metrics = null) {
   for (const intent of intents) resolutions.set(intent.character.id, resolvedAtStart(intent));
   const yieldedHeadOnIds = new Set();
 
@@ -1150,7 +1161,9 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
         resolutions.set(intent.character.id, detour);
         yieldedHeadOnIds.add(headOnPeer.character.id);
       } else {
-        resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(intent, validationIntents, resolutions));
+        resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(
+          intent, validationIntents, resolutions, metrics,
+        ));
       }
       continue;
     }
@@ -1160,7 +1173,9 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
       continue;
     }
 
-    resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(intent, validationIntents, resolutions));
+    resolutions.set(intent.character.id, furthestSafeTrajectoryPrefix(
+      intent, validationIntents, resolutions, metrics,
+    ));
   }
 
   if (!areIntentPairsSafeFor(intents, validationIntents, resolutions)) {
@@ -1218,9 +1233,9 @@ function componentIsSafe(component, intents, resolutions) {
   ));
 }
 
-function resolveComponentWithExistingSafety(state, component, resolutions, dt, intents) {
+function resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics = null) {
   const ordered = [...component].sort(compareIntentsByAgedPriority);
-  resolveIntentPairs(state, ordered, resolutions, dt, intents);
+  resolveIntentPairs(state, ordered, resolutions, dt, intents, metrics);
   if (!componentIsSafe(component, intents, resolutions)) {
     for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
   }
@@ -1233,12 +1248,13 @@ function resolveConflictComponentAttempt(
   dt,
   intents,
   allowControlledOverlapId = null,
+  metrics = null,
 ) {
   const isRecoveredStaffHeadOnPair = component.length === 2
     && component.every(intent => Boolean(intent.character.role))
     && isExplicitRecoveredHorizontalHeadOn(component[0], component[1]);
   if (isRecoveredStaffHeadOnPair) {
-    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
+    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics);
     return;
   }
 
@@ -1273,6 +1289,7 @@ function resolveConflictComponentAttempt(
   } else if (hasContestedDesiredCell && hasAgedPriority) {
     progressHorizon = Math.min(horizon, contestedRouteHorizon, executableSlots);
   }
+  if (metrics) metrics.solverCalls += 1;
   const solved = solveLocalConflictComponent({
     state,
     actors,
@@ -1281,9 +1298,15 @@ function resolveConflictComponentAttempt(
     progressHorizon,
     maxHighLevelNodes: 128,
     allowControlledOverlapId,
+    metrics,
   });
+  if (metrics) {
+    if (!solved) metrics.solverNull += 1;
+    else if (solved.mode === 'pbs') metrics.solverPbs += 1;
+    else metrics.solverAgedFallback += 1;
+  }
   if (!solved) {
-    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
+    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics);
     return;
   }
   const actorsById = new Map(actors.map(actor => [actor.id, actor]));
@@ -1304,7 +1327,7 @@ function resolveConflictComponentAttempt(
   for (const intent of component.filter(candidate => candidate.character.state === 'leaving'
     && (candidate.target || candidate.targetAfterPath))) {
     collective.set(intent.character.id, resolvedAtStart(intent));
-    const exactCandidate = furthestSafeTrajectoryPrefix(intent, intents, collective);
+    const exactCandidate = furthestSafeTrajectoryPrefix(intent, intents, collective, metrics);
     candidates.set(intent.character.id, exactCandidate);
     collective.set(intent.character.id, exactCandidate);
   }
@@ -1320,6 +1343,7 @@ function resolveConflictComponentAttempt(
       candidates.get(intent.character.id),
       intents,
       resolutions,
+      metrics,
     );
     resolutions.set(intent.character.id, candidate);
   }
@@ -1328,14 +1352,14 @@ function resolveConflictComponentAttempt(
   }
 }
 
-function resolveConflictComponent(state, component, resolutions, dt, intents) {
+function resolveConflictComponent(state, component, resolutions, dt, intents, metrics = null) {
   const exactExitIntents = component.filter(intent => intent.character.state === 'leaving'
     && (intent.target || intent.targetAfterPath));
   const isExactExitOnlyComponent = exactExitIntents.length > 0
     && component.every(intent => exactExitIntents.includes(intent) || intent.speed === 0);
   if (isExactExitOnlyComponent) {
     const exactResolutions = new Map(resolutions);
-    resolveComponentWithExistingSafety(state, component, exactResolutions, dt, intents);
+    resolveComponentWithExistingSafety(state, component, exactResolutions, dt, intents, metrics);
     if (exactExitIntents.some(intent => hasMeasurableRouteProgress(
       intent,
       exactResolutions.get(intent.character.id)?.endpoint || intent.character,
@@ -1346,7 +1370,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
   }
 
   const ordinaryResolutions = new Map(resolutions);
-  resolveConflictComponentAttempt(state, component, ordinaryResolutions, dt, intents);
+  resolveConflictComponentAttempt(state, component, ordinaryResolutions, dt, intents, null, metrics);
   if (componentHasMeasurableRouteProgress(component, ordinaryResolutions)) {
     copyComponentResolutions(component, ordinaryResolutions, resolutions);
     return;
@@ -1379,6 +1403,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
     dt,
     intents,
     selectedId,
+    metrics,
   );
   const selectedIntent = component.find(intent => intent.character.id === selectedId);
   if (!hasMeasurableRouteProgress(
@@ -1401,7 +1426,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
   copyComponentResolutions(component, relaxedResolutions, resolutions);
 }
 
-function applyBatchRecovery(state, intent, endpoint, dt, intents) {
+function applyBatchRecovery(state, intent, endpoint, dt, intents, metrics = null) {
   const character = intent.character;
   const moved = endpoint || resolvedAtStart(intent).endpoint;
   const displacement = Math.hypot(moved.x - intent.start.x, moved.y - intent.start.y);
@@ -1496,6 +1521,7 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
         .filter(peer => String(peer.character.id) !== String(character.id))
         .map(peer => peer.character);
       const occupiedCells = buildOccupiedCharacterCells(others, [character.id, ...(intent.ignoredIds || [])]);
+      if (metrics) metrics.dynamicRepaths += 1;
       const dynamicPath = findPath(state, worldToCell(recovered), pathGoal, { occupiedCells });
       if (dynamicPath.length) {
         recovered = {
@@ -1507,6 +1533,7 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
     }
   }
   if (stalledFor >= 2 && pathGoal && !intent.controlledOverlapSelected) {
+    if (metrics) metrics.staticRepaths += 1;
     const staticPath = findPath(state, worldToCell(recovered), pathGoal);
     recovered = staticPath.length
       ? { ...recovered, path: staticPath, usingStaticFallback: true }
@@ -1515,7 +1542,11 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   return recovered;
 }
 
-export function resolveCharacterMovementBatch(state, entries, dt) {
+export function resolveCharacterMovementBatch(state, entries, dt, metrics = null) {
+  const startedAt = metrics
+    ? (globalThis.performance?.now?.() ?? Date.now())
+    : 0;
+  if (metrics) metrics.batches += 1;
   const intents = entries
     .filter(entry => entry?.character?.id != null)
     .map(entry => buildMovementIntent(state, entry, dt))
@@ -1526,13 +1557,22 @@ export function resolveCharacterMovementBatch(state, entries, dt) {
     intent.desiredResolution = resolvedIntent(intent, intent.desired, intent.trajectory);
   }
   const resolutions = new Map(intents.map(intent => [intent.character.id, resolvedAtDesired(intent)]));
-  for (const component of buildConflictComponents(intents)) {
-    if (component.length > 1) resolveConflictComponent(state, component, resolutions, dt, intents);
+  for (const component of buildConflictComponents(intents, metrics)) {
+    if (component.length > 1) resolveConflictComponent(
+      state, component, resolutions, dt, intents, metrics,
+    );
   }
-  return new Map(intents.map(intent => [
+  const moved = new Map(intents.map(intent => [
     intent.character.id,
-    applyBatchRecovery(state, intent, resolutions.get(intent.character.id)?.endpoint, dt, intents),
+    applyBatchRecovery(
+      state, intent, resolutions.get(intent.character.id)?.endpoint, dt, intents, metrics,
+    ),
   ]));
+  if (metrics) {
+    const finishedAt = globalThis.performance?.now?.() ?? Date.now();
+    metrics.batchMilliseconds += finishedAt - startedAt;
+  }
+  return moved;
 }
 
 export function hasArrived(staff) {

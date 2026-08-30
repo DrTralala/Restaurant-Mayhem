@@ -13,6 +13,7 @@ import {
   resolveCharacterMovementBatch,
 } from './movement';
 import { buildBlockedCells, findPath, worldToCell } from './pathfinding';
+import { createMovementMetrics } from './movementMetrics';
 import { getRestaurantWorld } from './world';
 
 const openState = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [] };
@@ -541,6 +542,31 @@ describe('movement runtime', () => {
     const entries = threeWayCrossingEntries();
     expect(serialiseById(resolveCharacterMovementBatch(openState, entries, 1)))
       .toEqual(serialiseById(resolveCharacterMovementBatch(openState, [...entries].reverse(), 1)));
+  });
+
+  it('returns byte-equivalent dense movement results with metrics enabled', () => {
+    const entries = threeWayCrossingEntries();
+    const metrics = createMovementMetrics();
+
+    const withoutMetrics = JSON.stringify(serialiseById(
+      resolveCharacterMovementBatch(openState, entries, 1),
+    ));
+    const withMetrics = JSON.stringify(serialiseById(
+      resolveCharacterMovementBatch(openState, entries, 1, metrics),
+    ));
+
+    expect(withMetrics).toBe(withoutMetrics);
+    expect(metrics.batches).toBe(1);
+    expect(metrics.batchMilliseconds).toBeGreaterThanOrEqual(0);
+    expect(metrics.pairChecks).toBe(3);
+    expect(metrics.conflictPairs).toBeGreaterThan(0);
+    expect(metrics.components).toBe(1);
+    expect(metrics.maxComponentSize).toBe(3);
+    expect(metrics.solverCalls).toBeGreaterThan(0);
+    expect(metrics.solverCalls).toBe(
+      metrics.solverPbs + metrics.solverAgedFallback + metrics.solverNull,
+    );
+    expect(metrics.solverNodePops).toBeGreaterThan(0);
   });
 
   it('keeps local conflict movement within every actor budget', () => {

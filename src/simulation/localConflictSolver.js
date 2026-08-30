@@ -408,6 +408,7 @@ export function solveLocalConflictComponent({
   maxHighLevelNodes = 128,
   allowControlledOverlapId = null,
   progressHorizon = horizon,
+  metrics = null,
 }) {
   const boundedProgressHorizon = Math.max(1, Math.min(horizon, progressHorizon));
   const stableActors = [...actors].sort(compareActorsById);
@@ -429,6 +430,7 @@ export function solveLocalConflictComponent({
   while (frontier.length > 0 && poppedNodes < maxHighLevelNodes) {
     frontier.sort(compareHighLevelNodes);
     const node = frontier.shift();
+    if (metrics) metrics.solverNodePops += 1;
     poppedNodes += 1;
     if (node.conflicts.length === 0) return { plans: node.plans, mode: 'pbs' };
 
