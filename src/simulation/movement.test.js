@@ -1616,6 +1616,53 @@ describe('movement runtime', () => {
     }
   });
 
+  it('keeps a flagged non-head-on staff component making eventual route progress', () => {
+    const initialEntries = threeWayCrossingEntries().map((entry, index) => index === 0
+      ? {
+          ...entry,
+          character: {
+            ...entry.character,
+            role: 'waiter',
+            stalledFor: 2,
+            usingStaticFallback: true,
+            minimumSpacing: 16,
+          },
+          headOnDetourEligible: true,
+        }
+      : entry);
+
+    const initialDistance = new Map(initialEntries.map(({ character }) => [character.id, routeDistance(character)]));
+    const { entries, frames } = simulateMovementTicks(openState, initialEntries, 360);
+    const midpoint = frames[179].moved;
+
+    for (const { character } of entries) {
+      expect(routeDistance(character), character.id)
+        .toBeLessThan(routeDistance(midpoint.get(character.id)) - 0.1);
+      expect(routeDistance(character), character.id)
+        .toBeLessThan(initialDistance.get(character.id) - 0.1);
+    }
+  });
+
+  it('retains staff recovery age during non-goal displacement and clears it on route progress', () => {
+    const initial = {
+      id: 'waiter', role: 'waiter', x: 100, y: 100,
+      path: [{ x: 10, y: 5 }], pathGoal: { x: 10, y: 5 },
+      localConflictTarget: { x: 5, y: 3 },
+      stalledFor: 2, usingStaticFallback: false, minimumSpacing: 16,
+    };
+    const first = resolveCharacterMovementBatch(openState, [{ character: initial, speed: 60 }], 0.1)
+      .get(initial.id);
+
+    expect(first.y).toBeLessThan(initial.y);
+    expect(routeDistance(first)).toBeGreaterThanOrEqual(routeDistance(initial) - 0.1);
+    expect(first.stalledFor).toBeGreaterThan(2);
+
+    const { entries } = simulateMovementTicks(openState, [{ character: first, speed: 60 }], 60, 0.1);
+    const cleared = entries[0].character;
+    expect(cleared.x).toBeGreaterThan(initial.x);
+    expect(cleared).toMatchObject({ stalledFor: 0, minimumSpacing: 16, usingStaticFallback: false });
+  });
+
   it('serialises converging exit traffic through the door within a bounded number of ticks', () => {
     const world = getRestaurantWorld(openState.restaurant);
     const doorCell = worldToCell({ x: world.doorX, y: world.doorY + 20 });
@@ -1714,6 +1761,85 @@ describe('movement runtime', () => {
     );
     expect(stableId.get('a').x).toBeGreaterThan(92);
     expect(stableId.get('a').x - 92).toBeGreaterThan(108 - stableId.get('z').x);
+  });
+
+  it('applies normal spacing and controlled-overlap eligibility boundaries to leaving customers', () => {
+    const makeEntries = (left, right) => [
+      {
+        character: {
+          id: left.id, state: 'leaving', exitPhase: 'to_door', x: 92, y: 100,
+          path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+          stalledFor: left.age, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: right.id, state: 'leaving', exitPhase: 'to_door', x: 108, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: right.age, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+    ];
+    const ageZeroEntries = makeEntries({ id: 'z', age: 0 }, { id: 'a', age: 0 });
+    const ageZero = resolveCharacterMovementBatch(corridorState, ageZeroEntries, 0.2);
+    const ageZeroDistance = minimumTrajectoryDistance(
+      buildTimeParameterizedTrajectory(ageZeroEntries[0].character, ageZero.get('z'), 60, 0.2),
+      buildTimeParameterizedTrajectory(ageZeroEntries[1].character, ageZero.get('a'), 60, 0.2),
+    );
+
+    expect(ageZeroDistance).toBeGreaterThanOrEqual(16 - 1e-6);
+    expect(ageZero.get('z').minimumSpacing).toBe(16);
+    expect(ageZero.get('a').minimumSpacing).toBe(16);
+
+    const beforeThreshold = resolveCharacterMovementBatch(
+      corridorState,
+      makeEntries({ id: 'z', age: 1.99 }, { id: 'a', age: 1.99 }),
+      1 / 30,
+    );
+    expect(Math.hypot(
+      beforeThreshold.get('z').x - beforeThreshold.get('a').x,
+      beforeThreshold.get('z').y - beforeThreshold.get('a').y,
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+
+    const selected = resolveCharacterMovementBatch(
+      corridorState,
+      makeEntries({ id: 'z-old', age: 3 }, { id: 'a-young', age: 2 }),
+      0.2,
+    );
+    expect(selected.get('z-old').x).toBeGreaterThan(92);
+    expect(selected.get('z-old').x - 92).toBeGreaterThan(108 - selected.get('a-young').x);
+  });
+
+  it('does not relax a leaving customer without a valid static route', () => {
+    const state = {
+      ...openState,
+      chairs: [
+        { id: 'north', x: 100, y: 80 },
+        { id: 'east', x: 120, y: 100 },
+        { id: 'south', x: 100, y: 120 },
+        { id: 'west', x: 80, y: 100 },
+      ],
+    };
+    const enclosed = {
+      id: 'enclosed-leaving', state: 'leaving', exitPhase: 'to_door', x: 100, y: 100,
+      path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+      stalledFor: 3, usingStaticFallback: true, minimumSpacing: 16,
+    };
+    const moved = resolveCharacterMovementBatch(state, [
+      { character: enclosed, speed: 60 },
+      {
+        character: {
+          id: 'peer', x: 102, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: 2, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+    ], 0.2);
+
+    expect(moved.get(enclosed.id)).toMatchObject({ x: 100, y: 100, minimumSpacing: 16 });
   });
 
   it('selects falsey non-null stable ID zero for controlled overlap', () => {

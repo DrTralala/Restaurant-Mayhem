@@ -283,10 +283,7 @@ export function moveCharacterTowards(character, target, dt, others = [], speed =
 }
 
 function getMovementSpacing(character) {
-  return character.state === 'leaving'
-    && (character.usingStaticFallback || (character.stalledFor || 0) >= 2)
-    ? 6
-    : 16;
+  return 16;
 }
 
 function isAtTarget(position, target) {
@@ -1093,6 +1090,11 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
         intents,
       );
       if (detour) {
+        intent.acceptedRecoveredHeadOnDetour = true;
+        const detourTarget = detour.endpoint.path?.[0];
+        if (detourTarget && !cellsEqual(detourTarget, intent.character.path?.[0])) {
+          intent.acceptedRecoveredHeadOnDetourTarget = { ...detourTarget };
+        }
         resolutions.set(intent.character.id, detour);
         yieldedHeadOnIds.add(headOnPeer.character.id);
       } else {
@@ -1180,9 +1182,10 @@ function resolveConflictComponentAttempt(
   intents,
   allowControlledOverlapId = null,
 ) {
-  const hasRecoveredStaffHeadOn = component.some(intent => intent.character.role
-    && intent.headOnDetourEligible === true);
-  if (hasRecoveredStaffHeadOn) {
+  const isRecoveredStaffHeadOnPair = component.length === 2
+    && component.every(intent => Boolean(intent.character.role))
+    && isExplicitRecoveredHorizontalHeadOn(component[0], component[1]);
+  if (isRecoveredStaffHeadOnPair) {
     resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
     return;
   }
@@ -1247,6 +1250,13 @@ function resolveConflictComponentAttempt(
   ]));
   const collective = new Map(resolutions);
   for (const [id, candidate] of candidates) collective.set(id, candidate);
+  for (const intent of component.filter(candidate => candidate.character.state === 'leaving'
+    && (candidate.target || candidate.targetAfterPath))) {
+    collective.set(intent.character.id, resolvedAtStart(intent));
+    const exactCandidate = furthestSafeTrajectoryPrefix(intent, intents, collective);
+    candidates.set(intent.character.id, exactCandidate);
+    collective.set(intent.character.id, exactCandidate);
+  }
   if (componentIsSafe(component, intents, collective)) {
     for (const [id, candidate] of candidates) resolutions.set(id, candidate);
     return;
@@ -1268,9 +1278,20 @@ function resolveConflictComponentAttempt(
 }
 
 function resolveConflictComponent(state, component, resolutions, dt, intents) {
-  if (component.some(intent => intent.character.state === 'leaving')) {
-    resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
-    return;
+  const exactExitIntents = component.filter(intent => intent.character.state === 'leaving'
+    && (intent.target || intent.targetAfterPath));
+  const isExactExitOnlyComponent = exactExitIntents.length > 0
+    && component.every(intent => exactExitIntents.includes(intent) || intent.speed === 0);
+  if (isExactExitOnlyComponent) {
+    const exactResolutions = new Map(resolutions);
+    resolveComponentWithExistingSafety(state, component, exactResolutions, dt, intents);
+    if (exactExitIntents.some(intent => hasMeasurableRouteProgress(
+      intent,
+      exactResolutions.get(intent.character.id)?.endpoint || intent.character,
+    ))) {
+      copyComponentResolutions(component, exactResolutions, resolutions);
+      return;
+    }
   }
 
   const ordinaryResolutions = new Map(resolutions);
@@ -1281,7 +1302,9 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
   }
 
   for (const intent of component) {
-    const goal = movementGoalForIntent(intent);
+    const goal = intent.character.state === 'leaving' && intent.target
+      ? null
+      : movementGoalForIntent(intent);
     intent.hasValidStaticRoute = Boolean(goal
       && findPath(state, worldToCell(intent.character), worldToCell(goal)).length);
   }
@@ -1331,20 +1354,14 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   const character = intent.character;
   const moved = endpoint || resolvedAtStart(intent).endpoint;
   const displacement = Math.hypot(moved.x - intent.start.x, moved.y - intent.start.y);
-  const desiredDistanceBefore = Math.hypot(
-    intent.desired.x - intent.start.x,
-    intent.desired.y - intent.start.y,
-  );
-  const desiredDistanceAfter = Math.hypot(
-    intent.desired.x - moved.x,
-    intent.desired.y - moved.y,
-  );
-  const leavingProgress = (moved.path?.length || 0) < (character.path?.length || 0)
-    || (displacement >= 0.1
-      && (!moved.localConflictTarget || desiredDistanceAfter < desiredDistanceBefore - 0.1));
-  const progress = character.state === 'leaving'
-    ? leavingProgress
-    : hasMeasurableRouteProgress(intent, moved) || (character.role && displacement >= 0.1);
+  const recoveredHeadOnDetourTarget = intent.acceptedRecoveredHeadOnDetourTarget
+    || character.recoveredHeadOnDetourTarget;
+  const continuingRecoveredHeadOnDetour = recoveredHeadOnDetourTarget
+    && character.path?.[0]
+    && cellsEqual(recoveredHeadOnDetourTarget, character.path[0]);
+  const progress = hasMeasurableRouteProgress(intent, moved)
+    || ((intent.acceptedRecoveredHeadOnDetour || continuingRecoveredHeadOnDetour)
+      && displacement >= 0.1);
   const targetReached = intent.target && isAtTarget(moved, intent.target);
 
   if (!character.path?.length && (!intent.target || targetReached)) {
@@ -1360,8 +1377,15 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   }
 
   if (progress) {
+    const keepsRecoveredHeadOnDetour = recoveredHeadOnDetourTarget
+      && moved.path?.[0]
+      && cellsEqual(recoveredHeadOnDetourTarget, moved.path[0]);
+    const { recoveredHeadOnDetourTarget: _completedHeadOnDetour, ...withoutCompletedHeadOnDetour } = moved;
     return {
-      ...moved,
+      ...withoutCompletedHeadOnDetour,
+      ...(keepsRecoveredHeadOnDetour
+        ? { recoveredHeadOnDetourTarget: { ...recoveredHeadOnDetourTarget } }
+        : {}),
       stalledFor: 0,
       minimumSpacing: 16,
       usingStaticFallback: false,
@@ -1380,12 +1404,10 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   }
 
   const stalledFor = (character.stalledFor || 0) + dt;
-  const leavingFallback = character.state === 'leaving'
-    && (character.usingStaticFallback || stalledFor >= 2);
   let recovered = {
     ...moved,
     stalledFor,
-    minimumSpacing: leavingFallback ? 6 : 16,
+    minimumSpacing: 16,
     usingStaticFallback: intent.controlledOverlapSelected
       ? false
       : character.usingStaticFallback || false,
@@ -1416,10 +1438,8 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents) {
   if (stalledFor >= 2 && pathGoal && !intent.controlledOverlapSelected) {
     const staticPath = findPath(state, worldToCell(recovered), pathGoal);
     recovered = staticPath.length
-      ? { ...recovered, path: staticPath, usingStaticFallback: true,
-          ...(character.state === 'leaving' ? { minimumSpacing: 6 } : {}) }
-      : { ...recovered, usingStaticFallback: true,
-          ...(character.state === 'leaving' ? { minimumSpacing: 6 } : {}) };
+      ? { ...recovered, path: staticPath, usingStaticFallback: true }
+      : { ...recovered, usingStaticFallback: true };
   }
   return recovered;
 }
