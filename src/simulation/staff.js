@@ -315,6 +315,14 @@ function washDuration(station) {
     : ACTIVITY_DURATIONS.manualWash;
 }
 
+function isTableReadyForCleaning(tableId, customers, serviceItems) {
+  const hasBlockingCustomer = customers.some(customer => customer.tableId === tableId
+    && customer.state !== 'leaving' && customer.state !== 'paying');
+  const hasDirtyItem = serviceItems.some(item => item.tableId === tableId
+    && item.state === 'dirty_at_table');
+  return !hasBlockingCustomer && !hasDirtyItem;
+}
+
 function projectedWashWorkload(state, station, staff, serviceItems, allStaff) {
   const duration = washDuration(station);
   const active = serviceItems.find(item => item.state === 'washing' && item.washStationId === station.id);
@@ -698,6 +706,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
     }
 
     const dirty = tables.find(t => t.status === 'dirty'
+      && isTableReadyForCleaning(t.id, customers, serviceItems)
       && (!claimedTableIds || !claimedTableIds.has(t.id)));
     if (dirty) {
       const path = targetForTable(state, dirty, staff);
@@ -856,19 +865,17 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     if (!table || table.status !== 'dirty') {
       return { staff: { ...completedStaff, path: [] }, queue, customers, serviceItems, tables };
     }
+    if (!isTableReadyForCleaning(staff.task.tableId, customers, serviceItems)) {
+      return { staff: { ...completedStaff, path: [] }, queue, customers, serviceItems, tables };
+    }
     if (staff.task.cleaningStartedAt == null) {
       return {
         staff: { ...staff, path: [], task: { ...staff.task, cleaningStartedAt: state.restaurant.gameTime } },
         tables, customers, queue, serviceItems,
       };
     }
-    if (state.restaurant.gameTime - staff.task.cleaningStartedAt < 2) {
+    if (state.restaurant.gameTime - staff.task.cleaningStartedAt < ACTIVITY_DURATIONS.wipeFloor) {
       return { staff: { ...staff, path: [] }, queue, customers, serviceItems, tables };
-    }
-    const hasDirtyItems = serviceItems.some(item => item.tableId === staff.task.tableId && item.state === 'dirty_at_table');
-    if (hasDirtyItems || customers.some(customer => customer.tableId === staff.task.tableId
-      && customer.state !== 'leaving' && customer.state !== 'paying')) {
-      return { staff: { ...completedStaff, path: [] }, queue, customers, serviceItems, tables };
     }
     return {
       staff: { ...completedStaff, path: [] }, queue, customers, serviceItems,

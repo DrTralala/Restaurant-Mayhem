@@ -756,13 +756,19 @@ describe('updateStaff', () => {
     expect(done.serviceItems).toHaveLength(1);
   });
 
-  it('keeps a table dirty while clean_table is blocked by a customer or dirty item', () => {
-    const state = { ...baseState, restaurant: { gameTime: 100 }, tables: [{ id: 't1', status: 'dirty', x: 200, y: 200 }],
-      customers: [{ id: 'c1', tableId: 't1', state: 'eating' }], serviceItems: [],
-      staff: [{ id: 'j1', role: 'waiter', x: 200, y: 200, path: [], task: { type: 'clean_table', tableId: 't1', cleaningStartedAt: 0 } }] };
-    expect(updateStaff(state, 0).tables[0].status).toBe('dirty');
-    expect(updateStaff({ ...state, customers: [{ id: 'c1', tableId: 't1', state: 'leaving' }],
-      serviceItems: [{ id: 'dirty', tableId: 't1', state: 'dirty_at_table' }] }, 0).tables[0].status).toBe('dirty');
+  it('does not claim a dirty table while a customer or dirty item blocks cleaning', () => {
+    const blocked = {
+      ...baseState,
+      tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
+      customers: [{ id: 'c1', tableId: 't1', state: 'eating' }],
+      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, path: [], task: null }],
+    };
+    expect(updateStaff(blocked, 0).staff[0].task).toBeNull();
+    expect(updateStaff({
+      ...blocked,
+      customers: [{ id: 'c1', tableId: 't1', state: 'leaving' }],
+      serviceItems: [{ id: 'dirty', tableId: 't1', state: 'dirty_at_table' }],
+    }, 0).staff[0].task).toBeNull();
   });
 
   it('never assigns automatic-station queued work to a janitor', () => {
@@ -2183,7 +2189,7 @@ describe('updateStaff', () => {
     expect(result.tables[0].status).toBe('empty');
   });
 
-  it('holds a waiter at a dirty table for two seconds', () => {
+  it('holds a waiter at a ready dirty table for the canonical wipe duration', () => {
     const state = {
       ...baseState,
       staff: [{ id: 'w1', role: 'waiter', x: 180, y: 220, path: [], task: { type: 'clean_table', tableId: 't1' } }],
@@ -2192,16 +2198,9 @@ describe('updateStaff', () => {
     };
 
     const started = updateStaff(state, 0);
-    expect(started.tables[0].status).toBe('dirty');
-    expect(started.staff[0].task).toMatchObject({ type: 'clean_table', cleaningStartedAt: 100 });
-    expect(started.staff[0]).toMatchObject({ x: 180, y: 220, path: [] });
-
-    const stillCleaning = updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 101.9 } }, 0);
-    expect(stillCleaning.tables[0].status).toBe('dirty');
-    expect(stillCleaning.staff[0].task).toMatchObject({ type: 'clean_table', cleaningStartedAt: 100 });
-    expect(stillCleaning.staff[0]).toMatchObject({ x: 180, y: 220, path: [] });
-
-    const finished = updateStaff({ ...stillCleaning, restaurant: { ...stillCleaning.restaurant, gameTime: 102 } }, 0);
+    expect(started.staff[0].task).toMatchObject({ cleaningStartedAt: 100 });
+    expect(updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 219.999 } }, 0).tables[0].status).toBe('dirty');
+    const finished = updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 220 } }, 0);
     expect(finished.tables[0].status).toBe('empty');
     expect(finished.staff[0].task).toBeNull();
   });
