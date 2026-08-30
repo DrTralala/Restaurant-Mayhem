@@ -510,8 +510,17 @@ function findSafeDetour(state, intent, spacing, dt, intents, resolutions) {
   return null;
 }
 
-function isSafeIntentPair(actor, peer, spacing) {
-  return minimumTrajectoryDistance(actor.trajectory, peer.trajectory) >= spacing - 1e-6;
+function getEffectivePairSpacing(actor, peer, requiredSpacing) {
+  const startingDistance = Math.hypot(
+    actor.start.x - peer.start.x,
+    actor.start.y - peer.start.y,
+  );
+  return Math.min(requiredSpacing, startingDistance);
+}
+
+function isSafeIntentPair(actor, peer, requiredSpacing) {
+  const effectiveSpacing = getEffectivePairSpacing(actor, peer, requiredSpacing);
+  return minimumTrajectoryDistance(actor.trajectory, peer.trajectory) >= effectiveSpacing - 1e-6;
 }
 
 function trajectoryPositionAt(trajectory, time) {
@@ -604,7 +613,12 @@ function furthestSafeTrajectoryPrefix(intent, intents, resolutions) {
         if (isResolutionSafeForIntent(intent, middleCandidate, intents, resolutions)) low = middle;
         else high = middle;
       }
-      return resolvedAtTrajectoryTime(intent, low);
+      const safePrefix = resolvedAtTrajectoryTime(intent, low);
+      if (Math.hypot(
+        safePrefix.endpoint.x - intent.start.x,
+        safePrefix.endpoint.y - intent.start.y,
+      ) <= 1e-6) return resolvedAtStart(intent);
+      return safePrefix;
     }
   }
   return resolvedAtStart(intent);

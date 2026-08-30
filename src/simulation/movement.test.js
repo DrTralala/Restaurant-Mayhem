@@ -447,6 +447,110 @@ describe('movement runtime', () => {
     )).toBeCloseTo(0);
   });
 
+  it('moves an unrelated actor despite a pre-existing stationary overlap elsewhere', () => {
+    const mover = { id: 'mover', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const overlapA = { id: 'overlap-a', x: 300, y: 300, path: [] };
+    const overlapB = { id: 'overlap-b', x: 300, y: 300, path: [] };
+
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: mover, speed: 20, ignoredIds: [] },
+      { character: overlapA, speed: 0, ignoredIds: [] },
+      { character: overlapB, speed: 0, ignoredIds: [] },
+    ], 1);
+
+    expect(moved.get('mover')).toMatchObject({ x: 120, y: 100 });
+  });
+
+  it('allows actors that start too close to separate', () => {
+    const left = { id: 'left', x: 100, y: 100, path: [{ x: 4, y: 5 }] };
+    const right = { id: 'right', x: 108, y: 100, path: [{ x: 7, y: 5 }] };
+
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: left, speed: 20, ignoredIds: [] },
+      { character: right, speed: 20, ignoredIds: [] },
+    ], 1);
+
+    expect(moved.get('left').x).toBeLessThan(100);
+    expect(moved.get('right').x).toBeGreaterThan(108);
+  });
+
+  it('does not let actors that start too close reduce their starting distance', () => {
+    const approaching = { id: 'a-approaching', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const stationary = { id: 'b-stationary', x: 108, y: 100, path: [] };
+
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: approaching, speed: 20, ignoredIds: [] },
+      { character: stationary, speed: 0, ignoredIds: [] },
+    ], 1);
+
+    const startDistance = 8;
+    const finalDistance = Math.hypot(
+      moved.get('a-approaching').x - moved.get('b-stationary').x,
+      moved.get('a-approaching').y - moved.get('b-stationary').y,
+    );
+    expect(finalDistance).toBeGreaterThanOrEqual(startDistance - 1e-6);
+  });
+
+  it('rejects a below-spacing route whose endpoints recover after worsening swept separation', () => {
+    const crossing = { id: 'a-crossing', x: 100, y: 100, path: [] };
+    const stationary = { id: 'b-stationary', x: 108, y: 100, path: [] };
+    const target = { x: 120, y: 100 };
+    const startDistance = 8;
+    const desiredCrossing = buildTimeParameterizedTrajectory(crossing, target, 20, 1);
+    const stationaryTrajectory = buildTimeParameterizedTrajectory(stationary, stationary, 0, 1);
+
+    expect(Math.hypot(target.x - stationary.x, target.y - stationary.y))
+      .toBeGreaterThanOrEqual(startDistance);
+    expect(minimumTrajectoryDistance(desiredCrossing, stationaryTrajectory))
+      .toBeLessThan(startDistance);
+
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: crossing, speed: 20, target, ignoredIds: [] },
+      { character: stationary, speed: 0, ignoredIds: [] },
+    ], 1);
+    const acceptedCrossing = buildTimeParameterizedTrajectory(crossing, moved.get(crossing.id), 20, 1);
+    const acceptedStationary = buildTimeParameterizedTrajectory(stationary, moved.get(stationary.id), 0, 1);
+
+    expect(minimumTrajectoryDistance(acceptedCrossing, acceptedStationary))
+      .toBeGreaterThanOrEqual(startDistance - 1e-6);
+  });
+
+  it('keeps unrelated movement through final validation while overlapped movers separate', () => {
+    const mover = { id: 'mover', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const overlapA = { id: 'overlap-a', x: 300, y: 300, path: [] };
+    const overlapB = { id: 'overlap-b', x: 308, y: 300, path: [] };
+    const startDistance = 8;
+
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: mover, speed: 20, ignoredIds: [] },
+      { character: overlapA, speed: 20, target: { x: 280, y: 300 }, ignoredIds: [] },
+      { character: overlapB, speed: 20, target: { x: 328, y: 300 }, ignoredIds: [] },
+    ], 1);
+    const acceptedA = buildTimeParameterizedTrajectory(overlapA, moved.get(overlapA.id), 20, 1);
+    const acceptedB = buildTimeParameterizedTrajectory(overlapB, moved.get(overlapB.id), 20, 1);
+
+    expect(moved.get(mover.id)).toMatchObject({ x: 120, y: 100 });
+    expect(moved.get(overlapA.id).x).toBeLessThan(overlapA.x);
+    expect(moved.get(overlapB.id).x).toBeGreaterThan(overlapB.x);
+    expect(minimumTrajectoryDistance(acceptedA, acceptedB))
+      .toBeGreaterThanOrEqual(startDistance - 1e-6);
+  });
+
+  it('retains normal spacing for actors that start safely separated', () => {
+    const left = { id: 'left', x: 100, y: 100, path: [{ x: 6, y: 5 }] };
+    const right = { id: 'right', x: 140, y: 100, path: [{ x: 6, y: 5 }] };
+
+    const moved = resolveCharacterMovementBatch(openState, [
+      { character: left, speed: 20, ignoredIds: [] },
+      { character: right, speed: 20, ignoredIds: [] },
+    ], 1);
+
+    expect(Math.hypot(
+      moved.get('left').x - moved.get('right').x,
+      moved.get('left').y - moved.get('right').y,
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
   it('gives the lower ID priority when movement segments cross', () => {
     const a = { id: 'a', x: 80, y: 100, path: [{ x: 6, y: 5 }] };
     const b = { id: 'b', x: 100, y: 80, path: [{ x: 5, y: 6 }] };
@@ -631,6 +735,48 @@ describe('movement runtime', () => {
 
     expect(moved.get('a')).toMatchObject({ x: 180, y: 60 });
     expect(moved.get('b')).toMatchObject({ x: 200, y: 100 });
+  });
+
+  it('validates recovered head-on detours against below-spacing moving pairs', () => {
+    const recoveredHeadOnEntries = () => [
+      { character: { id: 'a', x: 180, y: 100, path: [{ x: 16, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 75, headOnDetourEligible: true },
+      { character: { id: 'b', x: 200, y: 100, path: [{ x: 3, y: 5 }], stalledFor: 2, usingStaticFallback: true }, speed: 75, headOnDetourEligible: true },
+    ];
+    const overlapA = { id: 'c-overlap', x: 300, y: 300, path: [] };
+    const overlapB = { id: 'd-overlap', x: 308, y: 300, path: [] };
+    const startDistance = 8;
+
+    const separated = resolveCharacterMovementBatch(openState, [
+      ...recoveredHeadOnEntries(),
+      { character: overlapA, speed: 20, target: { x: 280, y: 300 }, ignoredIds: [] },
+      { character: overlapB, speed: 20, target: { x: 328, y: 300 }, ignoredIds: [] },
+    ], 1);
+    const separatedA = buildTimeParameterizedTrajectory(overlapA, separated.get(overlapA.id), 20, 1);
+    const separatedB = buildTimeParameterizedTrajectory(overlapB, separated.get(overlapB.id), 20, 1);
+
+    expect(separated.get('a')).toMatchObject({ x: 180, y: 60 });
+    expect(minimumTrajectoryDistance(separatedA, separatedB))
+      .toBeGreaterThanOrEqual(startDistance - 1e-6);
+
+    const worseningTarget = { x: 320, y: 300 };
+    const worseningDesired = buildTimeParameterizedTrajectory(overlapA, worseningTarget, 20, 1);
+    const stationaryDesired = buildTimeParameterizedTrajectory(overlapB, overlapB, 0, 1);
+    expect(Math.hypot(worseningTarget.x - overlapB.x, worseningTarget.y - overlapB.y))
+      .toBeGreaterThanOrEqual(startDistance);
+    expect(minimumTrajectoryDistance(worseningDesired, stationaryDesired))
+      .toBeLessThan(startDistance);
+
+    const protectedResult = resolveCharacterMovementBatch(openState, [
+      ...recoveredHeadOnEntries(),
+      { character: overlapA, speed: 20, target: worseningTarget, ignoredIds: [] },
+      { character: overlapB, speed: 0, ignoredIds: [] },
+    ], 1);
+    const protectedA = buildTimeParameterizedTrajectory(overlapA, protectedResult.get(overlapA.id), 20, 1);
+    const protectedB = buildTimeParameterizedTrajectory(overlapB, protectedResult.get(overlapB.id), 0, 1);
+
+    expect(protectedResult.get('a').y).toBe(100);
+    expect(minimumTrajectoryDistance(protectedA, protectedB))
+      .toBeGreaterThanOrEqual(startDistance - 1e-6);
   });
 
   it('uses the legal side when a recovered head-on detour is beside the kitchen boundary', () => {

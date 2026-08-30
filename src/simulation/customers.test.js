@@ -888,6 +888,36 @@ describe('updateCustomers', () => {
     expect(result.customers[0].patience).toBe(100);
   });
 
+  it('does not reduce patience while a waiter actively takes the customer order', () => {
+    const customer = {
+      id: 'c1', state: 'seated', patience: 1, happiness: 80,
+      tableId: 't1', dishId: null, drinkId: null,
+    };
+    const staff = [{
+      id: 'w1', role: 'waiter',
+      task: { type: 'take_order', customerId: 'c1', startedAt: 0 },
+    }];
+
+    const result = prepareCustomersForMovement({ ...baseState, customers: [customer], staff }, 1);
+
+    expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1 });
+  });
+
+  it('continues seated patience loss when the active order targets another customer', () => {
+    const customer = {
+      id: 'c1', state: 'seated', patience: 2, happiness: 80,
+      tableId: 't1', dishId: null, drinkId: null,
+    };
+    const staff = [{
+      id: 'w1', role: 'waiter',
+      task: { type: 'take_order', customerId: 'c2', startedAt: 0 },
+    }];
+
+    const result = prepareCustomersForMovement({ ...baseState, customers: [customer], staff }, 1);
+
+    expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1 });
+  });
+
   it.each(['waiting', 'seated', 'waiting_for_items', 'paying'])('reduces patience while a customer is %s', stateName => {
     const customer = { id: 'c1', state: stateName, patience: 100, happiness: 80 };
 

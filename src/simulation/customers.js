@@ -57,6 +57,10 @@ function partyKey(customer) {
 }
 
 function isWaitingForService(customer, staff) {
+  const activeOrder = customer.state === 'seated'
+    && (staff || []).some(worker => worker.task?.type === 'take_order'
+      && worker.task.customerId === customer.id);
+  if (activeOrder) return false;
   if (PATIENCE_STATES.has(customer.state)) return true;
   return customer.state === 'paying'
     && !(staff || []).some(worker => worker.task?.type === 'take_payment'
