@@ -2,8 +2,8 @@ import { findAdjacentOpenCells, cellToWorld } from './pathfinding';
 import { clampReputation } from './balance';
 import { getRestaurantWorld } from './world';
 
-const DIRT_PER_MINUTE = 0.5;
-const EATING_DIRT_PER_MINUTE = 1;
+const DIRT_PER_MINUTE = 0.25;
+const EATING_DIRT_PER_MINUTE = 0.5;
 const SEATED_VISUAL_STATES = new Set(['seated', 'ordering', 'eating', 'waiting_for_items']);
 
 export function getNextDirtId(floorDirt = []) {
