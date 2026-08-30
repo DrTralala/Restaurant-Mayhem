@@ -1,3 +1,5 @@
+import { getFixtureRect, listFixtures } from '../data/fixtures';
+
 function intersects(rect, item) {
   return item.x < rect.right
     && item.x + item.w > rect.left
@@ -16,14 +18,10 @@ export function normaliseSelectionRect({ x1, y1, x2, y2 }) {
 
 export function selectFurnitureInRect(state, rawRect) {
   const rect = normaliseSelectionRect(rawRect);
-  const tables = (state.tables || [])
-    .filter(table => intersects(rect, { ...table, w: 40, h: 40 }))
-    .map(table => ({ type: 'table', id: table.id }));
-  const chairs = (state.chairs || [])
-    .filter(chair => intersects(rect, { ...chair, w: 20, h: 20 }))
-    .map(chair => ({ type: 'chair', id: chair.id }));
-  const washStations = (state.washStations || [])
-    .filter(station => intersects(rect, { ...station, w: station.w || 40, h: station.h || 40 }))
-    .map(station => ({ type: 'washStation', id: station.id }));
-  return [...tables, ...chairs, ...washStations];
+  return listFixtures(state)
+    .filter(fixture => {
+      const fixtureRect = getFixtureRect(state, fixture);
+      return fixtureRect && intersects(rect, fixtureRect);
+    })
+    .map(fixture => ({ type: fixture.type, id: fixture.id }));
 }

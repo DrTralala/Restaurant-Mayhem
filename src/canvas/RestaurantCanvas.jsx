@@ -8,13 +8,12 @@ import { findClickedEntity } from './interaction';
 import { getRestaurantWorld } from '../simulation/world';
 import StaffDetailsPanel from '../components/StaffDetailsPanel';
 import { normaliseSelectionRect, selectFurnitureInRect } from './selection';
-import { snapPlacement, validatePlacement } from '../simulation/placement';
+import { getFixture, getFixtureDescriptor, getFixtureLabel, getFixtureRect, listFixtures } from '../data/fixtures';
+import { getPlaceable } from '../data/placeables';
+import { snapPlacement, validateFixtureMoves, validatePlacement } from '../simulation/placement';
 
-const GRID = 20;
-const CHAIR_GRID = GRID / 2;
-
-function snap(n, grid = GRID) {
-  return Math.round(n / grid) * grid;
+function fixtureKey(type, id) {
+  return `${type}:${id}`;
 }
 
 function buildPlacement(state, request, point, rotation = 0) {
@@ -37,6 +36,169 @@ function samePlacement(first, second) {
     && first?.valid === second?.valid
     && first?.reason === second?.reason
     && first?.tableId === second?.tableId;
+}
+
+function getFixturePlacementType(fixture) {
+  const descriptor = getFixtureDescriptor(fixture?.type);
+  return typeof descriptor?.placementType === 'function'
+    ? descriptor.placementType(fixture?.data)
+    : descriptor?.placementType;
+}
+
+function getMoveItem(state, fixture) {
+  const rect = getFixtureRect(state, fixture);
+  if (!rect) return null;
+
+  const item = { type: fixture.type, id: fixture.id, x: rect.x, y: rect.y };
+  if (Object.prototype.hasOwnProperty.call(fixture.data || {}, 'rotation')) {
+    item.rotation = fixture.data.rotation;
+  }
+  return item;
+}
+
+function expandSelectedFixtures(state, selectedItems) {
+  const selected = new Set((selectedItems || []).map(item => fixtureKey(item.type, item.id)));
+  for (const item of selectedItems || []) {
+    if (item.type !== 'table') continue;
+    for (const chair of (state.chairs || []).filter(candidate => candidate.tableId === item.id)) {
+      selected.add(fixtureKey('chair', chair.id));
+    }
+  }
+
+  return listFixtures(state)
+    .filter(fixture => selected.has(fixtureKey(fixture.type, fixture.id)))
+    .map(fixture => getMoveItem(state, fixture))
+    .filter(Boolean);
+}
+
+function snapMoveItem(state, item) {
+  const fixture = getFixture(state, item.type, item.id);
+  const placementType = fixture && getFixturePlacementType(fixture);
+  const placeable = getPlaceable(placementType);
+  if (!placeable) return item;
+
+  return {
+    ...item,
+    x: item.type === 'door'
+      ? getRestaurantWorld(state.restaurant || {}).doorX
+      : Math.round(item.x / placeable.grid) * placeable.grid,
+    y: Math.round(item.y / placeable.grid) * placeable.grid,
+  };
+}
+
+function buildMoveItems(state, originalItems, anchor, world) {
+  const deltaX = world.x - anchor.x;
+  const deltaY = world.y - anchor.y;
+  return originalItems
+    .map(item => snapMoveItem(state, {
+      ...item,
+      x: item.x + deltaX,
+      y: item.y + deltaY,
+    }));
+}
+
+const PHYSICALLY_SEATED_CUSTOMER_STATES = new Set([
+  'seated',
+  'ordering',
+  'waiting_for_items',
+  'eating',
+]);
+
+function applyMovePreview(renderState, state, move) {
+  if (!move) return renderState;
+  const preview = { ...renderState };
+  const movesByCollection = new Map();
+
+  for (const item of move.items || []) {
+    const descriptor = getFixtureDescriptor(item.type);
+    if (!descriptor) continue;
+    const collectionMoves = movesByCollection.get(descriptor.collection) || [];
+    collectionMoves.push(item);
+    movesByCollection.set(descriptor.collection, collectionMoves);
+  }
+
+  for (const [collection, collectionMoves] of movesByCollection) {
+    if (!Array.isArray(renderState?.[collection])) continue;
+    const byId = new Map(collectionMoves.map(item => [item.id, item]));
+    preview[collection] = renderState[collection].map(record => {
+      const item = byId.get(record.id);
+      if (!item) return record;
+      return {
+        ...record,
+        ...(item.type === 'door' ? {} : { x: item.x }),
+        y: item.y,
+        ...(Object.prototype.hasOwnProperty.call(item, 'rotation')
+          ? { rotation: item.rotation }
+          : {}),
+      };
+    });
+  }
+
+  const chairDeltas = new Map((move.items || [])
+    .filter(item => item.type === 'chair')
+    .map(item => {
+      const original = move.originalItems.find(candidate =>
+        candidate.type === item.type && candidate.id === item.id);
+      const chair = getFixture(state, 'chair', item.id)?.data;
+      return [item.id, {
+        x: item.x - (original?.x ?? chair?.x),
+        y: item.y - (original?.y ?? chair?.y),
+        tableId: chair?.tableId,
+      }];
+    }));
+  if (Array.isArray(renderState?.customers) && chairDeltas.size > 0) {
+    preview.customers = renderState.customers.map(customer => {
+      const delta = chairDeltas.get(customer.chairId);
+      if (!delta || !PHYSICALLY_SEATED_CUSTOMER_STATES.has(customer.state)
+        || customer.tableId !== delta.tableId) return customer;
+      return {
+        ...customer,
+        ...(Number.isFinite(customer.x) ? { x: customer.x + delta.x } : {}),
+        ...(Number.isFinite(customer.y) ? { y: customer.y + delta.y } : {}),
+      };
+    });
+  }
+
+  const serviceTableDeltas = new Map((move.items || [])
+    .filter(item => item.type === 'serviceTable')
+    .map(item => {
+      const original = move.originalItems.find(candidate =>
+        candidate.type === item.type && candidate.id === item.id);
+      return [item.id, {
+        x: item.x - original?.x,
+        y: item.y - original?.y,
+      }];
+    }));
+  if (Array.isArray(renderState?.serviceItems) && serviceTableDeltas.size > 0) {
+    preview.serviceItems = renderState.serviceItems.map(serviceItem => {
+      const delta = serviceTableDeltas.get(serviceItem.serviceTableId);
+      if (!delta || !Number.isFinite(serviceItem.x) || !Number.isFinite(serviceItem.y)) {
+        return serviceItem;
+      }
+      return { ...serviceItem, x: serviceItem.x + delta.x, y: serviceItem.y + delta.y };
+    });
+  }
+
+  return preview;
+}
+
+function canSellItem(state, item) {
+  if (item?.type === 'table') {
+    return (state.tables || []).some(table => table.id === item.id && table.status === 'empty');
+  }
+  if (item?.type === 'chair') {
+    const chair = (state.chairs || []).find(candidate => candidate.id === item.id);
+    const table = chair && (state.tables || []).find(candidate => candidate.id === chair.tableId);
+    return Boolean(chair && table?.status === 'empty'
+      && !(state.customers || []).some(customer => customer.chairId === item.id));
+  }
+  if (item?.type === 'washStation') {
+    const station = (state.washStations || []).find(candidate => candidate.id === item.id);
+    return Boolean(station?.type === 'automatic'
+      && !(state.serviceItems || []).some(serviceItem => serviceItem.washStationId === item.id
+        && ['queued_for_wash', 'washing'].includes(serviceItem.state)));
+  }
+  return false;
 }
 
 export default function RestaurantCanvas({
@@ -63,10 +225,11 @@ export default function RestaurantCanvas({
   const [selectedStaffId, setSelectedStaffId] = useState(null);
   const [selectedItems, setSelectedItems] = useState([]);
   const [selectionRect, setSelectionRect] = useState(null);
+  const [, setMoveRevision] = useState(0);
   const selectedStaff = state.staff.find(staff => staff.id === selectedStaffId) || null;
 
   // Move mode: object follows the cursor until the next click places it.
-  const moveRef = useRef(null); // { type, id, rotation?, x, y }
+  const moveRef = useRef(null); // { originalItems, items, anchor, validation }
   const dragRef = useRef(null);
   const suppressClickRef = useRef(false);
 
@@ -115,44 +278,9 @@ export default function RestaurantCanvas({
     canvas.style.height = canvas.clientHeight + 'px';
 
     try {
-      let renderState = simulationRenderState;
-      if (moveRef.current) {
-        const m = moveRef.current;
-        if (m.type === 'table') {
-          renderState = {
-            ...simulationRenderState,
-            tables: simulationRenderState.tables.map(t =>
-              t.id === m.id ? { ...t, x: m.x, y: m.y } : t
-            ),
-          };
-        } else if (m.type === 'chair') {
-          renderState = {
-            ...simulationRenderState,
-            chairs: simulationRenderState.chairs.map(ch =>
-              ch.id === m.id ? { ...ch, x: m.x, y: m.y, rotation: m.rotation ?? ch.rotation } : ch
-            ),
-          };
-        } else if (m.type === 'group') {
-          renderState = {
-            ...simulationRenderState,
-            tables: simulationRenderState.tables.map(table => {
-              const item = m.items.find(candidate => candidate.type === 'table' && candidate.id === table.id);
-              return item ? { ...table, x: item.x, y: item.y } : table;
-            }),
-            chairs: simulationRenderState.chairs.map(chair => {
-              const item = m.items.find(candidate => candidate.type === 'chair' && candidate.id === chair.id);
-              return item ? { ...chair, x: item.x, y: item.y } : chair;
-            }),
-            washStations: (simulationRenderState.washStations || []).map(station => {
-              const item = m.items.find(candidate => candidate.type === 'washStation' && candidate.id === station.id);
-              return item ? { ...station, x: item.x, y: item.y } : station;
-            }),
-          };
-        } else if (m.type === 'washStation') {
-          renderState = { ...simulationRenderState, washStations: (simulationRenderState.washStations || []).map(station =>
-            station.id === m.id ? { ...station, x: m.x, y: m.y } : station) };
-        }
-      }
+      const renderState = moveRef.current
+        ? applyMovePreview(simulationRenderState, state, moveRef.current)
+        : simulationRenderState;
 
       drawFloorLayer(ctx, renderState, camera, sprites);
       drawFurnitureLayer(ctx, renderState, camera, sprites);
@@ -213,6 +341,7 @@ export default function RestaurantCanvas({
     setSelectionRect(null);
     moveRef.current = null;
     dragRef.current = null;
+    setMoveRevision(revision => revision + 1);
   }, [managementOpen]);
 
   useEffect(() => {
@@ -235,8 +364,15 @@ export default function RestaurantCanvas({
         setPlacement(next);
         return;
       }
-      if (e.key === 'r' && moveRef.current?.type === 'chair') {
-        moveRef.current.rotation = ((moveRef.current.rotation ?? 0) + 1) % 4;
+      const moving = moveRef.current;
+      if (e.key.toLowerCase() === 'r'
+        && moving?.originalItems?.length === 1
+        && moving.originalItems[0].type === 'chair') {
+        const rotation = ((moving.items[0].rotation ?? 0) + 1) % 4;
+        moving.originalItems = moving.originalItems.map(item => ({ ...item, rotation }));
+        moving.items = moving.items.map(item => ({ ...item, rotation }));
+        moving.validation = validateFixtureMoves(state, moving.items);
+        setMoveRevision(revision => revision + 1);
       }
       if (e.key === 'Escape') {
         if (placementRef.current) {
@@ -249,6 +385,7 @@ export default function RestaurantCanvas({
         setSelectionRect(null);
         moveRef.current = null;
         dragRef.current = null;
+        setMoveRevision(revision => revision + 1);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -286,22 +423,13 @@ export default function RestaurantCanvas({
     }
     if (moveRef.current) {
       const world = getWorldPos(e);
-      if (moveRef.current.type === 'group') {
-        if (!moveRef.current.anchor) {
-          moveRef.current.anchor = world;
-          return;
-        }
-        const dx = world.x - moveRef.current.anchor.x;
-        const dy = world.y - moveRef.current.anchor.y;
-        moveRef.current.items = moveRef.current.originalItems.map(item => ({
-          ...item,
-          x: item.x + dx,
-          y: item.y + dy,
-        }));
-      } else {
-        moveRef.current.x = world.x;
-        moveRef.current.y = world.y;
-      }
+      const moving = moveRef.current;
+      if (!moving.anchor) moving.anchor = world;
+      const proposedItems = buildMoveItems(state, moving.originalItems, moving.anchor, world);
+      const validation = validateFixtureMoves(state, proposedItems);
+      moving.items = validation.valid ? validation.moves : proposedItems;
+      moving.validation = validation;
+      setMoveRevision(revision => revision + 1);
       return;
     }
     if (dragRef.current && (e.buttons & 1) === 1) {
@@ -332,41 +460,20 @@ export default function RestaurantCanvas({
   };
 
   const placeMovingEntity = () => {
-    if (moveRef.current) {
-      const m = moveRef.current;
-      if (m.type === 'group') {
-        dispatch({
-          type: 'MOVE_ITEMS',
-          items: m.items.filter(item => item.type !== 'washStation').map(item => ({
-            ...item,
-            x: snap(item.x, item.type === 'chair' ? CHAIR_GRID : GRID),
-            y: snap(item.y, item.type === 'chair' ? CHAIR_GRID : GRID),
-          })),
-        });
-        for (const item of m.items.filter(candidate => candidate.type === 'washStation')) {
-          dispatch({ type: 'MOVE_WASH_STATION', id: item.id, x: snap(item.x), y: snap(item.y) });
-        }
-        setSelectedItems([]);
-      } else if (m.type === 'chair') {
-        dispatch({
-          type: 'MOVE_CHAIR',
-          id: m.id,
-          x: snap(m.x, CHAIR_GRID),
-          y: snap(m.y, CHAIR_GRID),
-          rotation: m.rotation,
-        });
-      } else if (m.type === 'washStation') {
-        dispatch({ type: 'MOVE_WASH_STATION', id: m.id, x: snap(m.x), y: snap(m.y) });
-      } else {
-        dispatch({
-          type: 'MOVE_TABLE',
-          id: m.id,
-          x: snap(m.x),
-          y: snap(m.y),
-        });
-      }
-      moveRef.current = null;
+    const moving = moveRef.current;
+    if (!moving) return;
+
+    const validation = validateFixtureMoves(state, moving.items);
+    moving.validation = validation;
+    if (!validation.valid) {
+      setMoveRevision(revision => revision + 1);
+      return;
     }
+
+    dispatch({ type: 'MOVE_FIXTURES', items: validation.moves });
+    setSelectedItems([]);
+    moveRef.current = null;
+    setMoveRevision(revision => revision + 1);
   };
 
   const handleClick = (e) => {
@@ -403,7 +510,7 @@ export default function RestaurantCanvas({
       setSelectedStaffId(hit.data.id);
       setSelectedItems([]);
       tooltipRef.current = null;
-    } else if (hit && (hit.type === 'table' || hit.type === 'chair' || hit.type === 'washStation')) {
+    } else if (hit) {
       // Show context menu at click position
       setSelectedStaffId(null);
       setSelectedItems([]);
@@ -462,14 +569,18 @@ export default function RestaurantCanvas({
   // Context menu actions
   const handleMoveEntity = () => {
     if (!menu) return;
+    const originalItems = expandSelectedFixtures(state, [{ type: menu.type, id: menu.data.id }]);
+    if (originalItems.length === 0) return;
+    const primary = originalItems.find(item => item.type === menu.type && item.id === menu.data.id)
+      || originalItems[0];
     moveRef.current = {
-      type: menu.type,
-      id: menu.data.id,
-      x: menu.data.x,
-      y: menu.data.y,
-      rotation: menu.data.rotation,
+      originalItems,
+      items: originalItems.map(item => ({ ...item })),
+      anchor: { x: primary.x, y: primary.y },
+      validation: null,
     };
     setMenu(null);
+    setMoveRevision(revision => revision + 1);
   };
 
   const handleDeleteEntity = () => {
@@ -479,32 +590,29 @@ export default function RestaurantCanvas({
   };
 
   const handleMoveSelected = () => {
-    const items = selectedItems.map(item => {
-      const data = item.type === 'table'
-        ? state.tables.find(table => table.id === item.id)
-        : item.type === 'chair' ? state.chairs.find(chair => chair.id === item.id)
-          : (state.washStations || []).find(station => station.id === item.id);
-      return { ...item, x: data.x, y: data.y };
-    });
+    const items = expandSelectedFixtures(state, selectedItems);
+    if (items.length === 0) return;
     moveRef.current = {
-      type: 'group',
       originalItems: items,
-      items,
+      items: items.map(item => ({ ...item })),
       anchor: null,
+      validation: null,
     };
+    setMoveRevision(revision => revision + 1);
   };
 
   const handleSellSelected = () => {
-    dispatch({ type: 'SELL_ITEMS', items: selectedItems });
+    const sellableItems = selectedItems.filter(item => canSellItem(state, item));
+    if (sellableItems.length > 0) dispatch({ type: 'SELL_ITEMS', items: sellableItems });
     setSelectedItems([]);
   };
 
-  const menuWashStationBusy = menu?.type === 'washStation'
-    && (state.serviceItems || []).some(item => item.washStationId === menu.data.id
-      && ['queued_for_wash', 'washing'].includes(item.state));
-  const canMoveMenuEntity = !menuWashStationBusy;
-  const canSellMenuEntity = !menuWashStationBusy
-    && !(menu?.type === 'washStation' && menu.data.type === 'manual');
+  const canMoveMenuEntity = Boolean(menu);
+  const canSellMenuEntity = Boolean(menu && canSellItem(state, {
+    type: menu.type,
+    id: menu.data.id,
+  }));
+  const sellableSelectedItems = selectedItems.filter(item => canSellItem(state, item));
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -527,7 +635,7 @@ export default function RestaurantCanvas({
           minWidth: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
         }}>
           <div style={{ color: '#888', fontSize: 11, padding: '2px 8px', fontFamily: 'monospace' }}>
-            {menu.type === 'table' ? 'Dining table' : menu.type === 'chair' ? 'Chair' : 'Wash station'}
+            {getFixtureLabel(state, { type: menu.type, data: menu.data }) || menu.type}
           </div>
           {canMoveMenuEntity && (
             <button onClick={handleMoveEntity} style={menuBtn}>
@@ -570,7 +678,9 @@ export default function RestaurantCanvas({
         }}>
           <strong>{selectedItems.length} selected</strong>
           <button onClick={handleMoveSelected} style={menuBtn}>Move selected</button>
-          <button onClick={handleSellSelected} style={{ ...menuBtn, color: '#ef7777' }}>Sell selected</button>
+          {sellableSelectedItems.length > 0 && (
+            <button onClick={handleSellSelected} style={{ ...menuBtn, color: '#ef7777' }}>Sell selected</button>
+          )}
           <button aria-label="Clear selection" onClick={() => setSelectedItems([])} style={menuBtn}>✕</button>
         </div>
       )}
@@ -582,7 +692,15 @@ export default function RestaurantCanvas({
           background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
           fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         }}>
-          Click to place · {moveRef.current.type === 'chair' ? 'R to rotate · ' : ''}Esc to cancel
+          Click to place · {moveRef.current.originalItems.length === 1
+            && moveRef.current.originalItems[0].type === 'chair' ? 'R to rotate · ' : ''}Esc to cancel
+          {moveRef.current.validation && !moveRef.current.validation.valid && (
+            <div style={{
+              marginTop: 4, color: '#b00000', fontSize: 12, fontFamily: 'monospace',
+            }}>
+              Invalid: {moveRef.current.validation.reason}
+            </div>
+          )}
         </div>
       )}
 
