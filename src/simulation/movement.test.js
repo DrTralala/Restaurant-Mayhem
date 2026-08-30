@@ -775,6 +775,72 @@ describe('movement runtime', () => {
     )).toBeGreaterThanOrEqual(16 - 1e-6);
   });
 
+  it('keeps an unscoped solver plan directed at the active waypoint', () => {
+    const actor = {
+      id: 'a', x: 40, y: 100,
+      path: [{ x: 10, y: 5 }, { x: 2, y: 10 }], stalledFor: 1,
+    };
+    const peer = {
+      id: 'b', x: 100, y: 40,
+      path: [{ x: 5, y: 10 }], stalledFor: 0,
+    };
+    const entries = [
+      { character: actor, speed: 60 },
+      { character: peer, speed: 60 },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a')).toMatchObject({
+      x: 100, y: 100,
+      path: [{ x: 10, y: 5 }, { x: 2, y: 10 }],
+    });
+    expect(moved.get('b')).toMatchObject({ x: 100, y: 80, path: [{ x: 5, y: 10 }] });
+    expect(moved.get('a').x).toBeGreaterThan(actor.x);
+    expect(moved.get('a').y).toBe(actor.y);
+    for (const { character, speed } of entries) {
+      expect(Math.hypot(
+        moved.get(character.id).x - character.x,
+        moved.get(character.id).y - character.y,
+      )).toBeLessThanOrEqual(speed + 1e-6);
+    }
+    expect(minimumTrajectoryDistance(
+      buildTimeParameterizedTrajectory(actor, moved.get('a'), 60, 1),
+      buildTimeParameterizedTrajectory(peer, moved.get('b'), 60, 1),
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
+  it('uses the safe remaining tick budget after an off-grid partial cell', () => {
+    const actor = {
+      id: 'a', x: 59, y: 100,
+      path: [{ x: 10, y: 5 }], stalledFor: 1,
+    };
+    const peer = {
+      id: 'b', x: 100, y: 59,
+      path: [{ x: 5, y: 10 }], stalledFor: 0,
+    };
+    const entries = [
+      { character: actor, speed: 60 },
+      { character: peer, speed: 60 },
+    ];
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a')).toMatchObject({ x: 119, y: 100, path: [{ x: 10, y: 5 }] });
+    expect(moved.get('b')).toMatchObject({ x: 100, path: [{ x: 5, y: 10 }] });
+    expect(moved.get('b').y).toBeCloseTo(84, 5);
+    expect(moved.get('a').x).toBeGreaterThan(actor.x);
+    expect(moved.get('a').y).toBe(actor.y);
+    for (const { character, speed } of entries) {
+      expect(Math.hypot(
+        moved.get(character.id).x - character.x,
+        moved.get(character.id).y - character.y,
+      )).toBeLessThanOrEqual(speed + 1e-6);
+    }
+    expect(minimumTrajectoryDistance(
+      buildTimeParameterizedTrajectory(actor, moved.get('a'), 60, 1),
+      buildTimeParameterizedTrajectory(peer, moved.get('b'), 60, 1),
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
+  });
+
   it('preserves the fast-path endpoint and path consumption for one uncongested actor', () => {
     const character = { id: 'solo', x: 100, y: 100, path: [{ x: 6, y: 5 }, { x: 8, y: 5 }] };
     const expected = moveCharacterAlongPath(character, 1, [], 20, 16, openState);

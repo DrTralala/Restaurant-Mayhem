@@ -623,12 +623,23 @@ function solverRouteCells(intent) {
   return routeCells.filter((cell, index) => index === 0 || !cellsEqual(cell, routeCells[index - 1]));
 }
 
+function hasUnscopedLegacyPath(intent) {
+  return intent.character.path?.length
+    && !intent.character.pathGoal
+    && !intent.targetAfterPath;
+}
+
 function solverActorForIntent(intent) {
   const startCell = worldToCell(intent.start);
   const moving = intentMoves(intent);
-  const routeCells = solverRouteCells(intent);
+  const unscopedLegacyPath = hasUnscopedLegacyPath(intent);
+  const routeCells = unscopedLegacyPath
+    ? [worldToCell(intent.desired)]
+    : solverRouteCells(intent);
   const goalCell = moving
-    ? (intent.character.pathGoal
+    ? (unscopedLegacyPath
+      ? worldToCell(intent.desired)
+      : intent.character.pathGoal
       || routeCells.at(-1)
       || worldToCell(intent.desired))
     : startCell;
@@ -699,7 +710,7 @@ function consumeReachedPathCell(intent, path, cell) {
   return true;
 }
 
-function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon = 8) {
+function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon = 8, goalCell = null) {
   const startCell = worldToCell(intent.start);
   const plan = rawPlan?.length === horizon + 1 && cellsEqual(rawPlan[0], startCell)
     ? rawPlan.slice(1)
@@ -715,6 +726,8 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
   let travelled = 0;
   let nextPlanIndex = 0;
   let previousPlanCell = startCell;
+  const desiredCell = worldToCell(intent.desired);
+  const preserveCurrentIntent = hasUnscopedLegacyPath(intent);
 
   while (path.length > 0 && isAtTarget(current, cellToWorld(path[0]))
     && consumeReachedPathCell(intent, path, path[0])) {
@@ -722,16 +735,35 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
   }
 
   for (let index = 0; index < plan.length; index += 1) {
-    const target = cellToWorld(plan[index]);
     const slotStart = index * slotSeconds;
     const slotEnd = slotStart + slotSeconds;
+    const cellDelta = {
+      x: plan[index].x - previousPlanCell.x,
+      y: plan[index].y - previousPlanCell.y,
+    };
+    const reachesExactDesired = preserveCurrentIntent
+      && goalCell
+      && cellsEqual(plan[index], goalCell)
+      && cellsEqual(goalCell, desiredCell);
+    const reachesQueuedWaypoint = path.length > 0 && cellsEqual(plan[index], path[0]);
+    const target = preserveCurrentIntent
+      ? (reachesExactDesired
+        ? positionOf(intent.desired)
+        : (reachesQueuedWaypoint
+          ? cellToWorld(plan[index])
+          : {
+            x: current.x + cellDelta.x * GRID_SIZE,
+            y: current.y + cellDelta.y * GRID_SIZE,
+          }))
+      : cellToWorld(plan[index]);
     if (!cellsEqual(plan[index], previousPlanCell)) {
       plannedArrivals.push({ cell: plan[index], time: dt > 0 ? slotEnd / dt : Infinity });
     }
     if (slotStart >= dt - 1e-9 || travelled >= budget - 1e-9) break;
 
     if (cellsEqual(plan[index], previousPlanCell) || isAtTarget(current, target)) {
-      if (isAtTarget(current, target) && consumeReachedPathCell(intent, path, plan[index])) {
+      if (isAtTarget(current, cellToWorld(plan[index]))
+        && consumeReachedPathCell(intent, path, plan[index])) {
         pathConsumptionTimes.push(dt > 0 ? Math.min(1, slotStart / dt) : 0);
       }
       appendTimedSegment(trajectory, current, current, slotStart, Math.min(dt, slotEnd), dt);
@@ -761,7 +793,8 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
     }
     nextPlanIndex = index + 1;
     previousPlanCell = plan[index];
-    if (consumeReachedPathCell(intent, path, plan[index])) {
+    if (isAtTarget(current, cellToWorld(plan[index]))
+      && consumeReachedPathCell(intent, path, plan[index])) {
       pathConsumptionTimes.push(Math.min(1, (slotStart + duration) / dt));
     }
     appendTimedSegment(trajectory, current, current, slotStart + duration, Math.min(dt, slotEnd), dt);
@@ -774,7 +807,9 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
 
   let nextCell = plan[nextPlanIndex];
   while (nextCell && (cellsEqual(nextCell, previousPlanCell)
-    || isAtTarget(current, cellToWorld(nextCell)))) {
+    || (preserveCurrentIntent
+      ? cellsEqual(worldToCell(current), nextCell)
+      : isAtTarget(current, cellToWorld(nextCell))))) {
     nextPlanIndex += 1;
     nextCell = plan[nextPlanIndex];
   }
@@ -1011,8 +1046,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
   }));
   const maxSpeed = Math.max(0, ...component.map(intent => intent.speed));
   const executableSlots = Math.max(1, Math.ceil(dt * maxSpeed / GRID_SIZE));
-  const hasUnscopedPath = component.some(intent => intent.character.path?.length
-    && !intent.character.pathGoal && !intent.targetAfterPath);
+  const hasUnscopedPath = component.some(hasUnscopedLegacyPath);
   const stalledAges = component.map(intent => intent.character.stalledFor || 0);
   const hasAgedPriority = Math.max(...stalledAges) > Math.min(...stalledAges);
   let horizon = 8;
@@ -1035,6 +1069,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
     resolveComponentWithExistingSafety(state, component, resolutions, dt, intents);
     return;
   }
+  const actorsById = new Map(actors.map(actor => [actor.id, actor]));
   const candidates = new Map(component.map(intent => [
     intent.character.id,
     resolutionFromSolverPlan(
@@ -1044,6 +1079,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
       component,
       dt,
       horizon,
+      actorsById.get(intent.character.id).goalCell,
     ),
   ]));
   const collective = new Map(resolutions);
