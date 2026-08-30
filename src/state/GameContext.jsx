@@ -11,6 +11,7 @@ import { getNextNumericId, snapPlacement, validatePlacement } from '../simulatio
 import { getRestaurantWorld } from '../simulation/world';
 import { hasValidDrinkReservation } from '../simulation/serviceItems';
 import { normaliseOperatingHour } from '../simulation/clock';
+import { moveFixtures } from './fixtureMoves';
 
 const DISH_QUALITY_COST = 50;
 const TRAINING_COST = 100;
@@ -431,15 +432,9 @@ function gameReducer(state, action) {
     }
     case 'PLACE_ITEM':
       return placeItem(state, action);
-    case 'MOVE_ITEMS': {
-      const tableMoves = new Map(action.items.filter(item => item.type === 'table').map(item => [item.id, item]));
-      const chairMoves = new Map(action.items.filter(item => item.type === 'chair').map(item => [item.id, item]));
-      return {
-        ...state,
-        tables: state.tables.map(table => tableMoves.has(table.id) ? { ...table, x: tableMoves.get(table.id).x, y: tableMoves.get(table.id).y } : table),
-        chairs: state.chairs.map(chair => chairMoves.has(chair.id) ? { ...chair, x: chairMoves.get(chair.id).x, y: chairMoves.get(chair.id).y } : chair),
-      };
-    }
+    case 'MOVE_FIXTURES':
+    case 'MOVE_ITEMS':
+      return moveFixtures(state, action.items);
     case 'SELL_ITEMS': {
       const selectedTableIds = new Set(action.items
         .filter(item => item.type === 'table')
@@ -473,29 +468,18 @@ function gameReducer(state, action) {
       };
     }
     case 'MOVE_CHAIR':
-      return {
-        ...state,
-        chairs: state.chairs.map(ch =>
-          ch.id === action.id ? { ...ch, x: action.x, y: action.y, ...(action.rotation != null ? { rotation: action.rotation } : {}) } : ch
-        ),
-      };
+      return moveFixtures(state, [{
+        type: 'chair', id: action.id, x: action.x, y: action.y,
+        ...(action.rotation != null ? { rotation: action.rotation } : {}),
+      }]);
     case 'MOVE_TABLE':
-      return {
-        ...state,
-        tables: state.tables.map(t =>
-          t.id === action.id ? { ...t, x: action.x, y: action.y } : t
-        ),
-      };
-    case 'MOVE_WASH_STATION': {
-      const station = (state.washStations || []).find(candidate => candidate.id === action.id);
-      const busy = (state.serviceItems || []).some(item => item.washStationId === action.id
-        && ['queued_for_wash', 'washing'].includes(item.state));
-      if (!station || busy) return state;
-      const withoutStation = { ...state, washStations: state.washStations.filter(item => item.id !== action.id) };
-      if (!validatePlacement(withoutStation, { itemType: 'automaticDishwasher', x: action.x, y: action.y }).valid) return state;
-      return { ...state, washStations: state.washStations.map(item => item.id === action.id
-        ? { ...item, x: action.x, y: action.y } : item) };
-    }
+      return moveFixtures(state, [
+        { type: 'table', id: action.id, x: action.x, y: action.y },
+      ]);
+    case 'MOVE_WASH_STATION':
+      return moveFixtures(state, [
+        { type: 'washStation', id: action.id, x: action.x, y: action.y },
+      ]);
     case 'DELETE_TABLE':
       return {
         ...state,
@@ -517,12 +501,9 @@ function gameReducer(state, action) {
     case 'BUY_SERVICE_TABLE':
       return placeLegacyItem(state, action, 'serviceTable');
     case 'MOVE_SERVICE_TABLE':
-      return {
-        ...state,
-        serviceTables: state.serviceTables.map(st =>
-          st.id === action.id ? { ...st, x: action.x, y: action.y } : st
-        ),
-      };
+      return moveFixtures(state, [
+        { type: 'serviceTable', id: action.id, x: action.x, y: action.y },
+      ]);
     case 'DELETE_SERVICE_TABLE': {
       const serviceTable = state.serviceTables.find(table => table.id === action.id);
       if (!serviceTable) return state;

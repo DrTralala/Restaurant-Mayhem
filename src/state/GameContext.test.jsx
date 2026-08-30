@@ -222,17 +222,41 @@ describe('GameProvider furniture actions', () => {
     expect(game.state.restaurant.funds).toBe(900);
   });
 
-  it.each([
-    ['manual', []],
-    ['automatic', [{ id: 'dirty', washStationId: 'wash2', state: 'queued_for_wash' }]],
-    ['automatic', [{ id: 'dirty', washStationId: 'wash2', state: 'washing' }]],
-  ])('blocks %s or busy wash stations from moving or selling', (type, serviceItems) => {
-    const station = { id: 'wash2', type, x: 300, y: 120, w: 40, h: 40 };
-    const game = renderReducer({ washStations: [station], serviceItems });
-    if (type !== 'manual') game.dispatch({ type: 'MOVE_WASH_STATION', id: 'wash2', x: 500, y: 300 });
+  it('blocks a manual wash station from being sold', () => {
+    const station = { id: 'wash2', type: 'manual', x: 300, y: 120, w: 40, h: 40 };
+    const game = renderReducer({ washStations: [station] });
+
     game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'washStation', id: 'wash2' }] });
+
     expect(game.state.washStations).toEqual([station]);
     expect(game.state.restaurant.funds).toBe(600);
+  });
+
+  it.each(['queued_for_wash', 'washing'])('blocks an automatic wash station with %s work from being sold', state => {
+    const station = { id: 'wash2', type: 'automatic', x: 300, y: 120, w: 40, h: 40 };
+    const game = renderReducer({
+      washStations: [station],
+      serviceItems: [{ id: 'dirty', washStationId: 'wash2', state }],
+    });
+
+    game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'washStation', id: 'wash2' }] });
+
+    expect(game.state.washStations).toEqual([station]);
+    expect(game.state.restaurant.funds).toBe(600);
+  });
+
+  it.each(['queued_for_wash', 'washing'])('moves a busy automatic wash station and requeues %s work', state => {
+    const game = renderReducer({
+      washStations: [{ id: 'wash2', type: 'automatic', x: 300, y: 120, w: 40, h: 40 }],
+      serviceItems: [{ id: 'dirty', washStationId: 'wash2', washStartedAt: 10, state }],
+    });
+
+    game.dispatch({ type: 'MOVE_WASH_STATION', id: 'wash2', x: 500, y: 300 });
+
+    expect(game.state.washStations[0]).toMatchObject({ x: 500, y: 300 });
+    expect(game.state.serviceItems[0]).toMatchObject({
+      state: 'queued_for_wash', washStationId: null, washStartedAt: null,
+    });
   });
 
   it('buys an additional door and deducts its item price', () => {
@@ -828,5 +852,60 @@ describe('GameProvider service counter actions', () => {
     game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st2' });
     expect(game.state.serviceTables).toEqual([]);
     expect(game.state.serviceItems).toEqual([cleanupItem]);
+  });
+});
+
+describe('GameProvider fixture movement actions', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('delegates the unified action while preserving station equipment', () => {
+    const game = renderReducer();
+
+    game.dispatch({
+      type: 'MOVE_FIXTURES',
+      items: [{ type: 'kitchenStation', id: 'k1', x: 500, y: 120 }],
+    });
+
+    expect(game.state.kitchenStations.find(station => station.id === 'k1')).toEqual({
+      id: 'k1', equipmentId: 'eq1', x: 500, y: 120,
+    });
+  });
+
+  it('retains accepted legacy table, chair, wash, counter, and grouped payloads', () => {
+    const tableGame = renderReducer();
+    tableGame.dispatch({ type: 'MOVE_TABLE', id: 't1', x: 300, y: 240 });
+    expect(tableGame.state.tables[0]).toMatchObject({ x: 300, y: 240 });
+    expect(tableGame.state.chairs.slice(0, 2)).toEqual([
+      { id: 'ch1', tableId: 't1', x: 310, y: 220, rotation: 2 },
+      { id: 'ch2', tableId: 't1', x: 310, y: 280, rotation: 0 },
+    ]);
+
+    const chairGame = renderReducer();
+    chairGame.dispatch({ type: 'MOVE_CHAIR', id: 'ch1', x: 180, y: 210, rotation: 1 });
+    expect(chairGame.state.chairs[0]).toMatchObject({ x: 180, y: 210, rotation: 1 });
+
+    const washGame = renderReducer({
+      washStations: [{ id: 'wash2', type: 'automatic', x: 300, y: 120, w: 40, h: 40 }],
+    });
+    washGame.dispatch({ type: 'MOVE_WASH_STATION', id: 'wash2', x: 500, y: 300 });
+    expect(washGame.state.washStations[0]).toMatchObject({ x: 500, y: 300 });
+
+    const counterGame = renderReducer();
+    counterGame.dispatch({ type: 'MOVE_SERVICE_TABLE', id: 'st1', x: 500, y: 120 });
+    expect(counterGame.state.serviceTables[0]).toMatchObject({ x: 500, y: 120 });
+
+    const groupedGame = renderReducer();
+    groupedGame.dispatch({
+      type: 'MOVE_ITEMS',
+      items: [
+        { type: 'table', id: 't1', x: 300, y: 240 },
+        { type: 'chair', id: 'ch1', x: 310, y: 220, rotation: 2 },
+        { type: 'chair', id: 'ch2', x: 310, y: 280, rotation: 0 },
+      ],
+    });
+    expect(groupedGame.state.tables[0]).toMatchObject({ x: 300, y: 240 });
+    expect(groupedGame.state.chairs.slice(0, 2).map(chair => [chair.x, chair.y])).toEqual([
+      [310, 220], [310, 280],
+    ]);
   });
 });
