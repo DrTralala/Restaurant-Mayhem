@@ -996,7 +996,19 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
   });
   const hasContestedDesiredCell = new Set(desiredCellKeys).size < desiredCellKeys.length;
   const actors = component.map(solverActorForIntent);
-  const contestedRouteHorizon = Math.max(1, ...actors.map(actor => actor.routeCells.length));
+  const contestedRouteHorizon = Math.max(1, ...actors.map(actor => {
+    let previous = actor.startCell;
+    return actor.routeCells.reduce((slots, cell) => {
+      const distance = Math.abs(cell.x - previous.x) + Math.abs(cell.y - previous.y);
+      previous = cell;
+      return slots + distance;
+    }, 0);
+  }));
+  const currentIntentHorizon = Math.max(1, ...component.map(intent => {
+    const startCell = worldToCell(intent.start);
+    const desiredCell = worldToCell(intent.desired);
+    return Math.abs(desiredCell.x - startCell.x) + Math.abs(desiredCell.y - startCell.y);
+  }));
   const maxSpeed = Math.max(0, ...component.map(intent => intent.speed));
   const executableSlots = Math.max(1, Math.ceil(dt * maxSpeed / GRID_SIZE));
   const hasUnscopedPath = component.some(intent => intent.character.path?.length
@@ -1004,8 +1016,10 @@ function resolveConflictComponent(state, component, resolutions, dt, intents) {
   const stalledAges = component.map(intent => intent.character.stalledFor || 0);
   const hasAgedPriority = Math.max(...stalledAges) > Math.min(...stalledAges);
   let horizon = 8;
-  // Without a route goal, only the current desired waypoint is a committed solver step.
-  if (hasContestedDesiredCell && hasUnscopedPath) horizon = 1;
+  // An unscoped route still needs every grid action reachable by this tick's desired movement.
+  if (hasContestedDesiredCell && hasUnscopedPath) {
+    horizon = Math.min(8, currentIntentHorizon, executableSlots);
+  }
   // Do not reward delaying an older actor's contested route until after this tick's budget.
   else if (hasContestedDesiredCell && hasAgedPriority) {
     horizon = Math.min(8, contestedRouteHorizon, executableSlots);
