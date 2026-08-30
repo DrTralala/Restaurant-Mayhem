@@ -28,7 +28,9 @@ export function normaliseTableReservationOwners(tables, staff) {
     }
     if (table.reservationOwnerStaffId != null) return table;
     const guideIds = guideIdsByTable.get(table.id) || [];
-    return guideIds.length === 1 ? reserveTableForGuide(table, guideIds[0]) : table;
+    return guideIds.length === 1
+      ? reserveTableForGuide(table, guideIds[0])
+      : releaseTableReservation(table, 'empty');
   });
 }
 

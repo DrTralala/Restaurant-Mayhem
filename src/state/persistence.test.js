@@ -95,6 +95,34 @@ describe('hydrateState', () => {
     });
   });
 
+  it.each([
+    ['zero guides', []],
+    ['multiple guides', [
+      {
+        id: 'guide-a', role: 'waiter',
+        task: { type: 'guide_customer', customerIds: ['party-a'], tableId: 't1' },
+      },
+      {
+        id: 'guide-b', role: 'waiter',
+        task: { type: 'guide_customer', customerIds: ['party-b'], tableId: 't1' },
+      },
+    ]],
+  ])('releases an ownerless legacy reservation with %s without assigning an arbitrary owner', (_case, staff) => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      staff,
+      tables: fresh.tables.map(table => table.id === 't1'
+        ? { ...table, status: 'reserved' }
+        : table),
+    };
+
+    const table = hydrateState(saved, fresh).tables.find(candidate => candidate.id === 't1');
+
+    expect(table).toEqual({ ...fresh.tables[0], status: 'empty' });
+    expect(table).not.toHaveProperty('reservationOwnerStaffId');
+  });
+
   it('removes stale reservation ownership from a legacy non-reserved table', () => {
     const fresh = createInitialState();
     const saved = {

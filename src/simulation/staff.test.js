@@ -1429,6 +1429,35 @@ describe('updateStaff', () => {
     });
   });
 
+  it('releases an ownerless reservation with multiple legacy guides before cancelling their linkages', () => {
+    const state = {
+      ...baseState,
+      staff: ['a', 'b'].map(id => ({
+        id: `guide-${id}`, role: 'waiter', x: 220, y: 220, path: [],
+        task: {
+          type: 'guide_customer', customerIds: [`party-${id}`], tableId: 't1',
+          chairIds: ['ch1'], stage: 'follow_guide', approaches: [],
+        },
+      })),
+      customers: ['a', 'b'].map(id => ({
+        id: `party-${id}`, state: 'guided', guideStaffId: `guide-${id}`,
+        tableId: 't1', chairId: null, x: 160, y: 200, path: [],
+      })),
+      tables: [{ id: 't1', status: 'reserved', seats: 1, x: 220, y: 200 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 180, y: 200 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.tables[0]).toEqual({ id: 't1', status: 'empty', seats: 1, x: 220, y: 200 });
+    expect(result.tables[0]).not.toHaveProperty('reservationOwnerStaffId');
+    expect(result.staff.every(worker => worker.task === null)).toBe(true);
+    expect(result.customers.every(customer => customer.state === 'leaving'
+      && customer.tableId === null
+      && customer.chairId === null
+      && customer.guideStaffId === null)).toBe(true);
+  });
+
   it('does not seat a waiting customer or fall back to the table centre when no chairs exist', () => {
     const state = {
       ...baseState,
