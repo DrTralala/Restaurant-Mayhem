@@ -1,8 +1,10 @@
 import { findAdjacentOpenCells, cellToWorld } from './pathfinding';
 import { clampReputation } from './balance';
+import { getRestaurantWorld } from './world';
 
 const DIRT_PER_MINUTE = 0.5;
 const EATING_DIRT_PER_MINUTE = 1;
+const SEATED_VISUAL_STATES = new Set(['seated', 'ordering', 'eating', 'waiting_for_items']);
 
 export function getNextDirtId(floorDirt = []) {
   const next = floorDirt.reduce((maximum, dirt) => {
@@ -12,15 +14,34 @@ export function getNextDirtId(floorDirt = []) {
   return `dirt-${next}`;
 }
 
-function customerRect(state, customer) {
+export function isRestaurantFloorPoint(state, point) {
+  if (![point?.x, point?.y].every(Number.isFinite)) return false;
+  const { floorX, doorX, kitchenY, floorH } = getRestaurantWorld(state.restaurant);
+  return point.x >= floorX && point.x <= doorX
+    && point.y >= kitchenY && point.y <= kitchenY + floorH;
+}
+
+function customerDirtOrigin(state, customer) {
+  if (SEATED_VISUAL_STATES.has(customer.state)) {
+    const chair = (state.chairs || []).find(candidate => candidate.id === customer.chairId);
+    if (chair && Number.isFinite(chair.x) && Number.isFinite(chair.y)) {
+      return { x: chair.x + 10, y: chair.y + 10 };
+    }
+  }
   const table = (state.tables || []).find(candidate => candidate.id === customer.tableId);
-  if (Number.isFinite(customer.x) && Number.isFinite(customer.y)) {
-    return { x: customer.x - 10, y: customer.y - 10, w: 20, h: 20 };
+  if (SEATED_VISUAL_STATES.has(customer.state)
+    && table && Number.isFinite(table.x) && Number.isFinite(table.y)) {
+    return { x: table.x + 20, y: table.y + 20 };
   }
-  if (table && Number.isFinite(table.x) && Number.isFinite(table.y)) {
-    return { x: table.x, y: table.y, w: 40, h: 40 };
-  }
-  return null;
+  return !SEATED_VISUAL_STATES.has(customer.state)
+    && Number.isFinite(customer.x) && Number.isFinite(customer.y)
+    ? { x: customer.x, y: customer.y }
+    : null;
+}
+
+function customerRect(state, customer) {
+  const origin = customerDirtOrigin(state, customer);
+  return origin ? { x: origin.x - 10, y: origin.y - 10, w: 20, h: 20 } : null;
 }
 
 function customerPosition(state, customer) {
@@ -29,6 +50,11 @@ function customerPosition(state, customer) {
   return table && Number.isFinite(table.x) && Number.isFinite(table.y)
     ? { x: table.x + 20, y: table.y + 20 }
     : null;
+}
+
+function cellCentre(cell) {
+  const point = cellToWorld(cell);
+  return { x: point.x + 10, y: point.y + 10 };
 }
 
 export function updateDirt(state, gameDt, random = Math.random) {
@@ -43,11 +69,12 @@ export function updateDirt(state, gameDt, random = Math.random) {
     const increment = (boundedDt / 60) * rate;
     let dirtFactor = Math.max(0, Number(customer.dirtFactor) || 0) + increment;
     if (dirtFactor >= 10) {
-      const candidates = findAdjacentOpenCells(state, rect);
+      const candidates = findAdjacentOpenCells(state, rect)
+        .filter(cell => isRestaurantFloorPoint(state, cellCentre(cell)));
       if (candidates.length) {
         const cell = candidates[Math.min(candidates.length - 1, Math.floor(Math.max(0, random()) * candidates.length))];
-        const point = cellToWorld(cell);
-        floorDirt.push({ id: getNextDirtId(floorDirt), x: point.x + 10, y: point.y + 10, createdAt: state.restaurant.gameTime });
+        const point = cellCentre(cell);
+        floorDirt.push({ id: getNextDirtId(floorDirt), x: point.x, y: point.y, createdAt: state.restaurant.gameTime });
         dirtFactor -= 10;
       }
     }

@@ -1,17 +1,75 @@
 import { describe, expect, it } from 'vitest';
-import { getNextDirtId, updateDirt } from './dirt';
+import { getNextDirtId, isRestaurantFloorPoint, updateDirt } from './dirt';
 import { buildBlockedCells, worldToCell } from './pathfinding';
 
 const baseState = {
   floorDirt: [],
-  customers: [{ id: 'c1', state: 'seated', x: 200, y: 200, dirtFactor: 9, happiness: 80 }],
-  tables: [], chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
+  customers: [{ id: 'c1', state: 'seated', chairId: 'ch1', tableId: 't1', x: 200, y: 200, dirtFactor: 9, happiness: 80 }],
+  tables: [{ id: 't1', x: 220, y: 180 }],
+  chairs: [{ id: 'ch1', tableId: 't1', x: 200, y: 200 }],
+  kitchenStations: [], serviceTables: [], cashierStations: [],
   restaurant: { gameTime: 1000, reputation: 3 },
 };
 
 describe('updateDirt', () => {
   it('generates the next dirt id after existing ids', () => {
     expect(getNextDirtId([{ id: 'dirt-2' }, { id: 'dirt-9' }, { id: 'other' }])).toBe('dirt-10');
+  });
+
+  it('never creates customer dirt in the exterior queue area', () => {
+    const result = updateDirt({
+      ...baseState,
+      customers: [{ id: 'c1', state: 'seated', chairId: 'ch1', tableId: 't1', x: 999, y: 360, dirtFactor: 10 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 200, y: 200 }],
+      tables: [{ id: 't1', x: 220, y: 180 }],
+    }, 0);
+    expect(result.floorDirt).toHaveLength(1);
+    expect(isRestaurantFloorPoint(result, result.floorDirt[0])).toBe(true);
+  });
+
+  it('uses the assigned chair rather than stale walking coordinates for seated dirt', () => {
+    const result = updateDirt({
+      ...baseState,
+      customers: [{ id: 'c1', state: 'seated', chairId: 'ch1', tableId: 't1', x: 999, y: 360, dirtFactor: 10 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 200, y: 200 }],
+      tables: [{ id: 't1', x: 220, y: 180 }],
+    }, 0, () => 0);
+    expect(Math.hypot(result.floorDirt[0].x - 210, result.floorDirt[0].y - 210)).toBeLessThanOrEqual(40);
+  });
+
+  it('retains the threshold when every adjacent interior dirt cell is blocked', () => {
+    const result = updateDirt({
+      ...baseState,
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1', dirtFactor: 10 }],
+      tables: [{ id: 't1', x: 50, y: 50 }],
+      chairs: [
+        { id: 'east-top', x: 90, y: 50 }, { id: 'east-bottom', x: 90, y: 70 },
+        { id: 'south-left', x: 50, y: 90 }, { id: 'south-right', x: 70, y: 90 },
+      ],
+    }, 0, () => 0);
+    expect(result.floorDirt).toEqual([]);
+    expect(result.customers[0].dirtFactor).toBe(10);
+  });
+
+  it.each([
+    ['top', { x: 200, y: 50 }, () => 0],
+    ['bottom', { x: 200, y: 670 }, () => 0.999999],
+    ['left', { x: 50, y: 350 }, () => 0],
+    ['right', { x: 890, y: 350 }, () => 0.5],
+  ])('keeps generated dirt inside the restaurant at the %s edge', (_edge, position, random) => {
+    const result = updateDirt({
+      ...baseState,
+      customers: [{ id: 'c1', state: 'moving', ...position, dirtFactor: 10 }],
+      tables: [],
+      chairs: [],
+    }, 0, random);
+
+    expect(result.floorDirt).toHaveLength(1);
+    for (const dirt of result.floorDirt) {
+      expect(isRestaurantFloorPoint(result, dirt)).toBe(true);
+      const dirtCell = worldToCell(dirt);
+      expect(buildBlockedCells(result).has(`${dirtCell.x},${dirtCell.y}`)).toBe(false);
+    }
   });
 
   it('creates deterministic floor dirt when a customer reaches the threshold', () => {
