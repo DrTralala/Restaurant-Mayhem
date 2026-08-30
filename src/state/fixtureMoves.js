@@ -13,9 +13,15 @@ const MOVEMENT_RECOVERY_FIELDS = [
   'headOnRecovery',
   'recoveredHeadOnDetourTarget',
 ];
+const PHYSICALLY_SEATED_CUSTOMER_STATES = new Set([
+  'seated',
+  'ordering',
+  'waiting_for_items',
+  'eating',
+]);
 
 function clearPath(actor) {
-  const cleared = { ...actor, path: [] };
+  const cleared = { ...actor, path: [], stalledFor: 0 };
   for (const field of MOVEMENT_RECOVERY_FIELDS) delete cleared[field];
   return cleared;
 }
@@ -91,7 +97,10 @@ function intersectsIds(value, ids) {
 function taskIsAffected(task, affected) {
   if (!task) return false;
   return intersectsIds(task.tableId, affected.tableIds)
-    || intersectsIds(task.stationId, affected.stationIds)
+    || (task.type === 'prepare_dish'
+      && intersectsIds(task.stationId, affected.kitchenStationIds))
+    || (task.type === 'take_payment'
+      && intersectsIds(task.stationId, affected.cashierIds))
     || intersectsIds(task.serviceTableId, affected.serviceTableIds)
     || intersectsIds(task.washStationId, affected.washStationIds)
     || intersectsIds(task.chairIds, affected.chairIds)
@@ -128,21 +137,26 @@ export function moveFixtures(state, requestedMoves) {
   const cashierIds = idsByType.get('cashierTable') || new Set();
   const washStationIds = idsByType.get('washStation') || new Set();
   const doorMoved = (idsByType.get('door')?.size || 0) > 0;
-  const stationIds = new Set([...kitchenStationIds, ...cashierIds]);
 
   const chairDeltas = new Map(moves
     .filter(move => move.type === 'chair')
     .map(move => {
       const chair = getFixture(state, 'chair', move.id).data;
-      return [move.id, { x: move.x - chair.x, y: move.y - chair.y }];
+      return [move.id, {
+        x: move.x - chair.x,
+        y: move.y - chair.y,
+        tableId: chair.tableId,
+      }];
     }));
   const affectedCustomerIds = new Set((state.customers || [])
-    .filter(customer => tableIds.has(customer.tableId) || chairIds.has(customer.chairId))
+    .filter(customer => PHYSICALLY_SEATED_CUSTOMER_STATES.has(customer.state)
+      && (tableIds.has(customer.tableId) || chairIds.has(customer.chairId)))
     .map(customer => customer.id));
   const affected = {
     tableIds,
     chairIds,
-    stationIds,
+    kitchenStationIds,
+    cashierIds,
     serviceTableIds,
     washStationIds,
     customerIds: affectedCustomerIds,
@@ -174,7 +188,8 @@ export function moveFixtures(state, requestedMoves) {
   next.customers = (state.customers || []).map(customer => {
     let updated = customer;
     const delta = chairDeltas.get(customer.chairId);
-    if (delta) {
+    if (delta && PHYSICALLY_SEATED_CUSTOMER_STATES.has(customer.state)
+      && customer.tableId === delta.tableId) {
       updated = clearPath({
         ...updated,
         ...(Number.isFinite(customer.x) ? { x: customer.x + delta.x } : {}),

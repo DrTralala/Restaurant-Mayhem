@@ -22,6 +22,38 @@ function makeState(overrides = {}) {
   };
 }
 
+function makeCollidingStationState() {
+  return makeState({
+    tables: [],
+    chairs: [],
+    kitchenStations: [{ id: 'shared', equipmentId: 'eq1', x: 100, y: 120 }],
+    cashierStations: [{
+      id: 'shared', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+    }],
+    customers: [
+      { id: 'c1', state: 'waiting_for_items' },
+      {
+        id: 'payer', state: 'paying', cashierStationId: 'shared',
+        path: [{ x: 42, y: 9 }], checkoutPosition: { x: 840, y: 180 },
+      },
+    ],
+    staff: [
+      {
+        id: 'cook', role: 'cook', path: [{ x: 5, y: 6 }],
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'shared' },
+      },
+      {
+        id: 'cashier', role: 'waiter', path: [{ x: 40, y: 8 }],
+        task: { type: 'take_payment', customerId: 'payer', stationId: 'shared' },
+      },
+    ],
+    serviceItems: [{
+      id: 'i1', kind: 'dish', customerId: 'c1', state: 'preparing', stationId: 'shared',
+      assignedStaffId: 'cook', preparationStartedAt: 50,
+    }],
+  });
+}
+
 describe('moveFixtures', () => {
   it('moves a table, all linked chairs, and their seated customers by one delta', () => {
     const state = makeState({
@@ -58,6 +90,26 @@ describe('moveFixtures', () => {
     expect(result.chairs[0]).toMatchObject({ x: 180, y: 210, rotation: 1 });
     expect(result.customers[0]).toMatchObject({ x: 190, y: 220 });
     expect(result.customers[1]).toBe(state.customers[1]);
+  });
+
+  it.each([
+    ['seated', 190, 220],
+    ['eating', 190, 220],
+    ['paying', 220, 190],
+    ['leaving', 220, 190],
+  ])('translates only physically seated customers when a chair moves: %s', (customerState, x, y) => {
+    const state = makeState({
+      customers: [{
+        id: 'c1', state: customerState, tableId: 't1', chairId: 'ch1',
+        x: 220, y: 190, path: [{ x: 20, y: 20 }],
+      }],
+    });
+
+    const result = moveFixtures(state, [
+      { type: 'chair', id: 'ch1', x: 180, y: 210, rotation: 1 },
+    ]);
+
+    expect(result.customers[0]).toMatchObject({ state: customerState, x, y });
   });
 
   it('rejects an inconsistent explicit table and chair delta atomically', () => {
@@ -123,6 +175,42 @@ describe('moveFixtures', () => {
     expect(result.staff[0]).toMatchObject({ task: null, path: [] });
   });
 
+  it('does not cancel cashier work when a kitchen station has an identical ID', () => {
+    const state = makeCollidingStationState();
+
+    const result = moveFixtures(state, [
+      { type: 'kitchenStation', id: 'shared', x: 500, y: 120 },
+    ]);
+
+    expect(result.staff[0]).toMatchObject({ task: null, path: [] });
+    expect(result.staff[1]).toMatchObject({
+      task: { type: 'take_payment', customerId: 'payer', stationId: 'shared' },
+      path: [{ x: 40, y: 8 }],
+    });
+    expect(result.customers[1]).toMatchObject({
+      path: [{ x: 42, y: 9 }], checkoutPosition: { x: 840, y: 180 },
+    });
+  });
+
+  it('does not cancel kitchen work when a cashier station has an identical ID', () => {
+    const state = makeCollidingStationState();
+
+    const result = moveFixtures(state, [
+      { type: 'cashierTable', id: 'shared', x: 600, y: 300 },
+    ]);
+
+    expect(result.staff[0]).toMatchObject({
+      task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'shared' },
+      path: [{ x: 5, y: 6 }],
+    });
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'preparing', stationId: 'shared', assignedStaffId: 'cook',
+      preparationStartedAt: 50,
+    });
+    expect(result.staff[1]).toMatchObject({ task: null, path: [] });
+    expect(result.customers[1]).toMatchObject({ path: [], checkoutPosition: null });
+  });
+
   it('requeues washing work without retaining a moved wash station', () => {
     const state = makeState({
       tables: [],
@@ -176,14 +264,17 @@ describe('moveFixtures', () => {
 
   it('cancels work tied to moved tables, seated customers, and service counters', () => {
     const recovery = {
-      pathGoal: { x: 1, y: 1 }, usingStaticFallback: true, minimumSpacing: 6,
+      stalledFor: 7, pathGoal: { x: 1, y: 1 }, usingStaticFallback: true, minimumSpacing: 6,
       localConflictTarget: { x: 2, y: 2 }, headOnRecovery: true,
       recoveredHeadOnDetourTarget: { x: 3, y: 3 },
     };
     const state = makeState({
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       customers: [
-        { id: 'c1', state: 'seated', tableId: 't1', chairId: 'ch1', x: 220, y: 190 },
+        {
+          id: 'c1', state: 'seated', tableId: 't1', chairId: 'ch1', x: 220, y: 190,
+          path: [{ x: 1, y: 1 }], ...recovery,
+        },
         { id: 'c2', state: 'waiting_for_items', drinkId: 'water' },
       ],
       staff: [
@@ -210,7 +301,12 @@ describe('moveFixtures', () => {
     ]);
 
     expect(result.staff.every(worker => worker.task == null && worker.path.length === 0)).toBe(true);
-    for (const field of Object.keys(recovery)) expect(result.staff[0]).not.toHaveProperty(field);
+    for (const field of Object.keys(recovery).filter(field => field !== 'stalledFor')) {
+      expect(result.staff[0]).not.toHaveProperty(field);
+      expect(result.customers[0]).not.toHaveProperty(field);
+    }
+    expect(result.staff[0].stalledFor).toBe(0);
+    expect(result.customers[0].stalledFor).toBe(0);
     expect(result.serviceItems[0]).toMatchObject({
       serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null,
     });
