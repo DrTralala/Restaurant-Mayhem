@@ -44,6 +44,10 @@ describe('balance helpers', () => {
     expect(getQueuePatienceMultiplier(twoParties)).toBe(1.1);
   });
 
+  it('treats a null queue as empty', () => {
+    expect(getQueuePatienceMultiplier(null)).toBe(1);
+  });
+
   it('caps queue pressure at 1.5 for heavily backed-up service', () => {
     const twentyParties = Array.from({ length: 20 }, (_, index) => ({
       id: `c${index}`,

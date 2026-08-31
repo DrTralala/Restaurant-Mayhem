@@ -15,6 +15,7 @@ const MEMBER_OFFSETS = Object.freeze({
 export function normaliseCustomerQueue(queue = []) {
   const parties = [];
   const byId = new Map();
+  const entries = Array.isArray(queue) ? queue : [];
   const append = (partyId, members) => {
     const id = String(partyId);
     let record = byId.get(id);
@@ -27,7 +28,7 @@ export function normaliseCustomerQueue(queue = []) {
       record.members.push({ ...member, partyId: id });
     }
   };
-  queue.forEach((entry, index) => {
+  entries.forEach((entry, index) => {
     if (Array.isArray(entry?.members)) {
       append(entry.partyId ?? entry.members[0]?.partyId ?? `legacy-party-${index}`, entry.members);
     } else if (entry) {
