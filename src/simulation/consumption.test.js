@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   advanceConsumption,
   getItemConsumptionDuration,
+  getCustomerConsumptionRemainingFraction,
+  normaliseConsumptionState,
   startCustomerConsumption,
 } from './consumption';
 
@@ -93,4 +95,118 @@ it('is idempotent after all ordered items are completed', () => {
     const second = twice.serviceItems.find(item => item.id === id);
     expect(second).toMatchObject({ consumedAt: first.consumedAt, dirtyAt: first.dirtyAt });
   }
+});
+
+it('derives legacy ordered IDs and preserves per-item and customer start times', () => {
+  const customers = [{
+    id: 'c1', state: 'eating', consumptionStartedAt: 40,
+  }];
+  const serviceItems = [
+    { id: 'drink', kind: 'drink', customerId: 'c1', state: 'dirty_at_table' },
+    { id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered' },
+    { id: 'other', kind: 'dish', customerId: 'other', state: 'delivered' },
+  ];
+
+  const result = normaliseConsumptionState(customers, serviceItems, 100);
+
+  expect(result.customers[0]).toMatchObject({
+    orderedServiceItemIds: ['drink', 'dish'], consumedServiceItemIds: ['drink'],
+  });
+  expect(result.serviceItems.find(item => item.id === 'dish')).toMatchObject({
+    consumptionStartedAt: 40,
+  });
+});
+
+it('recognises dirty states and finite completion timestamps as consumed', () => {
+  const result = normaliseConsumptionState(
+    [{ id: 'c1', state: 'eating', orderedServiceItemIds: ['dirty', 'stamped', 'pending'] }],
+    [
+      { id: 'dirty', kind: 'dish', customerId: 'c1', state: 'carried_dirty' },
+      { id: 'stamped', kind: 'drink', customerId: 'c1', state: 'delivered', consumedAt: 75 },
+      { id: 'pending', kind: 'dish', customerId: 'c1', state: 'delivered' },
+    ],
+    100,
+  );
+
+  expect(result.customers[0].consumedServiceItemIds).toEqual(['dirty', 'stamped']);
+});
+
+it('keeps normalisation equal when repeated and does not mutate its inputs', () => {
+  const customers = [{ id: 'c1', state: 'eating', consumptionStartedAt: 40 }];
+  const serviceItems = [{ id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered' }];
+  const originalCustomers = customers.map(customer => ({ ...customer }));
+  const originalServiceItems = serviceItems.map(item => ({ ...item }));
+
+  const first = normaliseConsumptionState(customers, serviceItems, 100);
+  const second = normaliseConsumptionState(first.customers, first.serviceItems, 200);
+
+  expect(second).toEqual(first);
+  expect(customers).toEqual(originalCustomers);
+  expect(serviceItems).toEqual(originalServiceItems);
+  expect(first.customers).not.toBe(customers);
+  expect(first.serviceItems).not.toBe(serviceItems);
+});
+
+it('returns the greatest remaining fraction among unconsumed items', () => {
+  const customer = { id: 'c1', state: 'eating', consumedServiceItemIds: ['finished'] };
+  const serviceItems = [
+    { id: 'finished', kind: 'drink', customerId: 'c1', state: 'dirty_at_table', consumptionStartedAt: 0 },
+    { id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered', consumptionStartedAt: 0 },
+    { id: 'drink', kind: 'drink', customerId: 'c1', state: 'delivered', consumptionStartedAt: 120 },
+  ];
+
+  expect(getCustomerConsumptionRemainingFraction(customer, serviceItems, 240)).toBe(0.5);
+});
+
+it('returns null when no owned item has a valid consumption timer', () => {
+  expect(getCustomerConsumptionRemainingFraction(
+    { id: 'c1', state: 'eating' },
+    [
+      { id: 'unknown', kind: 'unknown', customerId: 'c1', state: 'delivered', consumptionStartedAt: 0 },
+      { id: 'invalid', kind: 'drink', customerId: 'c1', state: 'delivered', consumptionStartedAt: Number.NaN },
+    ],
+    100,
+  )).toBeNull();
+});
+
+it('finishes a legacy checkout item immediately without changing its phase', () => {
+  const result = advanceConsumption({
+    customers: [{ id: 'c1', state: 'checkout_processing', paymentQueuedAt: 80 }],
+    serviceItems: [{ id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered' }],
+    restaurant: { gameTime: 100 },
+  });
+
+  expect(result.customers[0]).toMatchObject({
+    state: 'checkout_processing', orderedServiceItemIds: ['dish'],
+    consumedServiceItemIds: ['dish'], paymentQueuedAt: 80,
+  });
+  expect(result.serviceItems[0]).toMatchObject({
+    state: 'dirty_at_table', consumedAt: 100, dirtyAt: 100,
+  });
+});
+
+it('does not mutate inputs or their arrays across consumption operations', () => {
+  const customer = { id: 'c1', state: 'waiting_for_items' };
+  const serviceItems = [
+    { id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered' },
+  ];
+  const originalCustomer = { ...customer };
+  const originalServiceItems = serviceItems.map(item => ({ ...item }));
+
+  const started = startCustomerConsumption(customer, serviceItems, 0);
+  const customers = [started.customer];
+  const originalStartedItems = started.serviceItems.map(item => ({ ...item }));
+  const advanced = advanceConsumption({
+    customers, serviceItems: started.serviceItems,
+    restaurant: { gameTime: 480 },
+  });
+  getCustomerConsumptionRemainingFraction(started.customer, started.serviceItems, 1);
+
+  expect(customer).toEqual(originalCustomer);
+  expect(serviceItems).toEqual(originalServiceItems);
+  expect(customers).toEqual([started.customer]);
+  expect(started.serviceItems).toEqual(originalStartedItems);
+  expect(started.serviceItems).not.toBe(serviceItems);
+  expect(advanced.customers).not.toBe(customers);
+  expect(advanced.serviceItems).not.toBe(started.serviceItems);
 });
