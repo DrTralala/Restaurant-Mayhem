@@ -1,5 +1,8 @@
 import { getQueueProjectedMembers } from './customerQueue.js';
-import { resolveCharacterMovementBatch } from './movement.js';
+import {
+  minimumTrajectoryDistance,
+  resolveCharacterMovementBatchWithDiagnostics,
+} from './movement.js';
 import { getQueueAdmissionGateStatus } from './queueAdmission.js';
 import {
   getStaffMovementEntries,
@@ -10,6 +13,7 @@ import {
 const PARTY_SIZE = 4;
 const INITIAL_PARTIES = 8;
 const MAX_TICKS_PER_PARTY = 5_000;
+const GATE_KEYS = ['customerIds', 'guideStaffId', 'partyId', 'tableId'];
 
 function buildParty(index) {
   const partyId = `stress-party-${String(index).padStart(2, '0')}`;
@@ -77,12 +81,50 @@ function elapsedNow() {
   return globalThis.performance?.now?.() ?? Date.now();
 }
 
-function gateOwnerCount(state) {
+function sameOrderedIds(left, right) {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+export function getValidatedGateOwnerPartyIds(state) {
   const gate = state.queueAdmissionGate;
-  if (!getQueueAdmissionGateStatus(state).occupied) return 0;
-  return (state.staff || []).filter(worker => worker.id === gate.guideStaffId
-    && worker.task?.type === 'guide_customer'
-    && worker.task.tableId === gate.tableId).length;
+  if (gate == null) return [];
+  const keys = Object.keys(gate).sort();
+  if (!sameOrderedIds(keys, GATE_KEYS)
+    || typeof gate.partyId !== 'string'
+    || !Array.isArray(gate.customerIds)
+    || gate.customerIds.length === 0
+    || new Set(gate.customerIds).size !== gate.customerIds.length
+    || typeof gate.guideStaffId !== 'string'
+    || typeof gate.tableId !== 'string') {
+    throw new Error('Customer queue stress gate must contain exactly partyId, customerIds, guideStaffId, and tableId');
+  }
+
+  const guide = (state.staff || []).find(worker => worker.id === gate.guideStaffId);
+  const task = guide?.task;
+  if (task?.type !== 'guide_customer'
+    || task.partyId !== gate.partyId
+    || task.tableId !== gate.tableId
+    || task.customerId !== gate.customerIds[0]
+    || !Array.isArray(task.customerIds)
+    || !sameOrderedIds(task.customerIds, gate.customerIds)) {
+    throw new Error('Customer queue stress gate identity does not match its guide task');
+  }
+
+  const status = getQueueAdmissionGateStatus(state);
+  const gateCustomerIds = new Set(gate.customerIds);
+  const materialisedPartyMembers = (state.customers || [])
+    .filter(customer => customer.partyId === gate.partyId);
+  if (!status.occupied
+    || status.stale
+    || status.gateMembers.length !== gate.customerIds.length
+    || materialisedPartyMembers.length !== gate.customerIds.length
+    || !status.gateMembers.every(customer => gateCustomerIds.has(customer.id)
+      && customer.partyId === gate.partyId)
+    || !materialisedPartyMembers.every(customer => gateCustomerIds.has(customer.id))) {
+    throw new Error('Customer queue stress gate identity does not match its materialised customers');
+  }
+
+  return [gate.partyId];
 }
 
 function coordinatesAreFinite(state) {
@@ -102,18 +144,25 @@ function assertLogicalQueueRecords(state) {
   }
 }
 
-function minimumProjectedQueueSpacing(state) {
-  const projected = getQueueProjectedMembers(state, state.queue);
+function minimumMaterialisationSpacing(state, materialisedIds) {
+  const actors = [...(state.staff || []), ...(state.customers || [])]
+    .filter(actor => Number.isFinite(actor.x) && Number.isFinite(actor.y));
   let minimum = Infinity;
-  for (let left = 0; left < projected.length; left += 1) {
-    for (let right = left + 1; right < projected.length; right += 1) {
+  for (let left = 0; left < actors.length; left += 1) {
+    for (let right = left + 1; right < actors.length; right += 1) {
+      if (!materialisedIds.has(actors[left].id) && !materialisedIds.has(actors[right].id)) continue;
       minimum = Math.min(minimum, Math.hypot(
-        projected[left].x - projected[right].x,
-        projected[left].y - projected[right].y,
+        actors[left].x - actors[right].x,
+        actors[left].y - actors[right].y,
       ));
     }
   }
   return minimum;
+}
+
+function entriesIgnorePair(left, right) {
+  return (left.ignoredIds || []).some(id => String(id) === String(right.character.id))
+    || (right.ignoredIds || []).some(id => String(id) === String(left.character.id));
 }
 
 function resetAfterCompletion(state, partyId) {
@@ -162,17 +211,24 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
   let minimumSpacing = Infinity;
   let allCoordinatesFinite = true;
   let arrivalsResumed = false;
+  const gateOwnerPartyIds = new Set();
   const tickMilliseconds = [];
+
+  const observeGateOwners = currentState => {
+    const ownerPartyIds = getValidatedGateOwnerPartyIds(currentState);
+    ownerPartyIds.forEach(partyId => gateOwnerPartyIds.add(partyId));
+    maximumGateOwners = Math.max(maximumGateOwners, ownerPartyIds.length);
+  };
 
   while (completedPartyIds.length < cycles) {
     const tickStartedAt = elapsedNow();
     ticks += 1;
     ticksForCurrentParty += 1;
     assertLogicalQueueRecords(state);
-    minimumSpacing = Math.min(minimumSpacing, minimumProjectedQueueSpacing(state));
+    observeGateOwners(state);
 
     state = prepareStaffForMovement(state, movementDt);
-    maximumGateOwners = Math.max(maximumGateOwners, gateOwnerCount(state));
+    observeGateOwners(state);
 
     const queuedIds = new Set(getQueueProjectedMembers(state, state.queue)
       .map(member => member.id));
@@ -186,18 +242,37 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
       throw new Error(`Queued customers entered movement planning: ${queuedEntries.join(', ')}`);
     }
 
-    const moved = resolveCharacterMovementBatch(
+    const { moved, trajectories } = resolveCharacterMovementBatchWithDiagnostics(
       state,
       entries,
       movementDt,
     );
+    for (let left = 0; left < entries.length; left += 1) {
+      for (let right = left + 1; right < entries.length; right += 1) {
+        if (entriesIgnorePair(entries[left], entries[right])) continue;
+        minimumSpacing = Math.min(minimumSpacing, minimumTrajectoryDistance(
+          trajectories.get(entries[left].character.id),
+          trajectories.get(entries[right].character.id),
+        ));
+      }
+    }
     state = {
       ...state,
       staff: state.staff.map(actor => moved.get(actor.id) || actor),
       customers: state.customers.map(actor => moved.get(actor.id) || actor),
     };
+    const customerIdsBeforeResolution = new Set(state.customers.map(customer => customer.id));
     state = resolveStaffAfterMovement(state, movementDt);
-    maximumGateOwners = Math.max(maximumGateOwners, gateOwnerCount(state));
+    const materialisedIds = new Set(state.customers
+      .filter(customer => !customerIdsBeforeResolution.has(customer.id))
+      .map(customer => customer.id));
+    if (materialisedIds.size) {
+      minimumSpacing = Math.min(
+        minimumSpacing,
+        minimumMaterialisationSpacing(state, materialisedIds),
+      );
+    }
+    observeGateOwners(state);
     allCoordinatesFinite = allCoordinatesFinite && coordinatesAreFinite(state);
 
     const completedParty = state.customers.find(customer =>
@@ -236,6 +311,7 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
     throughput: completedPartyIds.length / ticks,
     queuedMemberMovementEntries,
     maximumGateOwners,
+    gateOwnerPartyIds: [...gateOwnerPartyIds],
     maximumMovementActors,
     minimumSpacing,
     arrivalsResumed,

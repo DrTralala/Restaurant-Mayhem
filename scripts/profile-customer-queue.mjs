@@ -51,6 +51,8 @@ try {
     && new Set(representative.completedPartyIds).size === CYCLES
     && representative.queuedMemberMovementEntries === 0
     && representative.maximumGateOwners === 1
+    && JSON.stringify(representative.gateOwnerPartyIds)
+      === JSON.stringify(representative.completedPartyIds)
     && representative.arrivalsResumed === true
     && representative.minimumSpacing >= 16 - 1e-6
     && representative.allCoordinatesFinite === true;
