@@ -35,6 +35,15 @@ describe('balance helpers', () => {
     expect(getQueuePatienceMultiplier(sixParties)).toBe(1.5);
   });
 
+  it('counts party records rather than their six total members', () => {
+    const twoParties = [
+      { partyId: 'p1', members: [{ id: 'p1-1' }, { id: 'p1-2' }, { id: 'p1-3' }] },
+      { partyId: 'p2', members: [{ id: 'p2-1' }, { id: 'p2-2' }, { id: 'p2-3' }] },
+    ];
+
+    expect(getQueuePatienceMultiplier(twoParties)).toBe(1.1);
+  });
+
   it('caps queue pressure at 1.5 for heavily backed-up service', () => {
     const twentyParties = Array.from({ length: 20 }, (_, index) => ({
       id: `c${index}`,

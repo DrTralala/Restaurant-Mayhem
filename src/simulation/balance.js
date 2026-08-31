@@ -1,3 +1,5 @@
+import { getQueuePartyCount } from './customerQueue';
+
 function finiteNumber(value, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
 }
@@ -27,7 +29,7 @@ export function getBaseArrivalRate(reputation) {
 }
 
 export function getQueuePatienceMultiplier(queue) {
-  const parties = new Set((queue || []).map((customer, index) => customer?.partyId ?? customer?.id ?? index)).size;
+  const parties = getQueuePartyCount(queue);
   return Math.min(1.5, 1 + Math.max(0, parties - 1) * 0.1);
 }
 
