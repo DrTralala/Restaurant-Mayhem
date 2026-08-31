@@ -52,14 +52,6 @@ export function getDoorPosition(state, door) {
   };
 }
 
-export function getQueuePosition(state, index = 0) {
-  const world = getRestaurantWorld(state.restaurant);
-  return {
-    x: world.queueX + 50,
-    y: world.doorY + 80 - index * 25,
-  };
-}
-
 export function getCashierWorkPosition(station) {
   return { x: station.x + station.w / 2, y: station.y - GRID_SIZE };
 }

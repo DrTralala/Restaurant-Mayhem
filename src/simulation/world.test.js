@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRestaurantWorld, getQueuePosition, getCashierCustomerPosition, getCashierWorkPosition, getDefaultStaffPosition } from './world';
+import { getRestaurantWorld, getCashierCustomerPosition, getCashierWorkPosition, getDefaultStaffPosition } from './world';
 
 describe('restaurant world geometry', () => {
   it('uses a larger base floor suitable for 1080p layouts', () => {
@@ -12,9 +12,8 @@ describe('restaurant world geometry', () => {
 
   it('places the queue outside the right-side door', () => {
     const world = getRestaurantWorld({ expansionLevel: 1 });
-    const queue = getQueuePosition({ restaurant: { expansionLevel: 1 } }, 0);
-    expect(queue.x).toBeGreaterThan(world.doorX);
-    expect(queue.y).toBeGreaterThan(0);
+    expect(world.queueX).toBeGreaterThan(world.doorX);
+    expect(world.queueY).toBeGreaterThan(0);
   });
 
   it('aligns the queue height and fit bounds with the restaurant', () => {
