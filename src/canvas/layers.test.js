@@ -867,16 +867,25 @@ describe('drawCustomerLayer', () => {
 });
 
 describe('drawQueueLayer', () => {
-  it('does not render the literal queue state', () => {
+  it('renders separated members for eight parties and counts only legacy excess parties', () => {
     const state = {
-      queue: Array.from({ length: 9 }, (_, index) => ({ id: `c${index}`, state: 'waiting' })),
+      queue: Array.from({ length: 9 }, (_, partyIndex) => ({
+        partyId: `p${partyIndex}`,
+        members: Array.from({ length: 4 }, (_, memberIndex) => ({
+          id: `p${partyIndex}-m${memberIndex}`,
+          partyId: `p${partyIndex}`,
+          gender: memberIndex % 2 ? 'female' : 'male',
+        })),
+      })),
       restaurant: { expansionLevel: 1 },
     };
     const ctx = recordCtx();
 
     drawQueueLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
 
-    expect(ctx._calls.texts.some(call => call.text === 'waiting')).toBe(false);
-    expect(ctx._calls.texts.some(call => call.text === '+1 more')).toBe(true);
+    expect(ctx._calls.arcs).toHaveLength(32);
+    expect(ctx._calls.texts.some(call => call.text === '+1 party')).toBe(true);
+    const centres = ctx._calls.arcs.map(({ x, y }) => `${x},${y}`);
+    expect(new Set(centres)).toHaveLength(32);
   });
 });

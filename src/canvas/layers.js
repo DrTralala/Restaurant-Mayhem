@@ -1,4 +1,4 @@
-import { getDoors, getRestaurantWorld, getQueuePosition, getDefaultStaffPosition } from '../simulation/world';
+import { getDoors, getRestaurantWorld, getDefaultStaffPosition } from '../simulation/world';
 import { getPlacementRect } from '../simulation/placement';
 import { getCharacterPalette } from './characterAppearance';
 import { getServiceItemEmoji } from './serviceItemEmoji';
@@ -7,6 +7,7 @@ import { getSeatedDisplayGeometry } from './seatedGeometry';
 import { ACTIVITY_DURATIONS, getRemainingFraction } from '../simulation/activity';
 import { getUpgradeEffect } from '../simulation/balance';
 import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/dishwashing';
+import { getQueuePartyMemberPosition, normaliseCustomerQueue } from '../simulation/customerQueue';
 
 function drawVerticalProgress(ctx, x, y, remaining) {
   if (!Number.isFinite(remaining)) return;
@@ -184,26 +185,33 @@ export function drawQueueLayer(ctx, state, camera, renderOptions = {}) {
   const world = getRestaurantWorld(state.restaurant);
 
   const MAX_VISIBLE = 8;
-  const visible = Math.min(state.queue.length, MAX_VISIBLE);
-  for (let i = 0; i < visible; i++) {
-    const q = state.queue[i];
-    const pos = getQueuePosition(state, i);
-
-    drawStickFigure(ctx, pos.x, pos.y, getCharacterPalette(q).figure, {
-      id: q.id,
-      timeMs: renderOptions.timeMs,
-      reducedMotion: renderOptions.reducedMotion,
+  const queue = normaliseCustomerQueue(state.queue || []);
+  const visible = Math.min(queue.length, MAX_VISIBLE);
+  for (let partyIndex = 0; partyIndex < visible; partyIndex++) {
+    const party = queue[partyIndex];
+    party.members.forEach((member, memberIndex) => {
+      const pos = getQueuePartyMemberPosition(state, partyIndex, memberIndex, party.members.length);
+      drawStickFigure(ctx, pos.x, pos.y, getCharacterPalette(member).figure, {
+        id: member.id,
+        timeMs: renderOptions.timeMs,
+        reducedMotion: renderOptions.reducedMotion,
+      });
     });
-
   }
 
-  if (state.queue.length > MAX_VISIBLE) {
-    const extra = state.queue.length - MAX_VISIBLE;
-    const lastPos = getQueuePosition(state, MAX_VISIBLE - 1);
+  if (queue.length > MAX_VISIBLE) {
+    const extra = queue.length - MAX_VISIBLE;
+    const lastParty = queue[MAX_VISIBLE - 1];
+    const lastPos = getQueuePartyMemberPosition(
+      state,
+      MAX_VISIBLE - 1,
+      0,
+      lastParty.members.length,
+    );
     const labelY = lastPos.y - 14;
     ctx.fillStyle = '#f0a500';
     ctx.font = 'bold 10px monospace';
-    ctx.fillText(`+${extra} more`, world.doorX + 50, labelY);
+    ctx.fillText(`+${extra} ${extra === 1 ? 'party' : 'parties'}`, world.doorX + 50, labelY);
   }
 
   ctx.restore();

@@ -18,7 +18,7 @@ it('interpolates moving character collections by id', () => {
 
   expect(rendered.staff[0]).toMatchObject({ x: 5, y: 15 });
   expect(rendered.customers[0]).toMatchObject({ x: 20, y: 30 });
-  expect(rendered.queue[0]).toMatchObject({ x: 30, y: 40 });
+  expect(rendered.queue).toBe(current.queue);
 });
 
 it('uses current positions for new entities and omits removed entities', () => {

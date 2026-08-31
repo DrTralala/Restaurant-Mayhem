@@ -19,6 +19,6 @@ export function interpolateSimulationState(previous, current, alpha) {
     ...current,
     staff: interpolateCollection(previous.staff, current.staff, alpha),
     customers: interpolateCollection(previous.customers, current.customers, alpha),
-    queue: interpolateCollection(previous.queue, current.queue, alpha),
+    queue: current.queue,
   };
 }
