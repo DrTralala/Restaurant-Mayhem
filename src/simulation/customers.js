@@ -76,9 +76,8 @@ function chooseParty() {
 }
 
 export function spawnCustomers(state, dt = 1) {
-  if (!isRestaurantOpen(state)) return state;
-
   const queue = normaliseCustomerQueue(state.queue || []);
+  if (!isRestaurantOpen(state)) return { ...state, queue };
   if (queue.length >= QUEUE_PARTY_CAPACITY) return { ...state, queue };
 
   const baseRatePerSecond = Math.max(0, getBaseArrivalRate(state.restaurant.reputation)
@@ -86,7 +85,7 @@ export function spawnCustomers(state, dt = 1) {
   const spawnRatePerSecond = baseRatePerSecond
     * getRushHourMultiplier(state.restaurant.gameTime);
   const spawnProbability = 1 - Math.exp(-spawnRatePerSecond * Math.max(0, dt));
-  if (Math.random() > spawnProbability) return state;
+  if (Math.random() > spawnProbability) return { ...state, queue };
 
   const party = chooseParty();
   const partyId = `p${++partyIdCounter}`;

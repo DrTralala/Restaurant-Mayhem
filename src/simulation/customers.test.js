@@ -76,8 +76,35 @@ describe('spawnCustomers', () => {
     const state = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 3 * 3600 } };
     vi.spyOn(Math, 'random').mockReturnValue(0);
     const result = spawnCustomers(state, 60);
-    expect(result).toBe(state);
+    expect(result).toEqual(state);
     expect(result.queue).toHaveLength(0);
+  });
+
+  it('canonicalises a flat below-capacity queue while closed without changing unrelated state', () => {
+    const queue = [{ id: 'q1', partyId: 'p1', state: 'queued' }];
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 3 * 3600 },
+      queue,
+    };
+
+    const result = spawnCustomers(state, 60);
+
+    expect(result.queue).toEqual([{ partyId: 'p1', members: queue }]);
+    expect(result.restaurant).toBe(state.restaurant);
+    expect(result.customers).toBe(state.customers);
+  });
+
+  it('canonicalises a flat below-capacity queue when the arrival roll fails', () => {
+    const queue = [{ id: 'q1', partyId: 'p1', state: 'queued' }];
+    const state = { ...baseState, queue };
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+
+    const result = spawnCustomers(state, 60);
+
+    expect(result.queue).toEqual([{ partyId: 'p1', members: queue }]);
+    expect(result.restaurant).toBe(state.restaurant);
+    expect(result.customers).toBe(state.customers);
   });
 
   it('includes archetype in spawned customer', () => {
