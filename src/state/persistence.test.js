@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { saveState, loadState, hydrateState } from './persistence';
 import { createInitialState } from './initialState';
+import { processKitchen } from '../simulation/kitchen';
 
 beforeEach(() => {
   localStorage.clear();
@@ -28,6 +29,59 @@ describe('loadState', () => {
 });
 
 describe('hydrateState', () => {
+  it('hydrates an aggregate legacy meal into independent item timers idempotently', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 200 },
+      customers: [{
+        id: 'c1', state: 'eating', dishId: 'toast', drinkId: 'water',
+        consumptionStartedAt: 100, consumptionDuration: 600,
+      }],
+      serviceItems: [
+        { id: 'dish', customerId: 'c1', kind: 'dish', state: 'delivered' },
+        { id: 'drink', customerId: 'c1', kind: 'drink', state: 'delivered' },
+      ],
+    };
+    const hydrated = hydrateState(saved, fresh);
+    expect(hydrated.customers[0]).toMatchObject({
+      orderedServiceItemIds: ['dish', 'drink'], consumedServiceItemIds: [],
+    });
+    expect(hydrated.serviceItems.map(item => item.consumptionStartedAt)).toEqual([100, 100]);
+    expect(hydrateState(hydrated, fresh)).toEqual(hydrated);
+  });
+
+  it('hydrates a legacy checkout item without advancing it or re-enqueuing checkout', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 200 },
+      customers: [{
+        id: 'c1', state: 'checkout_processing', paymentQueuedAt: 150,
+      }],
+      serviceItems: [{
+        id: 'dish', customerId: 'c1', kind: 'dish', state: 'delivered',
+        consumptionStartedAt: 100,
+      }],
+    };
+
+    const hydrated = hydrateState(saved, fresh);
+    expect(hydrated.customers[0]).toMatchObject({
+      state: 'checkout_processing', paymentQueuedAt: 150,
+      orderedServiceItemIds: ['dish'], consumedServiceItemIds: [],
+    });
+    expect(hydrated.serviceItems[0]).toMatchObject({
+      state: 'delivered', consumptionStartedAt: 100,
+    });
+
+    const advanced = processKitchen(hydrated);
+    expect(advanced.customers[0]).toMatchObject({
+      state: 'checkout_processing', paymentQueuedAt: 150,
+      consumedServiceItemIds: ['dish'],
+    });
+    expect(advanced.serviceItems[0].state).toBe('dirty_at_table');
+  });
+
   it('hydrates missing, malformed, and legacy operating hours safely', () => {
     const fresh = createInitialState();
     const missing = hydrateState({ ...fresh, restaurant: { funds: 900 } }, fresh);

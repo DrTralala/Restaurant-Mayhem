@@ -2,6 +2,7 @@ const SAVE_KEY = 'restaurant-sim-save';
 import { inferGender } from '../canvas/characterAppearance';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { normaliseOperatingHour } from '../simulation/clock';
+import { normaliseConsumptionState } from '../simulation/consumption';
 import { normaliseCustomerQueue } from '../simulation/customerQueue';
 import { normaliseTableReservationOwners } from '../simulation/guidance';
 
@@ -54,6 +55,13 @@ export function hydrateState(saved, fresh) {
     floorDirt: Array.isArray(saved.floorDirt) ? saved.floorDirt : fresh.floorDirt,
     washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
   };
+  const consumption = normaliseConsumptionState(
+    hydrated.customers,
+    hydrated.serviceItems || [],
+    hydrated.restaurant.gameTime,
+  );
+  hydrated.customers = consumption.customers;
+  hydrated.serviceItems = consumption.serviceItems;
   if ('tables' in saved || 'tables' in fresh) {
     hydrated.tables = normaliseTableReservationOwners(saved.tables || fresh.tables || [], staff);
   }

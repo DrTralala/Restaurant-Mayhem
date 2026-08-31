@@ -14,52 +14,79 @@ const baseState = {
 };
 
 describe('processKitchen', () => {
-  const makeEatingState = (order, gameTime) => ({
+  const deliveredItems = {
+    dish: {
+      id: 'dish', customerId: 'c1', tableId: 't1', kind: 'dish',
+      menuItemId: 'toast', state: 'delivered', consumptionStartedAt: 0,
+    },
+    drink: {
+      id: 'drink', customerId: 'c1', tableId: 't1', kind: 'drink',
+      menuItemId: 'water', state: 'delivered', consumptionStartedAt: 0,
+    },
+  };
+  const makeEatingState = (kinds, gameTime = 0) => ({
     ...baseState,
     restaurant: { gameTime, totalServed: 0 },
-    customers: [{ id: 'c1', state: 'eating', ...order,
-      consumptionStartedAt: 0,
-      consumptionDuration: gameTime >= 0 ? (order.dishId && order.drinkId ? 600 : order.dishId ? 480 : 180) : 0,
+    customers: [{
+      id: 'c1', state: 'eating', tableId: 't1',
+      dishId: kinds.includes('dish') ? 'toast' : null,
+      drinkId: kinds.includes('drink') ? 'water' : null,
+      orderedServiceItemIds: kinds,
+      consumedServiceItemIds: [],
     }],
+    serviceItems: kinds.map(kind => deliveredItems[kind]),
+    tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
   });
 
   it.each([
-    [{ dishId: null, drinkId: 'water' }, 180],
-    [{ dishId: 'toast', drinkId: null }, 480],
-    [{ dishId: 'toast', drinkId: 'water' }, 600],
-  ])('uses order-dependent consumption duration', (order, duration) => {
-    expect(processKitchen(makeEatingState(order, duration - 1)).customers[0].state).toBe('eating');
-    expect(processKitchen(makeEatingState(order, duration)).customers[0].state).toBe('checkout_queued');
+    ['drink', 180],
+    ['dish', 480],
+  ])('advances a delivered %s using its own consumption duration', (kind, duration) => {
+    const before = processKitchen(makeEatingState([kind], duration - 1));
+    const completed = processKitchen({ ...before, restaurant: { gameTime: duration } });
+
+    expect(before.customers[0].state).toBe('eating');
+    expect(before.serviceItems[0].state).toBe('delivered');
+    expect(completed.customers[0]).toMatchObject({
+      state: 'checkout_queued', paymentQueuedAt: duration,
+    });
+    expect(completed.serviceItems[0].state).toBe('dirty_at_table');
   });
 
-  it('keeps delivered items at the table when eating enters checkout', () => {
-    const result = processKitchen({
-      ...makeEatingState({ dishId: 'toast', drinkId: null }, 480),
-      serviceItems: [{
-        id: 'dish', customerId: 'c1', tableId: 't1', kind: 'dish',
-        menuItemId: 'toast', state: 'delivered', x: 208, y: 208,
+  it('finishes combined items independently before entering checkout', () => {
+    const combined = makeEatingState(['dish', 'drink']);
+    const at180 = processKitchen({ ...combined, restaurant: { gameTime: 180 } });
+    expect(at180.customers[0].state).toBe('eating');
+    expect(at180.serviceItems.find(item => item.kind === 'drink').state).toBe('dirty_at_table');
+    expect(at180.serviceItems.find(item => item.kind === 'dish').state).toBe('delivered');
+
+    const at480 = processKitchen({ ...at180, restaurant: { gameTime: 480 } });
+    expect(at480.customers[0].state).toBe('checkout_queued');
+    expect(at480.serviceItems.every(item => item.state === 'dirty_at_table')).toBe(true);
+  });
+
+  it('uses durable consumed IDs after a waiter collects a finished drink', () => {
+    const at180 = processKitchen({
+      ...makeEatingState(['dish', 'drink']),
+      restaurant: { gameTime: 180 },
+    });
+    const collected = {
+      ...at180,
+      staff: [{
+        id: 'w1', role: 'waiter', carryingServiceItemId: 'drink',
       }],
-    });
+      serviceItems: at180.serviceItems.map(item => item.id === 'drink'
+        ? { ...item, state: 'carried_dirty' }
+        : item),
+    };
 
-    expect(result.customers[0]).toMatchObject({
-      state: 'checkout_queued', paymentQueuedAt: 480,
-    });
-    expect(result.serviceItems[0].state).toBe('delivered');
-  });
+    expect(collected.serviceItems.find(item => item.id === 'drink').state).toBe('carried_dirty');
+    expect(collected.customers[0].consumedServiceItemIds).toContain('drink');
 
-  it('keeps a multi-customer table occupied when one customer finishes first', () => {
-    const result = processKitchen({
-      ...baseState,
-      restaurant: { gameTime: 180, totalServed: 0 },
-      customers: [
-        { id: 'c1', state: 'eating', tableId: 't1', consumptionStartedAt: 0, consumptionDuration: 180 },
-        { id: 'c2', state: 'eating', tableId: 't1', consumptionStartedAt: 100, consumptionDuration: 180 },
-      ],
-      tables: [{ id: 't1', status: 'occupied' }],
+    const at480 = processKitchen({ ...collected, restaurant: { gameTime: 480 } });
+    expect(at480.customers[0]).toMatchObject({
+      state: 'checkout_queued', consumedServiceItemIds: ['drink', 'dish'],
     });
-    expect(result.customers[0].state).toBe('checkout_queued');
-    expect(result.customers[1].state).toBe('eating');
-    expect(result.tables[0].status).toBe('occupied');
   });
 
   it('does not progress an ordered dish before a cook arrives', () => {
@@ -236,18 +263,6 @@ describe('processKitchen', () => {
 
     expect(processKitchen({ ...baseState, restaurant: { gameTime: 999 }, serviceItems: [drink] })
       .serviceItems).toEqual([drink]);
-  });
-
-  it('transitions an eating customer after its recorded consumption duration', () => {
-    const result = processKitchen({
-      ...baseState,
-      restaurant: { gameTime: 50 },
-      customers: [{ id: 'c1', state: 'eating', consumptionStartedAt: 20, consumptionDuration: 30, path: [{ x: 1, y: 1 }] }],
-    });
-
-    expect(result.customers[0]).toMatchObject({
-      state: 'checkout_queued', paymentQueuedAt: 50, path: [],
-    });
   });
 
   it('does not return legacy food or kitchen queue keys', () => {

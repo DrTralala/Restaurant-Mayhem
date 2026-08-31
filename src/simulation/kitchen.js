@@ -1,7 +1,6 @@
 import { getUpgradeEffect } from './balance';
 import { findAvailableServiceSlot } from './serviceItems';
-import { ACTIVITY_DURATIONS } from './activity';
-import { enterCheckout } from './checkout';
+import { advanceConsumption } from './consumption';
 
 const PHYSICAL_ITEM_STATES = new Set(['on_service', 'carried', 'delivered']);
 const DIRTY_ITEM_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
@@ -27,17 +26,11 @@ function canProgressDish(state, item) {
 }
 
 export function processKitchen(state) {
-  const customers = (state.customers || []).map(customer => {
-    if (customer.state === 'eating'
-      && Number.isFinite(customer.consumptionStartedAt)
-      && Number.isFinite(customer.consumptionDuration)
-      && state.restaurant.gameTime - customer.consumptionStartedAt >= customer.consumptionDuration) {
-      return enterCheckout(customer, state.restaurant.gameTime);
-    }
-    return customer;
-  });
+  const consumption = advanceConsumption(state);
+  const customers = consumption.customers;
+  let serviceItems = consumption.serviceItems;
 
-  let serviceItems = (state.serviceItems || []).map(item => {
+  serviceItems = serviceItems.map(item => {
     if (item.kind !== 'dish') return item;
 
     const orphan = item.customerId != null && !isActiveCustomer(customers, item.customerId);
@@ -50,11 +43,12 @@ export function processKitchen(state) {
     }
     if (item.state !== 'preparing') return item;
 
-    const preparation = canProgressDish(state, item);
+    const kitchenState = { ...state, customers, serviceItems };
+    const preparation = canProgressDish(kitchenState, item);
     if (!preparation) return item;
 
     const speedMultiplier = preparation.equipment?.speedMultiplier || 1;
-    const globalSpeedEffect = getUpgradeEffect(state, 'globalSpeed');
+    const globalSpeedEffect = getUpgradeEffect(kitchenState, 'globalSpeed');
     const cookTime = (preparation.dish.prepTime || 60)
       / (speedMultiplier * (1 + globalSpeedEffect));
     const elapsed = state.restaurant.gameTime - item.preparationStartedAt;
