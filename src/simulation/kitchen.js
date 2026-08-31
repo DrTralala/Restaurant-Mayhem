@@ -1,8 +1,7 @@
 import { getUpgradeEffect } from './balance';
 import { findAvailableServiceSlot } from './serviceItems';
-import { markCustomerItemsDirty } from './dishwashing';
 import { ACTIVITY_DURATIONS } from './activity';
-import { releaseTableReservation } from './guidance';
+import { enterCheckout } from './checkout';
 
 const PHYSICAL_ITEM_STATES = new Set(['on_service', 'carried', 'delivered']);
 const DIRTY_ITEM_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
@@ -33,12 +32,7 @@ export function processKitchen(state) {
       && Number.isFinite(customer.consumptionStartedAt)
       && Number.isFinite(customer.consumptionDuration)
       && state.restaurant.gameTime - customer.consumptionStartedAt >= customer.consumptionDuration) {
-      return {
-        ...customer,
-        state: 'paying',
-        paymentQueuedAt: state.restaurant.gameTime,
-        path: [],
-      };
+      return enterCheckout(customer, state.restaurant.gameTime);
     }
     return customer;
   });
@@ -74,12 +68,6 @@ export function processKitchen(state) {
     };
   }).filter(Boolean);
 
-  const newlyPaying = customers.filter((customer, index) => customer.state === 'paying'
-    && state.customers?.[index]?.state === 'eating');
-  for (const customer of newlyPaying) {
-    serviceItems = markCustomerItemsDirty(serviceItems, customer.id, state.restaurant.gameTime);
-  }
-
   const readyItems = serviceItems
     .filter(item => item.kind === 'dish' && item.state === 'ready')
     .sort((left, right) =>
@@ -111,10 +99,6 @@ export function processKitchen(state) {
     const validPreparation = validOrderedTask || validActiveTask;
     return validPreparation ? worker : { ...worker, task: null, path: [] };
   });
-  const result = { ...state, customers, serviceItems, staff,
-    tables: (state.tables || []).map(table => newlyPaying.some(customer => customer.tableId === table.id)
-      && !customers.some(candidate => !newlyPaying.some(customer => customer.id === candidate.id)
-        && candidate.tableId === table.id && candidate.state !== 'leaving')
-      ? releaseTableReservation(table, 'dirty') : table) };
+  const result = { ...state, customers, serviceItems, staff };
   return result;
 }

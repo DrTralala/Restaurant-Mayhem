@@ -1,6 +1,7 @@
 import { DRINKS, getDrink } from '../data/drinks';
 import { getDishValueScore } from './balance';
 import { DIRTY_STATES } from './dishwashing';
+import { isCheckoutState } from './checkout';
 
 export function selectOrderKinds(roll) {
   if (roll < 0.75) return ['dish'];
@@ -245,8 +246,10 @@ export function normaliseServiceItemOwnership(state) {
   const finalCustomers = customers.map(customer => {
     const selectedKinds = [customer.dishId ? 'dish' : null, customer.drinkId ? 'drink' : null].filter(Boolean);
     const represented = serviceItems.filter(item => item.customerId === customer.id);
+    const activeOrderState = ['waiting_for_items', 'eating'].includes(customer.state)
+      || isCheckoutState(customer);
     const malformed = selectedKinds.length > 1
-      && ['waiting_for_items', 'eating', 'paying'].includes(customer.state)
+      && activeOrderState
       && selectedKinds.some(kind => {
         const menuItemId = kind === 'dish' ? customer.dishId : customer.drinkId;
         return !represented.some(item => item.customerId === customer.id && item.kind === kind

@@ -354,8 +354,8 @@ describe('moveFixtures', () => {
         task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1' },
       }],
       customers: [{
-        id: 'c1', state: 'paying', cashierStationId: 'cashier1',
-        path: [{ x: 42, y: 9 }], checkoutPosition: { x: 840, y: 180 },
+        id: 'c1', state: 'checkout_processing', cashierStationId: 'cashier1', paymentReady: true,
+        path: [{ x: 42, y: 9 }], checkoutPosition: { x: 840, y: 180 }, paymentQueuedAt: 10,
       }],
     });
 
@@ -368,7 +368,8 @@ describe('moveFixtures', () => {
     });
     expect(result.staff[0]).toMatchObject({ task: null, path: [] });
     expect(result.customers[0]).toMatchObject({
-      state: 'paying', path: [], checkoutPosition: null,
+      state: 'checkout_queued', cashierStationId: null, checkoutPosition: null,
+      paymentReady: false, path: [], paymentQueuedAt: 10,
     });
   });
 

@@ -705,12 +705,8 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.kitchenStations).toHaveLength(initialStationCount + 1);
   });
 
-  it('enforces recipe slots, price limits, and paid dish quality', () => {
+  it('enforces price limits and paid dish quality', () => {
     const game = renderReducer({ restaurant: { funds: 50 } });
-    const extraDish = { ...game.state.dishes[0], id: 'extra-dish' };
-
-    game.dispatch({ type: 'ADD_DISH', dish: extraDish });
-    expect(game.state.dishes).toHaveLength(1);
 
     game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: -20, quality: 10 } });
     expect(game.state.dishes[0]).toMatchObject({ price: 1, quality: 1 });
@@ -728,6 +724,15 @@ describe('GameProvider guarded economy actions', () => {
 
     game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: Number.POSITIVE_INFINITY } });
     expect(game.state.dishes[0].price).toBe(100);
+  });
+
+  it('allows adding dishes beyond the legacy recipe-slot count', () => {
+    const game = renderReducer({ recipeSlots: 1 });
+    const extraDish = { ...game.state.dishes[0], id: 'extra-dish' };
+
+    game.dispatch({ type: 'ADD_DISH', dish: extraDish });
+
+    expect(game.state.dishes).toHaveLength(2);
   });
 
   it('unlocks a canonical drink once at its catalogue cost', () => {

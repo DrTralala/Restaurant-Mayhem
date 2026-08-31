@@ -22,12 +22,11 @@ export default function RecipeCreator({ onClose }) {
 
   const numericPrice = Number(price);
   const validPrice = Number.isInteger(numericPrice) && numericPrice >= 1 && numericPrice <= 100;
-  const canCreate = equipment?.owned && dishName.trim() && validPrice && state.recipeSlots > state.dishes.length;
+  const canCreate = equipment?.owned && dishName.trim() && validPrice;
 
   const handleCreate = () => {
     if (!canCreate) {
       if (!equipment?.owned) setError(`You need to own a ${equipment?.name || 'required equipment'} first.`);
-      else if (state.dishes.length >= state.recipeSlots) setError('No recipe slots available. Complete milestones to unlock more.');
       else if (!validPrice) setError('Price must be a whole number from $1 to $100.');
       return;
     }
@@ -100,7 +99,7 @@ export default function RecipeCreator({ onClose }) {
         <button onClick={handleCreate} disabled={!canCreate} style={{
           ...btnStyle, opacity: canCreate ? 1 : 0.5,
         }}>
-          Create ({state.dishes.length}/{state.recipeSlots} slots)
+          Create
         </button>
         <button onClick={onClose} style={{ ...btnStyle, background: '#444' }}>Cancel</button>
       </div>

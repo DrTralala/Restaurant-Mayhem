@@ -191,7 +191,10 @@ describe('updateCustomers', () => {
     const state = {
       ...baseState,
       chairs: [], kitchenStations: [], serviceTables: [],
-      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      staff: [{ id: 'cashier', role: 'waiter' }],
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
       customers: [{ id: 'c1', state: 'paying', x: 400, y: 300, patience: 100, paymentQueuedAt: 10 }],
     };
 
@@ -539,7 +542,10 @@ describe('updateCustomers', () => {
       ...baseState,
       chairs: [], kitchenStations: [], serviceTables: [],
       tables: [{ id: 'blocker', x: 600, y: 260, status: 'occupied' }],
-      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      staff: [{ id: 'cashier', role: 'waiter' }],
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
       customers: [
         { id: 'c1', state: 'paying', x: 400, y: 300, patience: 100, paymentQueuedAt: 10 },
         { id: 'c2', state: 'paying', x: 420, y: 300, patience: 100, paymentQueuedAt: 20 },
@@ -677,7 +683,10 @@ describe('updateCustomers', () => {
     const state = {
       ...baseState,
       chairs: [], kitchenStations: [], serviceTables: [],
-      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      staff: [{ id: 'cashier', role: 'waiter' }],
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
       customers: [
         { id: 'c1', state: 'paying', x: 400, y: 300, patience: 100, paymentQueuedAt: 10 },
         { id: 'c2', state: 'paying', x: 420, y: 300, patience: 100, paymentQueuedAt: 20 },
@@ -883,13 +892,26 @@ describe('updateCustomers', () => {
     expect(result.customers[0].patience).toBe(100);
   });
 
-  it('does not reduce patience during active payment', () => {
-    const customer = { id: 'c1', state: 'paying', patience: 100, happiness: 80 };
-    const staff = [{ id: 'w1', task: { type: 'take_payment', customerId: 'c1' } }];
+  it.each(['checkout_queued', 'checkout_moving', 'checkout_processing'])
+    ('preserves patience while a customer is %s', stateName => {
+      const customer = { id: 'c1', state: stateName, patience: 100, happiness: 80 };
 
-    const result = updateCustomers({ ...baseState, customers: [customer], staff }, 10);
+      const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
 
-    expect(result.customers[0].patience).toBe(100);
+      expect(result.customers[0].patience).toBe(100);
+    });
+
+  it('normalises legacy paying without consuming checkout patience', () => {
+    const customer = {
+      id: 'c1', state: 'paying', patience: 100, happiness: 80,
+      paymentQueuedAt: 20, x: 400, y: 300,
+    };
+
+    const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+
+    expect(result.customers[0]).toMatchObject({
+      state: 'checkout_queued', patience: 100, paymentQueuedAt: 20,
+    });
   });
 
   it('does not reduce patience while a waiter actively takes the customer order', () => {
@@ -922,7 +944,7 @@ describe('updateCustomers', () => {
     expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1 });
   });
 
-  it.each(['waiting', 'seated', 'waiting_for_items', 'paying'])('reduces patience while a customer is %s', stateName => {
+  it.each(['waiting', 'seated', 'waiting_for_items'])('reduces patience while a customer is %s', stateName => {
     const customer = { id: 'c1', state: stateName, patience: 100, happiness: 80 };
 
     const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
@@ -954,6 +976,27 @@ describe('updateCustomers', () => {
     expect(abandoned.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
     expect(abandoned.customers.every(customer => customer.reputationApplied)).toBe(true);
     expect(updatedAgain.restaurant.reputation).toBe(2.9);
+  });
+
+  it('does not remove a checkout-committed member when their party abandons', () => {
+    const customers = [
+      {
+        id: 'waiting', partyId: 'p1', state: 'waiting_for_items',
+        patience: 1, happiness: 80,
+      },
+      {
+        id: 'payer', partyId: 'p1', state: 'checkout_queued',
+        patience: 1, happiness: 80, paymentQueuedAt: 20,
+      },
+    ];
+
+    const result = updateCustomers({ ...baseState, customers }, 2);
+
+    expect(result.customers.find(customer => customer.id === 'waiting').state).toBe('leaving');
+    expect(result.customers.find(customer => customer.id === 'payer')).toMatchObject({
+      state: 'checkout_queued', patience: 1,
+    });
+    expect(result.restaurant.reputation).toBe(2.9);
   });
 
   it('penalises separate abandoning parties independently', () => {

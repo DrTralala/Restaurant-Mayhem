@@ -54,6 +54,14 @@ describe('dishwashing lifecycle', () => {
     expect(releaseClearedTables(tables, customers, [{ tableId: 't1', state: 'carried_dirty' }])[0].status).toBe('empty');
   });
 
+  it('does not treat a checkout customer as occupying the dining table', () => {
+    expect(releaseClearedTables(
+      [{ id: 't1', status: 'dirty' }],
+      [{ id: 'c1', tableId: 't1', state: 'checkout_moving' }],
+      [],
+    )[0].status).toBe('empty');
+  });
+
   it('starts the oldest automatic wash and removes it at completion', () => {
     const base = {
       washStations: [{ id: 'auto', type: 'automatic', x: 0, y: 0, w: 40, h: 40 }],

@@ -8,7 +8,7 @@ describe('getSeatedDisplayGeometry', () => {
       { id: 'table', x: 140, y: 90 },
     )).toEqual({
       figure: { x: 110, y: 105 },
-      menu: { x: 108, y: 102, width: 24, height: 16 },
+      menu: { x: 108, y: 112, width: 24, height: 16 },
     });
   });
 
@@ -19,14 +19,23 @@ describe('getSeatedDisplayGeometry', () => {
     );
     expect(result.figure).toEqual({ x: 110, y: 105 });
     expect(result.menu.x + result.menu.width / 2).toBeCloseTo(110 + 10 / Math.sqrt(2));
-    expect(result.menu.y + result.menu.height / 2).toBeCloseTo(110 + 10 / Math.sqrt(2));
+    expect(result.menu.y + result.menu.height / 2).toBe(120);
+  });
+
+  it('keeps the menu below the face when the table is above the customer', () => {
+    const { figure, menu } = getSeatedDisplayGeometry(
+      { x: 100, y: 100 },
+      { x: 90, y: 40 },
+    );
+
+    expect(menu.y).toBeGreaterThan(figure.y + 4);
   });
 
   it.each([
-    ['right', { x: 140, y: 90 }, { x: 120, y: 110 }],
-    ['left', { x: 40, y: 90 }, { x: 100, y: 110 }],
+    ['right', { x: 140, y: 90 }, { x: 120, y: 120 }],
+    ['left', { x: 40, y: 90 }, { x: 100, y: 120 }],
     ['below', { x: 90, y: 140 }, { x: 110, y: 120 }],
-    ['above', { x: 90, y: 40 }, { x: 110, y: 100 }],
+    ['above', { x: 90, y: 40 }, { x: 110, y: 120 }],
   ])('places the menu towards a table on the %s', (_side, table, expectedCentre) => {
     const { menu } = getSeatedDisplayGeometry({ x: 100, y: 100 }, table);
     expect({ x: menu.x + 12, y: menu.y + 8 }).toEqual(expectedCentre);

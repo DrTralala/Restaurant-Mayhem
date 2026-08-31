@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawQueueLayer } from './layers';
 import { updateStaff } from '../simulation/staff';
 import { processKitchen } from '../simulation/kitchen';
+import { getPlaceSettingPositions } from './tableGeometry';
 
 function recordCtx(extraCanvas = {}) {
   const calls = {
@@ -51,7 +52,7 @@ function recordCtx(extraCanvas = {}) {
 }
 
 describe('drawFloorLayer', () => {
-  it('renders outside the restaurant in AMOLED black', () => {
+  it('uses the restaurant backdrop outside the fitted world instead of black', () => {
     const fills = [];
     const ctx = {
       canvas: { width: 800, height: 600 },
@@ -75,7 +76,7 @@ describe('drawFloorLayer', () => {
 
     drawFloorLayer(ctx, { restaurant: { expansionLevel: 1 } }, { x: 0, y: 0, zoom: 1 });
 
-    expect(fills[0]).toEqual({ colour: '#000000', x: 0, y: 0, width: 800, height: 600 });
+    expect(fills[0]).toEqual({ colour: '#2d1f0e', x: 0, y: 0, width: 800, height: 600 });
     expect(fills).toContainEqual(expect.objectContaining({ colour: '#000000', width: 6, height: 40 }));
   });
 
@@ -129,7 +130,7 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.texts.some(call => /Table \d|Chair \d/.test(call.text))).toBe(false);
   });
 
-  it('draws on-service and delivered item emojis at their stored positions', () => {
+  it('draws on-service items at stored positions and skips delivered items without ownership geometry', () => {
     const ctx = recordCtx();
     const state = {
       tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [],
@@ -144,7 +145,7 @@ describe('drawFurnitureLayer', () => {
     drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
 
     expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍞', x: 150, y: 130 }));
-    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '💧', x: 224, y: 208 }));
+    expect(ctx._calls.texts.some(call => call.text === '💧')).toBe(false);
     expect(ctx._calls.texts.some(call => call.text === '🍵')).toBe(false);
   });
 
@@ -258,6 +259,81 @@ describe('drawFurnitureLayer', () => {
       customers: [{ id: 'c1', tableId: 't1', chairId: 'ch1' }],
       kitchenStations: [], serviceTables: [], equipment: [], dishes: [{ id: 'toast', base: 'Bread' }],
       serviceItems: [{ id: 'dish', kind: 'dish', menuItemId: 'toast', customerId: 'c1', state: 'delivered', x: 208, y: 208 }],
+    }, { x: 0, y: 0, zoom: 1 });
+    expect(ctx._calls.texts.some(call => call.text === '🍞')).toBe(false);
+  });
+
+  it.each(['checkout_queued', 'checkout_moving', 'checkout_processing'])
+    ('renders a combined delivered order for a customer in %s', stateName => {
+      const ctx = recordCtx();
+      const table = { id: 't1', x: 200, y: 200 };
+      const chair = { id: 'ch1', tableId: 't1', x: 210, y: 180 };
+      const positions = getPlaceSettingPositions(table, chair, ['dish', 'drink']);
+      drawFurnitureLayer(ctx, {
+        tables: [table], chairs: [chair], kitchenStations: [], serviceTables: [], equipment: [],
+        customers: [{ id: 'c1', state: stateName, tableId: 't1', chairId: 'ch1' }],
+        dishes: [{ id: 'toast', base: 'Bread' }],
+        serviceItems: [
+          { id: 'dish', customerId: 'c1', kind: 'dish', menuItemId: 'toast', state: 'delivered', x: 0, y: 0 },
+          { id: 'drink', customerId: 'c1', kind: 'drink', menuItemId: 'water', state: 'delivered', x: 0, y: 0 },
+        ],
+      }, { x: 0, y: 0, zoom: 1 });
+      expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍞', ...positions.dish }));
+      expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '💧', ...positions.drink }));
+    });
+
+  it.each([
+    ['dish', 'toast', '🍞'],
+    ['drink', 'water', '💧'],
+  ])('uses the single-item %s place setting', (kind, menuItemId, emoji) => {
+    const ctx = recordCtx();
+    const table = { id: 't1', x: 200, y: 200 };
+    const chair = { id: 'ch1', tableId: 't1', x: 210, y: 180 };
+    const expected = getPlaceSettingPositions(table, chair, [kind])[kind];
+    drawFurnitureLayer(ctx, {
+      tables: [table], chairs: [chair], kitchenStations: [], serviceTables: [], equipment: [],
+      customers: [{ id: 'c1', state: 'eating', tableId: 't1', chairId: 'ch1' }],
+      dishes: [{ id: 'toast', base: 'Bread' }],
+      serviceItems: [{ id: kind, customerId: 'c1', kind, menuItemId, state: 'delivered', x: 9, y: 9 }],
+    }, { x: 0, y: 0, zoom: 1 });
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: emoji, ...expected }));
+  });
+
+  it('places delivered items by their owning customers at a shared table', () => {
+    const ctx = recordCtx();
+    const table = { id: 't1', x: 200, y: 200 };
+    const chairs = [
+      { id: 'north', tableId: 't1', x: 210, y: 180 },
+      { id: 'south', tableId: 't1', x: 210, y: 240 },
+    ];
+    const expected = chairs.map(chair => getPlaceSettingPositions(table, chair, ['dish']).dish);
+    drawFurnitureLayer(ctx, {
+      tables: [table], chairs, kitchenStations: [], serviceTables: [], equipment: [],
+      customers: [
+        { id: 'c1', tableId: 't1', chairId: 'north' },
+        { id: 'c2', tableId: 't1', chairId: 'south' },
+      ],
+      dishes: [{ id: 'toast', base: 'Bread' }],
+      serviceItems: [
+        { id: 'one', customerId: 'c1', kind: 'dish', menuItemId: 'toast', state: 'delivered', x: 0, y: 0 },
+        { id: 'two', customerId: 'c2', kind: 'dish', menuItemId: 'toast', state: 'delivered', x: 0, y: 0 },
+      ],
+    }, { x: 0, y: 0, zoom: 1 });
+    for (const position of expected) {
+      expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍞', ...position }));
+    }
+  });
+
+  it.each([
+    ['customer', [], [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }], [{ id: 't1', x: 200, y: 200 }]],
+    ['chair', [{ id: 'c1', tableId: 't1', chairId: 'missing' }], [], [{ id: 't1', x: 200, y: 200 }]],
+    ['table', [{ id: 'c1', tableId: 'missing', chairId: 'ch1' }], [{ id: 'ch1', tableId: 'missing', x: 210, y: 180 }], []],
+  ])('does not draw a delivered item with a missing %s reference', (_name, customers, chairs, tables) => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables, chairs, customers, kitchenStations: [], serviceTables: [], equipment: [],
+      dishes: [{ id: 'toast', base: 'Bread' }],
+      serviceItems: [{ id: 'dish', customerId: 'c1', kind: 'dish', menuItemId: 'toast', state: 'delivered', x: 9, y: 9 }],
     }, { x: 0, y: 0, zoom: 1 });
     expect(ctx._calls.texts.some(call => call.text === '🍞')).toBe(false);
   });
@@ -587,7 +663,7 @@ describe('drawCustomerLayer', () => {
     }, { x: 0, y: 0, zoom: 1 });
 
     expect(ctx._calls.arcs).toContainEqual(expect.objectContaining({ x: 110, y: 105 }));
-    expect(ctx._calls.rects).toContainEqual({ x: 108, y: 102, w: 24, h: 16 });
+    expect(ctx._calls.rects).toContainEqual({ x: 108, y: 112, w: 24, h: 16 });
     expect(ctx._calls.rotations.at(-1)).toBe(0);
   });
 

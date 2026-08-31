@@ -2,7 +2,8 @@ import { getRushHourMultiplier, isRestaurantOpen } from './clock';
 import { buildBlockedCells, worldToCell } from './pathfinding';
 import { clearMovementRecoveryMetadata, planCharacterPath, resolveCharacterMovementBatch } from './movement';
 import { getCustomerGuideContext, releaseTableReservation } from './guidance';
-import { getCashierCustomerPosition, getDoorPosition, getDoors, getQueuePosition } from './world';
+import { getDoorPosition, getDoors, getQueuePosition } from './world';
+import { isCheckoutState, prepareCheckoutCustomers } from './checkout';
 import {
   ABANDONMENT_REPUTATION_PENALTY,
   CUSTOMER_PATIENCE,
@@ -32,7 +33,9 @@ function leavingFields(customer, overrides = {}) {
     exitHeading: null,
     path: [],
     stalledFor: 0,
+    cashierStationId: null,
     checkoutPosition: null,
+    paymentReady: false,
     ...overrides,
   });
 }
@@ -57,10 +60,7 @@ function isWaitingForService(customer, staff) {
     && (staff || []).some(worker => worker.task?.type === 'take_order'
       && worker.task.customerId === customer.id);
   if (activeOrder) return false;
-  if (PATIENCE_STATES.has(customer.state)) return true;
-  return customer.state === 'paying'
-    && !(staff || []).some(worker => worker.task?.type === 'take_payment'
-      && worker.task.customerId === customer.id);
+  return PATIENCE_STATES.has(customer.state);
 }
 
 function chooseParty() {
@@ -206,6 +206,7 @@ export function prepareCustomersForMovement(state, gameDt) {
     ).length;
 
     updatedCustomers = updatedCustomers.map(customer => abandoningParties.has(partyKey(customer))
+      && !isCheckoutState(customer)
       ? leavingFields(customer, {
           patience: Math.max(0, customer.patience),
           happiness: Math.max(0, customer.happiness - 30),
@@ -223,74 +224,10 @@ export function prepareCustomersForMovement(state, gameDt) {
     }))];
   }
 
-  const cashierStations = Array.isArray(state.cashierStations) ? state.cashierStations : [];
-  const staffedCashierStations = cashierStations.filter(station =>
-    (state.staff || []).some(staff => staff.id === station.assignedStaffId && staff.role === 'waiter'),
+  updatedCustomers = prepareCheckoutCustomers(
+    { ...state, customers: updatedCustomers },
+    updatedCustomers,
   );
-  const fallbackCashierStation = staffedCashierStations[0] || cashierStations[0];
-  const routingCashierStations = staffedCashierStations.length > 0
-    ? staffedCashierStations
-    : fallbackCashierStation ? [fallbackCashierStation] : [];
-  const stationById = new Map(cashierStations.map(station => [station.id, station]));
-  const payingCustomers = updatedCustomers.filter(customer => customer.state === 'paying');
-
-  if (payingCustomers.length > 0 && fallbackCashierStation) {
-    const queueLengths = new Map(routingCashierStations.map(station => [station.id, 0]));
-    for (const customer of payingCustomers) {
-      if (!queueLengths.has(customer.cashierStationId)) continue;
-      queueLengths.set(customer.cashierStationId, queueLengths.get(customer.cashierStationId) + 1);
-    }
-
-    updatedCustomers = updatedCustomers.map(customer => {
-      if (customer.state !== 'paying') return customer;
-      if (queueLengths.has(customer.cashierStationId) || !fallbackCashierStation) return customer;
-      const shortestQueue = routingCashierStations.reduce((shortest, station) =>
-        queueLengths.get(station.id) < queueLengths.get(shortest.id) ? station : shortest,
-      routingCashierStations[0]);
-      queueLengths.set(shortestQueue.id, queueLengths.get(shortestQueue.id) + 1);
-      return { ...customer, cashierStationId: shortestQueue.id };
-    });
-
-    const payingByStation = new Map();
-    for (const customer of updatedCustomers) {
-      if (customer.state !== 'paying' || !stationById.has(customer.cashierStationId)) continue;
-      const group = payingByStation.get(customer.cashierStationId) || [];
-      group.push(customer);
-      payingByStation.set(customer.cashierStationId, group);
-    }
-
-    const positions = new Map();
-    const queueIndexes = new Map();
-    for (const [stationId, customersAtStation] of payingByStation) {
-      const station = stationById.get(stationId);
-      customersAtStation
-        .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0))
-        .forEach((customer, queueIndex) => {
-          positions.set(customer.id, getCashierCustomerPosition(station, queueIndex));
-          queueIndexes.set(customer.id, queueIndex);
-        });
-    }
-
-    updatedCustomers = updatedCustomers.map(customer => {
-      const checkoutPosition = positions.get(customer.id);
-      if (!checkoutPosition) return customer;
-      const current = Number.isFinite(customer.x) && Number.isFinite(customer.y)
-        ? customer
-        : { ...customer, x: checkoutPosition.x - 80, y: checkoutPosition.y + 80 };
-      const goal = worldToCell(checkoutPosition);
-      const currentGoal = current.pathGoal;
-      const arrived = Math.hypot(current.x - checkoutPosition.x, current.y - checkoutPosition.y) <= 2;
-      if (arrived) return { ...current, checkoutPosition, paymentReady: queueIndexes.get(customer.id) === 0, path: [], pathGoal: undefined, stalledFor: 0 };
-      const needsPlan = !current.path?.length || !currentGoal || currentGoal.x !== goal.x || currentGoal.y !== goal.y;
-      const routed = needsPlan
-        ? planCharacterPath(state, current, { world: checkoutPosition }, [
-          ...(state.staff || []),
-          ...updatedCustomers.filter(candidate => candidate.id !== current.id && candidate.exitPhase !== 'fading'),
-        ])
-        : { ...current, checkoutPosition };
-      return { ...routed, checkoutPosition, paymentReady: false };
-    });
-  }
 
   // Free tables as soon as their last customer begins leaving, while retaining
   // those customers so their walk to the exit remains visible.
@@ -395,7 +332,8 @@ export function getCustomerMovementEntries(state, movementDt) {
       }
     }
 
-    if (!character.path?.length || !['paying', 'leaving', 'guided'].includes(character.state)) return [];
+    if (!character.path?.length
+      || !['checkout_moving', 'leaving', 'guided'].includes(character.state)) return [];
     const guideContext = character.state === 'guided' ? getCustomerGuideContext(state, character) : null;
     if (character.state === 'guided' && !guideContext) return [];
     const entry = {

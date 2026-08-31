@@ -23,6 +23,14 @@ import {
   taskCustomerIds,
 } from './guidance';
 import { buildChairApproachAssignments, getChairCentre, validateChairApproachAssignments } from './seating';
+import { isCheckoutState, requeueCheckoutCustomer } from './checkout';
+import {
+  getStaffMovementSpeed,
+  markTaskAssigned,
+  markWorking,
+  prepareStaffActivity,
+  settleTasklessActivity,
+} from './staffActivity';
 
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
   return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
@@ -251,6 +259,8 @@ function leavingFields(customer) {
     path: [],
     stalledFor: 0,
     checkoutPosition: null,
+    cashierStationId: null,
+    paymentReady: false,
   });
 }
 
@@ -317,7 +327,7 @@ function washDuration(station) {
 
 function isTableReadyForCleaning(tableId, customers, serviceItems) {
   const hasBlockingCustomer = customers.some(customer => customer.tableId === tableId
-    && customer.state !== 'leaving' && customer.state !== 'paying');
+    && customer.state !== 'leaving' && !isCheckoutState(customer));
   const hasDirtyItem = serviceItems.some(item => item.tableId === tableId
     && item.state === 'dirty_at_table');
   return !hasBlockingCustomer && !hasDirtyItem;
@@ -440,7 +450,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
 
   if (cashierStation) {
     const paying = customers
-      .filter(customer => customer.state === 'paying' && customer.paymentReady
+      .filter(customer => customer.state === 'checkout_moving' && customer.paymentReady
         && (!claimedCustomerIds || !claimedCustomerIds.has(customer.id)))
       .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0));
     const payingCustomer = paying.find(customer => customer.cashierStationId === cashierStation.id)
@@ -807,16 +817,40 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
 
   if (staff.task.type === 'take_payment') {
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
-    if (!customer || customer.state !== 'paying') return { staff: completedStaff, customers, queue, tables, serviceItems };
     const station = (state.cashierStations || []).find(candidate => candidate.id === staff.task.stationId);
+    if (!customer) return { staff: completedStaff, customers, queue, tables, serviceItems };
+    const validPhase = ['checkout_moving', 'checkout_processing'].includes(customer.state);
+    const validStation = station?.assignedStaffId === staff.id && customer.cashierStationId === station.id;
+    if (!validPhase || !validStation) {
+      return {
+        staff: { ...completedStaff, path: [] },
+        customers: customers.map(candidate => candidate.id === customer.id && validPhase
+          ? requeueCheckoutCustomer(candidate)
+          : candidate),
+        queue, tables, serviceItems,
+      };
+    }
     const customerPosition = station ? getCashierCustomerPosition(station, 0) : null;
     const cashierArrived = station && Math.hypot(staff.x - getCashierWorkPosition(station).x, staff.y - getCashierWorkPosition(station).y) <= 2;
     const customerArrived = customerPosition && Math.hypot(customer.x - customerPosition.x, customer.y - customerPosition.y) <= 2;
-    if (!customer.paymentReady || !cashierArrived || !customerArrived) {
-      return { staff: { ...completedStaff, path: [] }, customers, queue, tables, serviceItems };
+    const readyToStart = customer.state === 'checkout_moving' && customer.paymentReady;
+    if (!cashierArrived || !customerArrived || (staff.task.startedAt == null && !readyToStart)) {
+      return {
+        staff: { ...completedStaff, path: [] },
+        customers: customers.map(candidate => candidate.id === customer.id
+          ? requeueCheckoutCustomer(candidate)
+          : candidate),
+        queue, tables, serviceItems,
+      };
     }
     if (staff.task.startedAt == null) {
-      return { staff: { ...staff, path: [], task: { ...staff.task, startedAt: state.restaurant.gameTime } }, customers, queue, tables, serviceItems };
+      return {
+        staff: { ...staff, path: [], task: { ...staff.task, startedAt: state.restaurant.gameTime } },
+        customers: customers.map(candidate => candidate.id === customer.id
+          ? { ...candidate, state: 'checkout_processing', paymentReady: false, path: [] }
+          : candidate),
+        queue, tables, serviceItems,
+      };
     }
     if (state.restaurant.gameTime - staff.task.startedAt < ACTIVITY_DURATIONS.takePayment) {
       return { staff: { ...staff, path: [] }, customers, queue, tables, serviceItems };
@@ -1389,6 +1423,8 @@ export function prepareStaffForMovement(state, gameDt) {
     morale: Math.max(0, s.morale - 0.01 * gameDt / 60),
     carryingServiceItemId: s.carryingServiceItemId ?? null,
   }));
+  const activityState = { ...state, staff, customers, tables, serviceItems };
+  staff = staff.map(worker => prepareStaffActivity(activityState, worker));
   const staleTaskServiceItemIds = staff
     .filter(worker => worker.task?.type === 'prepare_drink')
     .map(worker => worker.task.serviceItemId)
@@ -1449,7 +1485,10 @@ export function prepareStaffForMovement(state, gameDt) {
           happiness: Math.max(0, customer.happiness - 30),
         };
       });
-      staff[i] = { ...current, task: null, path: [] };
+      staff[i] = settleTasklessActivity(
+        { ...state, restaurant, staff, customers, tables, serviceItems },
+        { ...current, task: null, path: [] },
+      );
     }
   }
 
@@ -1508,7 +1547,7 @@ export function getStaffMovementEntries(state) {
         || (staff.usingStaticFallback && (staff.stalledFor || 0) >= 2));
       entries.push({
         character: staff,
-        speed: staff.role === 'waiter' ? 75 : 55,
+        speed: getStaffMovementSpeed(staff),
         ignoredIds: ids,
         ...(movementRecovery ? { headOnDetourEligible: true } : {}),
       });
@@ -1555,7 +1594,10 @@ export function resolveStaffAfterMovement(state, gameDt) {
   for (let i = 0; i < staff.length; i += 1) {
     const s = staff[i];
 
-    if (s.task && !hasArrived(s)) continue;
+    if (s.task && !hasArrived(s)) {
+      staff[i] = markTaskAssigned(s);
+      continue;
+    }
 
     if (s.task && hasArrived(s)) {
       const resolved = resolveTask({
@@ -1569,7 +1611,14 @@ export function resolveStaffAfterMovement(state, gameDt) {
       if (resolved.completedCustomers) completedCustomers = resolved.completedCustomers;
       if (resolved.restaurant) restaurant = resolved.restaurant;
       if (resolved.floorDirt) floorDirt = resolved.floorDirt;
-      staff[i] = resolved.staff;
+      staff[i] = resolved.staff.task
+        ? resolved.staff.path?.length
+          ? markTaskAssigned(resolved.staff)
+          : markWorking(resolved.staff)
+        : settleTasklessActivity(
+          { ...state, restaurant, staff, customers, tables, serviceItems },
+          resolved.staff,
+        );
       if (resolved.clearCarriedServiceItemIds) {
         const clearedIds = new Set(resolved.clearCarriedServiceItemIds);
         staff = staff.map(worker => clearedIds.has(worker.carryingServiceItemId)
@@ -1585,7 +1634,12 @@ export function resolveStaffAfterMovement(state, gameDt) {
       claimedCustomerIds, claimedServiceItemIds, claimedTableIds, claimedDirtIds,
     });
     if (result) {
-      staff[i] = result.staff;
+      staff[i] = result.staff.task
+        ? markTaskAssigned(result.staff)
+        : settleTasklessActivity(
+          { ...state, restaurant, staff, customers, tables, serviceItems },
+          result.staff,
+        );
       if (result.customers) customers = result.customers;
       if (result.queue) queue = result.queue;
       if (result.tables) tables = result.tables;

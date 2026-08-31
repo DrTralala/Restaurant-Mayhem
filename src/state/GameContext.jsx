@@ -247,8 +247,7 @@ function gameReducer(state, action) {
     }
     case 'ADD_DISH': {
       const dish = action.dish;
-      if (!dish || state.dishes.length >= state.recipeSlots
-        || typeof dish.id !== 'string' || !dish.id
+      if (!dish || typeof dish.id !== 'string' || !dish.id
         || typeof dish.name !== 'string' || !dish.name.trim()
         || !Number.isFinite(dish.price) || !Number.isFinite(dish.quality)
         || dish.quality < STARTING_DISH_QUALITY) return state;

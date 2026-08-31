@@ -12,6 +12,36 @@ describe('table geometry', () => {
       .toEqual(expected);
   });
 
+  it.each([
+    ['north', { x: 210, y: 180 }],
+    ['east', { x: 240, y: 210 }],
+    ['south', { x: 210, y: 240 }],
+    ['west', { x: 180, y: 210 }],
+  ])('places paired items symmetrically for a %s chair', (_side, chair) => {
+    const table = { x: 200, y: 200 };
+    const positions = getPlaceSettingPositions(table, chair, ['dish', 'drink']);
+    const midpoint = {
+      x: (positions.dish.x + positions.drink.x) / 2,
+      y: (positions.dish.y + positions.drink.y) / 2,
+    };
+    const chairCentre = { x: chair.x + 10, y: chair.y + 10 };
+    const tableCentre = { x: table.x + 20, y: table.y + 20 };
+    const length = Math.hypot(tableCentre.x - chairCentre.x, tableCentre.y - chairCentre.y);
+    const facing = {
+      x: (tableCentre.x - chairCentre.x) / length,
+      y: (tableCentre.y - chairCentre.y) / length,
+    };
+    const localLeft = { x: facing.y, y: -facing.x };
+    const dishSide = (positions.dish.x - midpoint.x) * localLeft.x
+      + (positions.dish.y - midpoint.y) * localLeft.y;
+    const drinkSide = (positions.drink.x - midpoint.x) * localLeft.x
+      + (positions.drink.y - midpoint.y) * localLeft.y;
+    expect(Math.hypot(positions.dish.x - midpoint.x, positions.dish.y - midpoint.y))
+      .toBeCloseTo(Math.hypot(positions.drink.x - midpoint.x, positions.drink.y - midpoint.y));
+    expect(dishSide).toBeGreaterThan(0);
+    expect(drinkSide).toBeLessThan(0);
+  });
+
   it('uses the chair-facing rotation', () => {
     expect(getChairFacingRadians(2)).toBe(Math.PI);
   });

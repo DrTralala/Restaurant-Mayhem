@@ -259,6 +259,31 @@ describe('service item orders', () => {
     });
   });
 
+  it('keeps a complete two-item checkout order active during ownership normalisation', () => {
+    const result = normaliseServiceItemOwnership({
+      customers: [{ id: 'c1', state: 'checkout_moving', dishId: 'toast', drinkId: 'water' }],
+      staff: [], tables: [], washStations: [], serviceTables: [],
+      serviceItems: [
+        { id: 'dish', customerId: 'c1', kind: 'dish', menuItemId: 'toast', state: 'delivered' },
+        { id: 'drink', customerId: 'c1', kind: 'drink', menuItemId: 'water', state: 'delivered' },
+      ],
+    });
+    expect(result.customers[0].state).toBe('checkout_moving');
+  });
+
+  it('cancels a malformed combined checkout order instead of allowing incomplete payment', () => {
+    const result = normaliseServiceItemOwnership({
+      customers: [{ id: 'c1', state: 'checkout_processing', dishId: 'toast', drinkId: 'water' }],
+      staff: [], tables: [], washStations: [], serviceTables: [],
+      serviceItems: [
+        { id: 'dish', customerId: 'c1', kind: 'dish', menuItemId: 'toast', state: 'delivered' },
+      ],
+    });
+    expect(result.customers[0]).toMatchObject({
+      state: 'leaving', dishId: null, drinkId: null, orderTime: null,
+    });
+  });
+
   it.each([
     ['wrong menu ID', { id: 'i1', kind: 'dish', menuItemId: 'wrong', customerId: 'c1', state: 'ordered' }],
     ['non-fulfilment state', { id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'to_clean' }],

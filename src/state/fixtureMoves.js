@@ -4,6 +4,7 @@ import {
   getServiceSlotPosition,
   normaliseServiceItemOwnership,
 } from '../simulation/serviceItems';
+import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout';
 
 const MOVEMENT_RECOVERY_FIELDS = [
   'pathGoal',
@@ -212,10 +213,10 @@ export function moveFixtures(state, requestedMoves) {
       updated = clearPath(updated);
     }
 
-    if (updated.state === 'paying'
+    if (isCheckoutState(updated)
       && (cashierIds.has(updated.cashierStationId)
         || cancelledPaymentCustomerIds.has(updated.id))) {
-      updated = clearPath({ ...updated, checkoutPosition: null });
+      updated = requeueCheckoutCustomer(updated);
     }
 
     const cancelledGuide = cancelledGuides.find(guide => {

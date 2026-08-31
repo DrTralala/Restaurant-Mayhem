@@ -29,7 +29,22 @@ describe('processKitchen', () => {
     [{ dishId: 'toast', drinkId: 'water' }, 600],
   ])('uses order-dependent consumption duration', (order, duration) => {
     expect(processKitchen(makeEatingState(order, duration - 1)).customers[0].state).toBe('eating');
-    expect(processKitchen(makeEatingState(order, duration)).customers[0].state).toBe('paying');
+    expect(processKitchen(makeEatingState(order, duration)).customers[0].state).toBe('checkout_queued');
+  });
+
+  it('keeps delivered items at the table when eating enters checkout', () => {
+    const result = processKitchen({
+      ...makeEatingState({ dishId: 'toast', drinkId: null }, 480),
+      serviceItems: [{
+        id: 'dish', customerId: 'c1', tableId: 't1', kind: 'dish',
+        menuItemId: 'toast', state: 'delivered', x: 208, y: 208,
+      }],
+    });
+
+    expect(result.customers[0]).toMatchObject({
+      state: 'checkout_queued', paymentQueuedAt: 480,
+    });
+    expect(result.serviceItems[0].state).toBe('delivered');
   });
 
   it('keeps a multi-customer table occupied when one customer finishes first', () => {
@@ -42,7 +57,7 @@ describe('processKitchen', () => {
       ],
       tables: [{ id: 't1', status: 'occupied' }],
     });
-    expect(result.customers[0].state).toBe('paying');
+    expect(result.customers[0].state).toBe('checkout_queued');
     expect(result.customers[1].state).toBe('eating');
     expect(result.tables[0].status).toBe('occupied');
   });
@@ -231,7 +246,7 @@ describe('processKitchen', () => {
     });
 
     expect(result.customers[0]).toMatchObject({
-      state: 'paying', paymentQueuedAt: 50, path: [],
+      state: 'checkout_queued', paymentQueuedAt: 50, path: [],
     });
   });
 

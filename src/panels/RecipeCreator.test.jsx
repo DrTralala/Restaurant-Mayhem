@@ -33,4 +33,18 @@ describe('RecipeCreator', () => {
     fireEvent.change(price, { target: { value: '12.5' } });
     expect(screen.getByRole('button', { name: /Create/ })).toBeDisabled();
   });
+
+  it('allows another dish when the legacy recipe-slot count is full', () => {
+    useGameState.mockReturnValue({
+      equipment: [{ id: 'eq2', name: 'Oven', owned: true }],
+      dishes: [{ id: 'existing' }],
+      recipeSlots: 1,
+    });
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<RecipeCreator onClose={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Dish Name:'), { target: { value: 'Soup' } });
+
+    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+  });
 });

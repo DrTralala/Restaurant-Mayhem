@@ -11,7 +11,7 @@ export function getSeatedDisplayGeometry(chair, table) {
   const length = Math.hypot(dx, dy) || 1;
   const menuCentre = {
     x: chairCentre.x + (dx / length) * MENU_DISTANCE,
-    y: chairCentre.y + (dy / length) * MENU_DISTANCE,
+    y: chairCentre.y + MENU_DISTANCE,
   };
   return {
     figure: { x: chairCentre.x, y: chair.y + 5 },

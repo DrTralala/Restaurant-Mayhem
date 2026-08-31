@@ -113,7 +113,7 @@ export function drawFloorLayer(ctx, state, camera) {
   const { restaurant } = state;
   const world = getRestaurantWorld(restaurant);
 
-  ctx.fillStyle = '#000000';
+  ctx.fillStyle = '#2d1f0e';
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
   ctx.save();
@@ -310,18 +310,15 @@ export function drawFurnitureLayer(ctx, state, camera) {
        const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
        const chair = customer && (state.chairs || []).find(candidate => candidate.id === customer.chairId);
        const table = customer && (state.tables || []).find(candidate => candidate.id === customer.tableId);
-       if (chair && table) {
-         const kinds = [...new Set((state.serviceItems || [])
-           .filter(candidate => candidate.customerId === item.customerId && candidate.state === 'delivered')
-           .map(candidate => candidate.kind))];
-         const positions = getPlaceSettingPositions(table, chair, kinds);
-         const position = positions[item.kind];
-          if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
-            ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);
-            continue;
-          }
-          continue;
-        }
+       if (!customer || !chair || !table) continue;
+       const kinds = [...new Set((state.serviceItems || [])
+         .filter(candidate => candidate.customerId === item.customerId && candidate.state === 'delivered')
+         .map(candidate => candidate.kind))];
+       const position = getPlaceSettingPositions(table, chair, kinds)[item.kind];
+       if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+         ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);
+       }
+       continue;
      }
     ctx.fillText(getServiceItemEmoji(item, state.dishes || []), item.x, item.y);
   }

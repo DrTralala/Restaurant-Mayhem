@@ -1,5 +1,6 @@
 import { ACTIVITY_DURATIONS } from './activity';
 import { releaseTableReservation } from './guidance';
+import { isCheckoutState } from './checkout';
 
 const DIRTY_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
 const WASH_STATION_CAPACITY = Object.freeze({ manual: 8, automatic: 12 });
@@ -45,7 +46,7 @@ export function markCustomerItemsDirty(serviceItems, customerId, gameTime) {
 export function releaseClearedTables(tables, customers, serviceItems) {
   return (tables || []).map(table => {
     const occupied = (customers || []).some(customer => customer.tableId === table.id
-      && customer.state !== 'leaving' && customer.state !== 'paying');
+      && customer.state !== 'leaving' && !isCheckoutState(customer));
     const dirty = (serviceItems || []).some(item => item.tableId === table.id
       && item.state === 'dirty_at_table');
     return !occupied && !dirty && table.status === 'dirty'

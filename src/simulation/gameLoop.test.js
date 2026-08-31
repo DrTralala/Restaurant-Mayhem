@@ -333,15 +333,25 @@ describe('runTick', () => {
     const pickupTaskItemIds = new Set();
     const deliveryTaskItemIds = new Set();
     const removedAfterCleaningIds = new Set();
+    const checkoutAbandonments = new Set();
     let previousItems = new Map();
+    let previousCustomer = null;
+    let reputationBeforePayment = null;
+    let reputationAfterPayment = null;
     let bothDelivered = false;
     let progressedAfterBoth = false;
     let elapsed = 0;
     let completed = false;
     for (; elapsed < 1800; elapsed += 1) {
       // Keep this long-running journey at the pre-scale game-time pace.
+      const previousTotalServed = state.restaurant.totalServed;
+      const previousReputation = state.restaurant.reputation;
       state = runTick(state, 1 / 60);
       const customer = state.customers.find(candidate => candidate.id === customerId);
+      if (state.restaurant.totalServed > previousTotalServed && reputationBeforePayment == null) {
+        reputationBeforePayment = previousReputation;
+        reputationAfterPayment = state.restaurant.reputation;
+      }
       const journeyItems = state.serviceItems.filter(candidate => candidate.customerId === customerId);
       for (const item of journeyItems) {
         journeyItemIds.add(item.id);
@@ -356,9 +366,18 @@ describe('runTick', () => {
         if (customer.state === 'seated') stages.add('seated');
         if (customer.state === 'waiting_for_items') stages.add('waiting_for_items');
         if (customer.state === 'eating') stages.add('eating');
-        if (customer.state === 'paying') stages.add('paying');
+        if (['checkout_queued', 'checkout_moving', 'checkout_processing'].includes(customer.state)) {
+          stages.add(customer.state);
+        }
         if (customer.state === 'leaving' && customer.departureReason) stages.add(`departure:${customer.departureReason}`);
       }
+      if (previousCustomer
+        && ['checkout_queued', 'checkout_moving', 'checkout_processing'].includes(previousCustomer.state)
+        && customer?.state === 'leaving'
+        && customer.departureReason !== 'served') {
+        checkoutAbandonments.add(customer.id);
+      }
+      previousCustomer = customer ? { ...customer } : null;
       for (const staff of state.staff) {
         const task = staff.task;
         if (task?.customerId === customerId && task.type === 'take_order') stages.add('take_order');
@@ -404,6 +423,7 @@ describe('runTick', () => {
     return {
       state, customerId, seen, deliveredKinds, stages, cleaningTasks, cleanedItemIds,
       journeyItemIds, pickupTaskItemIds, deliveryTaskItemIds, removedAfterCleaningIds,
+      checkoutAbandonments, reputationBeforePayment, reputationAfterPayment,
       bothDelivered, progressedAfterBoth, elapsed: elapsed + 1, completed,
     };
   }
@@ -412,6 +432,7 @@ describe('runTick', () => {
     const {
       state, seen, deliveredKinds, stages, cleaningTasks, cleanedItemIds, journeyItemIds,
       pickupTaskItemIds, deliveryTaskItemIds, removedAfterCleaningIds,
+      checkoutAbandonments, reputationBeforePayment, reputationAfterPayment,
       bothDelivered, progressedAfterBoth, elapsed, completed,
     } = runServiceJourney(roll);
     for (const kind of kinds) for (const status of ['on_service', 'carried', 'delivered']) expect(seen).toContain(`${kind}:${status}`);
@@ -424,8 +445,12 @@ describe('runTick', () => {
     expect(completed || state.customers.length === 0 || state.customers.every(customer => customer.state === 'leaving')).toBe(true);
     expect(elapsed).toBeLessThanOrEqual(1801);
     expect(deliveredKinds).toEqual(new Set(kinds));
-    for (const stage of ['seated', 'waiting_for_items', 'eating', 'paying']) {
+    for (const stage of ['seated', 'waiting_for_items', 'eating', 'checkout_queued', 'checkout_moving', 'checkout_processing']) {
       expect(stages).toContain(stage);
+    }
+    expect(checkoutAbandonments).toEqual(new Set());
+    if (reputationBeforePayment != null) {
+      expect(reputationAfterPayment).toBeGreaterThan(reputationBeforePayment);
     }
     expect(stages.has('take_order')).toBe(true);
     expect(stages.has('take_payment') || state.restaurant.totalServed === 0).toBe(true);
@@ -454,11 +479,11 @@ describe('runTick', () => {
       ],
       customers: [
         {
-          id: 'c1', state: 'paying', x: 780, y: 140, patience: 100,
+          id: 'c1', state: 'checkout_queued', x: 780, y: 140, patience: 100,
           happiness: 80, paymentQueuedAt: 10, dishId: 'starter-toast', tableId: 't1',
         },
         {
-          id: 'c2', state: 'paying', x: 580, y: 320, patience: 100,
+          id: 'c2', state: 'checkout_queued', x: 580, y: 320, patience: 100,
           happiness: 80, paymentQueuedAt: 20, dishId: 'starter-toast', tableId: 't2',
         },
       ],
@@ -576,7 +601,7 @@ describe('runTick', () => {
       if (state.staff.some(staff => staff.task?.type === 'deliver_service_item' && staff.task.serviceItemId === item?.id)
         || (previousItem?.state === 'carried' && item?.state === 'delivered')) observe('deliver_service_item');
       if (customer?.state === 'eating') observe('eating');
-      if (customer?.state === 'paying'
+      if (['checkout_queued', 'checkout_moving', 'checkout_processing'].includes(customer?.state)
         || state.staff.some(staff => staff.task?.type === 'take_payment' && staff.task.customerId === customerId)) {
         observe('paying_at_cashier');
       }

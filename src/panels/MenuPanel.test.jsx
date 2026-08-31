@@ -22,7 +22,7 @@ describe('MenuPanel drinks', () => {
 
     expect(screen.getByText('Water')).toBeInTheDocument();
     expect(screen.getByText('$2')).toBeInTheDocument();
-    expect(screen.getByText('Menu (0/1 slots)')).toBeInTheDocument();
+    expect(screen.getByText('Menu')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Unlock Water/ })).not.toBeInTheDocument();
   });
 
