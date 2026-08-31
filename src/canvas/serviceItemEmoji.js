@@ -8,6 +8,9 @@ const DRINK_EMOJI = Object.freeze({
 });
 
 export function getServiceItemEmoji(item, dishes = []) {
+  const dirty = ['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']
+    .includes(item?.state);
+  if (dirty) return item?.kind === 'drink' ? '🥛' : '🍽️';
   if (item?.kind === 'drink') return DRINK_EMOJI[item.menuItemId] || '🥤';
   const dish = Array.isArray(dishes)
     ? dishes.find(candidate => candidate.id === item?.menuItemId)

@@ -23,4 +23,11 @@ describe('getServiceItemEmoji', () => {
     expect(getServiceItemEmoji({ kind: 'dish', menuItemId: 'missing' }, [])).toBe('🍽️');
     expect(getServiceItemEmoji({ kind: 'drink', menuItemId: 'missing' }, [])).toBe('🥤');
   });
+
+  it('renders dirty food as a dish and dirty drinks as empty cups', () => {
+    for (const state of ['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']) {
+      expect(getServiceItemEmoji({ kind: 'dish', state }, [])).toBe('🍽️');
+      expect(getServiceItemEmoji({ kind: 'drink', state }, [])).toBe('🥛');
+    }
+  });
 });

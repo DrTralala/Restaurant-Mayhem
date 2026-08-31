@@ -8,6 +8,7 @@ import { ACTIVITY_DURATIONS, getRemainingFraction } from '../simulation/activity
 import { getUpgradeEffect } from '../simulation/balance';
 import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/dishwashing';
 import { getQueuePartyMemberPosition, normaliseCustomerQueue } from '../simulation/customerQueue';
+import { getCustomerConsumptionRemainingFraction } from '../simulation/consumption';
 
 function drawVerticalProgress(ctx, x, y, remaining) {
   if (!Number.isFinite(remaining)) return;
@@ -310,18 +311,19 @@ export function drawFurnitureLayer(ctx, state, camera) {
   }
 
   for (const item of Array.isArray(state.serviceItems) ? state.serviceItems : []) {
-    if (!['on_service', 'delivered'].includes(item.state)
+    if (!['on_service', 'delivered', 'dirty_at_table'].includes(item.state)
       || !Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
     ctx.fillStyle = '#fff';
      ctx.font = '10px sans-serif';
-     if (item.state === 'delivered') {
+     if (['delivered', 'dirty_at_table'].includes(item.state)) {
        const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
        const chair = customer && (state.chairs || []).find(candidate => candidate.id === customer.chairId);
        const table = customer && (state.tables || []).find(candidate => candidate.id === customer.tableId);
        if (!customer || !chair || !table) continue;
        const kinds = [...new Set((state.serviceItems || [])
-         .filter(candidate => candidate.customerId === item.customerId && candidate.state === 'delivered')
-         .map(candidate => candidate.kind))];
+          .filter(candidate => candidate.customerId === item.customerId
+            && ['delivered', 'dirty_at_table'].includes(candidate.state))
+          .map(candidate => candidate.kind))];
        const position = getPlaceSettingPositions(table, chair, kinds)[item.kind];
        if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
          ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);
@@ -489,7 +491,11 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
     if (deciding) drawMenu(ctx, seatedGeometry.menu);
     const consuming = c.state === 'eating' && !c.path?.length;
     drawVerticalProgress(ctx, cx + 14, cy - 7, consuming
-      ? getRemainingFraction(state.restaurant?.gameTime, c.consumptionStartedAt, c.consumptionDuration)
+      ? getCustomerConsumptionRemainingFraction(
+        c,
+        state.serviceItems || [],
+        state.restaurant?.gameTime,
+      )
       : null);
     ctx.restore();
   }

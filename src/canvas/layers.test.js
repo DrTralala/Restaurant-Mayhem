@@ -196,8 +196,9 @@ describe('drawFurnitureLayer', () => {
 
   it('renders stationary customer and staff progress exactly once and suppresses invalid or moving staff', () => {
     const ctx = recordCtx();
-    drawCustomerLayer(ctx, { restaurant: { gameTime: 90 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }],
-      customers: [{ id: 'c', state: 'eating', tableId: 't', chairId: 'ch', consumptionStartedAt: 0, consumptionDuration: 180 }] }, { x: 0, y: 0, zoom: 1 });
+    drawCustomerLayer(ctx, { restaurant: { gameTime: 240 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }],
+      customers: [{ id: 'c', state: 'eating', tableId: 't', chairId: 'ch', consumptionStartedAt: 0, consumptionDuration: 180 }],
+      serviceItems: [{ id: 'dish', customerId: 'c', kind: 'dish', state: 'delivered', consumptionStartedAt: 0 }] }, { x: 0, y: 0, zoom: 1 });
     drawStaffLayer(ctx, { restaurant: { gameTime: 30 }, serviceItems: [], dishes: [], kitchenStations: [], equipment: [],
       staff: [
         { id: 'o', name: 'O', role: 'waiter', x: 200, y: 200, task: { type: 'take_order', startedAt: 0 }, path: [] },
@@ -215,6 +216,8 @@ describe('drawFurnitureLayer', () => {
     const moving = recordCtx();
     drawCustomerLayer(moving, { restaurant: { gameTime: 90 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }], customers: [
       { id: 'moving', state: 'eating', tableId: 't', chairId: 'ch', path: [{ x: 5, y: 5 }], consumptionStartedAt: 0, consumptionDuration: 180 },
+    ], serviceItems: [
+      { id: 'dish', customerId: 'moving', kind: 'dish', state: 'delivered', consumptionStartedAt: 0 },
     ] }, { x: 0, y: 0, zoom: 1 });
     expect(moving._calls.arcs).toHaveLength(1);
     expect(moving._calls.arcs[0]).toMatchObject({ x: 100, y: 95 });
@@ -223,6 +226,8 @@ describe('drawFurnitureLayer', () => {
     const stationary = recordCtx();
     drawCustomerLayer(stationary, { restaurant: { gameTime: 90 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }], customers: [
       { id: 'stationary', state: 'eating', tableId: 't', chairId: 'ch', path: [], consumptionStartedAt: 0, consumptionDuration: 180 },
+    ], serviceItems: [
+      { id: 'dish', customerId: 'stationary', kind: 'dish', state: 'delivered', consumptionStartedAt: 0 },
     ] }, { x: 0, y: 0, zoom: 1 });
     expect(stationary._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14)).toHaveLength(1);
   });
@@ -281,6 +286,35 @@ describe('drawFurnitureLayer', () => {
       expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍞', ...positions.dish }));
       expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '💧', ...positions.drink }));
     });
+
+  it('keeps delivered and dirty items at stable combined place settings', () => {
+    const table = { id: 't1', x: 200, y: 200 };
+    const chair = { id: 'ch1', tableId: 't1', x: 210, y: 180 };
+    const positions = getPlaceSettingPositions(table, chair, ['dish', 'drink']);
+    const state = {
+      tables: [table], chairs: [chair], kitchenStations: [], serviceTables: [], equipment: [],
+      customers: [{ id: 'c1', state: 'eating', tableId: 't1', chairId: 'ch1' }],
+      dishes: [{ id: 'toast', base: 'Bread' }],
+      serviceItems: [
+        { id: 'dish', customerId: 'c1', kind: 'dish', menuItemId: 'toast', state: 'delivered', x: 0, y: 0 },
+        { id: 'drink', customerId: 'c1', kind: 'drink', menuItemId: 'water', state: 'dirty_at_table', x: 0, y: 0 },
+      ],
+    };
+    const partiallyConsumed = recordCtx();
+    drawFurnitureLayer(partiallyConsumed, state, { x: 0, y: 0, zoom: 1 });
+    expect(partiallyConsumed._calls.texts).toContainEqual(expect.objectContaining({ text: '🍞', ...positions.dish }));
+    expect(partiallyConsumed._calls.texts).toContainEqual(expect.objectContaining({ text: '🥛', ...positions.drink }));
+
+    const fullyConsumed = recordCtx();
+    drawFurnitureLayer(fullyConsumed, {
+      ...state,
+      serviceItems: state.serviceItems.map(item => item.kind === 'dish'
+        ? { ...item, state: 'dirty_at_table', consumedAt: 480, dirtyAt: 480 }
+        : item),
+    }, { x: 0, y: 0, zoom: 1 });
+    expect(fullyConsumed._calls.texts).toContainEqual(expect.objectContaining({ text: '🍽️', ...positions.dish }));
+    expect(fullyConsumed._calls.texts).toContainEqual(expect.objectContaining({ text: '🥛', ...positions.drink }));
+  });
 
   it.each([
     ['dish', 'toast', '🍞'],
