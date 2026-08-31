@@ -131,6 +131,16 @@ it('falls back to gameTime when legacy item and customer start times are missing
   expect(result.serviceItems[0]).toMatchObject({ consumptionStartedAt: 100 });
 });
 
+it('falls back to gameTime when the legacy customer start time is NaN', () => {
+  const result = normaliseConsumptionState(
+    [{ id: 'c1', state: 'eating', consumptionStartedAt: Number.NaN }],
+    [{ id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered' }],
+    100,
+  );
+
+  expect(result.serviceItems[0]).toMatchObject({ consumptionStartedAt: 100 });
+});
+
 it.each([
   ['NaN item and Infinity customer starts', Number.NaN, Infinity],
   ['Infinity item and non-number customer starts', Infinity, 'legacy-start'],
