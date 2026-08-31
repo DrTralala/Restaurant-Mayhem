@@ -973,7 +973,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     return {
       staff: completedStaff,
       serviceItems,
-      queue: queue.filter(customer => !ids.includes(customer.id)),
+      queue,
       tables: tables.map(candidate => candidate.id === table.id
         ? releaseTableReservation(candidate, 'occupied')
         : candidate),
@@ -1328,7 +1328,9 @@ export function prepareStaffForMovement(state, gameDt) {
     morale: Math.max(0, s.morale - 0.01 * gameDt / 60),
     carryingServiceItemId: s.carryingServiceItemId ?? null,
   }));
-  if (gateStatus.stale) {
+  if (gateStatus.clear) {
+    queueAdmissionGate = null;
+  } else if (gateStatus.stale) {
     const gateMemberIds = new Set(queueAdmissionGate.customerIds || []);
     tables = tables.map(table => table.id === queueAdmissionGate.tableId
       && table.status === 'reserved'
@@ -1343,7 +1345,6 @@ export function prepareStaffForMovement(state, gameDt) {
       ? leavingFields({ ...customer, tableId: null, guideStaffId: null, chairId: null })
       : customer);
   }
-  if (gateStatus.clear) queueAdmissionGate = null;
   const activityState = { ...state, staff, customers, tables, serviceItems };
   staff = staff.map(worker => prepareStaffActivity(activityState, worker));
   const staleTaskServiceItemIds = staff

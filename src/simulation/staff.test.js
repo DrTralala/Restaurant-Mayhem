@@ -1345,6 +1345,38 @@ describe('updateStaff', () => {
     expect(cleared.queueAdmissionGate).toBeNull();
   });
 
+  it('clears an inside stale gate without sending safely admitted members away', () => {
+    const admitted = updateStaff(queuedAdmissionState(), 0);
+    const inside = {
+      ...admitted,
+      staff: admitted.staff.map(worker => worker.id === 'w1'
+        ? { ...worker, task: null, path: [] }
+        : worker),
+      customers: admitted.customers.map(customer => ({
+        ...customer,
+        state: 'seated',
+        x: 800,
+        tableId: 't1',
+        chairId: 'ch1',
+        guideStaffId: null,
+        path: [],
+      })),
+      tables: admitted.tables.map(table => {
+        if (table.id !== 't1') return table;
+        const { reservationOwnerStaffId: _owner, ...withoutOwner } = table;
+        return { ...withoutOwner, status: 'occupied' };
+      }),
+    };
+
+    const prepared = prepareStaffForMovement(inside, 0);
+
+    expect(prepared.queueAdmissionGate).toBeNull();
+    expect(prepared.customers[0]).toMatchObject({
+      id: 'q1', state: 'seated', x: 800, tableId: 't1', chairId: 'ch1', guideStaffId: null,
+    });
+    expect(prepared.tables.find(table => table.id === 't1').status).toBe('occupied');
+  });
+
   it('waiter starts guiding a waiting customer and reserves table', () => {
     const waiter = { id: 'w1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150, x: 860, y: 360 };
     const customer = {
@@ -1728,6 +1760,10 @@ describe('updateStaff', () => {
     ];
     const state = {
       ...baseState,
+      queue: [{
+        partyId: 'queued-party',
+        members: [{ id: 'queued-1', partyId: 'queued-party', partySize: 1, state: 'queued' }],
+      }],
       staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, path: [], task: {
         type: 'guide_customer', customerIds: ['c1', 'c2'], tableId: 't1',
         chairIds: ['ch1', 'ch2'], stage: 'approach_chairs', approaches,
@@ -1748,6 +1784,7 @@ describe('updateStaff', () => {
       expect.objectContaining({ id: 'c2', state: 'seated', x: 290, y: 210 }),
     ]));
     expect(result.staff[0].task).toBeNull();
+    expect(result.queue).toEqual(state.queue);
   });
 
   it('clears every movement-recovery field when guidance cancellation starts an exact departure', () => {
