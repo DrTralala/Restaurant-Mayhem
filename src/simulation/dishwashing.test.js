@@ -3,7 +3,6 @@ import {
   getWashStationCapacity,
   getWashStationOccupancy,
   hasWashStationCapacity,
-  markCustomerItemsDirty,
   releaseClearedTables,
   updateAutomaticDishwashers,
 } from './dishwashing';
@@ -32,19 +31,6 @@ describe('dishwashing lifecycle', () => {
     expect(getWashStationOccupancy(state, station)).toBe(3);
     expect(getWashStationOccupancy(state, station, { excludeServiceItemId: 'inbound' })).toBe(2);
     expect(hasWashStationCapacity(state, station)).toBe(true);
-  });
-
-  it('marks only delivered items for the target customer dirty', () => {
-    const result = markCustomerItemsDirty([
-      { id: 'dish', customerId: 'c1', state: 'delivered' },
-      { id: 'drink', customerId: 'c1', state: 'delivered' },
-      { id: 'other', customerId: 'c2', state: 'delivered' },
-      { id: 'old', customerId: 'c1', state: 'on_service' },
-    ], 'c1', 1000);
-    expect(result[0]).toMatchObject({ state: 'dirty_at_table', dirtyAt: 1000, washStationId: null, washQueuedAt: null, washStartedAt: null });
-    expect(result[1]).toMatchObject({ state: 'dirty_at_table', dirtyAt: 1000, washStationId: null, washQueuedAt: null, washStartedAt: null });
-    expect(result[2].state).toBe('delivered');
-    expect(result[3].state).toBe('on_service');
   });
 
   it('releases a dirty table only after its final dirty item is collected', () => {
@@ -77,11 +63,6 @@ describe('dishwashing lifecycle', () => {
     expect(waiting.serviceItems).toHaveLength(2);
     const done = updateAutomaticDishwashers({ ...waiting, restaurant: { gameTime: 280 } });
     expect(done.serviceItems.map(item => item.id)).toEqual(['new']);
-  });
-
-  it('does not let a dirty item be removed by a customer departure', () => {
-    expect(markCustomerItemsDirty([{ id: 'i', customerId: 'c', state: 'delivered' }], 'c', 5)[0].state)
-      .toBe('dirty_at_table');
   });
 
   it('starts and completes exactly one duplicate-id automatic item per cycle', () => {

@@ -505,7 +505,10 @@ function queuedAdmissionState() {
 }
 
 describe('updateStaff', () => {
-  it('bills one dish and one drink exactly once and marks both for clearing', () => {
+  it('bills one dish and one drink exactly once without changing delivered items', () => {
+    const legacyConsumedItem = {
+      id: 'dish', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'delivered', consumedAt: 100,
+    };
     const state = {
       ...baseState,
       staff: [{ id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100, path: [],
@@ -513,7 +516,7 @@ describe('updateStaff', () => {
       customers: [{ id: 'c1', state: 'checkout_processing', paymentReady: false, cashierStationId: 'cashier1', x: 840, y: 180, happiness: 80, dishId: 'd1', drinkId: 'water', tableId: 't1' }],
       dishes: [{ id: 'd1', price: 12 }], unlockedDrinkIds: ['water'],
       serviceItems: [
-        { id: 'dish', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'delivered' },
+        legacyConsumedItem,
         { id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'delivered' },
       ],
       cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier' }],
@@ -522,7 +525,7 @@ describe('updateStaff', () => {
     };
     const result = updateStaff(state, 0);
     expect(result.completedCustomers[0]).toMatchObject({ dishId: 'd1', drinkId: 'water', revenue: 16.8, tip: 2.8, totalPaid: 16.8 });
-    expect(result.serviceItems.every(item => item.state === 'dirty_at_table')).toBe(true);
+    expect(result.serviceItems).toEqual(state.serviceItems);
     expect(result.tables[0].status).toBe('dirty');
 
     const repeated = updateStaff(result, 60);
@@ -2882,8 +2885,8 @@ describe('updateStaff', () => {
     expect(result.customers[0].happiness).toBe(100);
   });
 
-  it('dish-only, drink-only, and combined customers wait for exactly their ordered items', () => {
-    const deliver = (kind, customer, serviceItems) => updateStaff({
+  it('starts independent consumption timers after the final ordered item is delivered', () => {
+    const deliver = (customer, serviceItems) => updateStaff({
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 100 },
       staff: [{
@@ -2896,39 +2899,23 @@ describe('updateStaff', () => {
       serviceItems,
     }, 0);
 
-    const dishOnly = deliver(
-      'dish', { id: 'c1', state: 'waiting_for_items', dishId: 'd1', drinkId: null, tableId: 't1' },
-      [{ id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', tableId: 't1', state: 'carried' }],
-    );
-    expect(dishOnly.customers[0]).toMatchObject({ state: 'eating', consumptionStartedAt: 100, consumptionDuration: 480 });
-
-    const drinkOnly = deliver(
-      'drink', { id: 'c2', state: 'waiting_for_items', dishId: null, drinkId: 'water', tableId: 't1' },
-      [{ id: 'i2', kind: 'drink', menuItemId: 'water', customerId: 'c2', tableId: 't1', state: 'carried' }],
-    );
-    expect(drinkOnly.customers[0]).toMatchObject({ state: 'eating', consumptionStartedAt: 100, consumptionDuration: 180 });
-
-    const combinedCustomer = { id: 'c3', state: 'waiting_for_items', dishId: 'd1', drinkId: 'water', tableId: 't1' };
-    const first = deliver(
-      'dish', combinedCustomer,
+    const result = deliver(
+      { id: 'c1', state: 'waiting_for_items', dishId: 'd1', drinkId: 'water', tableId: 't1' },
       [
-        { id: 'i3', kind: 'dish', menuItemId: 'd1', customerId: 'c3', tableId: 't1', state: 'carried' },
-        { id: 'i4', kind: 'drink', menuItemId: 'water', customerId: 'c3', tableId: 't1', state: 'ordered' },
+        { id: 'dish-item', kind: 'dish', menuItemId: 'd1', customerId: 'c1', tableId: 't1', state: 'delivered' },
+        { id: 'drink-item', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1', state: 'carried' },
       ],
     );
-    expect(first.customers[0].state).toBe('waiting_for_items');
-    expect(first.customers[0]).not.toHaveProperty('consumptionStartedAt');
-    expect(first.customers[0]).not.toHaveProperty('consumptionDuration');
 
-    const second = updateStaff({
-      ...first,
-      staff: [{
-        id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, path: [],
-        task: { type: 'deliver_service_item', serviceItemId: 'i4', customerId: 'c3' }, carryingServiceItemId: 'i4',
-      }],
-      serviceItems: first.serviceItems.map(item => item.id === 'i4' ? { ...item, state: 'carried' } : item),
-    }, 0);
-    expect(second.customers[0]).toMatchObject({ state: 'eating', consumptionStartedAt: 100, consumptionDuration: 600 });
+    expect(result.customers[0]).toMatchObject({
+      state: 'eating',
+      orderedServiceItemIds: ['dish-item', 'drink-item'],
+      consumedServiceItemIds: [],
+    });
+    expect(result.customers[0]).not.toHaveProperty('consumptionDuration');
+    expect(result.serviceItems
+      .filter(item => item.customerId === 'c1')
+      .map(item => item.consumptionStartedAt)).toEqual([100, 100]);
   });
 
   it('cancels a stale take_order task when the customer is no longer seated', () => {

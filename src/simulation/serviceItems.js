@@ -143,6 +143,8 @@ export function createCustomerOrder(state, customer, random = Math.random) {
       dishId: dishItem?.menuItemId ?? customer.dishId ?? null,
       drinkId: drinkItem?.menuItemId ?? customer.drinkId ?? null,
       orderTime: state.restaurant?.gameTime ?? customer.orderTime,
+      orderedServiceItemIds: customerItems.map(item => item.id),
+      consumedServiceItemIds: [],
     },
     serviceItems,
   };

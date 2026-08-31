@@ -45,6 +45,10 @@ describe('service item orders', () => {
       expect.objectContaining({ kind: 'dish', menuItemId: 'toast', customerId: 'c1', tableId: 't1', state: 'ordered' }),
       expect.objectContaining({ kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1', state: 'ordered' }),
     ]);
+    expect(result.customer.orderedServiceItemIds).toEqual(
+      result.serviceItems.filter(item => item.customerId === result.customer.id).map(item => item.id),
+    );
+    expect(result.customer.consumedServiceItemIds).toEqual([]);
     expect(result.serviceItems.every(item => !Array.isArray(item.customerId))).toBe(true);
   });
 

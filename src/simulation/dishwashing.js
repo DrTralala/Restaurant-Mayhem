@@ -30,19 +30,6 @@ export function hasWashStationCapacity(state, station, options) {
   return getWashStationOccupancy(state, station, options) < getWashStationCapacity(station);
 }
 
-export function markCustomerItemsDirty(serviceItems, customerId, gameTime) {
-  return (serviceItems || []).map(item => item.customerId === customerId && item.state === 'delivered'
-    ? {
-      ...item,
-      state: 'dirty_at_table',
-      dirtyAt: gameTime,
-      washStationId: null,
-      washQueuedAt: null,
-      washStartedAt: null,
-    }
-    : item);
-}
-
 export function releaseClearedTables(tables, customers, serviceItems) {
   return (tables || []).map(table => {
     const occupied = (customers || []).some(customer => customer.tableId === table.id

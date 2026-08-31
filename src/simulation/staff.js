@@ -13,7 +13,8 @@ import {
   hasValidDrinkReservation,
 } from './serviceItems';
 import { ACTIVITY_DURATIONS } from './activity';
-import { hasWashStationCapacity, markCustomerItemsDirty, releaseClearedTables } from './dishwashing';
+import { startCustomerConsumption } from './consumption';
+import { hasWashStationCapacity, releaseClearedTables } from './dishwashing';
 import {
   getCustomerGuideContext,
   getGuidePartyContext,
@@ -788,8 +789,8 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       customers: customers.map(candidate => candidate.id === customer.id
         ? leavingFields({ ...candidate, departureReason: 'served' })
         : candidate),
-       serviceItems: markCustomerItemsDirty(serviceItems.filter(item => item.customerId !== customer.id
-          || !['ordered', 'preparing'].includes(item.state)), customer.id, state.restaurant.gameTime),
+       serviceItems: serviceItems.filter(item => item.customerId !== customer.id
+          || !['ordered', 'preparing'].includes(item.state)),
         clearCarriedServiceItemIds: carriedServiceItemIds,
        tables: tables.map(table => table.id === customer.tableId && !remainingAtTable
          ? releaseTableReservation(table, 'dirty') : table),
@@ -1160,29 +1161,21 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     const deliveredServiceItems = serviceItems.map((candidate, index) => index === itemIndex
       ? { ...candidate, state: 'delivered', ...deliveredPosition }
       : candidate);
+    const happiness = item.kind === 'dish'
+      ? Math.min(100, (customer.happiness ?? 80) + happinessBonus)
+      : customer.happiness;
+    const deliveredCustomer = item.kind === 'dish'
+      ? { ...customer, happiness }
+      : customer;
+    const started = allOrderedItemsDelivered(deliveredCustomer, deliveredServiceItems)
+      ? startCustomerConsumption(deliveredCustomer, deliveredServiceItems, state.restaurant.gameTime)
+      : null;
     return {
       staff: { ...staff, task: null, carryingServiceItemId: null },
-      queue, tables, serviceItems: deliveredServiceItems,
-      customers: customers.map(candidate => {
-        if (candidate.id !== customer.id) return candidate;
-        const happiness = item.kind === 'dish'
-          ? Math.min(100, (candidate.happiness ?? 80) + happinessBonus)
-          : candidate.happiness;
-        return allOrderedItemsDelivered(candidate, deliveredServiceItems)
-          ? {
-            ...candidate,
-            state: 'eating',
-             eatTime: state.restaurant.gameTime,
-             consumptionStartedAt: state.restaurant.gameTime,
-             consumptionDuration: candidate.dishId && candidate.drinkId
-               ? ACTIVITY_DURATIONS.consumeBoth
-               : candidate.dishId ? ACTIVITY_DURATIONS.consumeFood : ACTIVITY_DURATIONS.consumeDrink,
-            ...(item.kind === 'dish' ? { happiness } : {}),
-          }
-          : item.kind === 'dish'
-            ? { ...candidate, happiness }
-            : candidate;
-      }),
+      queue, tables, serviceItems: started?.serviceItems ?? deliveredServiceItems,
+      customers: customers.map(candidate => candidate.id === customer.id
+        ? started?.customer ?? deliveredCustomer
+        : candidate),
     };
   }
 
