@@ -275,6 +275,21 @@ describe('service item orders', () => {
     expect(result.customers[0].state).toBe('checkout_moving');
   });
 
+  it('keeps an eating combined order active after its consumed drink is removed', () => {
+    const customer = {
+      id: 'c1', state: 'eating', dishId: 'toast', drinkId: 'water',
+      orderedServiceItemIds: ['dish', 'drink'], consumedServiceItemIds: ['drink'],
+    };
+    const result = normaliseServiceItemOwnership({
+      customers: [customer], staff: [], tables: [], washStations: [], serviceTables: [],
+      serviceItems: [
+        { id: 'dish', customerId: 'c1', kind: 'dish', menuItemId: 'toast', state: 'delivered' },
+      ],
+    });
+
+    expect(result.customers[0]).toEqual(customer);
+  });
+
   it('cancels a malformed combined checkout order instead of allowing incomplete payment', () => {
     const result = normaliseServiceItemOwnership({
       customers: [{ id: 'c1', state: 'checkout_processing', dishId: 'toast', drinkId: 'water' }],

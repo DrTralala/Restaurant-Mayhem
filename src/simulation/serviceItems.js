@@ -250,14 +250,25 @@ export function normaliseServiceItemOwnership(state) {
     const represented = serviceItems.filter(item => item.customerId === customer.id);
     const activeOrderState = ['waiting_for_items', 'eating'].includes(customer.state)
       || isCheckoutState(customer);
+    const orderedIds = Array.isArray(customer.orderedServiceItemIds)
+      ? customer.orderedServiceItemIds
+      : [];
+    const consumedIds = new Set(customer.consumedServiceItemIds || []);
+    const activeItems = represented
+      .filter(item => ['ordered', 'preparing', 'ready', 'on_service', 'carried', 'delivered'].includes(item.state)
+        || DIRTY_STATES.has(item.state));
+    const activeItemIds = new Set(activeItems.map(item => item.id));
+    const missingSelectedKinds = selectedKinds.filter(kind => {
+      const menuItemId = kind === 'dish' ? customer.dishId : customer.drinkId;
+      return !activeItems.some(item => item.kind === kind && item.menuItemId === menuItemId);
+    });
+    const removedConsumedCount = orderedIds.filter(id => consumedIds.has(id) && !activeItemIds.has(id)).length;
     const malformed = selectedKinds.length > 1
       && activeOrderState
-      && selectedKinds.some(kind => {
-        const menuItemId = kind === 'dish' ? customer.dishId : customer.drinkId;
-        return !represented.some(item => item.customerId === customer.id && item.kind === kind
-          && item.menuItemId === menuItemId
-          && ['ordered', 'preparing', 'ready', 'on_service', 'carried', 'delivered'].includes(item.state));
-      });
+      && (orderedIds.length > 0
+        ? orderedIds.some(id => !activeItemIds.has(id) && !consumedIds.has(id))
+          || missingSelectedKinds.length > removedConsumedCount
+        : missingSelectedKinds.length > 0);
     return malformed
       ? { ...customer, state: 'leaving', dishId: null, drinkId: null, orderTime: null }
       : customer;
