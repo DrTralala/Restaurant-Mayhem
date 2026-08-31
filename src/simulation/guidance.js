@@ -1,5 +1,8 @@
 export function taskCustomerIds(task) {
-  return task?.customerIds || (task?.customerId ? [task.customerId] : []);
+  if (task?.customerIds !== undefined) {
+    return Array.isArray(task.customerIds) ? task.customerIds : [];
+  }
+  return task?.customerId ? [task.customerId] : [];
 }
 
 export function reserveTableForGuide(table, guideStaffId) {

@@ -1358,6 +1358,12 @@ describe('updateStaff', () => {
         ? { ...worker, task: { ...worker.task, customerIds: [...worker.task.customerIds, 'other'] } }
         : worker),
     })],
+    ['non-array task customer IDs', admitted => ({
+      ...admitted,
+      staff: admitted.staff.map(worker => worker.id === 'w1'
+        ? { ...worker, task: { ...worker.task, customerIds: 'x' } }
+        : worker),
+    })],
     ['different materialised-member ownership', admitted => ({
       ...admitted,
       customers: admitted.customers.map(customer => ({ ...customer, guideStaffId: 'other-guide' })),

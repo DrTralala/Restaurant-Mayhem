@@ -175,6 +175,7 @@ function hasMatchingQueueAdmissionTask(worker, gate) {
     || worker.task.customerId !== gate.customerIds?.[0]) return false;
   const taskIds = taskCustomerIds(worker.task);
   return Array.isArray(gate.customerIds)
+    && Array.isArray(taskIds)
     && taskIds.length === gate.customerIds.length
     && taskIds.every((id, index) => id === gate.customerIds[index]);
 }
@@ -1374,7 +1375,9 @@ export function prepareStaffForMovement(state, gameDt) {
   for (const s of staff) {
     if (s.task) {
       if (s.task.customerId) claimedCustomerIds.add(s.task.customerId);
-      if (s.task.customerIds) s.task.customerIds.forEach(id => claimedCustomerIds.add(id));
+      if (Array.isArray(s.task.customerIds)) {
+        s.task.customerIds.forEach(id => claimedCustomerIds.add(id));
+      }
       if (s.task.serviceItemId) claimedServiceItemIds.add(s.task.serviceItemId);
       if (s.task.type === 'clean_table' && s.task.tableId) claimedTableIds.add(s.task.tableId);
       if (s.task.type === 'clean_floor' && s.task.dirtId) claimedDirtIds.add(s.task.dirtId);

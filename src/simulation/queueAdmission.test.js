@@ -202,4 +202,15 @@ describe('queue admission', () => {
       stale: true,
     });
   });
+
+  it.each([
+    ['a same-length string', 'xx'],
+    ['a same-length array-like object', { 0: 'q1', 1: 'q2', length: 2 }],
+  ])('safely marks non-array task customer IDs stale for %s', (_label, customerIds) => {
+    const state = buildGuidedGateState();
+    state.staff[0].task.customerIds = customerIds;
+
+    expect(() => getQueueAdmissionGateStatus(state)).not.toThrow();
+    expect(getQueueAdmissionGateStatus(state).stale).toBe(true);
+  });
 });
