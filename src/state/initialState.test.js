@@ -23,6 +23,7 @@ describe('createInitialState', () => {
     expect(state.staff).toHaveLength(5);
     expect(state.unlockedDrinkIds).toEqual(['water']);
     expect(state.serviceItems).toEqual([]);
+    expect(state.queueAdmissionGate).toBeNull();
     expect(state.staff.every(staff => staff.carryingServiceItemId === null
       || typeof staff.carryingServiceItemId === 'string')).toBe(true);
   });

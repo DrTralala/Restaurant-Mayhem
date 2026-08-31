@@ -53,8 +53,8 @@ describe('spawnCustomers', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     const result = spawnCustomers(state, 60);
     expect(result.queue.length).toBeGreaterThan(0);
-    expect(result.queue[0].state).toBe('queued');
-    expect(result.queue[0].tableId).toBeNull();
+    expect(result.queue[0].members[0].state).toBe('queued');
+    expect(result.queue[0].members[0].tableId).toBeNull();
     expect(result.customers.length).toBe(0);
   });
 
@@ -69,7 +69,7 @@ describe('spawnCustomers', () => {
       result = spawnCustomers(result);
     }
     expect(result.queue.length).toBeGreaterThan(0);
-    expect(result.queue[0].state).toBe('queued');
+    expect(result.queue[0].members[0].state).toBe('queued');
   });
 
   it('does not spawn while the restaurant is closed', () => {
@@ -89,7 +89,7 @@ describe('spawnCustomers', () => {
       .mockReturnValueOnce(0);
     const result = spawnCustomers(state, 60);
     const archetypes = ['regular', 'foodie', 'rusher', 'influencer'];
-    expect(archetypes).toContain(result.queue[0].archetype);
+    expect(archetypes).toContain(result.queue[0].members[0].archetype);
   });
 
   it('assigns a gender to spawned customers', () => {
@@ -101,8 +101,8 @@ describe('spawnCustomers', () => {
 
     const result = spawnCustomers(baseState, 1);
 
-    expect(result.queue[0].gender).toBe('female');
-    expect(result.queue[0]).toMatchObject({ dishId: null, drinkId: null });
+    expect(result.queue[0].members[0].gender).toBe('female');
+    expect(result.queue[0].members[0]).toMatchObject({ dishId: null, drinkId: null });
   });
 
   it('spawns couples as linked customers who queue together', () => {
@@ -115,11 +115,21 @@ describe('spawnCustomers', () => {
 
     const result = spawnCustomers(baseState, 1);
 
-    expect(result.queue).toHaveLength(2);
-    expect(result.queue.map(customer => customer.partyType)).toEqual(['couple', 'couple']);
-    expect(result.queue.map(customer => customer.partySize)).toEqual([2, 2]);
-    expect(new Set(result.queue.map(customer => customer.partyId)).size).toBe(1);
-    expect(result.queue.map(customer => customer.gender)).toEqual(['male', 'female']);
+    expect(result.queue).toHaveLength(1);
+    expect(result.queue[0].members.map(customer => customer.partyType)).toEqual(['couple', 'couple']);
+    expect(result.queue[0].members.map(customer => customer.partySize)).toEqual([2, 2]);
+    expect(new Set(result.queue[0].members.map(customer => customer.partyId)).size).toBe(1);
+    expect(result.queue[0].members.map(customer => customer.gender)).toEqual(['male', 'female']);
+  });
+
+  it('stores one couple as one queue record', () => {
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0).mockReturnValueOnce(0.5)
+      .mockReturnValueOnce(0).mockReturnValueOnce(0.2).mockReturnValueOnce(0.8);
+    const result = spawnCustomers(baseState, 60);
+    expect(result.queue).toHaveLength(1);
+    expect(result.queue[0]).toMatchObject({ partyId: expect.any(String) });
+    expect(result.queue[0].members).toHaveLength(2);
   });
 
   it('stops arrivals when eight parties are queued', () => {
@@ -129,6 +139,15 @@ describe('spawnCustomers', () => {
     const result = spawnCustomers({ ...baseState, queue }, 1);
 
     expect(result.queue).toHaveLength(8);
+  });
+
+  it('preserves an oversized legacy queue and postpones spawning', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const queue = Array.from({ length: 9 }, (_, index) => ({
+      partyId: `p${index}`,
+      members: [{ id: `q${index}`, partyId: `p${index}`, state: 'queued' }],
+    }));
+    expect(spawnCustomers({ ...baseState, queue }, 60).queue).toEqual(queue);
   });
 
   it('applies configured marketing and ambient-lighting effects', () => {
@@ -145,7 +164,7 @@ describe('spawnCustomers', () => {
     const result = spawnCustomers({ ...baseState, upgrades }, 60);
 
     expect(result.queue).toHaveLength(1);
-    expect(result.queue[0].happiness).toBe(90);
+    expect(result.queue[0].members[0].happiness).toBe(90);
   });
 
   it('keeps the configured marketing campaign proportional to the corrected arrival rate', () => {
@@ -171,7 +190,7 @@ describe('spawnCustomers', () => {
 
     const result = spawnCustomers(baseState, 60);
 
-    expect(result.queue[0].patience).toBe(expectedPatience);
+    expect(result.queue[0].members[0].patience).toBe(expectedPatience);
   });
 });
 
@@ -826,7 +845,7 @@ describe('updateCustomers', () => {
     const state = {
       ...baseState,
       customers: [leavingCustomer],
-      queue: [queuedCustomer],
+      queue: [{ partyId: 'q1', members: [queuedCustomer] }],
       tables: baseState.tables.map(t => t.id === 't1' ? { ...t, status: 'occupied' } : t),
     };
     const result = updateCustomers(state, 1);
@@ -858,7 +877,7 @@ describe('updateCustomers', () => {
       state: 'queued', dishId: null, tableId: null, tipAmount: 0,
       seatTime: null, orderTime: null, eatTime: null,
     };
-    const state = { ...baseState, queue: [queuedCustomer] };
+    const state = { ...baseState, queue: [{ partyId: 'q1', members: [queuedCustomer] }] };
     const result = updateCustomers(state, 10);
     expect(result.queue.length).toBe(0);
     // Dead queue mbr becomes a leaving customer (reputation loss)
@@ -868,12 +887,13 @@ describe('updateCustomers', () => {
 
   it('accelerates queued patience loss as the number of parties grows', () => {
     const queue = Array.from({ length: 6 }, (_, index) => ({
-      id: `q${index}`, partyId: `p${index}`, state: 'queued', patience: 100, happiness: 80,
+      partyId: `p${index}`,
+      members: [{ id: `q${index}`, partyId: `p${index}`, state: 'queued', patience: 100, happiness: 80 }],
     }));
 
     const result = updateCustomers({ ...baseState, queue }, 2);
 
-    expect(result.queue[0].patience).toBe(97);
+    expect(result.queue[0].members[0].patience).toBe(97);
   });
 
   it('does not reduce patience while a customer is eating', () => {
@@ -1011,15 +1031,27 @@ describe('updateCustomers', () => {
   });
 
   it('removes an entire queued party with one reputation penalty', () => {
-    const queue = [
+    const queue = [{ partyId: 'p1', members: [
       { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
       { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
-    ];
+    ] }];
 
     const result = updateCustomers({ ...baseState, queue }, 2);
 
     expect(result.queue).toHaveLength(0);
     expect(result.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
+    expect(result.restaurant.reputation).toBe(2.9);
+  });
+
+  it('abandons a complete party record once with projected leaving positions', () => {
+    const queue = [{ partyId: 'p1', members: [
+      { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
+      { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
+    ] }];
+    const result = prepareCustomersForMovement({ ...baseState, queue }, 2);
+    expect(result.queue).toEqual([]);
+    expect(result.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
+    expect(result.customers.every(customer => Number.isFinite(customer.x) && Number.isFinite(customer.y))).toBe(true);
     expect(result.restaurant.reputation).toBe(2.9);
   });
 
@@ -1030,8 +1062,8 @@ describe('updateCustomers', () => {
       result = spawnCustomers(result);
     }
     expect(result.customers.length).toBe(0);
-    for (const q of result.queue) {
-      expect(q.tableId).toBeNull();
+    for (const party of result.queue) {
+      for (const member of party.members) expect(member.tableId).toBeNull();
     }
   });
 });

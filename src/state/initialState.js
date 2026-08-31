@@ -51,6 +51,7 @@ export function createInitialState() {
     floorDirt: [],
     washStations: [{ id: 'wash1', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],
     queue: [],              // customers waiting outside for a free table
+    queueAdmissionGate: null,
     serviceItems: [],
     serviceTables: [
       { id: 'st1', x: 140, y: 120 },

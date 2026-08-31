@@ -2,6 +2,7 @@ const SAVE_KEY = 'restaurant-sim-save';
 import { inferGender } from '../canvas/characterAppearance';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { normaliseOperatingHour } from '../simulation/clock';
+import { normaliseCustomerQueue } from '../simulation/customerQueue';
 import { normaliseTableReservationOwners } from '../simulation/guidance';
 
 export function saveState(state) {
@@ -29,6 +30,13 @@ export function hydrateState(saved, fresh) {
     ...character,
     gender: inferGender(character),
   }));
+  const queue = normaliseCustomerQueue(saved.queue || fresh.queue || []).map(party => ({
+    ...party,
+    members: party.members.map(character => ({
+      ...character,
+      gender: inferGender(character),
+    })),
+  }));
   const hydrated = {
     ...fresh,
     ...saved,
@@ -41,10 +49,8 @@ export function hydrateState(saved, fresh) {
       ...character,
       gender: inferGender(character),
     })),
-    queue: (saved.queue || fresh.queue || []).map(character => ({
-      ...character,
-      gender: inferGender(character),
-    })),
+    queue,
+    queueAdmissionGate: saved.queueAdmissionGate ?? fresh.queueAdmissionGate ?? null,
     floorDirt: Array.isArray(saved.floorDirt) ? saved.floorDirt : fresh.floorDirt,
     washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
   };

@@ -2,8 +2,13 @@ import { getRushHourMultiplier, isRestaurantOpen } from './clock';
 import { buildBlockedCells, worldToCell } from './pathfinding';
 import { clearMovementRecoveryMetadata, planCharacterPath, resolveCharacterMovementBatch } from './movement';
 import { getCustomerGuideContext, releaseTableReservation } from './guidance';
-import { getDoorPosition, getDoors, getQueuePosition } from './world';
+import { getDoorPosition, getDoors } from './world';
 import { isCheckoutState, prepareCheckoutCustomers } from './checkout';
+import {
+  QUEUE_PARTY_CAPACITY,
+  getQueuePartyMemberPosition,
+  normaliseCustomerQueue,
+} from './customerQueue';
 import {
   ABANDONMENT_REPUTATION_PENALTY,
   CUSTOMER_PATIENCE,
@@ -73,8 +78,8 @@ function chooseParty() {
 export function spawnCustomers(state, dt = 1) {
   if (!isRestaurantOpen(state)) return state;
 
-  const queuedParties = new Set((state.queue || []).map((customer, index) => customer.partyId ?? customer.id ?? index)).size;
-  if (queuedParties >= 8) return state;
+  const queue = normaliseCustomerQueue(state.queue || []);
+  if (queue.length >= QUEUE_PARTY_CAPACITY) return { ...state, queue };
 
   const baseRatePerSecond = Math.max(0, getBaseArrivalRate(state.restaurant.reputation)
     + getUpgradeEffect(state, 'customerRate'));
@@ -110,7 +115,7 @@ export function spawnCustomers(state, dt = 1) {
 
   return {
     ...state,
-    queue: [...state.queue, ...newCustomers],
+    queue: [...queue, { partyId, members: newCustomers }],
   };
 }
 
@@ -163,13 +168,22 @@ function isSameCell(left, right) {
 
 export function prepareCustomersForMovement(state, gameDt) {
   const customers = state.customers || [];
-  const queue = state.queue || [];
+  const queue = normaliseCustomerQueue(state.queue || []);
   const restaurantOpen = isRestaurantOpen(state);
-  const closedQueue = restaurantOpen ? [] : queue.map(customer => leavingFields(customer, {
-    tableId: null,
-    reputationApplied: true,
-    closedAt: state.restaurant.gameTime,
-  }));
+  const closedQueue = restaurantOpen ? [] : queue.flatMap((party, partyIndex) =>
+    party.members.map((customer, memberIndex) => leavingFields({
+      ...customer,
+      ...getQueuePartyMemberPosition(
+        state,
+        partyIndex,
+        memberIndex,
+        party.members.length,
+      ),
+    }, {
+      tableId: null,
+      reputationApplied: true,
+      closedAt: state.restaurant.gameTime,
+    })));
   let abandonmentCount = 0;
   let updatedCustomers = [...customers, ...closedQueue].map(c => {
     const waitingForService = isWaitingForService(c, state.staff);
@@ -187,20 +201,25 @@ export function prepareCustomersForMovement(state, gameDt) {
 
   // Update queue: apply party pressure to patience, then remove those who run out.
   const queuePatienceMultiplier = getQueuePatienceMultiplier(queue);
-  let updatedQueue = (restaurantOpen ? queue : []).map(q => ({
-    ...q,
-    patience: Math.max(0, q.patience - gameDt * queuePatienceMultiplier),
+  let updatedQueue = (restaurantOpen ? queue : []).map(party => ({
+    ...party,
+    members: party.members.map(customer => ({
+      ...customer,
+      patience: Math.max(0, customer.patience - gameDt * queuePatienceMultiplier),
+    })),
   }));
 
   const abandoningParties = new Set([
     ...updatedCustomers
       .filter(customer => isWaitingForService(customer, state.staff) && customer.patience <= 0)
       .map(partyKey),
-    ...updatedQueue.filter(customer => customer.patience <= 0).map(partyKey),
+    ...updatedQueue
+      .filter(party => party.members.some(customer => customer.patience <= 0))
+      .map(party => party.partyId),
   ]);
 
   if (abandoningParties.size > 0) {
-    const allPartyMembers = [...updatedCustomers, ...updatedQueue];
+    const allPartyMembers = [...updatedCustomers, ...updatedQueue.flatMap(party => party.members)];
     abandonmentCount = [...abandoningParties].filter(key =>
       !allPartyMembers.some(customer => partyKey(customer) === key && customer.reputationApplied),
     ).length;
@@ -214,14 +233,25 @@ export function prepareCustomersForMovement(state, gameDt) {
         })
       : customer);
 
-    const abandoningQueue = updatedQueue.filter(customer => abandoningParties.has(partyKey(customer)));
-    updatedQueue = updatedQueue.filter(customer => !abandoningParties.has(partyKey(customer)));
-    updatedCustomers = [...updatedCustomers, ...abandoningQueue.map(customer => leavingFields(customer, {
-      patience: Math.max(0, customer.patience),
-      happiness: Math.max(0, customer.happiness - 30),
-      tableId: null,
-      reputationApplied: true,
-    }))];
+    const abandoningQueue = updatedQueue.flatMap((party, partyIndex) =>
+      abandoningParties.has(party.partyId)
+        ? party.members.map((customer, memberIndex) => leavingFields({
+            ...customer,
+            ...getQueuePartyMemberPosition(
+              state,
+              partyIndex,
+              memberIndex,
+              party.members.length,
+            ),
+          }, {
+            patience: Math.max(0, customer.patience),
+            happiness: Math.max(0, customer.happiness - 30),
+            tableId: null,
+            reputationApplied: true,
+          }))
+        : []);
+    updatedQueue = updatedQueue.filter(party => !abandoningParties.has(party.partyId));
+    updatedCustomers = [...updatedCustomers, ...abandoningQueue];
   }
 
   updatedCustomers = prepareCheckoutCustomers(
@@ -254,12 +284,9 @@ export function prepareCustomersForMovement(state, gameDt) {
     let leaving = customer;
     if (!Number.isFinite(leaving.x) || !Number.isFinite(leaving.y)) {
       const table = (state.tables || []).find(candidate => candidate.id === leaving.tableId);
-      const queueIndex = queue.findIndex(candidate => candidate.id === leaving.id);
       const fallback = table && Number.isFinite(table.x) && Number.isFinite(table.y)
         ? { x: table.x + 20, y: table.y + 20 }
-        : queueIndex >= 0
-          ? getQueuePosition(state, queueIndex)
-          : getDoorPosition(state, getDoors(state)[0]).inside;
+        : getDoorPosition(state, getDoors(state)[0]).inside;
       leaving = { ...leaving, ...fallback };
     }
     if (!leaving.exitDoorId) {

@@ -69,6 +69,7 @@ describe('hydrateState', () => {
       serviceItems: [],
       customers: [],
       queue: [],
+      queueAdmissionGate: null,
       floorDirt: [],
       washStations: [],
     });
@@ -168,8 +169,25 @@ describe('hydrateState', () => {
 
     expect(hydrated.staff[0].gender).toBe('female');
     expect(['male', 'female']).toContain(hydrated.customers[0].gender);
-    expect(['male', 'female']).toContain(hydrated.queue[0].gender);
+    expect(['male', 'female']).toContain(hydrated.queue[0].members[0].gender);
     expect(hydrateState(saved, fresh)).toEqual(hydrated);
+  });
+
+  it('hydrates flat legacy queues into nested party records without losing order or gender', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      queue: [
+        { id: 'a1', partyId: 'a', name: 'Sofia' },
+        { id: 'b1', partyId: 'b' },
+        { id: 'a2', partyId: 'a' },
+      ],
+    };
+    const hydrated = hydrateState(saved, fresh);
+    expect(hydrated.queue.map(party => party.partyId)).toEqual(['a', 'b']);
+    expect(hydrated.queue[0].members.map(member => member.id)).toEqual(['a1', 'a2']);
+    expect(hydrated.queue[0].members[0].gender).toBe('female');
+    expect(hydrateState(hydrated, fresh)).toEqual(hydrated);
   });
 
   it('normalises equipment multipliers from saved levels', () => {
