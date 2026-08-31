@@ -257,17 +257,22 @@ export function normaliseServiceItemOwnership(state) {
     const activeItems = represented
       .filter(item => ['ordered', 'preparing', 'ready', 'on_service', 'carried', 'delivered'].includes(item.state)
         || DIRTY_STATES.has(item.state));
-    const activeItemIds = new Set(activeItems.map(item => item.id));
     const missingSelectedKinds = selectedKinds.filter(kind => {
       const menuItemId = kind === 'dish' ? customer.dishId : customer.drinkId;
       return !activeItems.some(item => item.kind === kind && item.menuItemId === menuItemId);
     });
-    const removedConsumedCount = orderedIds.filter(id => consumedIds.has(id) && !activeItemIds.has(id)).length;
+    const malformedTrackedOrder = orderedIds.length !== selectedKinds.length
+      || orderedIds.some((id, index) => {
+        const item = activeItems.find(candidate => candidate.id === id);
+        if (!item) return !consumedIds.has(id);
+        const kind = selectedKinds[index];
+        const menuItemId = kind === 'dish' ? customer.dishId : customer.drinkId;
+        return item.kind !== kind || item.menuItemId !== menuItemId;
+      });
     const malformed = selectedKinds.length > 1
       && activeOrderState
       && (orderedIds.length > 0
-        ? orderedIds.some(id => !activeItemIds.has(id) && !consumedIds.has(id))
-          || missingSelectedKinds.length > removedConsumedCount
+        ? malformedTrackedOrder
         : missingSelectedKinds.length > 0);
     return malformed
       ? { ...customer, state: 'leaving', dishId: null, drinkId: null, orderTime: null }

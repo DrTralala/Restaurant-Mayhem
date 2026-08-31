@@ -290,6 +290,23 @@ describe('service item orders', () => {
     expect(result.customers[0]).toEqual(customer);
   });
 
+  it('does not let a removed consumed drink excuse a mismatched dish item', () => {
+    const result = normaliseServiceItemOwnership({
+      customers: [{
+        id: 'c1', state: 'eating', dishId: 'toast', drinkId: 'water',
+        orderedServiceItemIds: ['dish', 'drink'], consumedServiceItemIds: ['drink'],
+      }],
+      staff: [], tables: [], washStations: [], serviceTables: [],
+      serviceItems: [
+        { id: 'dish', customerId: 'c1', kind: 'drink', menuItemId: 'water', state: 'delivered' },
+      ],
+    });
+
+    expect(result.customers[0]).toMatchObject({
+      state: 'leaving', dishId: null, drinkId: null, orderTime: null,
+    });
+  });
+
   it('cancels a malformed combined checkout order instead of allowing incomplete payment', () => {
     const result = normaliseServiceItemOwnership({
       customers: [{ id: 'c1', state: 'checkout_processing', dishId: 'toast', drinkId: 'water' }],
