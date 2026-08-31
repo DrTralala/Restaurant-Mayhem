@@ -334,10 +334,17 @@ describe('runTick', () => {
     const deliveryTaskItemIds = new Set();
     const removedAfterCleaningIds = new Set();
     const checkoutAbandonments = new Set();
+    const consumedAtByKind = new Map();
+    const firstDirtyStateByKind = new Map();
+    const itemKindById = new Map();
     let previousItems = new Map();
     let previousCustomer = null;
     let reputationBeforePayment = null;
     let reputationAfterPayment = null;
+    let consumptionStart = null;
+    let checkoutStartedAt = null;
+    let paymentStartedAt = null;
+    let drinkClearedWhileDishUnfinished = false;
     let bothDelivered = false;
     let progressedAfterBoth = false;
     let elapsed = 0;
@@ -355,8 +362,19 @@ describe('runTick', () => {
       const journeyItems = state.serviceItems.filter(candidate => candidate.customerId === customerId);
       for (const item of journeyItems) {
         journeyItemIds.add(item.id);
+        itemKindById.set(item.id, item.kind);
         seen.add(`${item.kind}:${item.state}`);
         if (item.state === 'to_clean') cleanedItemIds.add(item.id);
+        if (Number.isFinite(item.consumptionStartedAt) && consumptionStart == null) {
+          consumptionStart = item.consumptionStartedAt;
+        }
+        if (Number.isFinite(item.consumedAt) && !consumedAtByKind.has(item.kind)) {
+          consumedAtByKind.set(item.kind, item.consumedAt);
+        }
+        if (['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing'].includes(item.state)
+          && !firstDirtyStateByKind.has(item.kind)) {
+          firstDirtyStateByKind.set(item.kind, item.state);
+        }
       }
       for (const id of previousItems.keys()) {
         if (!journeyItems.some(item => item.id === id) && cleaningTasks.has(id)) removedAfterCleaningIds.add(id);
@@ -368,8 +386,18 @@ describe('runTick', () => {
         if (customer.state === 'eating') stages.add('eating');
         if (['checkout_queued', 'checkout_moving', 'checkout_processing'].includes(customer.state)) {
           stages.add(customer.state);
+          if (checkoutStartedAt == null) checkoutStartedAt = state.restaurant.gameTime;
         }
         if (customer.state === 'leaving' && customer.departureReason) stages.add(`departure:${customer.departureReason}`);
+      }
+      const dish = journeyItems.find(item => item.kind === 'dish');
+      const drink = journeyItems.find(item => item.kind === 'drink');
+      const removedDrink = [...itemKindById].some(([id, kind]) => kind === 'drink'
+        && !journeyItems.some(item => item.id === id));
+      const dishUnfinished = dish?.state === 'delivered' && !Number.isFinite(dish.consumedAt);
+      if (customer?.state === 'eating' && dishUnfinished
+        && (['carried_dirty', 'queued_for_wash'].includes(drink?.state) || removedDrink)) {
+        drinkClearedWhileDishUnfinished = true;
       }
       if (previousCustomer
         && ['checkout_queued', 'checkout_moving', 'checkout_processing'].includes(previousCustomer.state)
@@ -381,7 +409,10 @@ describe('runTick', () => {
       for (const staff of state.staff) {
         const task = staff.task;
         if (task?.customerId === customerId && task.type === 'take_order') stages.add('take_order');
-        if (task?.customerId === customerId && task.type === 'take_payment') stages.add('take_payment');
+        if (task?.customerId === customerId && task.type === 'take_payment') {
+          stages.add('take_payment');
+          if (paymentStartedAt == null) paymentStartedAt = state.restaurant.gameTime;
+        }
         if (task?.serviceItemId && journeyItems.some(item => item.id === task.serviceItemId)) {
           if (task.type === 'prepare_dish') stages.add('prepare_dish');
           if (task.type === 'pickup_service_item') {
@@ -424,17 +455,22 @@ describe('runTick', () => {
       state, customerId, seen, deliveredKinds, stages, cleaningTasks, cleanedItemIds,
       journeyItemIds, pickupTaskItemIds, deliveryTaskItemIds, removedAfterCleaningIds,
       checkoutAbandonments, reputationBeforePayment, reputationAfterPayment,
+      consumedAtByKind, firstDirtyStateByKind, consumptionStart, checkoutStartedAt,
+      paymentStartedAt, drinkClearedWhileDishUnfinished,
       bothDelivered, progressedAfterBoth, elapsed: elapsed + 1, completed,
     };
   }
 
   it.each([[0.5, ['dish'], 14.4], [0.8, ['dish', 'drink'], 16.8], [0.97, ['drink'], 2.4]])('completes the %j fresh-game service journey', (roll, kinds, expectedRevenue) => {
+    const result = runServiceJourney(roll);
     const {
       state, seen, deliveredKinds, stages, cleaningTasks, cleanedItemIds, journeyItemIds,
       pickupTaskItemIds, deliveryTaskItemIds, removedAfterCleaningIds,
       checkoutAbandonments, reputationBeforePayment, reputationAfterPayment,
+      consumedAtByKind, firstDirtyStateByKind, paymentStartedAt,
+      drinkClearedWhileDishUnfinished,
       bothDelivered, progressedAfterBoth, elapsed, completed,
-    } = runServiceJourney(roll);
+    } = result;
     for (const kind of kinds) for (const status of ['on_service', 'carried', 'delivered']) expect(seen).toContain(`${kind}:${status}`);
     if (kinds.includes('drink')) expect(seen).toContain('drink:preparing');
     expect([...seen].some(entry => entry.startsWith('customer:leaving:'))).toBe(true);
@@ -463,6 +499,19 @@ describe('runTick', () => {
     expect(cleanedItemIds).toEqual(expect.any(Set));
     expect(cleaningTasks).toEqual(expect.any(Set));
     expect(removedAfterCleaningIds).toEqual(expect.any(Set));
+    if (kinds.length === 1) {
+      const kind = kinds[0];
+      const duration = kind === 'dish' ? 480 : 180;
+      expect(consumedAtByKind.get(kind) - result.consumptionStart).toBe(duration);
+      expect(firstDirtyStateByKind.get(kind)).toBe('dirty_at_table');
+      expect(paymentStartedAt).toBeGreaterThanOrEqual(consumedAtByKind.get(kind));
+    } else {
+      expect(result.consumedAtByKind.get('drink') - result.consumptionStart).toBe(180);
+      expect(result.consumedAtByKind.get('dish') - result.consumptionStart).toBe(480);
+      expect(result.consumedAtByKind.get('drink')).toBeLessThan(result.consumedAtByKind.get('dish'));
+      expect(result.checkoutStartedAt).toBeGreaterThanOrEqual(result.consumedAtByKind.get('dish'));
+      expect(drinkClearedWhileDishUnfinished).toBe(true);
+    }
   });
 
   it('lets a newly purchased second cashier station process payment alongside the staffed starter station', () => {
