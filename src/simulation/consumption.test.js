@@ -131,6 +131,25 @@ it('falls back to gameTime when legacy item and customer start times are missing
   expect(result.serviceItems[0]).toMatchObject({ consumptionStartedAt: 100 });
 });
 
+it.each([
+  ['NaN item and Infinity customer starts', Number.NaN, Infinity],
+  ['Infinity item and non-number customer starts', Infinity, 'legacy-start'],
+  ['non-number item and missing customer start', 'legacy-start', undefined],
+])('falls back to gameTime for %s', (_label, itemStart, customerStart) => {
+  const customer = {
+    id: 'c1', state: 'eating',
+    ...(customerStart === undefined ? {} : { consumptionStartedAt: customerStart }),
+  };
+  const serviceItem = {
+    id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered',
+    consumptionStartedAt: itemStart,
+  };
+
+  const result = normaliseConsumptionState([customer], [serviceItem], 100);
+
+  expect(result.serviceItems[0]).toMatchObject({ consumptionStartedAt: 100 });
+});
+
 it('recognises dirty states and finite completion timestamps as consumed', () => {
   const result = normaliseConsumptionState(
     [{ id: 'c1', state: 'eating', orderedServiceItemIds: ['dirty', 'stamped', 'pending'] }],
@@ -177,7 +196,7 @@ it('returns null when no owned item has a valid consumption timer', () => {
     { id: 'c1', state: 'eating' },
     [
       { id: 'unknown', kind: 'unknown', customerId: 'c1', state: 'delivered', consumptionStartedAt: 0 },
-      { id: 'invalid', kind: 'drink', customerId: 'c1', state: 'delivered', consumptionStartedAt: Number.NaN },
+      { id: 'invalid', kind: 'drink', customerId: 'c1', state: 'ordered', consumptionStartedAt: Number.NaN },
     ],
     100,
   )).toBeNull();

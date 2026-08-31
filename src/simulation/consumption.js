@@ -62,11 +62,11 @@ export function normaliseConsumptionState(customers, serviceItems, gameTime) {
   const normalisedItems = itemList.map(item => {
     const owner = customerList.find(customer => customer.id === item.customerId);
     if (owner?.state !== 'eating' || !isPhysicalItem(item)
-      || item.consumptionStartedAt != null) return item;
+      || Number.isFinite(item.consumptionStartedAt)) return item;
 
-    const consumptionStartedAt = item.consumptionStartedAt
-      ?? owner.consumptionStartedAt
-      ?? gameTime;
+    const consumptionStartedAt = Number.isFinite(owner.consumptionStartedAt)
+      ? owner.consumptionStartedAt
+      : gameTime;
     return consumptionStartedAt == null
       ? item
       : { ...item, consumptionStartedAt };
