@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mergeMovementEntries, runTick } from './gameLoop';
 import { createInitialState } from '../state/initialState';
+import { hydrateState } from '../state/persistence';
 
 const emptyState = {
   restaurant: { funds: 500, gameTime: 100, day: 1, openHour: 10, closeHour: 22, totalServed: 0, reputation: 2.0 },
@@ -42,6 +43,72 @@ describe('runTick', () => {
     const state = { ...emptyState, speed: 2 };
     const result = runTick(state, { gameDt: 4, movementDt: 2 / 30 });
     expect(result.restaurant.gameTime).toBe(104);
+  });
+
+  it('completes hydrated legacy checkout items before an in-flight payment resolves', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      restaurant: {
+        ...fresh.restaurant,
+        gameTime: 100,
+        funds: 500,
+        dailyRevenue: 0,
+        totalServed: 0,
+      },
+      queue: [],
+      tables: [{ id: 't1', status: 'occupied', seats: 1, x: 400, y: 300 }],
+      chairs: [],
+      customers: [{
+        id: 'legacy-checkout', state: 'checkout_processing', paymentQueuedAt: 20,
+        cashierStationId: 'cashier1', paymentReady: false, x: 840, y: 180,
+        happiness: 80, dishId: 'starter-toast', drinkId: null, tableId: 't1', path: [],
+      }],
+      serviceItems: [{
+        id: 'legacy-dish', customerId: 'legacy-checkout', kind: 'dish',
+        menuItemId: 'starter-toast', tableId: 't1', state: 'delivered', consumptionStartedAt: 0,
+      }],
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
+      staff: [{
+        id: 'cashier', role: 'waiter', morale: 80, salary: 150, x: 840, y: 100,
+        path: [], carryingServiceItemId: null,
+        task: {
+          type: 'take_payment', customerId: 'legacy-checkout',
+          stationId: 'cashier1', startedAt: 41,
+        },
+      }],
+      completedCustomers: [],
+    };
+    const hydrated = hydrateState(saved, fresh);
+
+    expect(hydrated.customers[0]).toMatchObject({
+      state: 'checkout_processing', consumedServiceItemIds: [],
+    });
+    expect(hydrated.serviceItems[0]).toMatchObject({ state: 'delivered' });
+
+    const paid = runTick(hydrated, { gameDt: 1, movementDt: 0 });
+    expect(paid.customers[0]).toMatchObject({
+      state: 'leaving', consumedServiceItemIds: ['legacy-dish'],
+    });
+    expect(paid.serviceItems[0]).toMatchObject({
+      state: 'dirty_at_table', consumedAt: 101, dirtyAt: 101,
+    });
+    expect(paid.restaurant.totalServed).toBe(1);
+    expect(paid.restaurant.dailyRevenue).toBeGreaterThan(0);
+    expect(paid.restaurant.funds).toBeGreaterThan(500);
+    expect(paid.completedCustomers).toEqual([]);
+
+    const next = runTick(paid, { gameDt: 0, movementDt: 0 });
+    expect(next.restaurant).toMatchObject({
+      totalServed: 1,
+      dailyRevenue: paid.restaurant.dailyRevenue,
+      funds: paid.restaurant.funds,
+    });
+    expect(next.serviceItems[0]).toMatchObject({
+      state: 'dirty_at_table', consumedAt: 101, dirtyAt: 101,
+    });
   });
 
   it('resolves customer and staff movement from one tick snapshot', () => {

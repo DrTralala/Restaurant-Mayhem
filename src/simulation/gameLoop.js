@@ -16,6 +16,7 @@ import { processKitchen } from './kitchen';
 import { updateAutomaticDishwashers } from './dishwashing';
 import { calculateRevenue } from './revenue';
 import { checkMilestones } from './milestones';
+import { advanceConsumption } from './consumption';
 
 /**
  * Combine customer- and staff-phase movement descriptors into one batch.
@@ -62,6 +63,7 @@ export function runTick(state, timing) {
   s = spawnCustomers(s, gameDt);
   s = prepareCustomersForMovement(s, gameDt);
   s = updateDirt(s, gameDt);
+  s = advanceConsumption(s);
   s = prepareStaffForMovement(s, gameDt);
 
   const entries = mergeMovementEntries(

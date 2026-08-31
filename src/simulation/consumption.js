@@ -56,6 +56,25 @@ function uniqueIds(ids) {
   return [...new Set(ids)];
 }
 
+function getLegacyPhysicalIds(customer, items) {
+  const expectedKinds = [
+    customer.dishId ? 'dish' : null,
+    customer.drinkId ? 'drink' : null,
+  ].filter(Boolean);
+  if (expectedKinds.length < 2) return items.map(item => item.id);
+
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftKind = expectedKinds.indexOf(left.item.kind);
+      const rightKind = expectedKinds.indexOf(right.item.kind);
+      const leftRank = leftKind === -1 ? expectedKinds.length : leftKind;
+      const rightRank = rightKind === -1 ? expectedKinds.length : rightKind;
+      return leftRank - rightRank || left.index - right.index;
+    })
+    .map(({ item }) => item.id);
+}
+
 export function normaliseConsumptionState(customers, serviceItems, gameTime) {
   const customerList = customers || [];
   const itemList = serviceItems || [];
@@ -76,12 +95,13 @@ export function normaliseConsumptionState(customers, serviceItems, gameTime) {
     if (customer.state !== 'eating' && !isCheckoutState(customer)) return customer;
 
     const ownedItems = normalisedItems.filter(item => item.customerId === customer.id);
-    const physicalIds = ownedItems
-      .filter(isPhysicalItem)
-      .map(item => item.id);
+    const physicalItems = ownedItems.filter(isPhysicalItem);
     const existingOrderedIds = Array.isArray(customer.orderedServiceItemIds)
       ? customer.orderedServiceItemIds
       : [];
+    const physicalIds = existingOrderedIds.length > 0
+      ? physicalItems.map(item => item.id)
+      : getLegacyPhysicalIds(customer, physicalItems);
     const orderedServiceItemIds = uniqueIds([...existingOrderedIds, ...physicalIds]);
     const orderedIds = new Set(orderedServiceItemIds);
     const existingConsumedIds = Array.isArray(customer.consumedServiceItemIds)

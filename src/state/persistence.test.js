@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { saveState, loadState, hydrateState } from './persistence';
 import { createInitialState } from './initialState';
 import { processKitchen } from '../simulation/kitchen';
+import { runTick } from '../simulation/gameLoop';
 
 beforeEach(() => {
   localStorage.clear();
@@ -80,6 +81,48 @@ describe('hydrateState', () => {
       consumedServiceItemIds: ['dish'],
     });
     expect(advanced.serviceItems[0].state).toBe('dirty_at_table');
+  });
+
+  it('canonicalises reversed legacy combined-order IDs before the next normal tick', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 100 },
+      queue: [],
+      staff: [],
+      cashierStations: [],
+      customers: [{
+        id: 'c1', state: 'eating', dishId: 'toast', drinkId: 'water',
+        consumptionStartedAt: 100, x: 400, y: 300, path: [],
+      }],
+      serviceItems: [
+        {
+          id: 'drink', customerId: 'c1', kind: 'drink', menuItemId: 'water',
+          state: 'delivered',
+        },
+        {
+          id: 'dish', customerId: 'c1', kind: 'dish', menuItemId: 'toast',
+          state: 'delivered',
+        },
+      ],
+    };
+
+    const hydrated = hydrateState(saved, fresh);
+    expect(hydrated.customers[0]).toMatchObject({
+      state: 'eating',
+      orderedServiceItemIds: ['dish', 'drink'],
+      consumedServiceItemIds: [],
+    });
+    expect(hydrated.serviceItems.map(item => item.id)).toEqual(['drink', 'dish']);
+
+    const ticked = runTick(hydrated, { gameDt: 0, movementDt: 0 });
+    expect(ticked.customers[0]).toMatchObject({
+      state: 'eating',
+      dishId: 'toast',
+      drinkId: 'water',
+      orderedServiceItemIds: ['dish', 'drink'],
+    });
+    expect(ticked.serviceItems.map(item => item.id)).toEqual(['drink', 'dish']);
   });
 
   it('hydrates missing, malformed, and legacy operating hours safely', () => {
