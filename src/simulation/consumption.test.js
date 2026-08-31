@@ -102,19 +102,33 @@ it('derives legacy ordered IDs and preserves per-item and customer start times',
     id: 'c1', state: 'eating', consumptionStartedAt: 40,
   }];
   const serviceItems = [
-    { id: 'drink', kind: 'drink', customerId: 'c1', state: 'dirty_at_table' },
+    { id: 'drink', kind: 'drink', customerId: 'c1', state: 'delivered', consumptionStartedAt: 12 },
     { id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered' },
+    { id: 'dirty', kind: 'drink', customerId: 'c1', state: 'dirty_at_table' },
     { id: 'other', kind: 'dish', customerId: 'other', state: 'delivered' },
   ];
 
   const result = normaliseConsumptionState(customers, serviceItems, 100);
 
   expect(result.customers[0]).toMatchObject({
-    orderedServiceItemIds: ['drink', 'dish'], consumedServiceItemIds: ['drink'],
+    orderedServiceItemIds: ['drink', 'dish', 'dirty'], consumedServiceItemIds: ['dirty'],
+  });
+  expect(result.serviceItems.find(item => item.id === 'drink')).toMatchObject({
+    consumptionStartedAt: 12,
   });
   expect(result.serviceItems.find(item => item.id === 'dish')).toMatchObject({
     consumptionStartedAt: 40,
   });
+});
+
+it('falls back to gameTime when legacy item and customer start times are missing', () => {
+  const result = normaliseConsumptionState(
+    [{ id: 'c1', state: 'eating' }],
+    [{ id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered' }],
+    100,
+  );
+
+  expect(result.serviceItems[0]).toMatchObject({ consumptionStartedAt: 100 });
 });
 
 it('recognises dirty states and finite completion timestamps as consumed', () => {
@@ -190,22 +204,27 @@ it('does not mutate inputs or their arrays across consumption operations', () =>
   const serviceItems = [
     { id: 'dish', kind: 'dish', customerId: 'c1', state: 'delivered' },
   ];
-  const originalCustomer = { ...customer };
-  const originalServiceItems = serviceItems.map(item => ({ ...item }));
+  const originalCustomer = structuredClone(customer);
+  const originalServiceItems = structuredClone(serviceItems);
 
   const started = startCustomerConsumption(customer, serviceItems, 0);
   const customers = [started.customer];
-  const originalStartedItems = started.serviceItems.map(item => ({ ...item }));
+  const beforeAdvanceCustomers = structuredClone(customers);
+  const beforeAdvanceItems = structuredClone(started.serviceItems);
   const advanced = advanceConsumption({
     customers, serviceItems: started.serviceItems,
     restaurant: { gameTime: 480 },
   });
+  const beforeRemainingCustomer = structuredClone(started.customer);
+  const beforeRemainingItems = structuredClone(started.serviceItems);
   getCustomerConsumptionRemainingFraction(started.customer, started.serviceItems, 1);
 
   expect(customer).toEqual(originalCustomer);
   expect(serviceItems).toEqual(originalServiceItems);
-  expect(customers).toEqual([started.customer]);
-  expect(started.serviceItems).toEqual(originalStartedItems);
+  expect(customers).toEqual(beforeAdvanceCustomers);
+  expect(started.serviceItems).toEqual(beforeAdvanceItems);
+  expect(started.customer).toEqual(beforeRemainingCustomer);
+  expect(started.serviceItems).toEqual(beforeRemainingItems);
   expect(started.serviceItems).not.toBe(serviceItems);
   expect(advanced.customers).not.toBe(customers);
   expect(advanced.serviceItems).not.toBe(started.serviceItems);
