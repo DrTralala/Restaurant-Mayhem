@@ -10,6 +10,13 @@ import { getDoorPosition, getRestaurantWorld } from './world';
 
 const QUEUE_ADMISSION_SPACING = 16;
 
+function sameOrderedIds(left, right) {
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((id, index) => id === right[index]);
+}
+
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
   return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
 }
@@ -112,20 +119,30 @@ export function getQueueAdmissionGateStatus(state) {
 
   const gateMemberIds = new Set(gate.customerIds || []);
   const gateMembers = (state.customers || []).filter(customer => gateMemberIds.has(customer.id));
+  const materialisedPartyMembers = (state.customers || [])
+    .filter(customer => customer.partyId === gate.partyId);
   const world = getRestaurantWorld(state.restaurant || {});
   const clear = gateMembers.length === 0
     || gateMembers.every(customer => Number.isFinite(customer.x)
       && customer.x <= world.doorX - world.gridSize);
   const guide = (state.staff || []).find(worker => worker.id === gate.guideStaffId);
-  const taskIds = new Set(guide?.task?.customerIds || (guide?.task?.customerId ? [guide.task.customerId] : []));
   const matchingGuideTask = guide?.task?.type === 'guide_customer'
+    && guide.task.partyId === gate.partyId
     && guide.task.tableId === gate.tableId
-    && gateMemberIds.size > 0
-    && [...gateMemberIds].every(id => taskIds.has(id));
+    && guide.task.customerId === gate.customerIds?.[0]
+    && sameOrderedIds(guide.task.customerIds, gate.customerIds);
   const ownedReservation = (state.tables || []).some(table => table.id === gate.tableId
     && table.status === 'reserved'
     && table.reservationOwnerStaffId === gate.guideStaffId);
-  const stale = gateMembers.length > 0 && (!matchingGuideTask || !ownedReservation);
+  const matchingMemberOwnership = gateMemberIds.size === gate.customerIds?.length
+    && gateMembers.length === gate.customerIds.length
+    && materialisedPartyMembers.length === gate.customerIds.length
+    && gateMembers.every(customer => customer.partyId === gate.partyId
+      && customer.guideStaffId === gate.guideStaffId
+      && customer.tableId === gate.tableId)
+    && materialisedPartyMembers.every(customer => gateMemberIds.has(customer.id));
+  const stale = gateMembers.length > 0
+    && (!matchingGuideTask || !ownedReservation || !matchingMemberOwnership);
 
   return { occupied: true, clear, stale, gateMembers };
 }

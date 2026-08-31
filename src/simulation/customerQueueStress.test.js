@@ -22,8 +22,19 @@ describe('party customer queue stress', () => {
     expect(result.gateOwnerPartyIds).toEqual(result.completedPartyIds);
     expect(result.queuedMemberMovementEntries).toBe(0);
     expect(result.arrivalsResumed).toBe(true);
+    expect(result.replacementPartyIds).toHaveLength(8);
+    expect(new Set(result.replacementPartyIds).size).toBe(8);
     expect(result.minimumSpacing).toBeGreaterThanOrEqual(16 - 1e-6);
     expect(result.allCoordinatesFinite).toBe(true);
+  });
+
+  it('replenishes every completed cycle and subsequently admits a replacement party', () => {
+    const result = runCustomerQueueStressScenario({ cycles: 9, movementDt: 0.1 });
+
+    expect(result.completedPartyIds).toHaveLength(9);
+    expect(result.replacementPartyIds).toHaveLength(9);
+    expect(result.completedPartyIds).toContain(result.replacementPartyIds[0]);
+    expect(result.completedPartyIds[8]).toBe('stress-party-09');
   });
 
   it('counts an owner party only after validating the exact four-field gate shape', () => {

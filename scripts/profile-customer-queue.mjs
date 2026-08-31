@@ -54,6 +54,8 @@ try {
     && JSON.stringify(representative.gateOwnerPartyIds)
       === JSON.stringify(representative.completedPartyIds)
     && representative.arrivalsResumed === true
+    && representative.replacementPartyIds.length === CYCLES
+    && new Set(representative.replacementPartyIds).size === CYCLES
     && representative.minimumSpacing >= 16 - 1e-6
     && representative.allCoordinatesFinite === true;
   if (!accepted) {
@@ -70,6 +72,8 @@ try {
     maximumMovementActors: representative.maximumMovementActors,
     minimumSpacing: representative.minimumSpacing,
     arrivalsResumed: representative.arrivalsResumed,
+    replacementParties: representative.replacementPartyIds.length,
+    replacementPartyIds: representative.replacementPartyIds,
     medianTickMilliseconds: median(allTickMilliseconds),
     p95TickMilliseconds: percentile(allTickMilliseconds, 0.95),
     maximumTickMilliseconds: Math.max(...allTickMilliseconds),

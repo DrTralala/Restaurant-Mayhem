@@ -170,9 +170,13 @@ function leavingFields(customer) {
 function hasMatchingQueueAdmissionTask(worker, gate) {
   if (worker.id !== gate.guideStaffId
     || worker.task?.type !== 'guide_customer'
-    || worker.task.tableId !== gate.tableId) return false;
-  const taskIds = new Set(taskCustomerIds(worker.task));
-  return (gate.customerIds || []).every(id => taskIds.has(id));
+    || worker.task.partyId !== gate.partyId
+    || worker.task.tableId !== gate.tableId
+    || worker.task.customerId !== gate.customerIds?.[0]) return false;
+  const taskIds = taskCustomerIds(worker.task);
+  return Array.isArray(gate.customerIds)
+    && taskIds.length === gate.customerIds.length
+    && taskIds.every((id, index) => id === gate.customerIds[index]);
 }
 
 function cancelGuideTask({ staff, customers, queue, tables, serviceItems }) {

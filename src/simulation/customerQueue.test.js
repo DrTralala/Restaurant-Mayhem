@@ -7,6 +7,9 @@ import {
   findOldestCompatibleQueueParty,
   normaliseCustomerQueue,
 } from './customerQueue';
+import { getRestaurantWorld } from './world';
+
+const CHARACTER_FOOTPRINT = Object.freeze({ left: 9, right: 9, top: 4, bottom: 22 });
 
 describe('customer queue party records', () => {
   it('groups legacy members by first-seen party order and is idempotent', () => {
@@ -40,11 +43,28 @@ describe('customer queue party records', () => {
     expect(queue.map(party => party.partyId)).toEqual(['large', 'solo']);
   });
 
-  it('keeps every supported party footprint disjoint and inside the queue area', () => {
+  it.each([1, 2, 3, 4])('keeps size-%i party footprints disjoint and inside the queue area', partySize => {
     const state = { restaurant: { expansionLevel: 1 } };
+    const world = getRestaurantWorld(state.restaurant);
     const projections = Array.from({ length: 8 }, (_, partyIndex) =>
-      Array.from({ length: 4 }, (_, memberIndex) =>
-        getQueuePartyMemberPosition(state, partyIndex, memberIndex, 4)));
+      Array.from({ length: partySize }, (_, memberIndex) =>
+        getQueuePartyMemberPosition(state, partyIndex, memberIndex, partySize)));
+    for (const party of projections) {
+      for (const member of party) {
+        expect(member.x - CHARACTER_FOOTPRINT.left).toBeGreaterThanOrEqual(world.queueX);
+        expect(member.x + CHARACTER_FOOTPRINT.right).toBeLessThanOrEqual(world.queueX + world.queueW);
+        expect(member.y - CHARACTER_FOOTPRINT.top).toBeGreaterThanOrEqual(world.queueY);
+        expect(member.y + CHARACTER_FOOTPRINT.bottom).toBeLessThanOrEqual(world.queueY + world.queueH);
+      }
+      for (let left = 0; left < party.length; left += 1) {
+        for (let right = left + 1; right < party.length; right += 1) {
+          expect(Math.hypot(
+            party[left].x - party[right].x,
+            party[left].y - party[right].y,
+          )).toBeGreaterThanOrEqual(16);
+        }
+      }
+    }
     for (let left = 0; left < projections.length; left += 1) {
       for (let right = left + 1; right < projections.length; right += 1) {
         expect(Math.min(...projections[left].flatMap(a =>

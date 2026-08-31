@@ -190,6 +190,46 @@ describe('hydrateState', () => {
     expect(hydrateState(hydrated, fresh)).toEqual(hydrated);
   });
 
+  it('hydrates a consistent active gate and reservation twice without changing their identity', () => {
+    const fresh = createInitialState();
+    const gate = {
+      partyId: 'party-a',
+      customerIds: ['customer-a'],
+      guideStaffId: 'guide-a',
+      tableId: 't1',
+    };
+    const saved = {
+      ...fresh,
+      queueAdmissionGate: gate,
+      customers: [{
+        id: 'customer-a', partyId: 'party-a', state: 'guided',
+        guideStaffId: 'guide-a', tableId: 't1', x: 1000, y: 360,
+      }],
+      staff: [{
+        id: 'guide-a', role: 'waiter',
+        task: {
+          type: 'guide_customer', customerId: 'customer-a', customerIds: ['customer-a'],
+          partyId: 'party-a', tableId: 't1',
+        },
+      }],
+      tables: fresh.tables.map(table => table.id === 't1'
+        ? { ...table, status: 'reserved', reservationOwnerStaffId: 'guide-a' }
+        : table),
+    };
+
+    const once = hydrateState(saved, fresh);
+    const twice = hydrateState(once, fresh);
+    const onceReservation = once.tables.find(table => table.id === gate.tableId);
+    const twiceReservation = twice.tables.find(table => table.id === gate.tableId);
+
+    expect(once.queueAdmissionGate).toEqual(gate);
+    expect(twice.queueAdmissionGate).toEqual(gate);
+    expect(twiceReservation).toEqual(onceReservation);
+    expect(twiceReservation).toMatchObject({
+      id: 't1', status: 'reserved', reservationOwnerStaffId: 'guide-a',
+    });
+  });
+
   it('normalises equipment multipliers from saved levels', () => {
     const fresh = {
       version: 4,

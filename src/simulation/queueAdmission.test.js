@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as pathfinding from './pathfinding';
 import { cellToWorld } from './pathfinding';
 import { getQueueAdmissionGateStatus, planQueuePartyAdmission } from './queueAdmission';
 import { getRestaurantWorld } from './world';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function buildAdmissionState() {
   return {
@@ -52,6 +57,7 @@ function buildGuidedGateState() {
       task: {
         type: 'guide_customer',
         partyId: 'p1',
+        customerId: 'q1',
         customerIds: ['q1', 'q2'],
         tableId: 't1',
       },
@@ -113,6 +119,26 @@ describe('queue admission', () => {
     expect(JSON.stringify(state)).toBe(before);
   });
 
+  it('rolls back when a later member route fails after an earlier member was staged', () => {
+    const state = buildAdmissionState();
+    const snapshot = structuredClone(state);
+    const route = vi.spyOn(pathfinding, 'findPathWithDynamicFallback')
+      .mockReturnValueOnce({ path: [{ x: 49, y: 18 }], usedStaticFallback: false })
+      .mockReturnValueOnce({ path: [], usedStaticFallback: false });
+
+    const planned = planQueuePartyAdmission(state, {
+      party: state.queue[0],
+      door: state.doors[0],
+      guide: state.staff[0],
+      guidePath: [{ x: 20, y: 10 }],
+      tableId: 't1',
+    });
+
+    expect(route).toHaveBeenCalledTimes(2);
+    expect(planned).toBeNull();
+    expect(state).toEqual(snapshot);
+  });
+
   it('does not treat logical waiting projections as admission occupancy', () => {
     const state = buildAdmissionState();
     state.queue.push({
@@ -142,5 +168,38 @@ describe('queue admission', () => {
     };
     expect(getQueueAdmissionGateStatus(inside).clear).toBe(true);
     expect(getQueueAdmissionGateStatus({ ...state, staff: [] }).stale).toBe(true);
+  });
+
+  it.each([
+    ['a different task party', state => {
+      state.staff[0].task.partyId = 'other-party';
+    }],
+    ['a task customer-ID superset', state => {
+      state.staff[0].task.customerIds.push('other-customer');
+    }],
+    ['reordered task customer IDs', state => {
+      state.staff[0].task.customerIds.reverse();
+    }],
+    ['a missing materialised gate member', state => {
+      state.customers.pop();
+    }],
+    ['a member owned by a different party', state => {
+      state.customers[0].partyId = 'other-party';
+    }],
+    ['a member owned by a different guide', state => {
+      state.customers[0].guideStaffId = 'other-guide';
+    }],
+    ['a member owned by a different table', state => {
+      state.customers[0].tableId = 'other-table';
+    }],
+  ])('marks an occupied gate stale for %s', (_label, mutate) => {
+    const state = buildGuidedGateState();
+    mutate(state);
+
+    expect(getQueueAdmissionGateStatus(state)).toMatchObject({
+      occupied: true,
+      clear: false,
+      stale: true,
+    });
   });
 });

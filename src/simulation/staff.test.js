@@ -1345,6 +1345,34 @@ describe('updateStaff', () => {
     expect(cleared.queueAdmissionGate).toBeNull();
   });
 
+  it.each([
+    ['a different task party', admitted => ({
+      ...admitted,
+      staff: admitted.staff.map(worker => worker.id === 'w1'
+        ? { ...worker, task: { ...worker.task, partyId: 'other-party' } }
+        : worker),
+    })],
+    ['a task customer-ID superset', admitted => ({
+      ...admitted,
+      staff: admitted.staff.map(worker => worker.id === 'w1'
+        ? { ...worker, task: { ...worker.task, customerIds: [...worker.task.customerIds, 'other'] } }
+        : worker),
+    })],
+    ['different materialised-member ownership', admitted => ({
+      ...admitted,
+      customers: admitted.customers.map(customer => ({ ...customer, guideStaffId: 'other-guide' })),
+    })],
+  ])('recovers an occupied malformed gate with %s', (_label, malformedState) => {
+    const admitted = updateStaff(queuedAdmissionState(), 0);
+    const recovered = prepareStaffForMovement(malformedState(admitted), 0);
+
+    expect(recovered.queueAdmissionGate).toEqual(admitted.queueAdmissionGate);
+    expect(recovered.customers[0]).toMatchObject({
+      id: 'q1', state: 'leaving', tableId: null, guideStaffId: null, chairId: null,
+    });
+    expect(recovered.tables.find(table => table.id === 't1').status).toBe('empty');
+  });
+
   it('clears an inside stale gate without sending safely admitted members away', () => {
     const admitted = updateStaff(queuedAdmissionState(), 0);
     const inside = {

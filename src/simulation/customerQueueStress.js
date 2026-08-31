@@ -201,6 +201,7 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
 
   let state = buildCustomerQueueStressState();
   const completedPartyIds = [];
+  const replacementPartyIds = [];
   const movementEntryIds = [];
   let nextPartyIndex = INITIAL_PARTIES + 1;
   let ticks = 0;
@@ -210,7 +211,6 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
   let maximumMovementActors = 0;
   let minimumSpacing = Infinity;
   let allCoordinatesFinite = true;
-  let arrivalsResumed = false;
   const gateOwnerPartyIds = new Set();
   const tickMilliseconds = [];
 
@@ -287,9 +287,10 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
       completedPartyIds.push(completedParty.partyId);
       state = resetAfterCompletion(state, completedParty.partyId);
       if (state.queue.length < INITIAL_PARTIES) {
-        state = { ...state, queue: [...state.queue, buildParty(nextPartyIndex)] };
+        const replacement = buildParty(nextPartyIndex);
+        state = { ...state, queue: [...state.queue, replacement] };
+        replacementPartyIds.push(replacement.partyId);
         nextPartyIndex += 1;
-        arrivalsResumed = true;
       }
       ticksForCurrentParty = 0;
     }
@@ -314,7 +315,8 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
     gateOwnerPartyIds: [...gateOwnerPartyIds],
     maximumMovementActors,
     minimumSpacing,
-    arrivalsResumed,
+    arrivalsResumed: replacementPartyIds.length > 0,
+    replacementPartyIds,
     allCoordinatesFinite,
     movementEntryIds,
     tickMilliseconds,
