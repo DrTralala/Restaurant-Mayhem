@@ -108,7 +108,7 @@ describe('processKitchen', () => {
     expect(result.serviceItems).toEqual([item]);
   });
 
-  it('completes a preparing dish using equipment and global speed effects', () => {
+  it('finishes preparation at the kitchen station without teleporting the dish', () => {
     const state = {
       ...baseState,
       restaurant: { gameTime: 91 },
@@ -122,14 +122,20 @@ describe('processKitchen', () => {
       equipment: [{ id: 'eq1', speedMultiplier: 1.2, qualityBonus: 0, owned: true }],
       upgrades: [{ level: 1, effects: { type: 'globalSpeed', value: 0.1 } }],
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
-      staff: [{ id: 'cook1', role: 'cook' }],
+      staff: [{
+        id: 'cook1', role: 'cook', path: [],
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
+      }],
     };
 
     const result = processKitchen(state);
 
     expect(result.serviceItems[0]).toMatchObject({
-      state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0, x: 150, y: 130,
-      readyAt: 91, assignedStaffId: null,
+      state: 'ready', serviceTableId: null, serviceSlotIndex: null, x: 120, y: 140,
+      readyAt: 91, assignedStaffId: 'cook1', stationId: 'k1',
+    });
+    expect(result.staff[0].task).toEqual({
+      type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
     });
   });
 
@@ -162,7 +168,7 @@ describe('processKitchen', () => {
     expect(result.serviceItems).toEqual(items);
   });
 
-  it('places ready dishes by ready time then ID order', () => {
+  it('does not automatically transfer ready dishes to service-counter slots', () => {
     const result = processKitchen({
       ...baseState,
       serviceItems: [
@@ -172,12 +178,14 @@ describe('processKitchen', () => {
       ],
     });
 
-    expect(result.serviceItems.find(item => item.id === 'a').serviceSlotIndex).toBe(0);
-    expect(result.serviceItems.find(item => item.id === 'b').serviceSlotIndex).toBe(1);
-    expect(result.serviceItems.find(item => item.id === 'later').serviceSlotIndex).toBe(2);
+    expect(result.serviceItems).toEqual([
+      { id: 'later', kind: 'dish', customerId: 'c1', state: 'ready', readyAt: 20 },
+      { id: 'b', kind: 'dish', customerId: 'c1', state: 'ready', readyAt: 10 },
+      { id: 'a', kind: 'dish', customerId: 'c1', state: 'ready', readyAt: 10 },
+    ]);
   });
 
-  it('uses a second counter when the first has four shared occupied slots', () => {
+  it('leaves a ready dish for its cook even when another counter has space', () => {
     const customers = Array.from({ length: 5 }, (_, index) => ({
       id: `c${index + 1}`, state: 'waiting_for_items',
     }));
@@ -198,8 +206,8 @@ describe('processKitchen', () => {
       ],
     });
 
-    expect(result.serviceItems.find(item => item.id === 'ready')).toMatchObject({
-      state: 'on_service', serviceTableId: 'st2', serviceSlotIndex: 0, x: 410, y: 130,
+    expect(result.serviceItems.find(item => item.id === 'ready')).toEqual({
+      id: 'ready', kind: 'dish', customerId: 'c1', state: 'ready', readyAt: 60,
     });
   });
 

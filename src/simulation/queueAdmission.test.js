@@ -89,6 +89,32 @@ describe('queue admission', () => {
     expect(state).toEqual(snapshot);
   });
 
+  it('preserves queue patience and resets service patience when admission starts', () => {
+    const state = buildAdmissionState();
+    state.queue[0].members = state.queue[0].members.map(customer => ({
+      ...customer,
+      patience: 20,
+      patienceMax: 100,
+      queuePatience: 40,
+      queuePatienceMax: 100,
+    }));
+
+    const planned = planQueuePartyAdmission(state, {
+      party: state.queue[0],
+      door: state.doors[0],
+      guide: state.staff[0],
+      guidePath: [{ x: 20, y: 10 }],
+      tableId: 't1',
+    });
+
+    expect(planned.admittedCustomers[0]).toMatchObject({
+      patience: 100,
+      patienceMax: 100,
+      queuePatience: 40,
+      queuePatienceMax: 100,
+    });
+  });
+
   it('returns null without changing input when every admission cell is occupied', () => {
     const state = buildAdmissionState();
     const world = getRestaurantWorld(state.restaurant);

@@ -20,6 +20,7 @@ const state = {
     id: 'register', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
   }],
 };
+const baseState = state;
 
 describe('checkout state', () => {
   it('enters queued checkout once and preserves order and position data', () => {
@@ -109,6 +110,130 @@ describe('checkout state', () => {
 
     expect(result[0]).toMatchObject({
       state: 'checkout_queued', cashierStationId: null, paymentQueuedAt: 10,
+    });
+  });
+
+  it('reserves slot zero for a valid processing customer', () => {
+    const processing = {
+      id: 'processing', state: 'checkout_processing', paymentQueuedAt: 10,
+      cashierStationId: 'register', checkoutPosition: { x: 840, y: 180 },
+      paymentReady: false, x: 840, y: 180, path: [],
+    };
+    const moving = {
+      id: 'moving', state: 'checkout_moving', paymentQueuedAt: 20,
+      cashierStationId: 'register', checkoutPosition: null,
+      paymentReady: false, x: 840, y: 200, path: [],
+    };
+    const state = {
+      ...baseState,
+      staff: [{
+        ...baseState.staff[0],
+        task: { type: 'take_payment', customerId: 'processing', stationId: 'register', startedAt: 90 },
+      }],
+      customers: [processing, moving],
+    };
+
+    const result = prepareCheckoutCustomers(state, state.customers);
+
+    expect(result[0]).toEqual(processing);
+    expect(result[1]).toMatchObject({
+      state: 'checkout_moving', checkoutPosition: { x: 840, y: 200 },
+      paymentReady: false, path: [],
+    });
+  });
+
+  it('keeps FIFO movers behind a processing customer', () => {
+    const processing = {
+      id: 'processing', state: 'checkout_processing', paymentQueuedAt: 1,
+      cashierStationId: 'register', checkoutPosition: { x: 840, y: 180 },
+      paymentReady: false, x: 840, y: 180, path: [],
+    };
+    const laterById = {
+      id: 'z-mover', state: 'checkout_moving', paymentQueuedAt: 20,
+      cashierStationId: 'register', paymentReady: false, x: 840, y: 220, path: [],
+    };
+    const earlierById = {
+      id: 'a-mover', state: 'checkout_moving', paymentQueuedAt: 20,
+      cashierStationId: 'register', paymentReady: false, x: 840, y: 200, path: [],
+    };
+    const state = {
+      ...baseState,
+      staff: [{
+        ...baseState.staff[0],
+        task: { type: 'take_payment', customerId: 'processing', stationId: 'register', startedAt: 90 },
+      }],
+      customers: [processing, laterById, earlierById],
+    };
+
+    const result = prepareCheckoutCustomers(state, state.customers);
+
+    expect(result.map(customer => customer.id)).toEqual(['processing', 'z-mover', 'a-mover']);
+    expect(result.find(customer => customer.id === 'a-mover')).toMatchObject({
+      checkoutPosition: { x: 840, y: 200 }, paymentReady: false,
+    });
+    expect(result.find(customer => customer.id === 'z-mover')).toMatchObject({
+      checkoutPosition: { x: 840, y: 220 }, paymentReady: false,
+    });
+  });
+
+  it('counts a processor when assigning the shortest staffed queue', () => {
+    const stations = [
+      { id: 'register', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier' },
+      { id: 'register-2', x: 600, y: 120, w: 80, h: 40, assignedStaffId: 'cashier-2' },
+    ];
+    const processing = {
+      id: 'processing', state: 'checkout_processing', paymentQueuedAt: 1,
+      cashierStationId: 'register', checkoutPosition: { x: 840, y: 180 },
+      paymentReady: false, x: 840, y: 180, path: [],
+    };
+    const queued = {
+      id: 'queued', state: 'checkout_queued', paymentQueuedAt: 2,
+      cashierStationId: null, checkoutPosition: null, paymentReady: false,
+      x: 500, y: 200, path: [],
+    };
+    const state = {
+      ...baseState,
+      cashierStations: stations,
+      staff: [
+        {
+          id: 'cashier', role: 'waiter', x: 840, y: 100,
+          task: { type: 'take_payment', customerId: 'processing', stationId: 'register', startedAt: 90 },
+        },
+        { id: 'cashier-2', role: 'waiter', x: 640, y: 100, task: null },
+      ],
+      customers: [processing, queued],
+    };
+
+    const result = prepareCheckoutCustomers(state, state.customers);
+
+    expect(result[1]).toMatchObject({
+      state: 'checkout_moving', cashierStationId: 'register-2',
+      checkoutPosition: { x: 640, y: 180 },
+    });
+  });
+
+  it('does not reserve slot zero for a stale processing customer', () => {
+    const stale = {
+      id: 'stale', state: 'checkout_processing', paymentQueuedAt: 1,
+      cashierStationId: 'register', checkoutPosition: { x: 840, y: 180 },
+      paymentReady: false, x: 840, y: 180, path: [],
+    };
+    const moving = {
+      id: 'moving', state: 'checkout_moving', paymentQueuedAt: 2,
+      cashierStationId: 'register', paymentReady: false,
+      x: 840, y: 180, path: [],
+    };
+    const state = { ...baseState, customers: [stale, moving] };
+
+    const result = prepareCheckoutCustomers(state, state.customers);
+
+    expect(result[0]).toMatchObject({
+      state: 'checkout_queued', cashierStationId: null, checkoutPosition: null,
+      paymentReady: false,
+    });
+    expect(result[1]).toMatchObject({
+      state: 'checkout_moving', checkoutPosition: { x: 840, y: 180 },
+      paymentReady: true,
     });
   });
 });

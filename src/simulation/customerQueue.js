@@ -1,16 +1,10 @@
 import { getRestaurantWorld } from './world';
 
 export const QUEUE_PARTY_CAPACITY = 8;
-const SLOT_STEP = 70;
-const MEMBER_OFFSETS = Object.freeze({
-  1: [{ x: 0, y: 0 }],
-  2: [{ x: -14, y: 0 }, { x: 14, y: 0 }],
-  3: [{ x: -14, y: -15 }, { x: 14, y: -15 }, { x: 0, y: 15 }],
-  4: [
-    { x: -14, y: -15 }, { x: 14, y: -15 },
-    { x: -14, y: 15 }, { x: 14, y: 15 },
-  ],
-});
+const MEMBER_STEP = 30;
+const FIRST_MEMBER_DOOR_OFFSET = 50;
+const BOTTOM_LABEL_OFFSET = 10;
+const BOTTOM_MEMBER_CLEARANCE = 40;
 
 export function normaliseCustomerQueue(queue = []) {
   const parties = [];
@@ -46,38 +40,41 @@ export function findOldestCompatibleQueueParty(queue, canSeatParty) {
   return normaliseCustomerQueue(queue).find(party => canSeatParty(party)) || null;
 }
 
-function getQueueSlotAnchors(state) {
+function getQueueGeometry(state) {
   const world = getRestaurantWorld(state.restaurant || {});
-  const doorReference = { x: world.queueX + 25, y: world.doorY + 20 };
-  return Array.from({ length: QUEUE_PARTY_CAPACITY }, (_, index) => ({
-    x: world.queueX + 25,
-    y: world.queueY + 30 + index * SLOT_STEP,
-  })).sort((left, right) =>
-    Math.hypot(left.x - doorReference.x, left.y - doorReference.y)
-      - Math.hypot(right.x - doorReference.x, right.y - doorReference.y)
-    || left.y - right.y);
-}
-
-export function getQueuePartyMemberPosition(state, partyIndex, memberIndex, partySize) {
-  const anchor = getQueueSlotAnchors(state)[partyIndex];
-  const offsets = MEMBER_OFFSETS[partySize];
-  if (!anchor || !offsets || !offsets[memberIndex]) return { x: NaN, y: NaN };
+  const firstY = world.doorY + FIRST_MEMBER_DOOR_OFFSET;
+  const lastVisibleY = world.queueY + world.queueH - BOTTOM_MEMBER_CLEARANCE;
   return {
-    x: anchor.x + offsets[memberIndex].x,
-    y: anchor.y + offsets[memberIndex].y,
+    world,
+    x: world.queueX + world.queueW / 2,
+    firstY,
+    lastVisibleY,
+    visibleCapacity: Math.max(0, Math.floor((lastVisibleY - firstY) / MEMBER_STEP) + 1),
   };
 }
 
 export function getQueueProjectedMembers(state, queue) {
+  const geometry = getQueueGeometry(state);
   return normaliseCustomerQueue(queue)
-    .slice(0, QUEUE_PARTY_CAPACITY)
-    .flatMap((party, partyIndex) => party.members.map((member, memberIndex) => ({
+    .flatMap(party => party.members)
+    .map((member, index) => ({
       ...member,
-      ...getQueuePartyMemberPosition(
-        state,
-        partyIndex,
-        memberIndex,
-        party.members.length,
-      ),
-    })));
+      x: geometry.x,
+      y: index < geometry.visibleCapacity
+        ? geometry.firstY + index * MEMBER_STEP
+        : geometry.world.queueY + geometry.world.queueH - 22,
+    }));
+}
+
+export function getQueueDisplayLayout(state, queue) {
+  const geometry = getQueueGeometry(state);
+  const projected = getQueueProjectedMembers(state, queue);
+  return {
+    visibleMembers: projected.slice(0, geometry.visibleCapacity),
+    hiddenCount: Math.max(0, projected.length - geometry.visibleCapacity),
+    overflowLabelPosition: {
+      x: geometry.x,
+      y: geometry.world.queueY + geometry.world.queueH - BOTTOM_LABEL_OFFSET,
+    },
+  };
 }

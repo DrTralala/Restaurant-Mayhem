@@ -1,4 +1,5 @@
 import { getRestaurantWorld } from '../simulation/world';
+import { getPlaceableDimensions } from './placeables';
 
 export const FIXTURE_TYPES = {
   table: { collection: 'tables', width: 40, height: 40, placementType: 'table', label: () => 'Dining table' },
@@ -43,18 +44,23 @@ export function getFixtureRect(state, fixture) {
   if (!descriptor || !data || !Number.isFinite(data.y)
     || (fixture.type !== 'door' && !Number.isFinite(data.x))) return null;
 
-  const washDimensions = fixture.type === 'washStation'
+  const dimensions = fixture.type === 'washStation'
     ? {
       w: Number.isFinite(data.w) ? data.w : descriptor.width,
       h: Number.isFinite(data.h) ? data.h : descriptor.height,
     }
-    : { w: descriptor.width, h: descriptor.height };
+    : fixture.type === 'serviceTable'
+      ? (() => {
+        const footprint = getPlaceableDimensions('serviceTable', data.rotation);
+        return { w: footprint.width, h: footprint.height };
+      })()
+      : { w: descriptor.width, h: descriptor.height };
   const world = getRestaurantWorld(state?.restaurant || {});
 
   return {
     x: fixture.type === 'door' ? world.doorX : data.x,
     y: data.y,
-    ...washDimensions,
+    ...dimensions,
   };
 }
 

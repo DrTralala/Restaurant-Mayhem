@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   QUEUE_PARTY_CAPACITY,
   getQueuePartyCount,
-  getQueuePartyMemberPosition,
   getQueueProjectedMembers,
   findOldestCompatibleQueueParty,
   normaliseCustomerQueue,
@@ -43,39 +42,21 @@ describe('customer queue party records', () => {
     expect(queue.map(party => party.partyId)).toEqual(['large', 'solo']);
   });
 
-  it.each([1, 2, 3, 4])('keeps size-%i party footprints disjoint and inside the queue area', partySize => {
+  it('projects queued customers as one straight line in party and member order', () => {
     const state = { restaurant: { expansionLevel: 1 } };
     const world = getRestaurantWorld(state.restaurant);
-    const projections = Array.from({ length: 8 }, (_, partyIndex) =>
-      Array.from({ length: partySize }, (_, memberIndex) =>
-        getQueuePartyMemberPosition(state, partyIndex, memberIndex, partySize)));
-    for (const party of projections) {
-      for (const member of party) {
-        expect(member.x - CHARACTER_FOOTPRINT.left).toBeGreaterThanOrEqual(world.queueX);
-        expect(member.x + CHARACTER_FOOTPRINT.right).toBeLessThanOrEqual(world.queueX + world.queueW);
-        expect(member.y - CHARACTER_FOOTPRINT.top).toBeGreaterThanOrEqual(world.queueY);
-        expect(member.y + CHARACTER_FOOTPRINT.bottom).toBeLessThanOrEqual(world.queueY + world.queueH);
-      }
-      for (let left = 0; left < party.length; left += 1) {
-        for (let right = left + 1; right < party.length; right += 1) {
-          expect(Math.hypot(
-            party[left].x - party[right].x,
-            party[left].y - party[right].y,
-          )).toBeGreaterThanOrEqual(16);
-        }
-      }
-    }
-    for (let left = 0; left < projections.length; left += 1) {
-      for (let right = left + 1; right < projections.length; right += 1) {
-        expect(Math.min(...projections[left].flatMap(a =>
-          projections[right].map(b => Math.hypot(a.x - b.x, a.y - b.y))))).toBeGreaterThanOrEqual(30);
-      }
-    }
     const queue = normaliseCustomerQueue([
       { id: 'a1', partyId: 'a' }, { id: 'a2', partyId: 'a' },
+      { id: 'b1', partyId: 'b' },
     ]);
     const projected = getQueueProjectedMembers(state, queue);
-    expect(projected.map(member => member.id)).toEqual(['a1', 'a2']);
+    expect(projected.map(member => ({ id: member.id, x: member.x, y: member.y }))).toEqual([
+      { id: 'a1', x: 973, y: 390 },
+      { id: 'a2', x: 973, y: 420 },
+      { id: 'b1', x: 973, y: 450 },
+    ]);
+    expect(projected.every(member => member.x - CHARACTER_FOOTPRINT.left >= world.queueX
+      && member.x + CHARACTER_FOOTPRINT.right <= world.queueX + world.queueW)).toBe(true);
     expect(projected.every(member => Number.isFinite(member.x) && Number.isFinite(member.y))).toBe(true);
     expect(queue.every(party => party.members.every(member =>
       !('x' in member) && !('y' in member) && !('path' in member) && !('pathGoal' in member)))).toBe(true);

@@ -21,3 +21,47 @@ body {
   display: flex;
   flex-direction: column;
 }
+
+.toast-banner {
+  position: relative;
+  animation: toast-lifetime 5s linear forwards;
+}
+
+.toast-dismiss {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #111;
+  font: bold 20px/24px monospace;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.toast-dismiss:hover,
+.toast-dismiss:focus-visible {
+  background: rgba(17, 17, 17, 0.14);
+  outline: 2px solid #111;
+  outline-offset: 1px;
+}
+
+@keyframes toast-lifetime {
+  0%, 88% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-banner {
+    animation: none;
+  }
+}

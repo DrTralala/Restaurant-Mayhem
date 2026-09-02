@@ -7,8 +7,18 @@ import {
   worldToCell,
 } from './pathfinding';
 import { getDoorPosition, getRestaurantWorld } from './world';
+import { getCustomerPatience } from './balance';
 
 const QUEUE_ADMISSION_SPACING = 16;
+
+function getPatienceMax(customer) {
+  if (Number.isFinite(customer.patienceMax) && customer.patienceMax > 0) {
+    return customer.patienceMax;
+  }
+  const archetypePatience = getCustomerPatience(customer.archetype, customer.partySize);
+  if (Number.isFinite(archetypePatience) && archetypePatience > 0) return archetypePatience;
+  return Math.max(0, Number(customer.patience) || 0);
+}
 
 function sameOrderedIds(left, right) {
   return Array.isArray(left)
@@ -88,8 +98,17 @@ export function planQueuePartyAdmission(state, {
       },
     ).path;
     if (!routeToGuide.length) return null;
+    const patienceMax = getPatienceMax(customer);
     const admitted = {
       ...customer,
+      patience: patienceMax,
+      patienceMax,
+      queuePatience: Number.isFinite(customer.queuePatience)
+        ? customer.queuePatience
+        : customer.patience,
+      queuePatienceMax: Number.isFinite(customer.queuePatienceMax)
+        ? customer.queuePatienceMax
+        : patienceMax,
       state: 'guided',
       guideStaffId: guide.id,
       chairId: null,

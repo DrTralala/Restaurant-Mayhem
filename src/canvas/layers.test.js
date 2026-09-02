@@ -13,12 +13,20 @@ function recordCtx(extraCanvas = {}) {
   let offsetX = 0;
   let offsetY = 0;
   let figureScale = 1;
+  let textAlign = 'start';
+  let textBaseline = 'alphabetic';
   const transforms = [];
   const point = (x, y) => ({ x: offsetX + x * figureScale, y: offsetY + y * figureScale });
   return {
     canvas: { height: 600, width: 800, ...extraCanvas },
-    save: () => { calls.saves = (calls.saves || 0) + 1; transforms.push([offsetX, offsetY, figureScale]); },
-    restore: () => { calls.restores = (calls.restores || 0) + 1; [offsetX, offsetY, figureScale] = transforms.pop(); },
+    save: () => {
+      calls.saves = (calls.saves || 0) + 1;
+      transforms.push([offsetX, offsetY, figureScale, textAlign, textBaseline]);
+    },
+    restore: () => {
+      calls.restores = (calls.restores || 0) + 1;
+      [offsetX, offsetY, figureScale, textAlign, textBaseline] = transforms.pop();
+    },
     translate: (x, y) => { offsetX += x; offsetY += y; },
     rotate: radians => {
       calls.rotations = [...(calls.rotations || []), radians];
@@ -33,6 +41,10 @@ function recordCtx(extraCanvas = {}) {
     get globalAlpha() { return alpha; },
     set globalAlpha(value) { alpha = value; },
     font: '',
+    get textAlign() { return textAlign; },
+    set textAlign(value) { textAlign = value; },
+    get textBaseline() { return textBaseline; },
+    set textBaseline(value) { textBaseline = value; },
     lineWidth: 1,
     arc: (x, y, r, start, end) => calls.arcs.push({ ...point(x, y), r, start, end, alpha }),
     fill: () => calls.fills.push({}),
@@ -41,7 +53,13 @@ function recordCtx(extraCanvas = {}) {
       calls.rects.push(rect);
       calls.rectColours.push({ ...rect, colour: this.fillStyle });
     },
-    fillText: (text, x, y) => calls.texts.push({ text, x, y, alpha }),
+    fillText(text, x, y) {
+      calls.texts.push({
+        text, x, y, alpha,
+        textAlign: this.textAlign,
+        textBaseline: this.textBaseline,
+      });
+    },
     strokeRect(x, y, w, h) {
       calls.strokeRects.push({
         ...point(x, y), w: w * figureScale, h: h * figureScale, colour: this.strokeStyle,
@@ -149,14 +167,28 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.texts.some(call => call.text === '🍵')).toBe(false);
   });
 
-  it('does not render non-physical or unpositioned service items', () => {
+  it.each(['preparing', 'ready'])('renders a positioned %s dish on its kitchen station', itemState => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [{ id: 'k1', x: 100, y: 120 }],
+      serviceTables: [], equipment: [], dishes: [{ id: 'toast', base: 'Bread' }],
+      serviceItems: [{
+        id: 'dish', kind: 'dish', menuItemId: 'toast', state: itemState,
+        stationId: 'k1', x: 120, y: 140,
+      }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
+      text: '🍞', x: 120, y: 140, textAlign: 'center', textBaseline: 'middle',
+    }));
+  });
+
+  it('does not render ordered or unpositioned service items', () => {
     const ctx = recordCtx();
     drawFurnitureLayer(ctx, {
       tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
       serviceItems: [
         { id: 'ordered', kind: 'dish', menuItemId: 'toast', state: 'ordered', x: null, y: null },
-        { id: 'preparing', kind: 'dish', menuItemId: 'toast', state: 'preparing', x: 0, y: 0 },
-        { id: 'ready', kind: 'dish', menuItemId: 'toast', state: 'ready', x: 10, y: 10 },
         { id: 'invalid', kind: 'dish', menuItemId: 'toast', state: 'on_service', x: NaN, y: 10 },
       ],
     }, { x: 0, y: 0, zoom: 1 });
@@ -181,6 +213,31 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '→', x: 110, y: 130 }));
   });
 
+  it('keeps the sink outline inside its four-cell footprint', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
+      washStations: [{ id: 'sink', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],
+      serviceItems: [],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.rects).toContainEqual({ x: 300, y: 120, w: 40, h: 40 });
+    expect(ctx._calls.strokeRects).toContainEqual(expect.objectContaining({
+      x: 300.5, y: 120.5, w: 39, h: 39,
+    }));
+  });
+
+  it('draws a quarter-turned service counter with a vertical footprint', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [], equipment: [], dishes: [], serviceItems: [],
+      serviceTables: [{ id: 'vertical', x: 300, y: 120, rotation: 1 }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.rects).toContainEqual({ x: 300, y: 120, w: 40, h: 120 });
+    expect(ctx._calls.rotations).toContain(Math.PI / 2);
+  });
+
   it('draws dirt, station labels, queue stacks, and exact half progress', () => {
     const ctx = recordCtx();
     drawFurnitureLayer(ctx, { tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
@@ -203,13 +260,14 @@ describe('drawFurnitureLayer', () => {
       staff: [
         { id: 'o', name: 'O', role: 'waiter', x: 200, y: 200, task: { type: 'take_order', startedAt: 0 }, path: [] },
         { id: 'p', name: 'P', role: 'waiter', x: 240, y: 200, task: { type: 'take_payment', startedAt: 0 }, path: [] },
-        { id: 'w', name: 'W', role: 'janitor', x: 280, y: 200, task: { type: 'clean_floor', cleaningStartedAt: 0 }, path: [] },
-        { id: 'x', name: 'X', role: 'janitor', x: 320, y: 200, task: { type: 'wash_item', washingStartedAt: 0 }, path: [{ x: 1, y: 1 }] },
-        { id: 'i', name: 'I', role: 'janitor', x: 360, y: 200, task: { type: 'wash_item', washingStartedAt: null }, path: [] },
+        { id: 't', name: 'T', role: 'waiter', x: 280, y: 200, task: { type: 'clean_table', cleaningStartedAt: 0 }, path: [] },
+        { id: 'w', name: 'W', role: 'janitor', x: 320, y: 200, task: { type: 'clean_floor', cleaningStartedAt: 0 }, path: [] },
+        { id: 'x', name: 'X', role: 'janitor', x: 360, y: 200, task: { type: 'wash_item', washingStartedAt: 0 }, path: [{ x: 1, y: 1 }] },
+        { id: 'i', name: 'I', role: 'janitor', x: 400, y: 200, task: { type: 'wash_item', washingStartedAt: null }, path: [] },
       ] }, { x: 0, y: 0, zoom: 1 });
     const progressFills = ctx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14);
-    expect(progressFills).toHaveLength(4);
-    expect(progressFills.map(fill => fill.h)).toEqual(expect.arrayContaining([7, 7, 7, 10.5]));
+    expect(progressFills).toHaveLength(5);
+    expect(progressFills.map(fill => fill.h)).toEqual(expect.arrayContaining([7, 7, 7, 10.5, 10.5]));
   });
 
   it('suppresses consumption progress for a moving eating customer with valid timestamps', () => {
@@ -316,6 +374,27 @@ describe('drawFurnitureLayer', () => {
     expect(fullyConsumed._calls.texts).toContainEqual(expect.objectContaining({ text: '🥛', ...positions.drink }));
   });
 
+  it('centres delivered food and drink glyphs on their inset table positions', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [{ id: 't1', x: 200, y: 200 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+      customers: [{ id: 'c1', tableId: 't1', chairId: 'ch1' }],
+      kitchenStations: [], serviceTables: [], equipment: [], dishes: [{ id: 'toast', base: 'Bread' }],
+      serviceItems: [
+        { id: 'dish', customerId: 'c1', kind: 'dish', menuItemId: 'toast', state: 'delivered', x: 0, y: 0 },
+        { id: 'drink', customerId: 'c1', kind: 'drink', menuItemId: 'water', state: 'delivered', x: 0, y: 0 },
+      ],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
+      text: '🍞', x: 226, y: 208, textAlign: 'center', textBaseline: 'middle',
+    }));
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
+      text: '💧', x: 214, y: 208, textAlign: 'center', textBaseline: 'middle',
+    }));
+  });
+
   it.each([
     ['dish', 'toast', '🍞'],
     ['drink', 'water', '💧'],
@@ -391,8 +470,8 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.rects).toContainEqual(expect.objectContaining({ w: 1, h: 7 }));
 
     const completed = processKitchen({ ...preparing, restaurant: { gameTime: 160 } });
-    expect(completed.staff[0].task).toBeNull();
-    expect(completed.serviceItems[0].state).toBe('on_service');
+    expect(completed.staff[0].task).toMatchObject({ type: 'prepare_dish', serviceItemId: 'food' });
+    expect(completed.serviceItems[0]).toMatchObject({ state: 'ready', x: 120, y: 120 });
   });
 });
 
@@ -688,7 +767,7 @@ describe('drawStaffLayer', () => {
 describe('drawCustomerLayer', () => {
   const camera = { x: 0, y: 0, zoom: 1 };
 
-  it('fits an upright deciding customer into its chair and places its menu towards the table', () => {
+  it('fits an upright deciding customer into its chair and centres its menu beneath it', () => {
     const ctx = recordCtx();
     drawCustomerLayer(ctx, {
       customers: [{ id: 'c1', state: 'seated', chairId: 'ch1', tableId: 't1', x: 800, y: 400 }],
@@ -697,7 +776,7 @@ describe('drawCustomerLayer', () => {
     }, { x: 0, y: 0, zoom: 1 });
 
     expect(ctx._calls.arcs).toContainEqual(expect.objectContaining({ x: 110, y: 105 }));
-    expect(ctx._calls.rects).toContainEqual({ x: 108, y: 112, w: 24, h: 16 });
+    expect(ctx._calls.rects).toContainEqual({ x: 98, y: 112, w: 24, h: 16 });
     expect(ctx._calls.rotations.at(-1)).toBe(0);
   });
 
@@ -901,7 +980,7 @@ describe('drawCustomerLayer', () => {
 });
 
 describe('drawQueueLayer', () => {
-  it('renders separated members for eight parties and counts only legacy excess parties', () => {
+  it('renders a straight downward customer line and counts customers hidden below it', () => {
     const state = {
       queue: Array.from({ length: 9 }, (_, partyIndex) => ({
         partyId: `p${partyIndex}`,
@@ -917,9 +996,9 @@ describe('drawQueueLayer', () => {
 
     drawQueueLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
 
-    expect(ctx._calls.arcs).toHaveLength(32);
-    expect(ctx._calls.texts.some(call => call.text === '+1 party')).toBe(true);
-    const centres = ctx._calls.arcs.map(({ x, y }) => `${x},${y}`);
-    expect(new Set(centres)).toHaveLength(32);
+    expect(ctx._calls.arcs).toHaveLength(9);
+    expect(ctx._calls.arcs.map(({ x }) => x)).toEqual(Array(9).fill(973));
+    expect(ctx._calls.arcs.map(({ y }) => y)).toEqual([390, 420, 450, 480, 510, 540, 570, 600, 630]);
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '+27', y: 660 }));
   });
 });

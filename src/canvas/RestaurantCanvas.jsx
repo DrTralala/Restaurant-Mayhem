@@ -51,10 +51,16 @@ function getMoveItem(state, fixture) {
   if (!rect) return null;
 
   const item = { type: fixture.type, id: fixture.id, x: rect.x, y: rect.y };
-  if (Object.prototype.hasOwnProperty.call(fixture.data || {}, 'rotation')) {
-    item.rotation = fixture.data.rotation;
+  const placementType = getFixturePlacementType(fixture);
+  if (getPlaceable(placementType)?.rotatable) {
+    item.rotation = fixture.data.rotation ?? 0;
   }
   return item;
+}
+
+function isRotatableMoveItem(state, item) {
+  const fixture = getFixture(state, item?.type, item?.id);
+  return Boolean(fixture && getPlaceable(getFixturePlacementType(fixture))?.rotatable);
 }
 
 function expandSelectedFixtures(state, selectedItems) {
@@ -376,10 +382,17 @@ export default function RestaurantCanvas({
   useEffect(() => {
     const onKey = (e) => {
       const currentPlacement = placementRef.current;
-      if (currentPlacement && e.key.toLowerCase() === 'r' && currentPlacement.itemType === 'chair') {
+      if (currentPlacement && e.key.toLowerCase() === 'r'
+        && getPlaceable(currentPlacement.itemType)?.rotatable) {
         e.preventDefault();
         const rotation = ((currentPlacement.rotation ?? 0) + 1) % 4;
-        const next = buildPlacement(state, currentPlacement, currentPlacement, rotation);
+        const point = snapPlacement(
+          currentPlacement.itemType,
+          currentPlacement,
+          state,
+          rotation,
+        ) || currentPlacement;
+        const next = buildPlacement(state, currentPlacement, point, rotation);
         placementRef.current = next;
         setPlacement(next);
         return;
@@ -387,7 +400,8 @@ export default function RestaurantCanvas({
       const moving = moveRef.current;
       if (e.key.toLowerCase() === 'r'
         && moving?.originalItems?.length === 1
-        && moving.originalItems[0].type === 'chair') {
+        && isRotatableMoveItem(state, moving.originalItems[0])) {
+        e.preventDefault();
         const rotation = ((moving.items[0].rotation ?? 0) + 1) % 4;
         moving.originalItems = moving.originalItems.map(item => ({ ...item, rotation }));
         moving.items = moving.items.map(item => ({ ...item, rotation }));
@@ -431,7 +445,12 @@ export default function RestaurantCanvas({
     const currentPlacement = placementRef.current;
     if (currentPlacement) {
       const world = getWorldPos(e);
-      const snapped = snapPlacement(currentPlacement.itemType, world, state);
+      const snapped = snapPlacement(
+        currentPlacement.itemType,
+        world,
+        state,
+        currentPlacement.rotation,
+      );
       if (snapped) {
         const next = buildPlacement(state, currentPlacement, snapped, currentPlacement.rotation);
         if (!samePlacement(currentPlacement, next)) {
@@ -659,7 +678,9 @@ export default function RestaurantCanvas({
           </div>
           {canMoveMenuEntity && (
             <button onClick={handleMoveEntity} style={menuBtn}>
-              Move {menu.type === 'chair' ? '(R=rotate)' : ''}
+              Move {getPlaceable(getFixturePlacementType({ type: menu.type, data: menu.data }))?.rotatable
+                ? '(R=rotate)'
+                : ''}
             </button>
           )}
           {canSellMenuEntity && (
@@ -713,7 +734,7 @@ export default function RestaurantCanvas({
           fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         }}>
           Click to place · {moveRef.current.originalItems.length === 1
-            && moveRef.current.originalItems[0].type === 'chair' ? 'R to rotate · ' : ''}Esc to cancel
+            && isRotatableMoveItem(state, moveRef.current.originalItems[0]) ? 'R to rotate · ' : ''}Esc to cancel
           {moveRef.current.validation && !moveRef.current.validation.valid && (
             <div style={{
               marginTop: 4, color: '#b00000', fontSize: 12, fontFamily: 'monospace',

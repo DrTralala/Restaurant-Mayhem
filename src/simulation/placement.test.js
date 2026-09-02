@@ -21,9 +21,15 @@ it('exposes canonical prices and footprints', () => {
   expect(getPlaceable('table')).toMatchObject({ price: 300, width: 40, height: 40 });
   expect(getPlaceable('chair')).toMatchObject({ price: 50, width: 20, height: 20, rotatable: true });
   expect(getPlaceable('door')).toMatchObject({ price: 400, width: 6, height: 40 });
-  expect(getPlaceable('serviceTable')).toMatchObject({ price: 300, width: 120, height: 40 });
+  expect(getPlaceable('serviceTable')).toMatchObject({ price: 300, width: 120, height: 40, rotatable: true });
   expect(getPlaceable('cashierTable')).toMatchObject({ price: 300, width: 80, height: 40 });
   expect(getPlaceable('automaticDishwasher')).toMatchObject({ price: 600, width: 40, height: 40 });
+});
+
+it('uses the vertical footprint for a quarter-turned service counter', () => {
+  expect(getPlacementRect('serviceTable', 600, 120, 1)).toEqual({
+    x: 600, y: 120, w: 40, h: 120,
+  });
 });
 
 it('places a dishwasher freely and rejects overlap with every furniture/station type', () => {

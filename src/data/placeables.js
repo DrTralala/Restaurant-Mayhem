@@ -35,7 +35,7 @@ export const PLACEABLES = {
     width: 120,
     height: 40,
     grid: 20,
-    rotatable: false,
+    rotatable: true,
   },
   cashierTable: {
     type: 'cashierTable',
@@ -83,4 +83,15 @@ export function getPlaceable(itemType) {
   return Object.prototype.hasOwnProperty.call(PLACEABLES, itemType)
     ? PLACEABLES[itemType]
     : undefined;
+}
+
+export function getPlaceableDimensions(itemType, rotation = 0) {
+  const item = getPlaceable(itemType);
+  if (!item) return null;
+  const normalisedRotation = Number.isInteger(rotation) ? ((rotation % 4) + 4) % 4 : 0;
+  const quarterTurn = item.rotatable && normalisedRotation % 2 === 1;
+  return {
+    width: quarterTurn ? item.height : item.width,
+    height: quarterTurn ? item.width : item.height,
+  };
 }

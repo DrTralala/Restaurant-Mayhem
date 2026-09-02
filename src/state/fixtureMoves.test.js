@@ -460,6 +460,23 @@ describe('moveFixtures', () => {
     expect(result.serviceItems[1]).toMatchObject({ id: 'i3', state: 'carried' });
   });
 
+  it('rotates a service counter and repositions its on-counter items', () => {
+    const state = makeState({
+      serviceTables: [{ id: 'st1', x: 400, y: 120 }],
+      serviceItems: [{
+        id: 'i1', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 1,
+        x: 180, y: 130,
+      }],
+    });
+
+    const result = moveFixtures(state, [
+      { type: 'serviceTable', id: 'st1', x: 400, y: 120, rotation: 1 },
+    ]);
+
+    expect(result.serviceTables[0]).toMatchObject({ rotation: 1 });
+    expect(result.serviceItems[0]).toMatchObject({ x: 410, y: 160 });
+  });
+
   it('invalidates all routed actors when a door moves and safely cancels guidance', () => {
     const state = makeState({
       tables: [

@@ -78,12 +78,19 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
       : customer;
   });
 
+  const processingCounts = new Map(staffedStations.map(station => [station.id, 0]));
   const queueLengths = new Map(staffedStations.map(station => [station.id, 0]));
   for (const customer of prepared) {
-    if (customer.state !== 'checkout_moving'
-      || !queueLengths.has(customer.cashierStationId)) continue;
-    queueLengths.set(customer.cashierStationId,
-      queueLengths.get(customer.cashierStationId) + 1);
+    if (!queueLengths.has(customer.cashierStationId)) continue;
+    if (customer.state === 'checkout_processing') {
+      processingCounts.set(customer.cashierStationId,
+        processingCounts.get(customer.cashierStationId) + 1);
+      queueLengths.set(customer.cashierStationId,
+        queueLengths.get(customer.cashierStationId) + 1);
+    } else if (customer.state === 'checkout_moving') {
+      queueLengths.set(customer.cashierStationId,
+        queueLengths.get(customer.cashierStationId) + 1);
+    }
   }
 
   prepared = prepared.map(customer => {
@@ -104,14 +111,16 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
   const positions = new Map();
   const queueIndexes = new Map();
   for (const station of staffedStations) {
+    const movingIndexOffset = processingCounts.get(station.id);
     prepared
       .filter(customer => customer.state === 'checkout_moving'
         && customer.cashierStationId === station.id)
       .sort((left, right) => (left.paymentQueuedAt ?? 0) - (right.paymentQueuedAt ?? 0)
         || String(left.id).localeCompare(String(right.id)))
       .forEach((customer, index) => {
-        positions.set(customer.id, getCashierCustomerPosition(station, index));
-        queueIndexes.set(customer.id, index);
+        const queueIndex = movingIndexOffset + index;
+        positions.set(customer.id, getCashierCustomerPosition(station, queueIndex));
+        queueIndexes.set(customer.id, queueIndex);
       });
   }
 

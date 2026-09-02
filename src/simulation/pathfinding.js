@@ -1,4 +1,5 @@
 import { GRID_SIZE, getDoors, getRestaurantWorld } from './world';
+import { getPlaceableDimensions } from '../data/placeables';
 
 export function cellKey(cell) {
   return `${cell.x},${cell.y}`;
@@ -25,7 +26,10 @@ export function buildBlockedCells(state) {
   for (const table of state.tables || []) blockRect(blocked, { x: table.x, y: table.y, w: 40, h: 40 });
   for (const chair of state.chairs || []) blockRect(blocked, { x: chair.x, y: chair.y, w: 20, h: 20 });
   for (const station of state.kitchenStations || []) blockRect(blocked, { x: station.x, y: station.y, w: 40, h: 40 });
-  for (const service of state.serviceTables || []) blockRect(blocked, { x: service.x, y: service.y, w: 120, h: 40 });
+  for (const service of state.serviceTables || []) {
+    const dimensions = getPlaceableDimensions('serviceTable', service.rotation);
+    blockRect(blocked, { x: service.x, y: service.y, w: dimensions.width, h: dimensions.height });
+  }
   for (const cashier of state.cashierStations || []) blockRect(blocked, cashier);
   for (const station of state.washStations || []) blockRect(blocked, { x: station.x, y: station.y, w: station.w || 40, h: station.h || 40 });
   const world = getRestaurantWorld(state.restaurant || {});

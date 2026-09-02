@@ -7,8 +7,9 @@ import { getSeatedDisplayGeometry } from './seatedGeometry';
 import { ACTIVITY_DURATIONS, getRemainingFraction } from '../simulation/activity';
 import { getUpgradeEffect } from '../simulation/balance';
 import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/dishwashing';
-import { getQueuePartyMemberPosition, normaliseCustomerQueue } from '../simulation/customerQueue';
+import { getQueueDisplayLayout } from '../simulation/customerQueue';
 import { getCustomerConsumptionRemainingFraction } from '../simulation/consumption';
+import { getPlaceableDimensions } from '../data/placeables';
 
 function drawVerticalProgress(ctx, x, y, remaining) {
   if (!Number.isFinite(remaining)) return;
@@ -21,7 +22,8 @@ function drawVerticalProgress(ctx, x, y, remaining) {
 function staffProgress(state, staff) {
   if (!staff.task || staff.path?.length) return null;
   let duration = { take_order: ACTIVITY_DURATIONS.takeOrder, take_payment: ACTIVITY_DURATIONS.takePayment,
-    clean_floor: ACTIVITY_DURATIONS.wipeFloor, wash_item: ACTIVITY_DURATIONS.manualWash }[staff.task.type];
+    clean_table: ACTIVITY_DURATIONS.wipeFloor, clean_floor: ACTIVITY_DURATIONS.wipeFloor,
+    wash_item: ACTIVITY_DURATIONS.manualWash }[staff.task.type];
   let started = staff.task.startedAt ?? staff.task.cleaningStartedAt ?? staff.task.washingStartedAt;
   const item = (state.serviceItems || []).find(candidate => candidate.id === staff.task.serviceItemId);
   if (staff.task.type === 'prepare_drink') duration = ACTIVITY_DURATIONS.prepareDrink;
@@ -183,36 +185,20 @@ export function drawQueueLayer(ctx, state, camera, renderOptions = {}) {
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
 
-  const world = getRestaurantWorld(state.restaurant);
-
-  const MAX_VISIBLE = 8;
-  const queue = normaliseCustomerQueue(state.queue || []);
-  const visible = Math.min(queue.length, MAX_VISIBLE);
-  for (let partyIndex = 0; partyIndex < visible; partyIndex++) {
-    const party = queue[partyIndex];
-    party.members.forEach((member, memberIndex) => {
-      const pos = getQueuePartyMemberPosition(state, partyIndex, memberIndex, party.members.length);
-      drawStickFigure(ctx, pos.x, pos.y, getCharacterPalette(member).figure, {
-        id: member.id,
-        timeMs: renderOptions.timeMs,
-        reducedMotion: renderOptions.reducedMotion,
-      });
+  const layout = getQueueDisplayLayout(state, state.queue || []);
+  for (const member of layout.visibleMembers) {
+    drawStickFigure(ctx, member.x, member.y, getCharacterPalette(member).figure, {
+      id: member.id,
+      timeMs: renderOptions.timeMs,
+      reducedMotion: renderOptions.reducedMotion,
     });
   }
 
-  if (queue.length > MAX_VISIBLE) {
-    const extra = queue.length - MAX_VISIBLE;
-    const lastParty = queue[MAX_VISIBLE - 1];
-    const lastPos = getQueuePartyMemberPosition(
-      state,
-      MAX_VISIBLE - 1,
-      0,
-      lastParty.members.length,
-    );
-    const labelY = lastPos.y - 14;
+  if (layout.hiddenCount > 0) {
     ctx.fillStyle = '#f0a500';
     ctx.font = 'bold 10px monospace';
-    ctx.fillText(`+${extra} ${extra === 1 ? 'party' : 'parties'}`, world.doorX + 50, labelY);
+    ctx.textAlign = 'center';
+    ctx.fillText(`+${layout.hiddenCount}`, layout.overflowLabelPosition.x, layout.overflowLabelPosition.y);
   }
 
   ctx.restore();
@@ -277,15 +263,25 @@ export function drawFurnitureLayer(ctx, state, camera) {
 
   // Service tables (long counter between kitchen and dining)
   for (const st of state.serviceTables) {
+    const dimensions = getPlaceableDimensions('serviceTable', st.rotation);
+    const vertical = dimensions.height > dimensions.width;
     ctx.fillStyle = '#4a6a4a';
-    ctx.fillRect(st.x, st.y, 120, 40);
+    ctx.fillRect(st.x, st.y, dimensions.width, dimensions.height);
     ctx.fillStyle = '#aaa';
-     ctx.font = '8px monospace';
-     ctx.textAlign = 'center';
-     ctx.textBaseline = 'middle';
-     ctx.fillText('SERVICE', st.x + 60, st.y + 20);
-     ctx.textAlign = 'start';
-     ctx.textBaseline = 'alphabetic';
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (vertical) {
+      ctx.save();
+      ctx.translate(st.x + dimensions.width / 2, st.y + dimensions.height / 2);
+      ctx.rotate(Math.PI / 2);
+      ctx.fillText('SERVICE', 0, 0);
+      ctx.restore();
+    } else {
+      ctx.fillText('SERVICE', st.x + dimensions.width / 2, st.y + dimensions.height / 2);
+    }
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
   }
 
   ctx.font = '10px sans-serif';
@@ -295,7 +291,12 @@ export function drawFurnitureLayer(ctx, state, camera) {
   for (const station of state.washStations || []) {
     const w = station.w || 40, h = station.h || 40;
     ctx.fillStyle = station.type === 'automatic' ? '#536b75' : '#466b62';
-    ctx.fillRect(station.x, station.y, w, h); ctx.strokeStyle = '#9ab0aa'; ctx.strokeRect(station.x, station.y, w, h);
+    ctx.fillRect(station.x, station.y, w, h);
+    ctx.save();
+    ctx.strokeStyle = '#9ab0aa';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(station.x + 0.5, station.y + 0.5, w - 1, h - 1);
+    ctx.restore();
     ctx.fillStyle = '#fff'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(station.type === 'automatic' ? 'AUTO' : 'SINK', station.x + w / 2, station.y + h / 2);
     ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
@@ -311,10 +312,21 @@ export function drawFurnitureLayer(ctx, state, camera) {
   }
 
   for (const item of Array.isArray(state.serviceItems) ? state.serviceItems : []) {
-    if (!['on_service', 'delivered', 'dirty_at_table'].includes(item.state)
+    const kitchenDish = item.kind === 'dish'
+      && ['preparing', 'ready'].includes(item.state)
+      && (state.kitchenStations || []).some(station => station.id === item.stationId);
+    if (!kitchenDish && !['on_service', 'delivered', 'dirty_at_table'].includes(item.state)
       || !Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
     ctx.fillStyle = '#fff';
      ctx.font = '10px sans-serif';
+     if (kitchenDish) {
+       ctx.save();
+       ctx.textAlign = 'center';
+       ctx.textBaseline = 'middle';
+       ctx.fillText(getServiceItemEmoji(item, state.dishes || []), item.x, item.y);
+       ctx.restore();
+       continue;
+     }
      if (['delivered', 'dirty_at_table'].includes(item.state)) {
        const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
        const chair = customer && (state.chairs || []).find(candidate => candidate.id === customer.chairId);
@@ -324,10 +336,14 @@ export function drawFurnitureLayer(ctx, state, camera) {
           .filter(candidate => candidate.customerId === item.customerId
             && ['delivered', 'dirty_at_table'].includes(candidate.state))
           .map(candidate => candidate.kind))];
-       const position = getPlaceSettingPositions(table, chair, kinds)[item.kind];
-       if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
-         ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);
-       }
+        const position = getPlaceSettingPositions(table, chair, kinds)[item.kind];
+        if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);
+          ctx.restore();
+        }
        continue;
      }
     ctx.fillText(getServiceItemEmoji(item, state.dishes || []), item.x, item.y);
@@ -373,11 +389,19 @@ export function drawPlacementPreview(ctx, state, camera, placement) {
   } else if (placement.itemType === 'serviceTable') {
     ctx.fillStyle = '#ddd';
     ctx.font = '8px monospace';
-     ctx.textAlign = 'center';
-     ctx.textBaseline = 'middle';
-     ctx.fillText('SERVICE', rect.x + rect.w / 2, rect.y + rect.h / 2);
-     ctx.textAlign = 'start';
-     ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (rect.h > rect.w) {
+      ctx.save();
+      ctx.translate(rect.x + rect.w / 2, rect.y + rect.h / 2);
+      ctx.rotate(Math.PI / 2);
+      ctx.fillText('SERVICE', 0, 0);
+      ctx.restore();
+    } else {
+      ctx.fillText('SERVICE', rect.x + rect.w / 2, rect.y + rect.h / 2);
+    }
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
   } else if (placement.itemType === 'equipmentStation') {
     const equipment = state.equipment.find(candidate => candidate.id === placement.equipmentId);
     if (equipment) {

@@ -40,6 +40,9 @@ describe('fixture catalogue', () => {
     expect(getFixtureRect(state, {
       type: 'serviceTable', id: 'st1', data: state.serviceTables[0],
     })).toEqual({ x: 140, y: 120, w: 120, h: 40 });
+    expect(getFixtureRect(state, {
+      type: 'serviceTable', id: 'vertical', data: { id: 'vertical', x: 400, y: 120, rotation: 1 },
+    })).toEqual({ x: 400, y: 120, w: 40, h: 120 });
   });
 
   it('uses one public wash-station type for manual and automatic stations', () => {

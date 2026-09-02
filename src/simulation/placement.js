@@ -1,4 +1,4 @@
-import { getPlaceable } from '../data/placeables';
+import { getPlaceable, getPlaceableDimensions } from '../data/placeables';
 import {
   getFixture,
   getFixtureDescriptor,
@@ -65,7 +65,8 @@ function getExistingFurnitureRects(state) {
     if (rect) rects.push(rect);
   }
   for (const serviceTable of serviceTables) {
-    const rect = getRecordRect(serviceTable, 120, 40);
+    const dimensions = getPlaceableDimensions('serviceTable', serviceTable.rotation);
+    const rect = getRecordRect(serviceTable, dimensions.width, dimensions.height);
     if (rect) rects.push(rect);
   }
   for (const cashier of cashierStations) {
@@ -125,16 +126,14 @@ function hasValidCashierWorkCell(state, rect, furnitureRects) {
 export function getPlacementRect(itemType, x, y, rotation = 0) {
   const item = getPlaceable(itemType);
   if (!item || !Number.isFinite(x) || !Number.isFinite(y)) return null;
-
-  // Chair rotation changes its facing only; all current rotatable placeables
-  // retain their catalogue footprint.
-  void rotation;
-  return { x, y, w: item.width, h: item.height };
+  const dimensions = getPlaceableDimensions(itemType, rotation);
+  return { x, y, w: dimensions.width, h: dimensions.height };
 }
 
-export function snapPlacement(itemType, point, state = {}) {
+export function snapPlacement(itemType, point, state = {}, rotation = 0) {
   const item = getPlaceable(itemType);
   if (!item || !isFinitePoint(point)) return null;
+  const dimensions = getPlaceableDimensions(itemType, rotation);
 
   const world = getRestaurantWorld(state?.restaurant || {});
   const x = Math.round(point.x / item.grid) * item.grid;
@@ -143,13 +142,13 @@ export function snapPlacement(itemType, point, state = {}) {
   if (itemType === 'door') {
     return {
       x: world.doorX,
-      y: clamp(y, world.kitchenY, world.kitchenY + world.floorH - item.height),
+      y: clamp(y, world.kitchenY, world.kitchenY + world.floorH - dimensions.height),
     };
   }
 
   return {
-    x: clamp(x, world.floorX, world.floorX + world.floorW - item.width),
-    y: clamp(y, world.kitchenY, world.kitchenY + world.floorH - item.height),
+    x: clamp(x, world.floorX, world.floorX + world.floorW - dimensions.width),
+    y: clamp(y, world.kitchenY, world.kitchenY + world.floorH - dimensions.height),
   };
 }
 

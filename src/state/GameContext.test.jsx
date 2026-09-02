@@ -323,9 +323,9 @@ describe('GameProvider authoritative placement actions', () => {
     {
       itemType: 'serviceTable',
       cost: 300,
-      action: { x: 400, y: 120, rotation: 0, cost: 1 },
+      action: { x: 400, y: 120, rotation: 1, cost: 1 },
       assertPlacement(state) {
-        expect(state.serviceTables.at(-1)).toEqual({ id: 'st2', x: 400, y: 120 });
+        expect(state.serviceTables.at(-1)).toEqual({ id: 'st2', x: 400, y: 120, rotation: 1 });
       },
     },
     {

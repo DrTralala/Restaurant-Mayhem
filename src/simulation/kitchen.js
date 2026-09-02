@@ -1,5 +1,4 @@
 import { getUpgradeEffect } from './balance';
-import { findAvailableServiceSlot } from './serviceItems';
 import { advanceConsumption } from './consumption';
 
 const PHYSICAL_ITEM_STATES = new Set(['on_service', 'carried', 'delivered']);
@@ -22,7 +21,7 @@ function canProgressDish(state, item) {
     : null;
   if (dish.requiredEquipmentId && !equipment) return null;
 
-  return { dish, equipment };
+  return { dish, equipment, station };
 }
 
 export function processKitchen(state) {
@@ -58,23 +57,10 @@ export function processKitchen(state) {
       ...item,
       state: 'ready',
       readyAt: state.restaurant.gameTime,
-      assignedStaffId: null,
+      x: preparation.station.x + 20,
+      y: preparation.station.y + 20,
     };
   }).filter(Boolean);
-
-  const readyItems = serviceItems
-    .filter(item => item.kind === 'dish' && item.state === 'ready')
-    .sort((left, right) =>
-      (left.readyAt ?? 0) - (right.readyAt ?? 0)
-      || String(left.id).localeCompare(String(right.id)));
-
-  for (const ready of readyItems) {
-    const slot = findAvailableServiceSlot({ ...state, customers, serviceItems });
-    if (!slot) continue;
-    serviceItems = serviceItems.map(item => item.id === ready.id
-      ? { ...item, ...slot, state: 'on_service' }
-      : item);
-  }
 
   const staff = (state.staff || []).map(worker => {
     if (worker.task?.type !== 'prepare_dish') return worker;
@@ -86,7 +72,7 @@ export function processKitchen(state) {
     const validOrderedTask = worker.role === 'cook' && item?.kind === 'dish' && item.state === 'ordered'
       && dish && station && requiredEquipmentOwned
       && (!dish.requiredEquipmentId || station.equipmentId === dish.requiredEquipmentId);
-    const validActiveTask = item?.state === 'preparing'
+    const validActiveTask = ['preparing', 'ready'].includes(item?.state)
       && item.assignedStaffId === worker.id
       && item.stationId === worker.task.stationId
       && canProgressDish({ ...state, customers, serviceItems }, item);

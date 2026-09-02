@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createCustomerOrder,
   findAvailableServiceSlot,
+  getServiceSlotPosition,
   hasDuplicateOwner,
   allOrderedItemsDelivered,
   selectOrderKinds,
@@ -68,6 +69,27 @@ describe('service item orders', () => {
     ]);
   });
 
+  it('reserves a service-counter slot while a cook carries a finished dish to it', () => {
+    const state = {
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      serviceItems: [{
+        id: 'dish1', kind: 'dish', state: 'carried', assignedStaffId: 'cook1',
+        serviceTableId: 'st1', serviceSlotIndex: 0,
+      }],
+      staff: [{
+        id: 'cook1', role: 'cook', carryingServiceItemId: 'dish1',
+        task: {
+          type: 'place_dish_on_service', serviceItemId: 'dish1',
+          serviceTableId: 'st1', serviceSlotIndex: 0,
+        },
+      }],
+    };
+
+    expect(findAvailableServiceSlot(state)).toEqual({
+      serviceTableId: 'st1', serviceSlotIndex: 1, x: 180, y: 130,
+    });
+  });
+
   it('does not create a duplicate customer-kind item', () => {
     const existing = [{ id: 'service-item-1', kind: 'dish', customerId: 'c1' }];
     expect(hasDuplicateOwner(existing, 'c1', 'dish')).toBe(true);
@@ -117,6 +139,12 @@ describe('service item orders', () => {
 
     expect(findAvailableServiceSlot(state)).toEqual({
       serviceTableId: 'st1', serviceSlotIndex: 2, x: 210, y: 130,
+    });
+  });
+
+  it('places service slots down a quarter-turned counter', () => {
+    expect(getServiceSlotPosition({ x: 140, y: 120, rotation: 1 }, 2)).toEqual({
+      x: 150, y: 190,
     });
   });
 

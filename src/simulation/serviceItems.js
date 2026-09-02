@@ -29,10 +29,19 @@ export function getNextServiceItemId(serviceItems) {
 }
 
 export function getServiceSlotPosition(serviceTable, serviceSlotIndex) {
-  return {
-    x: serviceTable.x + 10 + serviceSlotIndex * 30,
-    y: serviceTable.y + 10,
-  };
+  const rotation = Number.isInteger(serviceTable?.rotation)
+    ? ((serviceTable.rotation % 4) + 4) % 4
+    : 0;
+  if (rotation === 1) {
+    return { x: serviceTable.x + 10, y: serviceTable.y + 10 + serviceSlotIndex * 30 };
+  }
+  if (rotation === 2) {
+    return { x: serviceTable.x + 110 - serviceSlotIndex * 30, y: serviceTable.y + 10 };
+  }
+  if (rotation === 3) {
+    return { x: serviceTable.x + 10, y: serviceTable.y + 110 - serviceSlotIndex * 30 };
+  }
+  return { x: serviceTable.x + 10 + serviceSlotIndex * 30, y: serviceTable.y + 10 };
 }
 
 export function getOccupiedServiceSlotKeys(state) {
@@ -47,6 +56,20 @@ export function getOccupiedServiceSlotKeys(state) {
     if (!validSlot) continue;
 
     if (item.state === 'on_service') {
+      occupied.add(`${item.serviceTableId}:${item.serviceSlotIndex}`);
+      continue;
+    }
+
+    const cook = (state.staff || []).find(worker => worker.id === item.assignedStaffId);
+    const hasCookDeliveryReservation = item.kind === 'dish'
+      && item.state === 'carried'
+      && cook?.role === 'cook'
+      && cook.carryingServiceItemId === item.id
+      && cook.task?.type === 'place_dish_on_service'
+      && cook.task.serviceItemId === item.id
+      && cook.task.serviceTableId === item.serviceTableId
+      && cook.task.serviceSlotIndex === item.serviceSlotIndex;
+    if (hasCookDeliveryReservation) {
       occupied.add(`${item.serviceTableId}:${item.serviceSlotIndex}`);
       continue;
     }

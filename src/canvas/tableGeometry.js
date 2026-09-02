@@ -1,4 +1,5 @@
 const TABLE_SIZE = 40;
+const PLACE_SETTING_INSET = 8;
 
 export function getChairFacingRadians(rotation) {
   return [0, Math.PI / 2, Math.PI, -Math.PI / 2][rotation] ?? 0;
@@ -21,7 +22,10 @@ export function getPlaceSettingPositions(table, chair, kinds) {
   const validCandidates = candidates.filter(value => Number.isFinite(value) && value >= 0);
   if (!validCandidates.length) return {};
   const distanceToEdge = Math.min(...validCandidates);
-  const anchor = { x: chairCentre.x + ux * distanceToEdge, y: chairCentre.y + uy * distanceToEdge };
+  const anchor = {
+    x: chairCentre.x + ux * (distanceToEdge + PLACE_SETTING_INSET),
+    y: chairCentre.y + uy * (distanceToEdge + PLACE_SETTING_INSET),
+  };
   if (![anchor.x, anchor.y].every(Number.isFinite)) return {};
   const requested = Array.isArray(kinds) ? kinds : [];
   const result = {};

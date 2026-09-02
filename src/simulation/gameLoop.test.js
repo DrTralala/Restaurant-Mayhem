@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mergeMovementEntries, runTick } from './gameLoop';
+import { recoverStuckCustomers } from './customers';
 import { createInitialState } from '../state/initialState';
 import { hydrateState } from '../state/persistence';
 
@@ -137,6 +138,33 @@ describe('runTick', () => {
       .toHaveLength(1);
     expect(result.staff[0]).toMatchObject({ x: 960, y: 360 });
     expect(result.customers[0]).not.toMatchObject({ x: 960, y: 360 });
+  });
+
+  it('recovers a pathless checkout customer through shared post-movement resolution', () => {
+    const checkoutPosition = { x: 840, y: 180 };
+    const state = {
+      ...emptyState,
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
+      floorDirt: [], washStations: [],
+      staff: [{
+        id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100,
+        path: [], task: null, carryingServiceItemId: null,
+      }],
+      customers: [{
+        id: 'checkout', state: 'checkout_moving', cashierStationId: 'cashier1',
+        checkoutPosition, paymentQueuedAt: 1, paymentReady: false,
+        x: 859, y: 199, path: [], patience: 100, happiness: 80,
+      }],
+    };
+    const observed = recoverStuckCustomers(state, 0);
+    const aged = recoverStuckCustomers(observed, 9);
+
+    const result = runTick(aged, { gameDt: 0, movementDt: 1 });
+
+    expect(result.customers[0]).toMatchObject({ x: 840, y: 180 });
+    expect(result.customers[0].stuckWatchdog).toBeUndefined();
   });
 
   it('prefers the guide-provenance staff descriptor over the duplicate customer descriptor', () => {

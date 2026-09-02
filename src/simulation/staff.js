@@ -4,6 +4,7 @@ import { getCashierCustomerPosition, getCashierWorkPosition, getDoorPosition, ge
 import { clampReputation, getTipRate, getUpgradeEffect } from './balance';
 import { getAssignedCashierStation } from './cashiers';
 import { getDrink } from '../data/drinks';
+import { getPlaceableDimensions } from '../data/placeables';
 import {
   allOrderedItemsDelivered,
   createCustomerOrder,
@@ -90,6 +91,16 @@ function findGuidedCustomerStart(state, customer, occupiedActors) {
 
 function targetForTable(state, table, staff) {
   return targetForRect(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff);
+}
+
+function getServiceTableRect(serviceTable) {
+  const dimensions = getPlaceableDimensions('serviceTable', serviceTable.rotation);
+  return {
+    x: serviceTable.x,
+    y: serviceTable.y,
+    w: dimensions.width,
+    h: dimensions.height,
+  };
 }
 
 function targetForRect(state, rect, staff) {
@@ -444,7 +455,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       const serviceTable = (state.serviceTables || []).find(table => table.id === readyServiceItem.serviceTableId);
       const path = targetForRectOrCurrent(
         state,
-        { x: serviceTable.x, y: serviceTable.y, w: 120, h: 40 },
+        getServiceTableRect(serviceTable),
         staff,
       );
       if (path) {
@@ -478,7 +489,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       const path = serviceTable
         ? targetForRectOrCurrent(
           state,
-          { x: serviceTable.x, y: serviceTable.y, w: 120, h: 40 },
+          getServiceTableRect(serviceTable),
           staff,
         )
         : null;
@@ -769,8 +780,9 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     const price = dishPrice + drinkPrice;
     const happiness = Number.isFinite(customer.happiness) ? customer.happiness : 80;
     const tip = Math.round(price * getTipRate(happiness) * 100) / 100;
+    const reviewScore = getCustomerReviewScore(customer, happiness);
     const reputationGainEffect = getUpgradeEffect(state, 'reputationGain');
-    const reputationGain = (0.01 + happiness / 10000) * (1 + reputationGainEffect);
+    const reputationGain = (0.01 + reviewScore / 10000) * (1 + reputationGainEffect);
     const payment = {
       customerId: customer.id,
       day: state.restaurant.day || Math.floor(state.restaurant.gameTime / 86400) + 1,
@@ -779,6 +791,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       revenue: price + tip,
       tip,
       totalPaid: price + tip,
+      reviewScore,
     };
     const remainingAtTable = customers.some(candidate => candidate.id !== customer.id && candidate.tableId === customer.tableId && candidate.state !== 'leaving');
     const carriedServiceItemIds = serviceItems
@@ -1039,6 +1052,47 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     };
   }
 
+  if (staff.task.type === 'place_dish_on_service') {
+    const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
+    const customer = customers.find(candidate => candidate.id === item?.customerId);
+    const serviceTable = (state.serviceTables || []).find(candidate =>
+      candidate.id === staff.task.serviceTableId);
+    const ownsItem = item?.state === 'carried'
+      && item.kind === 'dish'
+      && staff.role === 'cook'
+      && staff.carryingServiceItemId === item.id
+      && item.assignedStaffId === staff.id
+      && item.serviceTableId === staff.task.serviceTableId
+      && item.serviceSlotIndex === staff.task.serviceSlotIndex;
+    const validDelivery = ownsItem && customer?.state !== 'leaving' && serviceTable;
+    if (!validDelivery) {
+      return {
+        staff: { ...completedStaff, carryingServiceItemId: ownsItem ? null : staff.carryingServiceItemId },
+        queue, tables, customers,
+        serviceItems: serviceItems.map(candidate => ownsItem && candidate.id === item.id
+          ? { ...candidate, state: 'to_clean', assignedStaffId: null }
+          : candidate),
+      };
+    }
+
+    const deliveryPath = targetForRectOrCurrent(state, getServiceTableRect(serviceTable), staff);
+    if (deliveryPath === null) {
+      return { staff: { ...staff, path: [] }, queue, tables, customers, serviceItems };
+    }
+    if (deliveryPath.length) {
+      return { staff: { ...staff, path: deliveryPath }, queue, tables, customers, serviceItems };
+    }
+
+    const position = getServiceSlotPosition(serviceTable, item.serviceSlotIndex);
+    return {
+      staff: { ...completedStaff, carryingServiceItemId: null, path: [] },
+      queue, tables, customers,
+      serviceItems: serviceItems.map(candidate => candidate.id === item.id
+        ? { ...candidate, state: 'on_service', assignedStaffId: null, ...position }
+        : candidate),
+    };
+  }
+
   if (staff.task.type === 'collect_dirty_item') {
     const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
     const table = tables.find(candidate => candidate.id === item?.tableId);
@@ -1270,6 +1324,53 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       candidate.id !== staff.id
       && candidate.task?.type === 'prepare_dish'
       && candidate.task.stationId === staff.task.stationId);
+    const validReadyDish = item?.state === 'ready'
+      && item.kind === 'dish'
+      && staff.role === 'cook'
+      && item.assignedStaffId === staff.id
+      && item.stationId === staff.task.stationId
+      && dish
+      && station
+      && requiredEquipmentOwned
+      && (!dish.requiredEquipmentId || station.equipmentId === dish.requiredEquipmentId)
+      && !anotherWorkerOwnsItem
+      && !anotherWorkerOwnsStation;
+    if (validReadyDish) {
+      const slot = findAvailableServiceSlot(state);
+      const serviceTable = slot
+        ? (state.serviceTables || []).find(candidate => candidate.id === slot.serviceTableId)
+        : null;
+      const path = serviceTable
+        ? targetForRectOrCurrent(state, getServiceTableRect(serviceTable), staff)
+        : null;
+      if (!slot || !serviceTable || path === null) {
+        return { staff: { ...staff, path: [] }, queue, tables, customers, serviceItems };
+      }
+      return {
+        staff: {
+          ...staff,
+          path,
+          carryingServiceItemId: item.id,
+          task: {
+            type: 'place_dish_on_service',
+            serviceItemId: item.id,
+            serviceTableId: slot.serviceTableId,
+            serviceSlotIndex: slot.serviceSlotIndex,
+          },
+        },
+        queue, tables, customers,
+        serviceItems: serviceItems.map(candidate => candidate.id === item.id
+          ? {
+            ...candidate,
+            ...slot,
+            state: 'carried',
+            assignedStaffId: staff.id,
+            x: staff.x,
+            y: staff.y,
+          }
+          : candidate),
+      };
+    }
     const validAssignment = item?.kind === 'dish'
       && staff.role === 'cook'
       && ['ordered', 'preparing'].includes(item.state)
@@ -1295,6 +1396,8 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
           stationId: staff.task.stationId,
           assignedStaffId: staff.id,
           preparationStartedAt: state.restaurant.gameTime,
+          x: station.x + 20,
+          y: station.y + 20,
         }
         : candidate),
     };
@@ -1617,4 +1720,19 @@ export function updateStaff(state, timing) {
     customers: prepared.customers.map(character => moved.get(character.id) || character),
   };
   return resolveStaffAfterMovement(committed, gameDt);
+}
+function getCustomerReviewScore(customer, fallback) {
+  const queueScore = Number.isFinite(customer.queuePatience)
+    && Number.isFinite(customer.queuePatienceMax)
+    && customer.queuePatienceMax > 0
+    ? Math.min(1, Math.max(0, customer.queuePatience / customer.queuePatienceMax)) * 100
+    : null;
+  const serviceScore = Number.isFinite(customer.patience)
+    && Number.isFinite(customer.patienceMax)
+    && customer.patienceMax > 0
+    ? Math.min(1, Math.max(0, customer.patience / customer.patienceMax)) * 100
+    : null;
+  return queueScore == null || serviceScore == null
+    ? fallback
+    : (queueScore + serviceScore) / 2;
 }

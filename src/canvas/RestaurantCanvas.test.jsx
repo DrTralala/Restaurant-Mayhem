@@ -165,7 +165,7 @@ describe('RestaurantCanvas object movement', () => {
         id,
         x: type === 'door' ? getRestaurantWorld(caseState.restaurant).doorX : 500,
         y: 300,
-        ...(type === 'chair' ? { rotation: 0 } : {}),
+        ...(['chair', 'serviceTable'].includes(type) ? { rotation: 0 } : {}),
       }],
     });
   });
@@ -335,6 +335,46 @@ describe('RestaurantCanvas object movement', () => {
       type: 'PLACE_ITEM', itemType: 'chair', x: 140, y: 80, rotation: 1,
     }));
     expect(complete).toHaveBeenCalled();
+  });
+
+  it('rotates a service counter during placement', () => {
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue(placementState);
+    const { container } = render(
+      <RestaurantCanvas managementOpen={false} placementRequest={{ itemType: 'serviceTable' }} />,
+    );
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.mouseMove(canvas, { clientX: 600, clientY: 120, buttons: 0 });
+    fireEvent.keyDown(window, { key: 'r' });
+    fireEvent.click(canvas, { clientX: 600, clientY: 120 });
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'PLACE_ITEM', itemType: 'serviceTable', x: 600, y: 120, rotation: 1,
+    });
+  });
+
+  it('rotates an existing service counter while moving it', () => {
+    const dispatch = vi.fn();
+    const serviceTable = { id: 'st1', x: 100, y: 120 };
+    const caseState = { ...makeFixtureMovementState('serviceTable'), serviceTables: [serviceTable] };
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue(caseState);
+    findClickedEntity.mockReturnValue({ type: 'serviceTable', data: serviceTable, text: 'Service counter' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.click(canvas, { clientX: 100, clientY: 120 });
+    fireEvent.click(screen.getByRole('button', { name: /Move/ }));
+    fireEvent.keyDown(window, { key: 'r' });
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 300, buttons: 0 });
+    fireEvent.click(canvas, { clientX: 500, clientY: 300 });
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'MOVE_FIXTURES',
+      items: [{ type: 'serviceTable', id: 'st1', x: 500, y: 300, rotation: 1 }],
+    });
   });
 
   for (const { itemType, x, y, state: caseState = placementState } of validPlacementCases) {

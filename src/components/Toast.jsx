@@ -1,23 +1,49 @@
 import { useGameState } from '../state/GameContext';
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+const AUTO_DISMISS_MS = 5000;
+
+function ToastBanner({ notification, onDismiss }) {
+  useEffect(() => {
+    const timer = setTimeout(() => onDismiss(notification.id), AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [notification.id, onDismiss]);
+
+  return (
+    <div className="toast-banner" role="status" style={{
+      background: '#f0a500', color: '#111', padding: '10px 44px 10px 24px',
+      borderRadius: 8, fontSize: '14px', fontFamily: 'monospace',
+      marginBottom: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+    }}>
+      {notification.message}
+      <button
+        type="button"
+        className="toast-dismiss"
+        aria-label="Dismiss notification"
+        onClick={() => onDismiss(notification.id)}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
 
 export default function Toast() {
   const state = useGameState();
   const [visible, setVisible] = useState([]);
+  const seenIds = useRef(new Set());
+
+  const dismiss = useCallback(id => {
+    setVisible(current => current.filter(notification => notification.id !== id));
+  }, []);
 
   useEffect(() => {
-    if (state.notifications.length === 0) return;
-    const latest = state.notifications[state.notifications.length - 1];
-    const id = latest.id;
-    setVisible(prev => {
-      if (prev.some(v => v.id === id)) return prev;
-      return [...prev, { id, message: latest.message, time: Date.now() }];
-    });
-    const timer = setTimeout(() => {
-      setVisible(prev => prev.filter(v => v.id !== id));
-    }, 4000);
-    return () => clearTimeout(timer);
-  }, [state.notifications.length, state.notifications]);
+    const notifications = state.notifications || [];
+    const latest = notifications[notifications.length - 1];
+    if (!latest || seenIds.current.has(latest.id)) return;
+    seenIds.current.add(latest.id);
+    setVisible(current => [...current, latest]);
+  }, [state.notifications]);
 
   if (visible.length === 0) return null;
 
@@ -25,14 +51,12 @@ export default function Toast() {
     <div style={{
       position: 'fixed', bottom: 60, left: '50%', transform: 'translateX(-50%)', zIndex: 200,
     }}>
-      {visible.map(v => (
-        <div key={v.id} style={{
-          background: '#f0a500', color: '#111', padding: '10px 24px',
-          borderRadius: 8, fontSize: '14px', fontFamily: 'monospace',
-          marginBottom: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-        }}>
-          {v.message}
-        </div>
+      {visible.map(notification => (
+        <ToastBanner
+          key={notification.id}
+          notification={notification}
+          onDismiss={dismiss}
+        />
       ))}
     </div>
   );

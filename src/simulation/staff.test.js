@@ -533,6 +533,115 @@ describe('updateStaff', () => {
     expect(repeated.restaurant.totalServed).toBe(result.restaurant.totalServed);
   });
 
+  it('advances and completes the next payment after a processor leaves slot zero', () => {
+    const station = {
+      id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+    };
+    const state = {
+      ...baseState,
+      restaurant: {
+        ...baseState.restaurant, gameTime: 60, totalServed: 0, reputation: 3,
+      },
+      cashierStations: [station],
+      dishes: [{ id: 'd1', price: 10 }],
+      completedCustomers: [],
+      staff: [{
+        id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100, path: [],
+        task: { type: 'take_payment', customerId: 'first', stationId: 'cashier1', startedAt: 0 },
+      }],
+      customers: [
+        {
+          id: 'first', state: 'checkout_processing', paymentQueuedAt: 1,
+          cashierStationId: 'cashier1', checkoutPosition: { x: 840, y: 180 },
+          paymentReady: false, x: 840, y: 180, path: [],
+          happiness: 80, dishId: 'd1', drinkId: null, tableId: null,
+        },
+        {
+          id: 'second', state: 'checkout_moving', paymentQueuedAt: 2,
+          cashierStationId: 'cashier1', checkoutPosition: null,
+          paymentReady: false, x: 800, y: 180, path: [],
+          happiness: 80, dishId: 'd1', drinkId: null, tableId: null,
+        },
+      ],
+    };
+
+    const slotOne = { x: 840, y: 200 };
+    let reserved = state;
+    expect(Math.hypot(
+      state.customers[1].x - state.customers[0].x,
+      state.customers[1].y - state.customers[0].y,
+    )).toBe(40);
+    let reachedSlotOne = false;
+    for (let tick = 0; tick < 100; tick += 1) {
+      const previous = reserved.customers.find(customer => customer.id === 'second');
+      reserved = updateCustomers(reserved, { gameDt: 0, movementDt: 0.1 });
+      const processor = reserved.customers.find(customer => customer.id === 'first');
+      const second = reserved.customers.find(customer => customer.id === 'second');
+      expect(processor).toMatchObject({
+        state: 'checkout_processing', checkoutPosition: { x: 840, y: 180 },
+      });
+      expect(Math.hypot(second.x - previous.x, second.y - previous.y)).toBeLessThanOrEqual(6.2 + 1e-6);
+      expect(Math.hypot(second.x - processor.x, second.y - processor.y)).toBeGreaterThanOrEqual(16 - 1e-6);
+      if (second.checkoutPosition?.x === slotOne.x
+        && second.checkoutPosition?.y === slotOne.y
+        && Math.hypot(second.x - slotOne.x, second.y - slotOne.y) <= 2) {
+        reachedSlotOne = true;
+        break;
+      }
+    }
+    expect(reachedSlotOne).toBe(true);
+    const secondAtSlotOne = reserved.customers.find(customer => customer.id === 'second');
+    expect(secondAtSlotOne).toMatchObject({
+      state: 'checkout_moving', checkoutPosition: slotOne, paymentReady: false,
+    });
+    expect(Math.hypot(secondAtSlotOne.x - slotOne.x, secondAtSlotOne.y - slotOne.y))
+      .toBeLessThanOrEqual(2);
+
+    const firstPaid = updateStaff(reserved, 0);
+    expect(firstPaid.customers.find(customer => customer.id === 'first').state).toBe('leaving');
+    expect(firstPaid.completedCustomers).toHaveLength(1);
+
+    const slotZero = { x: 840, y: 180 };
+    let arrivedAtFront = firstPaid;
+    let reachedSlotZero = false;
+    for (let tick = 0; tick < 100; tick += 1) {
+      const previous = arrivedAtFront.customers.find(customer => customer.id === 'second');
+      arrivedAtFront = updateCustomers(arrivedAtFront, { gameDt: 0, movementDt: 0.1 });
+      const second = arrivedAtFront.customers.find(customer => customer.id === 'second');
+      expect(Math.hypot(second.x - previous.x, second.y - previous.y)).toBeLessThanOrEqual(6.2 + 1e-6);
+      if (second.checkoutPosition?.x === slotZero.x
+        && second.checkoutPosition?.y === slotZero.y
+        && Math.hypot(second.x - slotZero.x, second.y - slotZero.y) <= 2
+        && second.paymentReady) {
+        reachedSlotZero = true;
+        break;
+      }
+    }
+    expect(reachedSlotZero).toBe(true);
+    const secondAtSlotZero = arrivedAtFront.customers.find(customer => customer.id === 'second');
+    expect(secondAtSlotZero).toMatchObject({
+      state: 'checkout_moving', checkoutPosition: slotZero, paymentReady: true,
+    });
+    expect(Math.hypot(secondAtSlotZero.x - secondAtSlotOne.x,
+      secondAtSlotZero.y - secondAtSlotOne.y)).toBeGreaterThan(0);
+
+    const secondAssigned = updateStaff(arrivedAtFront, 0);
+    const secondStarted = updateStaff(secondAssigned, 0);
+    expect(secondStarted.customers.find(customer => customer.id === 'second').state)
+      .toBe('checkout_processing');
+    expect(secondStarted.staff[0].task).toMatchObject({
+      type: 'take_payment', customerId: 'second', stationId: 'cashier1', startedAt: 60,
+    });
+
+    const secondPaid = updateStaff({
+      ...secondStarted,
+      restaurant: { ...secondStarted.restaurant, gameTime: 120 },
+    }, 0);
+    expect(secondPaid.customers.find(customer => customer.id === 'second').state).toBe('leaving');
+    expect(secondPaid.completedCustomers).toHaveLength(2);
+    expect(secondPaid.restaurant.totalServed).toBe(2);
+  });
+
   it.each(['dish', 'drink'])('clears a used %s item through one generic task', kind => {
     const state = {
       ...baseState,
@@ -1112,7 +1221,7 @@ describe('updateStaff', () => {
       serviceItems: [item],
       serviceTables: [
         { id: 'st1', x: 140, y: 120 },
-        { id: 'st2', x: 400, y: 120 },
+        { id: 'st2', x: 400, y: 120, rotation: 1 },
       ],
     };
 
@@ -1266,6 +1375,32 @@ describe('updateStaff', () => {
 
     expect(result.restaurant.reputation).toBeCloseTo(4.91836);
     expect(result.completedCustomers[0].tip).toBe(2.4);
+  });
+
+  it('averages queue and service patience into the review at payment', () => {
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'cw1', role: 'waiter', morale: 80, x: 840, y: 100, path: [],
+        task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1', startedAt: 0 },
+      }],
+      customers: [{
+        id: 'c1', state: 'checkout_processing', paymentReady: false,
+        cashierStationId: 'cashier1', x: 840, y: 180,
+        happiness: 80, dishId: 'd1', tableId: 't1',
+        queuePatience: 75, queuePatienceMax: 100,
+        patience: 25, patienceMax: 100,
+      }],
+      dishes: [{ id: 'd1', price: 12 }],
+      completedCustomers: [],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
+      restaurant: { ...baseState.restaurant, gameTime: 60, reputation: 3 },
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.completedCustomers[0].reviewScore).toBe(50);
+    expect(result.restaurant.reputation).toBeCloseTo(3.015);
   });
 
   it('assigned cashier waiter stays at the station when no payment is waiting', () => {
@@ -2631,14 +2766,14 @@ describe('updateStaff', () => {
       }],
       serviceTables: [
         { id: 'st1', x: 140, y: 120 },
-        { id: 'st2', x: 400, y: 120 },
+        { id: 'st2', x: 400, y: 120, rotation: 1 },
       ],
     };
 
     const result = updateStaff(state, 0);
 
     expect(result.staff[0].task).toMatchObject({ type: 'pickup_service_item', serviceItemId: 'i1' });
-    expect(result.staff[0].path.at(-1)).toEqual({ x: 26, y: 8 });
+    expect(result.staff[0].path.at(-1)).toEqual({ x: 22, y: 12 });
   });
 
   it.each(['dish', 'drink'])('picks up and carries one on-service %s', kind => {
@@ -3145,10 +3280,76 @@ describe('updateStaff', () => {
     expect(result.serviceItems).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'i1', state: 'preparing', stationId: 'k1', assignedStaffId: 'c1',
-        preparationStartedAt: 100,
+        preparationStartedAt: 100, x: 110, y: 90,
       }),
       expect.objectContaining({ id: 'i2', customerId: 'c2', state: 'ordered' }),
     ]));
+  });
+
+  it('cook picks up their finished dish and paths to a reserved service-counter slot', () => {
+    const station = { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 };
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 160 },
+      staff: [{
+        id: 'cook1', role: 'cook', morale: 80, x: 80, y: 140, path: [],
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
+      }],
+      customers: [{ id: 'customer', state: 'waiting_for_items', dishId: 'd1' }],
+      kitchenStations: [station],
+      serviceTables: [{ id: 'st1', x: 300, y: 120 }],
+      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true }],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'customer',
+        state: 'ready', stationId: 'k1', assignedStaffId: 'cook1', readyAt: 160,
+        serviceTableId: null, serviceSlotIndex: null, x: 120, y: 140,
+      }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({
+      task: {
+        type: 'place_dish_on_service', serviceItemId: 'i1',
+        serviceTableId: 'st1', serviceSlotIndex: 0,
+      },
+      carryingServiceItemId: 'i1',
+    });
+    expect(result.staff[0].path.length).toBeGreaterThan(0);
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'carried', assignedStaffId: 'cook1',
+      serviceTableId: 'st1', serviceSlotIndex: 0,
+    });
+  });
+
+  it('cook places the carried dish onto the service counter for waiter pickup', () => {
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'cook1', role: 'cook', morale: 80, x: 300, y: 160, path: [],
+        task: {
+          type: 'place_dish_on_service', serviceItemId: 'i1',
+          serviceTableId: 'st1', serviceSlotIndex: 0,
+        },
+        carryingServiceItemId: 'i1',
+      }],
+      customers: [{ id: 'customer', state: 'waiting_for_items', dishId: 'd1' }],
+      serviceTables: [{ id: 'st1', x: 300, y: 120 }],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'customer',
+        state: 'carried', assignedStaffId: 'cook1',
+        serviceTableId: 'st1', serviceSlotIndex: 0, x: 300, y: 160,
+      }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0]).toMatchObject({ task: null, carryingServiceItemId: null });
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'on_service', assignedStaffId: null,
+      serviceTableId: 'st1', serviceSlotIndex: 0, x: 310, y: 130,
+    });
   });
 
   it('clears a stale prepare-dish task without touching another item', () => {

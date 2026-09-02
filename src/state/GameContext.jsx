@@ -177,7 +177,9 @@ function placeItem(state, action) {
     const id = getNextNumericId(serviceTables, 'st');
     return {
       ...nextState,
-      serviceTables: [...serviceTables, { id, x: placement.x, y: placement.y }],
+      serviceTables: [...serviceTables, {
+        id, x: placement.x, y: placement.y, rotation: placement.rotation,
+      }],
     };
   }
 
@@ -501,7 +503,10 @@ function gameReducer(state, action) {
       return placeLegacyItem(state, action, 'serviceTable');
     case 'MOVE_SERVICE_TABLE':
       return moveFixtures(state, [
-        { type: 'serviceTable', id: action.id, x: action.x, y: action.y },
+        {
+          type: 'serviceTable', id: action.id, x: action.x, y: action.y,
+          ...(action.rotation != null ? { rotation: action.rotation } : {}),
+        },
       ]);
     case 'DELETE_SERVICE_TABLE': {
       const serviceTable = state.serviceTables.find(table => table.id === action.id);

@@ -24,6 +24,18 @@ describe('pathfinding', () => {
     for (const cell of ['25,15', '26,15', '25,16', '26,16']) expect(blocked.has(cell)).toBe(true);
   });
 
+  it('blocks the vertical footprint of a rotated service counter', () => {
+    const blocked = buildBlockedCells({
+      ...state,
+      serviceTables: [{ id: 'vertical', x: 400, y: 120, rotation: 1 }],
+    });
+
+    for (const cell of ['20,6', '21,6', '20,11', '21,11']) {
+      expect(blocked.has(cell)).toBe(true);
+    }
+    expect(blocked.has('22,6')).toBe(false);
+  });
+
   it('finds the nearest open cell adjacent to a blocked target', () => {
     const cleanState = {
       restaurant: { expansionLevel: 1 },

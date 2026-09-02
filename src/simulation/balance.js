@@ -11,6 +11,13 @@ export const CUSTOMER_PATIENCE = Object.freeze({
   influencer: 18 * 60,
 });
 
+export function getCustomerPatience(archetype, partySize = 1) {
+  const basePatience = CUSTOMER_PATIENCE[archetype];
+  if (!Number.isFinite(basePatience)) return 0;
+  const size = Math.min(4, Math.max(1, Math.floor(finiteNumber(partySize, 1))));
+  return basePatience * (1 + (size - 1) * 0.25);
+}
+
 export const ABANDONMENT_REPUTATION_PENALTY = 0.1;
 
 export function clampReputation(value) {
