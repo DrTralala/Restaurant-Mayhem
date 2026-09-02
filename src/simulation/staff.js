@@ -3,7 +3,7 @@ import { clearMovementRecoveryMetadata, ensureStaffRuntime, hasArrived, planChar
 import { getCashierCustomerPosition, getCashierWorkPosition, getDoorPosition, getDoors, getRestaurantWorld } from './world';
 import { clampReputation, getTipRate, getUpgradeEffect } from './balance';
 import { getAssignedCashierStation } from './cashiers';
-import { getDrink } from '../data/drinks';
+import { getDrink, getResolvedDrink } from '../data/drinks';
 import { getPlaceableDimensions } from '../data/placeables';
 import {
   allOrderedItemsDelivered,
@@ -784,9 +784,11 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     if (state.restaurant.gameTime - staff.task.startedAt < ACTIVITY_DURATIONS.takePayment) {
       return { staff: { ...staff, path: [] }, customers, queue, tables, serviceItems };
     }
-    const dishPrice = (state.dishes || []).find(candidate => candidate.id === customer.dishId)?.price || 0;
-    const drinkPrice = getDrink(customer.drinkId)?.price || 0;
-    const price = dishPrice + drinkPrice;
+    const legacyDishPrice = (state.dishes || []).find(candidate => candidate.id === customer.dishId)?.price || 0;
+    const legacyDrinkPrice = getResolvedDrink(state, customer.drinkId)?.price || 0;
+    const price = Number.isFinite(customer.orderSubtotal) && customer.orderSubtotal >= 0
+      ? customer.orderSubtotal
+      : legacyDishPrice + legacyDrinkPrice;
     const happiness = Number.isFinite(customer.happiness) ? customer.happiness : 80;
     const tip = Math.round(price * getTipRate(happiness) * 100) / 100;
     const reviewScore = getCustomerReviewScore(customer, happiness);

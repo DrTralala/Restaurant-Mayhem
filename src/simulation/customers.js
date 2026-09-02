@@ -17,6 +17,7 @@ import {
   getQueuePatienceMultiplier,
   getUpgradeEffect,
 } from './balance';
+import { createSpendingProfile } from './menuEconomy';
 
 let customerIdCounter = 0;
 let partyIdCounter = 0;
@@ -120,13 +121,16 @@ export function spawnCustomers(state, dt = 1) {
   const archetype = ARCHETYPES[Math.floor(Math.random() * ARCHETYPES.length)];
   const newCustomers = Array.from({ length: party.size }, () => {
     const patienceMax = getCustomerPatience(archetype, party.size);
+    const gender = Math.random() < 0.5 ? 'male' : 'female';
+    const spendingProfile = createSpendingProfile(state.restaurant.reputation);
     return {
       id: nextCustomerId(),
       partyId,
       partyType: party.type,
       partySize: party.size,
       archetype,
-      gender: Math.random() < 0.5 ? 'male' : 'female',
+      gender,
+      ...spendingProfile,
       patience: patienceMax,
       patienceMax,
       queuePatience: patienceMax,

@@ -423,4 +423,38 @@ describe('hydrateState', () => {
       tea: { price: 10, quality: 3 },
     });
   });
+
+  it('preserves valid profiles and snapshots while removing invalid economy fields', () => {
+    const fresh = createInitialState();
+    const valid = {
+      id: 'valid', gender: 'female', spendingTier: 'value', spendingBudget: 30,
+      menuOutcome: 'ordered', dishPriceAtOrder: 12, drinkPriceAtOrder: null,
+      orderSubtotal: 12,
+    };
+    const invalid = {
+      id: 'invalid', gender: 'male', spendingTier: 'budget', spendingBudget: 99,
+      menuOutcome: 'forged', dishPriceAtOrder: -1,
+      drinkPriceAtOrder: '2', orderSubtotal: Number.NaN,
+    };
+    const queuedValid = {
+      id: 'queued-valid', partyId: 'queued-party', gender: 'female',
+      spendingTier: 'premium', spendingBudget: 120,
+    };
+    const queuedInvalid = {
+      id: 'queued-invalid', partyId: 'queued-party', gender: 'male',
+      spendingTier: 'premium', spendingBudget: 121,
+    };
+    const hydrated = hydrateState({
+      ...fresh,
+      customers: [valid, invalid],
+      queue: [{ partyId: 'queued-party', members: [queuedValid, queuedInvalid] }],
+    }, fresh);
+
+    expect(hydrated.customers[0]).toMatchObject(valid);
+    expect(hydrated.customers[1]).toEqual({ id: 'invalid', gender: 'male' });
+    expect(hydrated.queue[0].members[0]).toMatchObject(queuedValid);
+    expect(hydrated.queue[0].members[1]).toEqual({
+      id: 'queued-invalid', partyId: 'queued-party', gender: 'male',
+    });
+  });
 });

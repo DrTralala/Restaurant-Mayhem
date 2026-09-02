@@ -140,6 +140,8 @@ describe('spawnCustomers', () => {
       .mockReturnValueOnce(0.5)
       .mockReturnValueOnce(0)
       .mockReturnValueOnce(0.2)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
       .mockReturnValueOnce(0.8);
 
     const result = spawnCustomers(baseState, 1);
@@ -149,6 +151,25 @@ describe('spawnCustomers', () => {
     expect(result.queue[0].members.map(customer => customer.partySize)).toEqual([2, 2]);
     expect(new Set(result.queue[0].members.map(customer => customer.partyId)).size).toBe(1);
     expect(result.queue[0].members.map(customer => customer.gender)).toEqual(['male', 'female']);
+  });
+
+  it('assigns independent spending profiles to members of one party', () => {
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)        // spawn
+      .mockReturnValueOnce(0.5)      // couple
+      .mockReturnValueOnce(0)        // regular archetype
+      .mockReturnValueOnce(0)        // member a gender
+      .mockReturnValueOnce(0)        // member a tier
+      .mockReturnValueOnce(0)        // member a budget
+      .mockReturnValueOnce(0)        // member b gender
+      .mockReturnValueOnce(0.999999) // member b tier
+      .mockReturnValueOnce(0.999999);// member b budget
+
+    const result = spawnCustomers(baseState, 60);
+    const members = result.queue[0].members;
+    expect(new Set(members.map(member => member.partyId))).toEqual(new Set([members[0].partyId]));
+    expect(members.map(member => [member.spendingTier, member.spendingBudget]))
+      .toEqual([['budget', 6], ['premium', 120]]);
   });
 
   it('stores one couple as one queue record', () => {

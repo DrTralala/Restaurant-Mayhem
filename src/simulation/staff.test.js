@@ -505,7 +505,7 @@ function queuedAdmissionState() {
 }
 
 describe('updateStaff', () => {
-  it('bills one dish and one drink exactly once without changing delivered items', () => {
+  it('bills one dish and one drink from accepted price snapshots exactly once without changing delivered items', () => {
     const legacyConsumedItem = {
       id: 'dish', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'delivered', consumedAt: 100,
     };
@@ -513,8 +513,8 @@ describe('updateStaff', () => {
       ...baseState,
       staff: [{ id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100, path: [],
         task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1', startedAt: 0 } }],
-      customers: [{ id: 'c1', state: 'checkout_processing', paymentReady: false, cashierStationId: 'cashier1', x: 840, y: 180, happiness: 80, dishId: 'd1', drinkId: 'water', tableId: 't1' }],
-      dishes: [{ id: 'd1', price: 12 }], unlockedDrinkIds: ['water'],
+      customers: [{ id: 'c1', state: 'checkout_processing', paymentReady: false, cashierStationId: 'cashier1', x: 840, y: 180, happiness: 80, dishId: 'd1', drinkId: 'water', tableId: 't1', menuOutcome: 'ordered', dishPriceAtOrder: 8, drinkPriceAtOrder: 3, orderSubtotal: 11 }],
+      dishes: [{ id: 'd1', price: 40 }], unlockedDrinkIds: ['water'], drinkOverrides: { water: { price: 20 } },
       serviceItems: [
         legacyConsumedItem,
         { id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'delivered' },
@@ -524,13 +524,36 @@ describe('updateStaff', () => {
       cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier' }],
     };
     const result = updateStaff(state, 0);
-    expect(result.completedCustomers[0]).toMatchObject({ dishId: 'd1', drinkId: 'water', revenue: 16.8, tip: 2.8, totalPaid: 16.8 });
+    expect(result.completedCustomers[0]).toMatchObject({ dishId: 'd1', drinkId: 'water', revenue: 13.2, tip: 2.2, totalPaid: 13.2 });
     expect(result.serviceItems).toEqual(state.serviceItems);
     expect(result.tables[0].status).toBe('dirty');
 
     const repeated = updateStaff(result, 60);
     expect(repeated.completedCustomers).toHaveLength(1);
     expect(repeated.restaurant.totalServed).toBe(result.restaurant.totalServed);
+  });
+
+  it('bills legacy dish and resolved drink prices when no snapshot exists', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 60 },
+      staff: [{ id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100, path: [],
+        task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1', startedAt: 0 } }],
+      customers: [{ id: 'c1', state: 'checkout_processing', paymentReady: false, cashierStationId: 'cashier1', x: 840, y: 180, happiness: 80, dishId: 'd1', drinkId: 'water', tableId: 't1' }],
+      dishes: [{ id: 'd1', price: 40 }], unlockedDrinkIds: ['water'], drinkOverrides: { water: { price: 20 } },
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier' }],
+      serviceItems: [
+        { id: 'dish', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'delivered' },
+        { id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'delivered' },
+      ],
+      completedCustomers: [],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.completedCustomers[0]).toMatchObject({
+      dishId: 'd1', drinkId: 'water', revenue: 72, tip: 12, totalPaid: 72,
+    });
   });
 
   it('does not re-dirty an already cleaned table when payment completes', () => {

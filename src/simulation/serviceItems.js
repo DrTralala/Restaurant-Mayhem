@@ -1,7 +1,7 @@
-import { DRINKS, getDrink } from '../data/drinks';
-import { getDishValueScore } from './balance';
+import { DRINKS } from '../data/drinks';
 import { DIRTY_STATES } from './dishwashing';
 import { isCheckoutState } from './checkout';
+import { chooseAffordableBasket } from './menuEconomy';
 
 export function selectOrderKinds(roll) {
   if (roll < 0.75) return ['dish'];
@@ -97,13 +97,6 @@ export function findAvailableServiceSlot(state) {
   return null;
 }
 
-function selectBestDish(dishes) {
-  if (!dishes?.length) return null;
-  return dishes.reduce((best, dish) =>
-    getDishValueScore(dish) > getDishValueScore(best) ? dish : best,
-  dishes[0]);
-}
-
 function createServiceItem(serviceItems, customer, kind, menuItemId) {
   return {
     id: getNextServiceItemId(serviceItems),
@@ -128,44 +121,51 @@ function createServiceItem(serviceItems, customer, kind, menuItemId) {
 }
 
 export function createCustomerOrder(state, customer, random = Math.random) {
-  const selectedKinds = selectOrderKinds(random());
-  const selectedDish = selectedKinds.includes('dish') ? selectBestDish(state.dishes) : null;
-  let selectedDrinkId = selectedKinds.includes('drink')
-    ? selectUnlockedDrinkId(state.unlockedDrinkIds, random())
-    : null;
-  let dish = selectedDish;
-
-  if (!dish && selectedKinds.includes('dish') && !selectedKinds.includes('drink')) {
-    selectedDrinkId = selectUnlockedDrinkId(state.unlockedDrinkIds, random());
-  }
-  if (!selectedDrinkId && selectedKinds.includes('drink') && !selectedKinds.includes('dish')) {
-    dish = selectBestDish(state.dishes);
-  }
-
+  const { customer: profiledCustomer, basket } = chooseAffordableBasket(state, customer, random);
   let serviceItems = [...(state.serviceItems || [])];
   const initialLength = serviceItems.length;
+  if (!basket) {
+    return {
+      customer: {
+        ...profiledCustomer,
+        state: 'waiting_for_party',
+        menuOutcome: 'unaffordable',
+        dishId: null,
+        drinkId: null,
+        dishPriceAtOrder: null,
+        drinkPriceAtOrder: null,
+        orderSubtotal: null,
+        orderedServiceItemIds: [],
+        consumedServiceItemIds: [],
+      },
+      serviceItems,
+    };
+  }
+
   const selections = [
-    ['dish', dish?.id || null],
-    ['drink', selectedDrinkId],
+    ['dish', basket.dish?.id ?? null],
+    ['drink', basket.drink?.id ?? null],
   ];
 
   for (const [kind, menuItemId] of selections) {
     if (!menuItemId || hasDuplicateOwner(serviceItems, customer.id, kind)) continue;
-    serviceItems.push(createServiceItem(serviceItems, customer, kind, menuItemId));
+    serviceItems.push(createServiceItem(serviceItems, profiledCustomer, kind, menuItemId));
   }
 
-  if (serviceItems.length === initialLength) return { customer, serviceItems };
+  if (serviceItems.length === initialLength) return { customer: profiledCustomer, serviceItems };
 
-  const customerItems = serviceItems.filter(item => item.customerId === customer.id);
-  const dishItem = customerItems.find(item => item.kind === 'dish');
-  const drinkItem = customerItems.find(item => item.kind === 'drink');
+  const customerItems = serviceItems.filter(item => item.customerId === profiledCustomer.id);
   return {
     customer: {
-      ...customer,
+      ...profiledCustomer,
       state: 'waiting_for_items',
-      dishId: dishItem?.menuItemId ?? customer.dishId ?? null,
-      drinkId: drinkItem?.menuItemId ?? customer.drinkId ?? null,
-      orderTime: state.restaurant?.gameTime ?? customer.orderTime,
+      menuOutcome: 'ordered',
+      dishId: basket.dish?.id ?? null,
+      drinkId: basket.drink?.id ?? null,
+      dishPriceAtOrder: basket.dish?.price ?? null,
+      drinkPriceAtOrder: basket.drink?.price ?? null,
+      orderSubtotal: basket.price,
+      orderTime: state.restaurant?.gameTime ?? profiledCustomer.orderTime,
       orderedServiceItemIds: customerItems.map(item => item.id),
       consumedServiceItemIds: [],
     },

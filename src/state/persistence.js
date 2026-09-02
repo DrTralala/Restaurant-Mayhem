@@ -6,6 +6,7 @@ import { normaliseOperatingHour } from '../simulation/clock';
 import { normaliseConsumptionState } from '../simulation/consumption';
 import { normaliseCustomerQueue } from '../simulation/customerQueue';
 import { normaliseTableReservationOwners } from '../simulation/guidance';
+import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
 
 export function saveState(state) {
   try {
@@ -34,7 +35,7 @@ export function hydrateState(saved, fresh) {
   }));
   const queue = normaliseCustomerQueue(saved.queue || fresh.queue || []).map(party => ({
     ...party,
-    members: party.members.map(character => ({
+    members: party.members.map(character => normaliseCustomerEconomy({
       ...character,
       gender: inferGender(character),
     })),
@@ -47,10 +48,11 @@ export function hydrateState(saved, fresh) {
       ...(saved.restaurant || {}),
     },
     staff,
-    customers: (saved.customers || fresh.customers || []).map(character => ({
-      ...character,
-      gender: inferGender(character),
-    })),
+    customers: (saved.customers || fresh.customers || []).map(character =>
+      normaliseCustomerEconomy({
+        ...character,
+        gender: inferGender(character),
+      })),
     queue,
     queueAdmissionGate: saved.queueAdmissionGate ?? fresh.queueAdmissionGate ?? null,
     drinkOverrides: normaliseDrinkOverrides(saved.drinkOverrides ?? fresh.drinkOverrides),

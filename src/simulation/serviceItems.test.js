@@ -29,13 +29,80 @@ describe('service item orders', () => {
     expect(selectUnlockedDrinkId(['lemonade'], 0.5)).toBeNull();
   });
 
+  it('creates scalar-owned items and snapshots an affordable combined basket', () => {
+    const state = {
+      restaurant: { reputation: 3, gameTime: 42 },
+      dishes: [{ id: 'toast', price: 12, quality: 1, popularity: 50, prepTime: 120 }],
+      unlockedDrinkIds: ['water'], drinkOverrides: {}, serviceItems: [],
+    };
+    const rolls = [0.8, 0];
+    const result = createCustomerOrder(state, {
+      id: 'c1', partyId: 'p1', tableId: 't1', state: 'seated',
+      archetype: 'regular', spendingTier: 'value', spendingBudget: 20,
+    }, () => rolls.shift());
+
+    expect(result.customer).toMatchObject({
+      state: 'waiting_for_items',
+      menuOutcome: 'ordered',
+      dishId: 'toast',
+      drinkId: 'water',
+      dishPriceAtOrder: 12,
+      drinkPriceAtOrder: 2,
+      orderSubtotal: 14,
+      orderTime: 42,
+    });
+    expect(result.serviceItems).toEqual([
+      expect.objectContaining({ kind: 'dish', menuItemId: 'toast', customerId: 'c1' }),
+      expect.objectContaining({ kind: 'drink', menuItemId: 'water', customerId: 'c1' }),
+    ]);
+  });
+
+  it('creates no service item when every basket is unaffordable', () => {
+    const expensiveState = {
+      restaurant: { reputation: 3, gameTime: 42 },
+      dishes: [{ id: 'toast', price: 100, quality: 1, popularity: 50, prepTime: 120 }],
+      unlockedDrinkIds: ['water'], drinkOverrides: { water: { price: 100 } },
+      serviceItems: [],
+    };
+    const result = createCustomerOrder(expensiveState, {
+      id: 'c1', partyId: 'p1', state: 'seated', tableId: 't1',
+      archetype: 'regular', spendingTier: 'budget', spendingBudget: 6,
+    }, () => 0);
+    expect(result.customer).toMatchObject({
+      state: 'waiting_for_party', menuOutcome: 'unaffordable',
+      dishId: null, drinkId: null, orderSubtotal: null,
+    });
+    expect(result.serviceItems).toEqual(expensiveState.serviceItems);
+  });
+
+  it('assigns one lazy profile and preserves it on repeated order calls', () => {
+    const state = {
+      restaurant: { reputation: 1, gameTime: 42 },
+      dishes: [], unlockedDrinkIds: ['water'], drinkOverrides: {}, serviceItems: [],
+    };
+    const rolls = [0, 0, 0, 0];
+    const first = createCustomerOrder(state, {
+      id: 'legacy', partyId: 'p1', tableId: 't1', state: 'seated',
+      archetype: 'regular',
+    }, () => rolls.shift());
+    expect(first.customer).toMatchObject({ spendingTier: 'budget', spendingBudget: 6 });
+
+    const second = createCustomerOrder({ ...state, serviceItems: first.serviceItems }, first.customer, () => 0.99);
+    expect(second.customer.spendingTier).toBe(first.customer.spendingTier);
+    expect(second.customer.spendingBudget).toBe(first.customer.spendingBudget);
+    expect(second.serviceItems).toEqual(first.serviceItems);
+  });
+
   it('creates one scalar-owned item per selected kind', () => {
-    const rolls = [0.8, 0.9];
     const state = {
       dishes: [{ id: 'toast', popularity: 50, quality: 1, price: 12 }],
       unlockedDrinkIds: ['water'], serviceItems: [],
     };
-    const customer = { id: 'c1', tableId: 't1', state: 'seated' };
+    const customer = {
+      id: 'c1', tableId: 't1', state: 'seated',
+      spendingTier: 'value', spendingBudget: 20,
+    };
+    const rolls = [0.8, 0];
 
     const result = createCustomerOrder(state, customer, () => rolls.shift());
 
@@ -60,7 +127,10 @@ describe('service item orders', () => {
       dishes: [{ id: 'toast', popularity: 50, quality: 1, price: 12 }],
       unlockedDrinkIds: ['water'], serviceItems: existing,
       restaurant: { gameTime: 42 },
-    }, { id: 'c1', tableId: 't1', state: 'seated', orderTime: null }, () => rolls.shift());
+    }, {
+      id: 'c1', tableId: 't1', state: 'seated', orderTime: null,
+      spendingTier: 'value', spendingBudget: 20,
+    }, () => rolls.shift());
 
     expect(result.customer.orderTime).toBe(42);
     expect(result.serviceItems.slice(1)).toEqual([
@@ -95,7 +165,10 @@ describe('service item orders', () => {
     expect(hasDuplicateOwner(existing, 'c1', 'dish')).toBe(true);
     expect(hasDuplicateOwner(existing, 'c1', 'drink')).toBe(false);
 
-    const customer = { id: 'c1', tableId: 't1', state: 'seated' };
+    const customer = {
+      id: 'c1', tableId: 't1', state: 'seated',
+      spendingTier: 'value', spendingBudget: 20,
+    };
     const result = createCustomerOrder({
       dishes: [{ id: 'toast', popularity: 50, quality: 1, price: 12 }],
       unlockedDrinkIds: [], serviceItems: existing,
@@ -108,22 +181,13 @@ describe('service item orders', () => {
     const rolls = [0.2, 0];
     const result = createCustomerOrder({
       dishes: [], unlockedDrinkIds: ['water'], serviceItems: [],
-    }, { id: 'c1', tableId: 't1', state: 'seated' }, () => rolls.shift());
+    }, {
+      id: 'c1', tableId: 't1', state: 'seated',
+      spendingTier: 'budget', spendingBudget: 6,
+    }, () => rolls.shift());
 
     expect(result.customer).toMatchObject({ dishId: null, drinkId: 'water' });
     expect(result.serviceItems.map(item => item.kind)).toEqual(['drink']);
-  });
-
-  it('chooses the dish with the highest value score', () => {
-    const result = createCustomerOrder({
-      dishes: [
-        { id: 'good-value', popularity: 70, quality: 7, price: 20 },
-        { id: 'overpriced', popularity: 90, quality: 8, price: 100 },
-      ],
-      unlockedDrinkIds: [], serviceItems: [],
-    }, { id: 'c1', tableId: 't1', state: 'seated' }, () => 0.2);
-
-    expect(result.customer.dishId).toBe('good-value');
   });
 
   it('allocates the first unique slot across on-service items and active drink reservations', () => {
