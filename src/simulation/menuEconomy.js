@@ -1,4 +1,4 @@
-import { getDrink } from '../data/drinks';
+import { getResolvedDrink } from '../data/drinks';
 import { clampReputation } from './balance';
 
 export const SPENDING_TIER_RANGES = Object.freeze({
@@ -101,26 +101,12 @@ function toBasket(kind, dish = null, drink = null) {
   };
 }
 
-// Task 2 deletes this temporary adapter after adding shared drink resolution.
-function resolveDrinkForEconomy(state, drinkId) {
-  const drink = getDrink(drinkId);
-  if (!drink) return null;
-  const override = state?.drinkOverrides?.[drinkId];
-  const price = Number.isFinite(override?.price)
-    ? Math.min(100, Math.max(1, Math.round(override.price)))
-    : drink.price;
-  const quality = Number.isFinite(override?.quality)
-    ? Math.min(10, Math.max(1, Math.round(override.quality)))
-    : drink.quality;
-  return { ...drink, price, ...(quality == null ? {} : { quality }) };
-}
-
 export function buildAffordableBaskets(state, customer) {
   const budget = Number(customer?.spendingBudget);
   if (!Number.isFinite(budget) || budget < 0) return [];
   const dishes = (state?.dishes || []).filter(dish => Number.isFinite(dish?.price));
   const drinks = (state?.unlockedDrinkIds || [])
-    .map(id => resolveDrinkForEconomy(state, id)).filter(Boolean);
+    .map(id => getResolvedDrink(state, id)).filter(Boolean);
   return [
     ...dishes.map(dish => toBasket('dish', dish)),
     ...drinks.map(drink => toBasket('drink', null, drink)),
@@ -198,7 +184,7 @@ export function estimateMenuItemDemand(state, kind, itemId) {
     ? (state?.dishes || []).some(dish => dish?.id === itemId)
     : kind === 'drink'
       && (state?.unlockedDrinkIds || []).includes(itemId)
-      && resolveDrinkForEconomy(state, itemId) != null;
+      && getResolvedDrink(state, itemId) != null;
   if (!itemExists) return 0;
 
   const tierMix = getSpendingTierProbabilities(state?.restaurant?.reputation);

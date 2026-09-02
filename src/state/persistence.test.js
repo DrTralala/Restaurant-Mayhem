@@ -167,6 +167,7 @@ describe('hydrateState', () => {
       customers: [],
       queue: [],
       queueAdmissionGate: null,
+      drinkOverrides: {},
       floorDirt: [],
       washStations: [],
     });
@@ -397,5 +398,29 @@ describe('hydrateState', () => {
     expect(crowded.staffSlots).toBe(8);
     expect(expanded.staffSlots).toBe(9);
     expect(legacy.version).toBe(5);
+  });
+
+  it('normalises drink overrides and defaults missing legacy state', () => {
+    const hydrated = hydrateState({
+      version: 5,
+      drinkOverrides: {
+        water: { price: -10, quality: 22, popularity: 99 },
+        tea: { price: 9.7, quality: 3 },
+        missing: { price: 20 },
+      },
+    }, createInitialState());
+    expect(hydrated.drinkOverrides).toEqual({
+      water: { price: 1, quality: 10 },
+      tea: { price: 10, quality: 3 },
+    });
+    expect(hydrateState({ version: 5 }, createInitialState()).drinkOverrides).toEqual({});
+  });
+
+  it('round-trips valid sparse drink overrides', () => {
+    const fresh = createInitialState();
+    saveState({ ...fresh, drinkOverrides: { tea: { price: 10, quality: 3 } } });
+    expect(hydrateState(loadState(), fresh).drinkOverrides).toEqual({
+      tea: { price: 10, quality: 3 },
+    });
   });
 });

@@ -1,5 +1,6 @@
 const SAVE_KEY = 'restaurant-sim-save';
 import { inferGender } from '../canvas/characterAppearance';
+import { normaliseDrinkOverrides } from '../data/drinks';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { normaliseOperatingHour } from '../simulation/clock';
 import { normaliseConsumptionState } from '../simulation/consumption';
@@ -52,6 +53,7 @@ export function hydrateState(saved, fresh) {
     })),
     queue,
     queueAdmissionGate: saved.queueAdmissionGate ?? fresh.queueAdmissionGate ?? null,
+    drinkOverrides: normaliseDrinkOverrides(saved.drinkOverrides ?? fresh.drinkOverrides),
     floorDirt: Array.isArray(saved.floorDirt) ? saved.floorDirt : fresh.floorDirt,
     washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
   };

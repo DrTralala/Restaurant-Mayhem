@@ -125,6 +125,7 @@ export function createInitialState() {
     milestones: MILESTONES,
     recipeSlots: 1,
     unlockedDrinkIds: ['water'],
+    drinkOverrides: {},
     staffSlots: 7,
     completedCustomers: [],
     dailyHistory: [],

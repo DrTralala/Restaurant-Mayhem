@@ -755,6 +755,67 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.unlockedDrinkIds).toEqual(['water']);
   });
 
+  it('updates only an unlocked known drink price', () => {
+    const game = renderReducer({
+      unlockedDrinkIds: ['water', 'tea'], drinkOverrides: {},
+      restaurant: { funds: 200 },
+    });
+    game.dispatch({ type: 'UPDATE_DRINK', id: 'tea', changes: { price: 19.6, popularity: 100 } });
+    expect(game.state.drinkOverrides).toEqual({ tea: { price: 20 } });
+    game.dispatch({ type: 'UPDATE_DRINK', id: 'coffee', changes: { price: 10 } });
+    expect(game.state.drinkOverrides).toEqual({ tea: { price: 20 } });
+  });
+
+  it('upgrades unlocked drink quality once for $50 and caps level ten', () => {
+    const game = renderReducer({
+      unlockedDrinkIds: ['water'], drinkOverrides: {},
+      restaurant: { funds: 100 },
+    });
+    game.dispatch({ type: 'UPGRADE_DRINK_QUALITY', id: 'water' });
+    expect(game.state.restaurant.funds).toBe(50);
+    expect(game.state.drinkOverrides.water).toEqual({ quality: 2 });
+  });
+
+  it('rejects malformed, locked, unknown, unaffordable, and capped drink actions', () => {
+    const missingChanges = renderReducer({ unlockedDrinkIds: ['water'] });
+    const missingChangesState = missingChanges.state;
+    missingChanges.dispatch({ type: 'UPDATE_DRINK', id: 'water' });
+    expect(missingChanges.state).toBe(missingChangesState);
+
+    const invalidPrice = renderReducer({ unlockedDrinkIds: ['water'] });
+    const invalidPriceState = invalidPrice.state;
+    invalidPrice.dispatch({ type: 'UPDATE_DRINK', id: 'water', changes: { price: Number.NaN } });
+    expect(invalidPrice.state).toBe(invalidPriceState);
+    invalidPrice.dispatch({ type: 'UPDATE_DRINK', id: 'water', changes: {} });
+    expect(invalidPrice.state).toBe(invalidPriceState);
+
+    const locked = renderReducer({ unlockedDrinkIds: ['water'] });
+    const lockedState = locked.state;
+    locked.dispatch({ type: 'UPDATE_DRINK', id: 'tea', changes: { price: 10 } });
+    expect(locked.state).toBe(lockedState);
+
+    const unknown = renderReducer({ unlockedDrinkIds: ['water'] });
+    const unknownState = unknown.state;
+    unknown.dispatch({ type: 'UPGRADE_DRINK_QUALITY', id: 'missing' });
+    expect(unknown.state).toBe(unknownState);
+
+    const insufficient = renderReducer({
+      unlockedDrinkIds: ['water'], restaurant: { funds: 49 },
+    });
+    const insufficientState = insufficient.state;
+    insufficient.dispatch({ type: 'UPGRADE_DRINK_QUALITY', id: 'water' });
+    expect(insufficient.state).toBe(insufficientState);
+    expect(insufficient.state.restaurant.funds).toBe(49);
+
+    const capped = renderReducer({
+      unlockedDrinkIds: ['water'], drinkOverrides: { water: { quality: 10 } },
+    });
+    const cappedState = capped.state;
+    capped.dispatch({ type: 'UPGRADE_DRINK_QUALITY', id: 'water' });
+    expect(capped.state).toBe(cappedState);
+    expect(capped.state.restaurant.funds).toBe(600);
+  });
+
   it('canonicalises valid dish creation and rejects malformed dishes', () => {
     const initial = createInitialState();
     const game = renderReducer({ dishes: [], recipeSlots: 3 });

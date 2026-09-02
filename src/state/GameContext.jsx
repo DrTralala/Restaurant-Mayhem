@@ -2,7 +2,7 @@ import { createContext, useContext, useReducer, useEffect, useRef } from 'react'
 import { createInitialState } from './initialState';
 import { hydrateState, loadState, saveState } from './persistence';
 import { ITEM_PRICES, ITEM_SELL_RATIO } from '../data/items';
-import { getDrink } from '../data/drinks';
+import { getDrink, getResolvedDrink, normaliseDrinkOverrides } from '../data/drinks';
 import { getPlaceable } from '../data/placeables';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { clampReputation } from '../simulation/balance';
@@ -280,6 +280,21 @@ function gameReducer(state, action) {
           : candidate),
       };
     }
+    case 'UPDATE_DRINK': {
+      const drink = getDrink(action.id);
+      const unlockedDrinkIds = Array.isArray(state.unlockedDrinkIds)
+        ? state.unlockedDrinkIds
+        : [];
+      if (!drink || !unlockedDrinkIds.includes(drink.id)
+        || !action.changes || !Number.isFinite(action.changes.price)) return state;
+      const currentOverrides = normaliseDrinkOverrides(state.drinkOverrides);
+      const price = Math.min(100, Math.max(1, Math.round(action.changes.price)));
+      const drinkOverrides = normaliseDrinkOverrides({
+        ...currentOverrides,
+        [drink.id]: { ...currentOverrides[drink.id], price },
+      });
+      return { ...state, drinkOverrides };
+    }
     case 'UPGRADE_DISH_QUALITY': {
       const dish = state.dishes.find(candidate => candidate.id === action.id);
       const quality = Math.min(10, Math.max(0, Math.floor(dish?.quality)));
@@ -291,6 +306,25 @@ function gameReducer(state, action) {
         dishes: state.dishes.map(candidate => candidate.id === dish.id
           ? { ...candidate, quality: quality + 1 }
           : candidate),
+      };
+    }
+    case 'UPGRADE_DRINK_QUALITY': {
+      const drink = getResolvedDrink(state, action.id);
+      const unlockedDrinkIds = Array.isArray(state.unlockedDrinkIds)
+        ? state.unlockedDrinkIds
+        : [];
+      const quality = Math.min(10, Math.max(0, Math.floor(drink?.quality)));
+      if (!drink || !unlockedDrinkIds.includes(drink.id) || !Number.isFinite(drink.quality)
+        || quality >= 10 || !canAfford(state, DISH_QUALITY_COST)) return state;
+      const currentOverrides = normaliseDrinkOverrides(state.drinkOverrides);
+      const drinkOverrides = normaliseDrinkOverrides({
+        ...currentOverrides,
+        [drink.id]: { ...currentOverrides[drink.id], quality: quality + 1 },
+      });
+      return {
+        ...state,
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - DISH_QUALITY_COST },
+        drinkOverrides,
       };
     }
     case 'BUY_UPGRADE': {
