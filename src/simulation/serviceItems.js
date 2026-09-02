@@ -146,6 +146,15 @@ export function createCustomerOrder(state, customer, random = Math.random) {
     ['dish', basket.dish?.id ?? null],
     ['drink', basket.drink?.id ?? null],
   ];
+  const existingCustomerItems = serviceItems.filter(
+    item => item.customerId === profiledCustomer.id,
+  );
+  const ownershipConflict = existingCustomerItems.some(item => {
+    const selection = selections.find(([kind]) => kind === item.kind);
+    return !selection || selection[1] !== item.menuItemId;
+  }) || selections.some(([kind, menuItemId]) => menuItemId
+    && existingCustomerItems.filter(item => item.kind === kind).length > 1);
+  if (ownershipConflict) return { customer: profiledCustomer, serviceItems };
 
   for (const [kind, menuItemId] of selections) {
     if (!menuItemId || hasDuplicateOwner(serviceItems, customer.id, kind)) continue;

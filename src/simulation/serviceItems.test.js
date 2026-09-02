@@ -177,6 +177,29 @@ describe('service item orders', () => {
     expect(result).toEqual({ customer, serviceItems: existing });
   });
 
+  it('rejects a partially duplicate basket instead of mismatching snapshots', () => {
+    const existing = [{
+      id: 'service-item-1', kind: 'dish', menuItemId: 'dish-a', customerId: 'c1',
+    }];
+    const customer = {
+      id: 'c1', tableId: 't1', state: 'seated',
+      archetype: 'regular', spendingTier: 'value', spendingBudget: 20,
+    };
+    const result = createCustomerOrder({
+      restaurant: { reputation: 3, gameTime: 42 },
+      dishes: [
+        { id: 'dish-a', price: 8, quality: 1, popularity: 50, prepTime: 120 },
+        { id: 'dish-b', price: 12, quality: 1, popularity: 50, prepTime: 120 },
+      ],
+      unlockedDrinkIds: ['water'], drinkOverrides: {}, serviceItems: existing,
+    }, customer, (() => {
+      const rolls = [0.8, 0.999999];
+      return () => rolls.shift();
+    })());
+
+    expect(result).toEqual({ customer, serviceItems: existing });
+  });
+
   it('degrades an unavailable dish order to drink-only', () => {
     const rolls = [0.2, 0];
     const result = createCustomerOrder({
