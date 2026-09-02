@@ -2486,6 +2486,13 @@ describe('updateStaff', () => {
   });
 
   it('assigns an already-adjacent waiter one timed table wipe', () => {
+    const approachBlockers = [
+      [9, 10], [9, 12], [9, 13],
+      [12, 10], [12, 11], [12, 12], [12, 13],
+      [10, 10], [11, 10], [10, 13], [11, 13],
+    ].map(([x, y], index) => ({
+      id: `table-approach-block-${index}`, x: x * 20, y: y * 20,
+    }));
     const state = {
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 100 },
@@ -2495,6 +2502,7 @@ describe('updateStaff', () => {
       }],
       customers: [{ id: 'former', state: 'leaving', tableId: 't1' }],
       tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
+      chairs: approachBlockers,
       serviceItems: [{
         id: 'off-table', state: 'to_clean', tableId: 't1', x: 500, y: 500,
       }],
