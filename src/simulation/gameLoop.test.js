@@ -712,7 +712,7 @@ describe('runTick', () => {
     const requiredStages = [
       'take_order', 'prepare_dish', 'pickup_service_item', 'deliver_service_item',
       'eating', 'paying_at_cashier', 'dirty_at_table', 'carried_dirty',
-      'queued_for_wash', 'washing', 'washed', 'leaving',
+      'clean_table', 'queued_for_wash', 'washing', 'washed', 'leaving',
     ];
     const observedStages = [];
     const observe = stage => {
@@ -722,6 +722,8 @@ describe('runTick', () => {
     const observedCompletionIds = new Set();
     let observedPaymentHappiness = null;
     let completed = false;
+    let previousTableStatus = state.tables.find(table => table.id === 't1').status;
+    let emptyTransitions = 0;
 
     for (let tick = 0; tick < 5000; tick += 1) {
       const previousItem = state.serviceItems.find(item => item.customerId === customerId);
@@ -737,6 +739,12 @@ describe('runTick', () => {
 
       const item = state.serviceItems.find(candidate => candidate.customerId === customerId);
       const customer = state.customers.find(candidate => candidate.id === customerId);
+      for (const staff of state.staff) {
+        const task = staff.task;
+        if (task?.type === 'clean_table' && task.tableId === 't1') {
+          observe('clean_table');
+        }
+      }
       if (state.staff.some(staff => staff.task?.type === 'take_order' && staff.task.customerId === customerId)) observe('take_order');
       if (state.staff.some(staff => staff.task?.type === 'prepare_dish' && staff.task.serviceItemId === item?.id)
         || item?.state === 'preparing') observe('prepare_dish');
@@ -755,6 +763,15 @@ describe('runTick', () => {
       if (item?.state === 'washing') observe('washing');
       if (previousItem?.state === 'washing' && !item) observe('washed');
       if (customer?.state === 'leaving') observe('leaving');
+
+      const lifecycleTable = state.tables.find(table => table.id === 't1');
+      if (previousTableStatus === 'empty') {
+        expect(lifecycleTable.status).toBe('empty');
+      }
+      if (previousTableStatus !== 'empty' && lifecycleTable.status === 'empty') {
+        emptyTransitions += 1;
+      }
+      previousTableStatus = lifecycleTable.status;
 
       completed = requiredStages.every(stage => observedStages.includes(stage))
         && observedCompletionIds.size === 1
@@ -792,9 +809,95 @@ describe('runTick', () => {
     expect(stageIndex('paying_at_cashier')).toBeLessThan(stageIndex('dirty_at_table'));
     expect(stageIndex('paying_at_cashier')).toBeLessThan(stageIndex('leaving'));
     expect(stageIndex('dirty_at_table')).toBeLessThan(stageIndex('carried_dirty'));
+    expect(stageIndex('carried_dirty')).toBeLessThan(stageIndex('clean_table'));
+    expect(emptyTransitions).toBe(1);
     expect(stageIndex('carried_dirty')).toBeLessThan(stageIndex('queued_for_wash'));
     expect(stageIndex('queued_for_wash')).toBeLessThan(stageIndex('washing'));
     expect(stageIndex('washing')).toBeLessThan(stageIndex('washed'));
+  });
+
+  it('wipes once and keeps the table empty through delayed checkout departure', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    let state = {
+      ...emptyState,
+      restaurant: {
+        ...emptyState.restaurant, gameTime: 0, reputation: 3,
+        openHour: 10, closeHour: 22,
+      },
+      dishes: [{ id: 'd1', price: 10 }],
+      tables: [{ id: 't1', seats: 2, status: 'occupied', x: 200, y: 220 }],
+      customers: [{
+        id: 'former', state: 'checkout_queued', paymentQueuedAt: 1,
+        cashierStationId: null, checkoutPosition: null, paymentReady: false,
+        x: 400, y: 300, path: [], tableId: 't1', happiness: 80,
+        patience: 1000, dishId: 'd1', drinkId: null,
+        orderedServiceItemIds: ['dirty'], consumedServiceItemIds: ['dirty'],
+      }],
+      serviceItems: [{
+        id: 'dirty', kind: 'dish', menuItemId: 'd1', customerId: 'former',
+        tableId: 't1', state: 'dirty_at_table', dirtyAt: 0, consumedAt: 0,
+      }],
+      staff: [{
+        id: 'cleaner', role: 'waiter', morale: 80,
+        x: 180, y: 220, path: [], task: null, carryingServiceItemId: null,
+      }],
+      washStations: [{
+        id: 'sink', type: 'manual', x: 300, y: 200, w: 40, h: 40,
+      }],
+      cashierStations: [],
+      floorDirt: [],
+    };
+    let sawCarriedDirty = false;
+    let sawCleanTable = false;
+    let wiped = false;
+
+    for (let tick = 0; tick < 500; tick += 1) {
+      state = runTick(state, 1 / 60);
+      if (state.serviceItems.some(item => item.state === 'carried_dirty')) {
+        sawCarriedDirty = true;
+      }
+      if (state.staff.some(worker => worker.task?.type === 'clean_table'
+        && worker.task.tableId === 't1')) {
+        sawCleanTable = true;
+      }
+      if (state.tables[0].status === 'empty') {
+        wiped = true;
+        break;
+      }
+    }
+
+    expect(sawCarriedDirty).toBe(true);
+    expect(sawCleanTable).toBe(true);
+    expect(wiped).toBe(true);
+    expect(state.customers.find(customer => customer.id === 'former')).toMatchObject({
+      state: 'checkout_queued', tableId: 't1',
+    });
+
+    state = {
+      ...state,
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40,
+        assignedStaffId: 'cashier',
+      }],
+      staff: [...state.staff, {
+        id: 'cashier', role: 'waiter', morale: 80,
+        x: 840, y: 100, path: [], task: null,
+      }],
+    };
+    let observedLeaving = false;
+
+    for (let tick = 0; tick < 1000; tick += 1) {
+      state = runTick(state, 1 / 60);
+      expect(state.tables[0].status).toBe('empty');
+      const customer = state.customers.find(candidate => candidate.id === 'former');
+      if (customer?.state === 'leaving') observedLeaving = true;
+      if (!customer) break;
+    }
+
+    expect(observedLeaving).toBe(true);
+    expect(state.customers.some(customer => customer.id === 'former')).toBe(false);
+    expect(state.restaurant.totalServed).toBe(1);
+    expect(state.tables[0].status).toBe('empty');
   });
 
   it('processes manual and automatic dirty items concurrently while returning the janitor to floor dirt', () => {

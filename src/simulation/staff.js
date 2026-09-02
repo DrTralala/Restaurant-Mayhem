@@ -15,7 +15,7 @@ import {
 } from './serviceItems';
 import { ACTIVITY_DURATIONS } from './activity';
 import { startCustomerConsumption } from './consumption';
-import { hasWashStationCapacity, releaseClearedTables } from './dishwashing';
+import { hasWashStationCapacity } from './dishwashing';
 import {
   getCustomerGuideContext,
   getGuidePartyContext,
@@ -92,6 +92,14 @@ function findGuidedCustomerStart(state, customer, occupiedActors) {
 
 function targetForTable(state, table, staff) {
   return targetForRect(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff);
+}
+
+function targetForTableOrCurrent(state, table, staff) {
+  return targetForRectOrCurrent(
+    state,
+    { x: table.x, y: table.y, w: 40, h: 40 },
+    staff,
+  );
 }
 
 function getServiceTableRect(serviceTable) {
@@ -640,8 +648,8 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       && isTableReadyForCleaning(t.id, customers, serviceItems)
       && (!claimedTableIds || !claimedTableIds.has(t.id)));
     if (dirty) {
-      const path = targetForTable(state, dirty, staff);
-      if (path.length) {
+      const path = targetForTableOrCurrent(state, dirty, staff);
+      if (path !== null) {
         return {
           staff: { ...staff, path, task: { type: 'clean_table', tableId: dirty.id } },
           claimedTableId: dirty.id,
@@ -1114,7 +1122,7 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       staff: { ...staff, task: stationChoice ? { type: 'deliver_dirty_item', serviceItemId: item.id, washStationId: stationChoice.station.id } : null,
         carryingServiceItemId: item.id, path: stationChoice?.path || [] },
       queue, customers,
-      tables: releaseClearedTables(tables, customers, carriedItems),
+      tables,
       serviceItems: carriedItems,
     };
   }

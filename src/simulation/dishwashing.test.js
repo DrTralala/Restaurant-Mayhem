@@ -3,7 +3,6 @@ import {
   getWashStationCapacity,
   getWashStationOccupancy,
   hasWashStationCapacity,
-  releaseClearedTables,
   updateAutomaticDishwashers,
 } from './dishwashing';
 import { processKitchen } from './kitchen';
@@ -31,21 +30,6 @@ describe('dishwashing lifecycle', () => {
     expect(getWashStationOccupancy(state, station)).toBe(3);
     expect(getWashStationOccupancy(state, station, { excludeServiceItemId: 'inbound' })).toBe(2);
     expect(hasWashStationCapacity(state, station)).toBe(true);
-  });
-
-  it('releases a dirty table only after its final dirty item is collected', () => {
-    const tables = [{ id: 't1', status: 'dirty' }];
-    const customers = [{ id: 'c1', tableId: 't1', state: 'leaving' }];
-    expect(releaseClearedTables(tables, customers, [{ tableId: 't1', state: 'dirty_at_table' }])[0].status).toBe('dirty');
-    expect(releaseClearedTables(tables, customers, [{ tableId: 't1', state: 'carried_dirty' }])[0].status).toBe('empty');
-  });
-
-  it('does not treat a checkout customer as occupying the dining table', () => {
-    expect(releaseClearedTables(
-      [{ id: 't1', status: 'dirty' }],
-      [{ id: 'c1', tableId: 't1', state: 'checkout_moving' }],
-      [],
-    )[0].status).toBe('empty');
   });
 
   it('starts the oldest automatic wash and removes it at completion', () => {

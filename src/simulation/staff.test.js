@@ -917,6 +917,7 @@ describe('updateStaff', () => {
       staff: [{ id: 'w1', role: 'waiter', x: 180, y: 220, path: [], task: { type: 'collect_dirty_item', serviceItemId: 'i1', tableId: 't1' }, carryingServiceItemId: null }] };
     const carried = updateStaff({ ...base, washStations: [] }, 0);
     expect(carried.serviceItems[0].state).toBe('carried_dirty');
+    expect(carried.tables[0].status).toBe('dirty');
     expect(carried.staff[0].carryingServiceItemId).toBe('i1');
     const queued = updateStaff({ ...carried, washStations: [{ id: 'wash1', type: 'manual', x: 200, y: 200, w: 40, h: 40 }],
       staff: [{ ...carried.staff[0], task: { type: 'deliver_dirty_item', serviceItemId: 'i1', washStationId: 'wash1' } }] }, 0);
@@ -2482,6 +2483,66 @@ describe('updateStaff', () => {
     const finished = updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 220 } }, 0);
     expect(finished.tables[0].status).toBe('empty');
     expect(finished.staff[0].task).toBeNull();
+  });
+
+  it('assigns an already-adjacent waiter one timed table wipe', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      staff: [{
+        id: 'w1', role: 'waiter', morale: 80,
+        x: 180, y: 220, path: [], task: null,
+      }],
+      customers: [{ id: 'former', state: 'leaving', tableId: 't1' }],
+      tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
+      serviceItems: [{
+        id: 'off-table', state: 'to_clean', tableId: 't1', x: 500, y: 500,
+      }],
+    };
+
+    const assigned = updateStaff(state, 0);
+    expect(assigned.staff[0]).toMatchObject({
+      path: [], task: { type: 'clean_table', tableId: 't1' },
+    });
+
+    const started = updateStaff(assigned, 0);
+    expect(started.staff[0].task).toMatchObject({ cleaningStartedAt: 100 });
+    expect(started.tables[0].status).toBe('dirty');
+
+    const waiting = updateStaff({
+      ...started,
+      restaurant: { ...started.restaurant, gameTime: 219.999 },
+    }, 0);
+    expect(waiting.tables[0].status).toBe('dirty');
+
+    const finished = updateStaff({
+      ...started,
+      restaurant: { ...started.restaurant, gameTime: 220 },
+    }, 0);
+    expect(finished.tables[0].status).toBe('empty');
+    expect(finished.staff[0].task).toBeNull();
+  });
+
+  it('leaves an unreachable dirty table unclaimed', () => {
+    const blockers = [
+      [180, 180], [200, 180], [220, 180], [240, 180],
+      [180, 200], [240, 200], [180, 220], [240, 220],
+      [180, 240], [200, 240], [220, 240], [240, 240],
+    ].map(([x, y], index) => ({ id: `block-${index}`, x, y }));
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'w1', role: 'waiter', morale: 80,
+        x: 400, y: 300, path: [], task: null,
+      }],
+      chairs: blockers,
+      tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 200 }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.tables[0].status).toBe('dirty');
   });
 
   it('cancels active table cleaning when a customer blocks the table', () => {
