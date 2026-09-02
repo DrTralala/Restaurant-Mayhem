@@ -6,6 +6,21 @@ const statBox = { background: '#1a1a2e', borderRadius: 6, padding: 10, border: '
 export default function StatsPanel() {
   const state = useGameState();
   const canvasRef = useRef(null);
+  const partyReviewHistory = Array.isArray(state.partyReviewHistory)
+    ? state.partyReviewHistory
+    : [];
+  const finiteScores = partyReviewHistory
+    .map(review => review.score)
+    .filter(Number.isFinite);
+  const averagePartyReview = finiteScores.length
+    ? (finiteScores.reduce((sum, score) => sum + score, 0) / finiteScores.length).toFixed(1)
+    : '—';
+  const unaffordableReviewCount = partyReviewHistory
+    .filter(review => review.unaffordableCount > 0).length;
+  const unaffordableReviewPercentage = partyReviewHistory.length
+    ? Math.round(unaffordableReviewCount / partyReviewHistory.length * 100)
+    : 0;
+  const latestPartyReviews = partyReviewHistory.slice(-10).reverse();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -46,6 +61,39 @@ export default function StatsPanel() {
         <div style={statBox}>Reputation: <strong>{state.restaurant.reputation.toFixed(1)} ★</strong></div>
         <div style={statBox}>Staff: <strong>{state.staff.length}</strong></div>
         <div style={statBox}>Dishes: <strong>{state.dishes.length}</strong></div>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <h4 style={{ marginBottom: 8 }}>Party Reviews</h4>
+        <div style={{ display: 'grid', gap: 8, fontSize: 12 }}>
+          <div style={statBox}>Average party review: {averagePartyReview}</div>
+          <div style={statBox}>Completed reviews: {partyReviewHistory.length}</div>
+          <div style={statBox}>
+            Reviews with unaffordable members: {unaffordableReviewCount} ({unaffordableReviewPercentage}%)
+          </div>
+          {latestPartyReviews.map(review => {
+            const formattedDelta = review.reputationDelta.toFixed(3);
+            const signedDelta = review.reputationDelta > 0
+              ? `+${formattedDelta}`
+              : formattedDelta;
+            return (
+              <div
+                key={`${review.day}-${review.partyId}`}
+                data-testid="party-review-row"
+                style={statBox}
+              >
+                <div style={{ color: '#f0a500', marginBottom: 4 }}>
+                  Day {review.day} · {review.partyId}
+                </div>
+                <div>Score: {review.score.toFixed(1)}</div>
+                <div>
+                  Party: {review.memberCount} · Paid: {review.paidCount} · Unaffordable: {review.unaffordableCount}
+                </div>
+                <div>Reputation: {signedDelta}</div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <button

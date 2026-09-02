@@ -18,6 +18,13 @@ vi.mock('./StatsPanel', () => ({ default: () => <div>Stats panel</div> }));
 vi.mock('./HoursPanel', () => ({ default: () => <div>Hours panel</div> }));
 
 describe('ManagementModal', () => {
+  it('opens on Upgrades without a Menu tab', () => {
+    render(<ManagementModal isOpen onClose={vi.fn()} />);
+
+    expect(screen.queryByRole('button', { name: 'Menu' })).not.toBeInTheDocument();
+    expect(screen.getByText('Upgrade panel')).toBeInTheDocument();
+  });
+
   it('opens physical furniture in a separate Items tab', () => {
     render(<ManagementModal isOpen onClose={vi.fn()} />);
 

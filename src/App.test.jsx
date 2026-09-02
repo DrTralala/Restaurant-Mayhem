@@ -31,10 +31,16 @@ vi.mock('./components/StatsBar', () => ({ default: () => null }));
 vi.mock('./components/BookIcon', () => ({
   default: ({ onClick }) => <button onClick={onClick}>Management</button>,
 }));
+vi.mock('./components/MenuIcon', () => ({
+  default: ({ onClick }) => <button onClick={onClick}>Menu</button>,
+}));
 vi.mock('./components/SpeedControls', () => ({ default: () => null }));
 vi.mock('./components/Toast', () => ({ default: () => null }));
 vi.mock('./panels/ManagementModal', () => ({
   default: ({ isOpen }) => isOpen ? <div>Management panel</div> : null,
+}));
+vi.mock('./panels/MenuModal', () => ({
+  default: ({ isOpen }) => isOpen ? <div>Menu panel</div> : null,
 }));
 
 describe('settings menu', () => {
@@ -114,5 +120,34 @@ describe('settings menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Empty canvas' }));
 
     expect(screen.queryByText('Management panel')).not.toBeInTheDocument();
+  });
+
+  it('keeps Menu, Management, and Settings mutually exclusive', () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    expect(screen.getByText('Menu panel')).toBeInTheDocument();
+    expect(screen.queryByText('Management panel')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save Game' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Management' }));
+    expect(screen.queryByText('Menu panel')).not.toBeInTheDocument();
+    expect(screen.getByText('Management panel')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save Game' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(screen.queryByText('Menu panel')).not.toBeInTheDocument();
+    expect(screen.queryByText('Management panel')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save Game' })).toBeInTheDocument();
+  });
+
+  it('closes Menu when empty canvas space is clicked', () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    expect(screen.getByText('Menu panel')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Empty canvas' }));
+
+    expect(screen.queryByText('Menu panel')).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import MenuPanel from './MenuPanel';
 import UpgradePanel from './UpgradePanel';
 import ItemsPanel from './ItemsPanel';
 import StaffPanel from './StaffPanel';
@@ -8,7 +7,6 @@ import StatsPanel from './StatsPanel';
 import HoursPanel from './HoursPanel';
 
 const TABS = [
-  { key: 'menu', label: 'Menu' },
   { key: 'upgrades', label: 'Upgrades' },
   { key: 'items', label: 'Items' },
   { key: 'staff', label: 'Staff' },
@@ -18,7 +16,7 @@ const TABS = [
 ];
 
 export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
-  const [tab, setTab] = useState('menu');
+  const [tab, setTab] = useState('upgrades');
 
   if (!isOpen) return null;
 
@@ -65,7 +63,6 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
         </div>
 
         <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
-          {tab === 'menu' && <MenuPanel />}
           {tab === 'upgrades' && <UpgradePanel onStartPlacement={onStartPlacement} />}
           {tab === 'items' && <ItemsPanel onStartPlacement={onStartPlacement} />}
           {tab === 'staff' && <StaffPanel />}
