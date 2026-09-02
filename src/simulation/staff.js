@@ -36,6 +36,12 @@ import {
 } from './staffActivity';
 import { findOldestCompatibleQueueParty } from './customerQueue';
 import { getQueueAdmissionGateStatus, planQueuePartyAdmission } from './queueAdmission';
+import {
+  getPartyKey,
+  recordPartyOrderOutcome,
+  recordPartyPayment,
+  settlePartyReview,
+} from './partyReviews';
 
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
   return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
@@ -717,7 +723,10 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
   return null;
 }
 
-function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
+function resolveTask({
+  state, staff, customers, queue, tables, serviceItems,
+  pendingPartyReviews, partyReviewHistory, restaurant,
+}) {
   const completedStaff = { ...staff, task: null };
 
   if (staff.task.type === 'take_order') {
@@ -733,14 +742,39 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       { ...state, serviceItems },
       customer,
     );
+    const partyMembers = customers.filter(candidate =>
+      getPartyKey(candidate) === getPartyKey(customer));
+    const nextPending = recordPartyOrderOutcome(
+      pendingPartyReviews,
+      partyMembers,
+      ordered.customer,
+      ordered.customer.menuOutcome,
+    );
+    const settlement = settlePartyReview({
+      pendingPartyReviews: nextPending,
+      partyReviewHistory,
+      restaurant,
+      upgrades: state.upgrades,
+    }, getPartyKey(customer));
+    let updatedCustomers = customers.map(candidate => candidate.id === customer.id
+      ? ordered.customer
+      : candidate);
+    if (settlement.review) {
+      updatedCustomers = updatedCustomers.map(candidate =>
+        getPartyKey(candidate) === getPartyKey(customer)
+          && candidate.state === 'waiting_for_party'
+          ? leavingFields({ ...candidate, departureReason: 'menu_unaffordable' })
+          : candidate);
+    }
     return {
       staff: completedStaff,
       queue,
       tables,
       serviceItems: ordered.serviceItems,
-      customers: customers.map(candidate => candidate.id === customer.id
-        ? ordered.customer
-        : candidate),
+      customers: updatedCustomers,
+      pendingPartyReviews: settlement.pendingPartyReviews,
+      partyReviewHistory: settlement.partyReviewHistory,
+      restaurant: settlement.restaurant,
     };
   }
 
@@ -792,8 +826,6 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
     const happiness = Number.isFinite(customer.happiness) ? customer.happiness : 80;
     const tip = Math.round(price * getTipRate(happiness) * 100) / 100;
     const reviewScore = getCustomerReviewScore(customer, happiness);
-    const reputationGainEffect = getUpgradeEffect(state, 'reputationGain');
-    const reputationGain = (0.01 + reviewScore / 10000) * (1 + reputationGainEffect);
     const payment = {
       customerId: customer.id,
       day: state.restaurant.day || Math.floor(state.restaurant.gameTime / 86400) + 1,
@@ -804,26 +836,63 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
       totalPaid: price + tip,
       reviewScore,
     };
-    const remainingAtTable = customers.some(candidate => candidate.id !== customer.id && candidate.tableId === customer.tableId && candidate.state !== 'leaving');
+    const partyId = getPartyKey(customer);
+    const hasPendingTracker = Array.isArray(pendingPartyReviews)
+      && pendingPartyReviews.some(record => record?.partyId === partyId);
+    const hasExplicitMenuOutcome = ['ordered', 'unaffordable'].includes(customer.menuOutcome);
+    let nextPendingPartyReviews = pendingPartyReviews;
+    let nextPartyReviewHistory = partyReviewHistory;
+    let nextRestaurant = restaurant;
+    let settledReview = null;
+    if (customer.menuOutcome === 'ordered' && hasPendingTracker) {
+      const paymentRecorded = recordPartyPayment(pendingPartyReviews, customer, reviewScore);
+      const settlement = settlePartyReview({
+        pendingPartyReviews: paymentRecorded,
+        partyReviewHistory,
+        restaurant,
+        upgrades: state.upgrades,
+      }, partyId);
+      nextPendingPartyReviews = settlement.pendingPartyReviews;
+      nextPartyReviewHistory = settlement.partyReviewHistory;
+      nextRestaurant = settlement.restaurant;
+      settledReview = settlement.review;
+    } else if (!hasPendingTracker && !hasExplicitMenuOutcome) {
+      const reputationGainEffect = getUpgradeEffect(state, 'reputationGain');
+      const reputationGain = (0.01 + reviewScore / 10000) * (1 + reputationGainEffect);
+      nextRestaurant = {
+        ...restaurant,
+        reputation: clampReputation(restaurant.reputation + reputationGain),
+      };
+    }
+    let updatedCustomers = customers.map(candidate => candidate.id === customer.id
+      ? leavingFields({ ...candidate, departureReason: 'served' })
+      : candidate);
+    if (settledReview) {
+      updatedCustomers = updatedCustomers.map(candidate =>
+        getPartyKey(candidate) === partyId && candidate.state === 'waiting_for_party'
+          ? leavingFields({ ...candidate, departureReason: 'menu_unaffordable' })
+          : candidate);
+    }
+    const remainingAtTable = updatedCustomers.some(candidate =>
+      candidate.tableId === customer.tableId && candidate.state !== 'leaving');
     const carriedServiceItemIds = serviceItems
       .filter(item => item.customerId === customer.id && ['carried', 'carried_dirty'].includes(item.state))
       .map(item => item.id);
     return {
       staff: completedStaff, queue,
-      customers: customers.map(candidate => candidate.id === customer.id
-        ? leavingFields({ ...candidate, departureReason: 'served' })
-        : candidate),
-       serviceItems: serviceItems.filter(item => item.customerId !== customer.id
-          || !['ordered', 'preparing'].includes(item.state)),
-        clearCarriedServiceItemIds: carriedServiceItemIds,
+      customers: updatedCustomers,
+      serviceItems: serviceItems.filter(item => item.customerId !== customer.id
+        || !['ordered', 'preparing'].includes(item.state)),
+      clearCarriedServiceItemIds: carriedServiceItemIds,
       tables: tables.map(table => table.id === customer.tableId && !remainingAtTable
         ? markTableDirtyIfInUse(table) : table),
       completedCustomers: [...(state.completedCustomers || []), payment],
       restaurant: {
-        ...state.restaurant,
-        totalServed: (state.restaurant.totalServed || 0) + 1,
-        reputation: clampReputation(state.restaurant.reputation + reputationGain),
+        ...nextRestaurant,
+        totalServed: (nextRestaurant.totalServed || 0) + 1,
       },
+      pendingPartyReviews: nextPendingPartyReviews,
+      partyReviewHistory: nextPartyReviewHistory,
     };
   }
 
@@ -1427,6 +1496,8 @@ export function prepareStaffForMovement(state, gameDt) {
   let tables = normaliseTableReservationOwners(state.tables, state.staff);
   let serviceItems = [...(state.serviceItems || [])];
   let completedCustomers = [...(state.completedCustomers || [])];
+  let pendingPartyReviews = [...(state.pendingPartyReviews || [])];
+  let partyReviewHistory = [...(state.partyReviewHistory || [])];
   let floorDirt = [...(state.floorDirt || [])];
   let restaurant = state.restaurant;
 
@@ -1567,7 +1638,8 @@ export function prepareStaffForMovement(state, gameDt) {
   }
 
   return {
-    ...state, staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt, restaurant,
+    ...state, staff, customers, queue, tables, serviceItems, completedCustomers,
+    pendingPartyReviews, partyReviewHistory, floorDirt, restaurant,
     queueAdmissionGate,
     __staffClaimedServiceItemIds: staleTaskServiceItemIds,
   };
@@ -1612,7 +1684,10 @@ export function getStaffMovementEntries(state) {
 }
 
 export function resolveStaffAfterMovement(state, gameDt) {
-  let { staff, customers, queue, serviceItems, completedCustomers, floorDirt, restaurant } = state;
+  let {
+    staff, customers, queue, serviceItems, completedCustomers,
+    pendingPartyReviews, partyReviewHistory, floorDirt, restaurant,
+  } = state;
   let queueAdmissionGate = state.queueAdmissionGate ?? null;
   let tables = normaliseTableReservationOwners(state.tables, staff);
   const claimedCustomerIds = new Set();
@@ -1639,14 +1714,21 @@ export function resolveStaffAfterMovement(state, gameDt) {
 
     if (s.task && hasArrived(s)) {
       const resolved = resolveTask({
-        state: { ...state, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt, queueAdmissionGate },
+        state: {
+          ...state, restaurant, staff, customers, queue, tables, serviceItems,
+          completedCustomers, pendingPartyReviews, partyReviewHistory, floorDirt,
+          queueAdmissionGate,
+        },
         staff: s, customers, queue, tables, serviceItems,
+        pendingPartyReviews, partyReviewHistory, restaurant,
       });
       if (resolved.customers) customers = resolved.customers;
       if (resolved.queue) queue = resolved.queue;
       if (resolved.tables) tables = resolved.tables;
       if (resolved.serviceItems) serviceItems = resolved.serviceItems;
       if (resolved.completedCustomers) completedCustomers = resolved.completedCustomers;
+      if (resolved.pendingPartyReviews) pendingPartyReviews = resolved.pendingPartyReviews;
+      if (resolved.partyReviewHistory) partyReviewHistory = resolved.partyReviewHistory;
       if (resolved.restaurant) restaurant = resolved.restaurant;
       if (resolved.floorDirt) floorDirt = resolved.floorDirt;
       if (Object.hasOwn(resolved, 'queueAdmissionGate')) {
@@ -1657,7 +1739,10 @@ export function resolveStaffAfterMovement(state, gameDt) {
           ? markTaskAssigned(resolved.staff)
           : markWorking(resolved.staff)
         : settleTasklessActivity(
-          { ...state, restaurant, staff, customers, tables, serviceItems },
+          {
+            ...state, restaurant, staff, customers, tables, serviceItems,
+            pendingPartyReviews, partyReviewHistory,
+          },
           resolved.staff,
         );
       if (resolved.clearCarriedServiceItemIds) {
@@ -1670,7 +1755,11 @@ export function resolveStaffAfterMovement(state, gameDt) {
     }
 
     const result = assignTask({
-      state: { ...state, restaurant, staff, customers, queue, tables, serviceItems, completedCustomers, floorDirt, queueAdmissionGate },
+      state: {
+        ...state, restaurant, staff, customers, queue, tables, serviceItems,
+        completedCustomers, pendingPartyReviews, partyReviewHistory, floorDirt,
+        queueAdmissionGate,
+      },
       staff: s, allStaff: staff, customers, queue, tables, serviceItems,
       claimedCustomerIds, claimedServiceItemIds, claimedTableIds, claimedDirtIds,
     });
@@ -1678,7 +1767,10 @@ export function resolveStaffAfterMovement(state, gameDt) {
       staff[i] = result.staff.task
         ? markTaskAssigned(result.staff)
         : settleTasklessActivity(
-          { ...state, restaurant, staff, customers, tables, serviceItems },
+          {
+            ...state, restaurant, staff, customers, tables, serviceItems,
+            pendingPartyReviews, partyReviewHistory,
+          },
           result.staff,
         );
       if (result.customers) customers = result.customers;
@@ -1713,6 +1805,8 @@ export function resolveStaffAfterMovement(state, gameDt) {
     tables,
     serviceItems,
     completedCustomers,
+    pendingPartyReviews,
+    partyReviewHistory,
     floorDirt,
     queueAdmissionGate,
   };

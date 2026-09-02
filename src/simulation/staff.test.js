@@ -505,6 +505,222 @@ function queuedAdmissionState() {
 }
 
 describe('updateStaff', () => {
+  function orderOutcomeState(customers) {
+    return {
+      ...baseState,
+      restaurant: {
+        ...baseState.restaurant, gameTime: 60, day: 1, reputation: 3, totalServed: 0,
+      },
+      staff: customers.map((customer, index) => ({
+        id: `waiter-${index}`, role: 'waiter', morale: 80,
+        x: 180 + index * 20, y: 220, path: [],
+        task: { type: 'take_order', customerId: customer.id, startedAt: 0 },
+      })),
+      customers,
+      tables: [{ id: 't1', status: 'occupied', seats: 2, x: 200, y: 200 }],
+      dishes: [{ id: 'toast', price: 10, quality: 1, popularity: 50, prepTime: 60 }],
+      unlockedDrinkIds: [],
+      completedCustomers: [],
+      pendingPartyReviews: [],
+      partyReviewHistory: [],
+      upgrades: [],
+    };
+  }
+
+  it('records both outcomes and keeps an unaffordable member waiting for an ordered party member', () => {
+    const state = orderOutcomeState([
+      {
+        id: 'a', partyId: 'p1', partySize: 2, state: 'seated', tableId: 't1',
+        spendingTier: 'budget', spendingBudget: 18, archetype: 'regular',
+        patience: 100, happiness: 80,
+      },
+      {
+        id: 'b', partyId: 'p1', partySize: 2, state: 'seated', tableId: 't1',
+        spendingTier: 'budget', spendingBudget: 6, archetype: 'regular',
+        patience: 100, happiness: 80,
+      },
+    ]);
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers.find(customer => customer.id === 'a').state).toBe('waiting_for_items');
+    expect(result.customers.find(customer => customer.id === 'b').state).toBe('waiting_for_party');
+    expect(result.pendingPartyReviews).toEqual([{
+      partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
+      unaffordableMemberIds: ['b'], paidReviews: [],
+    }]);
+    expect(result.partyReviewHistory).toEqual([]);
+    expect(result.tables[0].status).toBe('occupied');
+  });
+
+  it('settles an all-unaffordable couple after the second order task in the same tick', () => {
+    const state = orderOutcomeState([
+      {
+        id: 'a', partyId: 'p1', partySize: 2, state: 'seated', tableId: 't1',
+        spendingTier: 'budget', spendingBudget: 6, archetype: 'regular',
+        patience: 100, happiness: 80,
+      },
+      {
+        id: 'b', partyId: 'p1', partySize: 2, state: 'seated', tableId: 't1',
+        spendingTier: 'budget', spendingBudget: 6, archetype: 'regular',
+        patience: 100, happiness: 80,
+      },
+    ]);
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers).toEqual([
+      expect.objectContaining({ id: 'a', state: 'leaving', departureReason: 'menu_unaffordable', tableId: 't1' }),
+      expect.objectContaining({ id: 'b', state: 'leaving', departureReason: 'menu_unaffordable', tableId: 't1' }),
+    ]);
+    expect(result.partyReviewHistory).toEqual([
+      expect.objectContaining({
+        partyId: 'p1', score: -110, paidCount: 0, unaffordableCount: 2,
+        reputationDelta: -0.044,
+      }),
+    ]);
+    expect(result.restaurant.reputation).toBe(2.956);
+    expect(result.pendingPartyReviews).toEqual([]);
+  });
+
+  it('settles a solo unaffordable order without payment, service, or served-count effects', () => {
+    const state = orderOutcomeState([{
+      id: 'solo', partyId: 'solo-party', partySize: 1, state: 'seated', tableId: 't1',
+      spendingTier: 'budget', spendingBudget: 6, archetype: 'regular',
+      patience: 100, happiness: 80,
+    }]);
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers[0]).toMatchObject({
+      state: 'leaving', departureReason: 'menu_unaffordable', tableId: 't1',
+    });
+    expect(result.partyReviewHistory).toEqual([
+      expect.objectContaining({
+        partyId: 'solo-party', score: -50, paidCount: 0, unaffordableCount: 1,
+        reputationDelta: -0.01,
+      }),
+    ]);
+    expect(result.restaurant).toMatchObject({ reputation: 2.99, totalServed: 0 });
+    expect(result.pendingPartyReviews).toEqual([]);
+    expect(result.serviceItems).toEqual([]);
+    expect(result.completedCustomers).toEqual([]);
+  });
+
+  function partyPaymentState({ customers, pendingPartyReviews, upgrades = [] }) {
+    return {
+      ...baseState,
+      restaurant: {
+        ...baseState.restaurant, gameTime: 60, day: 1, reputation: 3, totalServed: 0,
+      },
+      staff: [{
+        id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100, path: [],
+        task: { type: 'take_payment', customerId: 'a', stationId: 'cashier1', startedAt: 0 },
+      }],
+      customers,
+      dishes: [{ id: 'toast', price: 40 }],
+      unlockedDrinkIds: [],
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
+      tables: [{ id: 't1', status: 'occupied', seats: 2, x: 200, y: 200 }],
+      serviceItems: [],
+      completedCustomers: [],
+      pendingPartyReviews,
+      partyReviewHistory: [],
+      upgrades,
+    };
+  }
+
+  it('settles one mixed-party review when its ordered member makes the final payment', () => {
+    const state = partyPaymentState({
+      customers: [
+        {
+          id: 'a', partyId: 'p1', state: 'checkout_processing', menuOutcome: 'ordered',
+          cashierStationId: 'cashier1', paymentReady: false, x: 840, y: 180,
+          happiness: 100, dishId: 'toast', drinkId: null, orderSubtotal: 10,
+          tableId: 't1',
+        },
+        {
+          id: 'b', partyId: 'p1', state: 'waiting_for_party', menuOutcome: 'unaffordable',
+          happiness: 80, tableId: 't1',
+        },
+      ],
+      pendingPartyReviews: [{
+        partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
+        unaffordableMemberIds: ['b'], paidReviews: [],
+      }],
+    });
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers.find(customer => customer.id === 'a')).toMatchObject({
+      state: 'leaving', departureReason: 'served',
+    });
+    expect(result.customers.find(customer => customer.id === 'b')).toMatchObject({
+      state: 'leaving', departureReason: 'menu_unaffordable', tableId: 't1',
+    });
+    expect(result.partyReviewHistory.at(-1)).toMatchObject({
+      partyId: 'p1', score: -5, memberCount: 2, paidCount: 1,
+      unaffordableCount: 1, reputationDelta: -0.002,
+    });
+    expect(result.pendingPartyReviews).toEqual([]);
+    expect(result.completedCustomers).toHaveLength(1);
+    expect(result.restaurant).toMatchObject({ totalServed: 1, reputation: 2.998 });
+
+    const repeated = updateStaff(result, 0);
+    expect(repeated.partyReviewHistory).toHaveLength(1);
+    expect(repeated.completedCustomers).toEqual(result.completedCustomers);
+    expect(repeated.restaurant).toEqual(result.restaurant);
+  });
+
+  it('applies one upgraded positive delta when the final member of an all-paying party pays', () => {
+    const result = updateStaff(partyPaymentState({
+      customers: [
+        {
+          id: 'a', partyId: 'p1', state: 'checkout_processing', menuOutcome: 'ordered',
+          cashierStationId: 'cashier1', paymentReady: false, x: 840, y: 180,
+          happiness: 100, dishId: 'toast', drinkId: null, orderSubtotal: 10,
+          tableId: 't1',
+        },
+        {
+          id: 'b', partyId: 'p1', state: 'leaving', menuOutcome: 'ordered',
+          departureReason: 'served', happiness: 100, tableId: 't1',
+        },
+      ],
+      pendingPartyReviews: [{
+        partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a', 'b'],
+        unaffordableMemberIds: [], paidReviews: [{ customerId: 'b', score: 100 }],
+      }],
+      upgrades: [{ level: 2, effects: { type: 'reputationGain', value: 0.01 } }],
+    }), 0);
+
+    expect(result.partyReviewHistory).toEqual([
+      expect.objectContaining({
+        partyId: 'p1', score: 100, memberCount: 2, paidCount: 2,
+        unaffordableCount: 0, reputationDelta: 0.0408,
+      }),
+    ]);
+    expect(result.restaurant.reputation).toBe(3.0408);
+    expect(result.pendingPartyReviews).toEqual([]);
+  });
+
+  it('does not fall back to an individual reputation gain for an untracked new-system payment', () => {
+    const result = updateStaff(partyPaymentState({
+      customers: [{
+        id: 'a', partyId: 'p1', state: 'checkout_processing', menuOutcome: 'ordered',
+        cashierStationId: 'cashier1', paymentReady: false, x: 840, y: 180,
+        happiness: 100, dishId: 'toast', drinkId: null, orderSubtotal: 10,
+        tableId: 't1',
+      }],
+      pendingPartyReviews: [],
+    }), 0);
+
+    expect(result.completedCustomers).toHaveLength(1);
+    expect(result.restaurant).toMatchObject({ totalServed: 1, reputation: 3 });
+    expect(result.partyReviewHistory).toEqual([]);
+  });
+
   it('bills one dish and one drink from accepted price snapshots exactly once without changing delivered items', () => {
     const legacyConsumedItem = {
       id: 'dish', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'delivered', consumedAt: 100,

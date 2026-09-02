@@ -1176,6 +1176,35 @@ describe('updateCustomers', () => {
     expect(updatedAgain.restaurant.reputation).toBe(2.9);
   });
 
+  it('cancels only the pending review for a party abandoning from seated patience', () => {
+    const customers = [
+      {
+        id: 'c1', partyId: 'p1', state: 'seated', tableId: 't1',
+        patience: 1, happiness: 80,
+      },
+      {
+        id: 'c2', partyId: 'p1', state: 'ordering', tableId: 't1',
+        patience: 100, happiness: 80,
+      },
+    ];
+    const pendingPartyReviews = [
+      {
+        partyId: 'p1', memberIds: ['c1', 'c2'], orderedMemberIds: ['c2'],
+        unaffordableMemberIds: [], paidReviews: [],
+      },
+      {
+        partyId: 'p2', memberIds: ['other'], orderedMemberIds: [],
+        unaffordableMemberIds: ['other'], paidReviews: [],
+      },
+    ];
+
+    const result = updateCustomers({ ...baseState, customers, pendingPartyReviews }, 2);
+
+    expect(result.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
+    expect(result.restaurant.reputation).toBe(2.9);
+    expect(result.pendingPartyReviews).toEqual([pendingPartyReviews[1]]);
+  });
+
   it('does not remove a checkout-committed member when their party abandons', () => {
     const customers = [
       {

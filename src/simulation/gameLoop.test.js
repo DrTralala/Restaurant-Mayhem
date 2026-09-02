@@ -816,6 +816,122 @@ describe('runTick', () => {
     expect(stageIndex('washing')).toBeLessThan(stageIndex('washed'));
   });
 
+  it('completes a mixed-affordability party lifecycle with one payment and one review', () => {
+    const initial = createInitialState();
+    let state = {
+      ...initial,
+      unlockedDrinkIds: [],
+      queue: [],
+      customers: [
+        {
+          id: 'payer', partyId: 'mixed-party', partySize: 2, partyType: 'couple',
+          archetype: 'regular', gender: 'female', spendingTier: 'budget', spendingBudget: 18,
+          patience: 5000, patienceMax: 5000, happiness: 100, state: 'seated',
+          dishId: null, drinkId: null, tableId: 't1', chairId: 'ch1',
+          x: 220, y: 190, dirtFactor: 0, path: [],
+        },
+        {
+          id: 'waiter', partyId: 'mixed-party', partySize: 2, partyType: 'couple',
+          archetype: 'regular', gender: 'male', spendingTier: 'budget', spendingBudget: 6,
+          patience: 5000, patienceMax: 5000, happiness: 100, state: 'seated',
+          dishId: null, drinkId: null, tableId: 't1', chairId: 'ch2',
+          x: 220, y: 250, dirtFactor: 0, path: [],
+        },
+      ],
+      tables: initial.tables.map(table => table.id === 't1'
+        ? { ...table, status: 'occupied' }
+        : table),
+      staff: initial.staff
+        .filter(staff => [
+          'starter-cook', 'starter-waiter', 'starter-cashier-waiter', 'starter-janitor',
+        ].includes(staff.id))
+        .map(staff => ({
+          ...staff,
+          x: {
+            'starter-cook': 80,
+            'starter-waiter': 180,
+            'starter-cashier-waiter': 840,
+            'starter-janitor': 600,
+          }[staff.id],
+          y: {
+            'starter-cook': 80,
+            'starter-waiter': 180,
+            'starter-cashier-waiter': 100,
+            'starter-janitor': 360,
+          }[staff.id],
+          path: [], task: null, carryingServiceItemId: null,
+        })),
+    };
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const checkoutStates = ['checkout_queued', 'checkout_moving', 'checkout_processing'];
+    const departureReasons = new Map();
+    const tableStates = new Set(['occupied']);
+    let unaffordableServiceItemCreated = false;
+    let unaffordableEnteredCheckout = false;
+    let waitedWhilePayerDined = false;
+    let paymentsObserved = 0;
+    let completed = false;
+
+    for (let tick = 0; tick < 6000; tick += 1) {
+      const previousServed = state.restaurant.totalServed;
+      state = runTick(state, 1 / 60);
+      paymentsObserved += state.restaurant.totalServed - previousServed;
+      unaffordableServiceItemCreated ||= state.serviceItems.some(item => item.customerId === 'waiter');
+      const payer = state.customers.find(customer => customer.id === 'payer');
+      const waitingMember = state.customers.find(customer => customer.id === 'waiter');
+      unaffordableEnteredCheckout ||= checkoutStates.includes(waitingMember?.state);
+      if (payer && waitingMember
+        && ['waiting_for_items', 'eating'].includes(payer.state)
+        && waitingMember.state === 'waiting_for_party') {
+        waitedWhilePayerDined = true;
+        expect(waitingMember.tableId).toBe('t1');
+        expect(state.tables.find(table => table.id === 't1').status).toBe('occupied');
+      }
+      for (const customer of state.customers) {
+        if (customer.state === 'leaving') departureReasons.set(customer.id, customer.departureReason);
+      }
+      tableStates.add(state.tables.find(table => table.id === 't1').status);
+      completed = state.customers.every(customer =>
+        !['payer', 'waiter'].includes(customer.id))
+        && state.tables.find(table => table.id === 't1').status === 'empty'
+        && state.serviceItems.every(item => !['payer', 'waiter'].includes(item.customerId));
+      if (completed) break;
+    }
+
+    expect(completed).toBe(true);
+    expect(unaffordableServiceItemCreated).toBe(false);
+    expect(unaffordableEnteredCheckout).toBe(false);
+    expect(waitedWhilePayerDined).toBe(true);
+    expect(departureReasons).toEqual(new Map([
+      ['payer', 'served'],
+      ['waiter', 'menu_unaffordable'],
+    ]));
+    expect(tableStates.has('dirty')).toBe(true);
+    expect(tableStates.has('empty')).toBe(true);
+    expect(paymentsObserved).toBe(1);
+    expect(state.restaurant).toMatchObject({
+      totalServed: 1, dailyRevenue: 15, reputation: 1.998,
+    });
+    expect(state.partyReviewHistory).toEqual([
+      expect.objectContaining({
+        partyId: 'mixed-party', score: -5, memberCount: 2, paidCount: 1,
+        unaffordableCount: 1, reputationDelta: -0.002,
+      }),
+    ]);
+    expect(state.pendingPartyReviews).toEqual([]);
+
+    const settledRestaurant = state.restaurant;
+    const settledHistory = state.partyReviewHistory;
+    for (let tick = 0; tick < 120; tick += 1) state = runTick(state, 1 / 60);
+    expect(state.restaurant).toMatchObject({
+      totalServed: settledRestaurant.totalServed,
+      dailyRevenue: settledRestaurant.dailyRevenue,
+      funds: settledRestaurant.funds,
+      reputation: settledRestaurant.reputation,
+    });
+    expect(state.partyReviewHistory).toEqual(settledHistory);
+  });
+
   it('wipes once and keeps the table empty through delayed checkout departure', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     let state = {

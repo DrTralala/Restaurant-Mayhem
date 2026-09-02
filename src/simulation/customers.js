@@ -18,6 +18,7 @@ import {
   getUpgradeEffect,
 } from './balance';
 import { createSpendingProfile } from './menuEconomy';
+import { cancelPendingPartyReviews } from './partyReviews';
 
 let customerIdCounter = 0;
 let partyIdCounter = 0;
@@ -566,6 +567,9 @@ export function prepareCustomersForMovement(state, gameDt) {
     customers: updatedCustomers,
     queue: updatedQueue,
     tables: updatedTables,
+    pendingPartyReviews: abandoningParties.size > 0
+      ? cancelPendingPartyReviews(state.pendingPartyReviews, abandoningParties)
+      : state.pendingPartyReviews,
   };
 }
 
