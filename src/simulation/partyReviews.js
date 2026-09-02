@@ -160,6 +160,17 @@ export function settlePartyReview({
   restaurant,
   upgrades,
 }, partyId) {
+  const normalisedHistory = normalisePartyReviewHistory(partyReviewHistory);
+  if (normalisedHistory.some(review => review.partyId === partyId)) {
+    return {
+      review: null,
+      pendingPartyReviews: Array.isArray(pendingPartyReviews)
+        ? pendingPartyReviews.filter(record => record?.partyId !== partyId)
+        : pendingPartyReviews,
+      partyReviewHistory: normalisedHistory,
+      restaurant,
+    };
+  }
   const pendingRecord = Array.isArray(pendingPartyReviews)
     ? pendingPartyReviews.find(record => record?.partyId === partyId)
     : null;
@@ -203,7 +214,7 @@ export function settlePartyReview({
   return {
     review,
     pendingPartyReviews: pendingPartyReviews.filter(record => record?.partyId !== partyId),
-    partyReviewHistory: [...normalisePartyReviewHistory(partyReviewHistory), review]
+    partyReviewHistory: [...normalisedHistory, review]
       .slice(-30),
     restaurant: {
       ...restaurant,

@@ -51,8 +51,47 @@ function isOpenCell(state, point) {
   const cell = worldToCell(point);
   return !buildBlockedCells(state).has(`${cell.x},${cell.y}`);
 }
-function nextCustomerId() {
-  return `c${++customerIdCounter}`;
+function numericIdSuffix(id, prefix) {
+  const match = new RegExp(`^${prefix}(\\d+)$`).exec(String(id));
+  return match ? Number(match[1]) : 0;
+}
+
+function nextUnusedId(prefix, ids, counter) {
+  const usedIds = new Set(ids.filter(id => id != null).map(String));
+  let nextCounter = Math.max(
+    counter,
+    ...[...usedIds].map(id => numericIdSuffix(id, prefix)),
+  );
+  let id;
+  do {
+    id = `${prefix}${++nextCounter}`;
+  } while (usedIds.has(id));
+  return { id, counter: nextCounter };
+}
+
+function getCustomerIdentityIds(state, queue) {
+  return [
+    ...(state.customers || []).map(customer => customer?.id),
+    ...queue.flatMap(party => party.members.map(customer => customer?.id)),
+    ...(state.completedCustomers || []).map(payment => payment?.customerId),
+    ...(state.pendingPartyReviews || []).flatMap(record => [
+      ...(record?.memberIds || []),
+      ...(record?.paidReviews || []).map(payment => payment?.customerId),
+    ]),
+    ...(state.serviceItems || []).map(item => item?.customerId),
+  ];
+}
+
+function getPartyIdentityIds(state, queue) {
+  return [
+    ...(state.customers || []).map(customer => customer?.partyId),
+    ...queue.flatMap(party => [
+      party?.partyId,
+      ...party.members.map(customer => customer?.partyId),
+    ]),
+    ...(state.pendingPartyReviews || []).map(record => record?.partyId),
+    ...(state.partyReviewHistory || []).map(record => record?.partyId),
+  ];
 }
 
 const ARCHETYPES = ['regular', 'regular', 'regular', 'foodie', 'rusher', 'influencer'];
@@ -118,14 +157,20 @@ export function spawnCustomers(state, dt = 1) {
   if (Math.random() > spawnProbability) return { ...state, queue };
 
   const party = chooseParty();
-  const partyId = `p${++partyIdCounter}`;
+  const nextParty = nextUnusedId('p', getPartyIdentityIds(state, queue), partyIdCounter);
+  partyIdCounter = nextParty.counter;
+  const partyId = nextParty.id;
+  const usedCustomerIds = getCustomerIdentityIds(state, queue);
   const archetype = ARCHETYPES[Math.floor(Math.random() * ARCHETYPES.length)];
   const newCustomers = Array.from({ length: party.size }, () => {
+    const nextCustomer = nextUnusedId('c', usedCustomerIds, customerIdCounter);
+    customerIdCounter = nextCustomer.counter;
+    usedCustomerIds.push(nextCustomer.id);
     const patienceMax = getCustomerPatience(archetype, party.size);
     const gender = Math.random() < 0.5 ? 'male' : 'female';
     const spendingProfile = createSpendingProfile(state.restaurant.reputation);
     return {
-      id: nextCustomerId(),
+      id: nextCustomer.id,
       partyId,
       partyType: party.type,
       partySize: party.size,

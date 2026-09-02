@@ -77,6 +77,15 @@ describe('customer spending profiles', () => {
     });
     expect(invalid).toEqual({ id: 'invalid' });
   });
+
+  it('clears an inconsistent ordered price tuple atomically while retaining its outcome', () => {
+    const normalised = normaliseCustomerEconomy({
+      id: 'malformed', menuOutcome: 'ordered',
+      dishPriceAtOrder: 8, drinkPriceAtOrder: 3, orderSubtotal: 40,
+    });
+
+    expect(normalised).toEqual({ id: 'malformed', menuOutcome: 'ordered' });
+  });
 });
 
 const menuState = {

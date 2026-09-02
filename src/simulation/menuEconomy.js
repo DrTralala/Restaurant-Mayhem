@@ -50,6 +50,18 @@ export function ensureSpendingProfile(customer, reputation, random = Math.random
     : { ...customer, ...createSpendingProfile(reputation, random) };
 }
 
+export function getOrderSnapshotSubtotal(customer) {
+  if (customer?.menuOutcome !== 'ordered') return null;
+  const itemPrices = [customer.dishPriceAtOrder, customer.drinkPriceAtOrder];
+  if (itemPrices.some(price => price !== null
+    && !(Number.isFinite(price) && price >= 0))) return null;
+  const presentPrices = itemPrices.filter(price => price !== null);
+  if (!presentPrices.length
+    || !(Number.isFinite(customer.orderSubtotal) && customer.orderSubtotal >= 0)) return null;
+  const subtotal = presentPrices.reduce((sum, price) => sum + price, 0);
+  return customer.orderSubtotal === subtotal ? subtotal : null;
+}
+
 export function normaliseCustomerEconomy(customer) {
   const normalised = { ...customer };
   if (!hasValidSpendingProfile(normalised)) {
@@ -66,11 +78,9 @@ export function normaliseCustomerEconomy(customer) {
     normalised.drinkPriceAtOrder = null;
     normalised.orderSubtotal = null;
   } else {
-    for (const key of ['dishPriceAtOrder', 'drinkPriceAtOrder']) {
-      if (normalised[key] !== null
-        && !(Number.isFinite(normalised[key]) && normalised[key] >= 0)) delete normalised[key];
-    }
-    if (!(Number.isFinite(normalised.orderSubtotal) && normalised.orderSubtotal >= 0)) {
+    if (getOrderSnapshotSubtotal(normalised) === null) {
+      delete normalised.dishPriceAtOrder;
+      delete normalised.drinkPriceAtOrder;
       delete normalised.orderSubtotal;
     }
   }

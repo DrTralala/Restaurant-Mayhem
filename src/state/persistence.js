@@ -4,8 +4,10 @@ import { normaliseDrinkOverrides } from '../data/drinks';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { normaliseOperatingHour } from '../simulation/clock';
 import { normaliseConsumptionState } from '../simulation/consumption';
+import { isCheckoutState } from '../simulation/checkout';
 import { normaliseCustomerQueue } from '../simulation/customerQueue';
 import { normaliseTableReservationOwners } from '../simulation/guidance';
+import { clearMovementRecoveryMetadata } from '../simulation/movement';
 import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
 import {
   normalisePartyReviewHistory,
@@ -32,6 +34,35 @@ export function loadState() {
   }
 }
 
+function uniqueCompletedCustomerVisits(value) {
+  if (!Array.isArray(value)) return [];
+  const seenCustomerIds = new Set();
+  return value.filter(payment => {
+    if (payment?.customerId == null) return true;
+    if (seenCustomerIds.has(payment.customerId)) return false;
+    seenCustomerIds.add(payment.customerId);
+    return true;
+  });
+}
+
+function finishCompletedCheckout(customer, completedCustomerIds) {
+  if (!completedCustomerIds.has(customer.id) || !isCheckoutState(customer)) return customer;
+  return clearMovementRecoveryMetadata({
+    ...customer,
+    state: 'leaving',
+    departureReason: 'served',
+    exitPhase: 'to_door',
+    exitDoorId: null,
+    exitFadeProgress: 0,
+    exitHeading: null,
+    path: [],
+    stalledFor: 0,
+    cashierStationId: null,
+    checkoutPosition: null,
+    paymentReady: false,
+  });
+}
+
 export function hydrateState(saved, fresh) {
   const staff = (saved.staff || fresh.staff || []).map(character => ({
     ...character,
@@ -44,6 +75,15 @@ export function hydrateState(saved, fresh) {
       gender: inferGender(character),
     })),
   }));
+  const completedCustomers = uniqueCompletedCustomerVisits(
+    saved.completedCustomers || fresh.completedCustomers || [],
+  );
+  const completedCustomerIds = new Set(completedCustomers
+    .map(payment => payment?.customerId).filter(id => id != null));
+  const partyReviewHistory = normalisePartyReviewHistory(saved.partyReviewHistory);
+  const settledPartyIds = new Set(partyReviewHistory.map(review => review.partyId));
+  const pendingPartyReviews = normalisePendingPartyReviews(saved.pendingPartyReviews)
+    .filter(record => !settledPartyIds.has(record.partyId));
   const hydrated = {
     ...fresh,
     ...saved,
@@ -53,25 +93,30 @@ export function hydrateState(saved, fresh) {
     },
     staff,
     customers: (saved.customers || fresh.customers || []).map(character =>
-      normaliseCustomerEconomy({
+      finishCompletedCheckout(normaliseCustomerEconomy({
         ...character,
         gender: inferGender(character),
-      })),
+      }), completedCustomerIds)),
     queue,
     queueAdmissionGate: saved.queueAdmissionGate ?? fresh.queueAdmissionGate ?? null,
-    pendingPartyReviews: normalisePendingPartyReviews(saved.pendingPartyReviews),
-    partyReviewHistory: normalisePartyReviewHistory(saved.partyReviewHistory),
+    pendingPartyReviews,
+    partyReviewHistory,
     drinkOverrides: normaliseDrinkOverrides(saved.drinkOverrides ?? fresh.drinkOverrides),
     floorDirt: Array.isArray(saved.floorDirt) ? saved.floorDirt : fresh.floorDirt,
     washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
   };
+  if ('completedCustomers' in saved || 'completedCustomers' in fresh) {
+    hydrated.completedCustomers = completedCustomers;
+  }
   const consumption = normaliseConsumptionState(
     hydrated.customers,
     hydrated.serviceItems || [],
     hydrated.restaurant.gameTime,
   );
   hydrated.customers = consumption.customers;
-  hydrated.serviceItems = consumption.serviceItems;
+  hydrated.serviceItems = consumption.serviceItems.filter(item =>
+    !completedCustomerIds.has(item?.customerId)
+      || !['ordered', 'preparing'].includes(item?.state));
   if ('tables' in saved || 'tables' in fresh) {
     hydrated.tables = normaliseTableReservationOwners(saved.tables || fresh.tables || [], staff);
   }

@@ -42,6 +42,7 @@ import {
   recordPartyPayment,
   settlePartyReview,
 } from './partyReviews';
+import { getOrderSnapshotSubtotal } from './menuEconomy';
 
 function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
   return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
@@ -783,6 +784,29 @@ function resolveTask({
     const station = (state.cashierStations || []).find(candidate => candidate.id === staff.task.stationId);
     if (!customer) return { staff: completedStaff, customers, queue, tables, serviceItems };
     const validPhase = ['checkout_moving', 'checkout_processing'].includes(customer.state);
+    const alreadyCompleted = (state.completedCustomers || [])
+      .some(payment => payment?.customerId === customer.id);
+    if (alreadyCompleted && validPhase) {
+      const updatedCustomers = customers.map(candidate => candidate.id === customer.id
+        ? leavingFields({ ...candidate, departureReason: 'served' })
+        : candidate);
+      const remainingAtTable = updatedCustomers.some(candidate =>
+        candidate.tableId === customer.tableId && candidate.state !== 'leaving');
+      const carriedServiceItemIds = serviceItems
+        .filter(item => item.customerId === customer.id && ['carried', 'carried_dirty'].includes(item.state))
+        .map(item => item.id);
+      return {
+        staff: completedStaff,
+        queue,
+        customers: updatedCustomers,
+        serviceItems: serviceItems.filter(item => item.customerId !== customer.id
+          || !['ordered', 'preparing'].includes(item.state)),
+        clearCarriedServiceItemIds: carriedServiceItemIds,
+        tables: tables.map(table => table.id === customer.tableId && !remainingAtTable
+          ? markTableDirtyIfInUse(table) : table),
+        completedCustomers: state.completedCustomers,
+      };
+    }
     const validStation = station?.assignedStaffId === staff.id && customer.cashierStationId === station.id;
     if (!validPhase || !validStation) {
       return {
@@ -820,9 +844,8 @@ function resolveTask({
     }
     const legacyDishPrice = (state.dishes || []).find(candidate => candidate.id === customer.dishId)?.price || 0;
     const legacyDrinkPrice = getResolvedDrink(state, customer.drinkId)?.price || 0;
-    const price = Number.isFinite(customer.orderSubtotal) && customer.orderSubtotal >= 0
-      ? customer.orderSubtotal
-      : legacyDishPrice + legacyDrinkPrice;
+    const snapshotSubtotal = getOrderSnapshotSubtotal(customer);
+    const price = snapshotSubtotal ?? legacyDishPrice + legacyDrinkPrice;
     const happiness = Number.isFinite(customer.happiness) ? customer.happiness : 80;
     const tip = Math.round(price * getTipRate(happiness) * 100) / 100;
     const reviewScore = getCustomerReviewScore(customer, happiness);

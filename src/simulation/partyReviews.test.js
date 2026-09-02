@@ -129,6 +129,28 @@ describe('settled party reviews', () => {
     expect(absent.pendingPartyReviews).toEqual(incomplete);
   });
 
+  it('discards a complete pending record whose globally unique party ID is already settled', () => {
+    let pending = recordPartyOrderOutcome([], party, party[0], 'ordered');
+    pending = recordPartyOrderOutcome(pending, party, party[1], 'ordered');
+    pending = recordPartyPayment(pending, party[0], 100);
+    pending = recordPartyPayment(pending, party[1], 100);
+    const completed = {
+      partyId: 'p1', day: 1, score: 60, memberCount: 2,
+      paidCount: 2, unaffordableCount: 0, reputationDelta: 0.024,
+    };
+
+    const result = settlePartyReview({
+      ...baseSettlement,
+      pendingPartyReviews: pending,
+      partyReviewHistory: [completed],
+    }, 'p1');
+
+    expect(result.review).toBeNull();
+    expect(result.pendingPartyReviews).toEqual([]);
+    expect(result.partyReviewHistory).toEqual([completed]);
+    expect(result.restaurant).toEqual(baseSettlement.restaurant);
+  });
+
   it('keeps only the latest thirty history records', () => {
     const solo = [{ id: 'solo', partyId: 'solo-party' }];
     const pending = recordPartyOrderOutcome([], solo, solo[0], 'unaffordable');

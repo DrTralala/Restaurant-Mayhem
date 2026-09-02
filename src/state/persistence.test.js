@@ -482,4 +482,35 @@ describe('hydrateState', () => {
     expect(hydrated.pendingPartyReviews).toEqual(pendingPartyReviews);
     expect(hydrated.partyReviewHistory).toEqual(partyReviewHistory);
   });
+
+  it('reconciles completed visits and reviews across malformed version-five collections', () => {
+    const fresh = createInitialState();
+    const completedReview = {
+      partyId: 'p1', day: 2, score: 80, memberCount: 1,
+      paidCount: 1, unaffordableCount: 0, reputationDelta: 0.016,
+    };
+    const completedPayment = { customerId: 'c1', revenue: 12 };
+    const hydrated = hydrateState({
+      ...fresh,
+      customers: [{
+        id: 'c1', partyId: 'p1', state: 'checkout_processing',
+        cashierStationId: 'cashier1', checkoutPosition: { x: 840, y: 180 },
+        paymentReady: false, path: [{ x: 42, y: 9 }],
+      }],
+      completedCustomers: [completedPayment, { ...completedPayment, revenue: 99 }],
+      pendingPartyReviews: [{
+        partyId: 'p1', memberIds: ['c1'], orderedMemberIds: ['c1'],
+        unaffordableMemberIds: [], paidReviews: [{ customerId: 'c1', score: 80 }],
+      }],
+      partyReviewHistory: [completedReview],
+    }, fresh);
+
+    expect(hydrated.completedCustomers).toEqual([completedPayment]);
+    expect(hydrated.pendingPartyReviews).toEqual([]);
+    expect(hydrated.partyReviewHistory).toEqual([completedReview]);
+    expect(hydrated.customers[0]).toMatchObject({
+      id: 'c1', state: 'leaving', cashierStationId: null,
+      checkoutPosition: null, paymentReady: false, path: [],
+    });
+  });
 });

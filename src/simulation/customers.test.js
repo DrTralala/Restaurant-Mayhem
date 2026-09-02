@@ -29,6 +29,58 @@ const baseState = {
 describe('spawnCustomers', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('avoids hydrated customer and party identities and leaves the existing pending review untouched', async () => {
+    vi.resetModules();
+    const [{ spawnCustomers: spawnAfterReload }, { hydrateState }, { createInitialState }, partyReviews] = await Promise.all([
+      import('./customers'),
+      import('../state/persistence'),
+      import('../state/initialState'),
+      import('./partyReviews'),
+    ]);
+    const fresh = createInitialState();
+    const pendingPartyReviews = [
+      {
+        partyId: 'p1', memberIds: ['c1'], orderedMemberIds: [],
+        unaffordableMemberIds: [], paidReviews: [],
+      },
+      {
+        partyId: 'p4', memberIds: ['c4'], orderedMemberIds: ['c4'],
+        unaffordableMemberIds: [], paidReviews: [],
+      },
+    ];
+    const partyReviewHistory = [{
+      partyId: 'p5', day: 1, score: 80, memberCount: 1,
+      paidCount: 1, unaffordableCount: 0, reputationDelta: 0.016,
+    }];
+    const hydrated = hydrateState({
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 12 * 3600 },
+      customers: [{ id: 'c1', partyId: 'p1', state: 'seated' }],
+      queue: [{ partyId: 'p2', members: [{ id: 'c2', partyId: 'p2', state: 'queued' }] }],
+      completedCustomers: [{ customerId: 'c3', revenue: 10 }],
+      pendingPartyReviews,
+      partyReviewHistory,
+    }, fresh);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const spawned = spawnAfterReload(hydrated, 60);
+    const newParty = spawned.queue.at(-1);
+    const newMember = newParty.members[0];
+    const existingCustomerIds = new Set(['c1', 'c2', 'c3', 'c4']);
+    const existingPartyIds = new Set(['p1', 'p2', 'p4', 'p5']);
+    const recorded = partyReviews.recordPartyOrderOutcome(
+      hydrated.pendingPartyReviews,
+      newParty.members,
+      newMember,
+      'ordered',
+    );
+
+    expect(existingCustomerIds.has(newMember.id)).toBe(false);
+    expect(existingPartyIds.has(newParty.partyId)).toBe(false);
+    expect(recorded[0]).toEqual(pendingPartyReviews[0]);
+    expect(recorded).toHaveLength(3);
+  });
+
   it('scales spawning probability by elapsed time instead of animation frames', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.03);
 

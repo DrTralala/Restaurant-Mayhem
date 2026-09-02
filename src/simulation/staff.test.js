@@ -772,6 +772,67 @@ describe('updateStaff', () => {
     });
   });
 
+  it('falls back to current prices instead of billing an inconsistent ordered snapshot tuple', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 60 },
+      staff: [{ id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100, path: [],
+        task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1', startedAt: 0 } }],
+      customers: [{
+        id: 'c1', state: 'checkout_processing', paymentReady: false,
+        cashierStationId: 'cashier1', x: 840, y: 180, happiness: 80,
+        dishId: 'd1', drinkId: 'water', tableId: 't1', menuOutcome: 'ordered',
+        dishPriceAtOrder: 8, drinkPriceAtOrder: 3, orderSubtotal: 2,
+      }],
+      dishes: [{ id: 'd1', price: 40 }],
+      unlockedDrinkIds: ['water'],
+      drinkOverrides: { water: { price: 20 } },
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
+      serviceItems: [
+        { id: 'dish', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'delivered' },
+        { id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'delivered' },
+      ],
+      completedCustomers: [],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.completedCustomers[0]).toMatchObject({
+      revenue: 72, tip: 12, totalPaid: 72,
+    });
+  });
+
+  it('finishes stale checkout cleanup without charging or serving a completed customer visit twice', () => {
+    const existingPayment = { customerId: 'a', revenue: 12 };
+    const state = partyPaymentState({
+      customers: [{
+        id: 'a', partyId: 'p1', state: 'checkout_processing', menuOutcome: 'ordered',
+        cashierStationId: 'cashier1', paymentReady: false, x: 840, y: 180,
+        happiness: 100, dishId: 'toast', drinkId: null, orderSubtotal: 10,
+        tableId: 't1',
+      }],
+      pendingPartyReviews: [],
+    });
+    state.completedCustomers = [existingPayment];
+    state.restaurant = { ...state.restaurant, totalServed: 7 };
+    state.serviceItems = [{
+      id: 'stale-order', customerId: 'a', kind: 'dish', state: 'preparing',
+    }];
+
+    const result = updateStaff(state, 0);
+
+    expect(result.completedCustomers).toEqual([existingPayment]);
+    expect(result.restaurant.totalServed).toBe(7);
+    expect(result.customers[0]).toMatchObject({
+      id: 'a', state: 'leaving', departureReason: 'served',
+      cashierStationId: null, checkoutPosition: null, paymentReady: false,
+    });
+    expect(result.serviceItems).toEqual([]);
+    expect(result.staff[0].task).toBeNull();
+  });
+
   it('does not re-dirty an already cleaned table when payment completes', () => {
     const result = updateStaff({
       ...baseState,
