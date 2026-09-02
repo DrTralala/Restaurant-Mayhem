@@ -1011,6 +1011,48 @@ describe('updateCustomers', () => {
       expect(result.tables.find(table => table.id === 't1').status).toBe('dirty');
     });
 
+  it.each(['occupied', 'reserved'])
+    ('marks an in-use %s table dirty and clears its reservation owner', status => {
+      const customer = {
+        id: 'payer', state: 'checkout_queued', tableId: 't1',
+        patience: 100, happiness: 80, x: 400, y: 300,
+      };
+      const tables = baseState.tables.map(table => table.id === 't1'
+        ? { ...table, status, reservationOwnerStaffId: 'guide' }
+        : table);
+
+      const result = prepareCustomersForMovement({
+        ...baseState, customers: [customer], tables,
+      }, 0);
+      const table = result.tables.find(candidate => candidate.id === 't1');
+
+      expect(table.status).toBe('dirty');
+      expect(table).not.toHaveProperty('reservationOwnerStaffId');
+      expect(result.customers[0].tableId).toBe('t1');
+    });
+
+  it.each(['checkout_queued', 'checkout_moving', 'checkout_processing', 'leaving'])
+    ('does not re-dirty an empty table for a former customer in %s', stateName => {
+      const customer = {
+        id: 'former', state: stateName, tableId: 't1',
+        patience: 100, happiness: 80, x: 400, y: 300,
+        ...(stateName === 'leaving' ? { exitPhase: 'to_door' } : {}),
+      };
+      let current = {
+        ...baseState,
+        customers: [customer],
+        tables: baseState.tables.map(table => table.id === 't1'
+          ? { ...table, status: 'empty' }
+          : table),
+      };
+
+      current = prepareCustomersForMovement(current, 0);
+      current = prepareCustomersForMovement(current, 0);
+
+      expect(current.tables.find(table => table.id === 't1').status).toBe('empty');
+      expect(current.customers.find(candidate => candidate.id === 'former').tableId).toBe('t1');
+    });
+
   it('keeps a table occupied while another party member is still dining', () => {
     const customers = [
       { id: 'payer', state: 'checkout_queued', tableId: 't1', patience: 100, happiness: 80 },

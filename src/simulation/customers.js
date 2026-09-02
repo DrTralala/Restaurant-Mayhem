@@ -1,7 +1,7 @@
 import { getRushHourMultiplier, isRestaurantOpen } from './clock';
 import { buildBlockedCells, cellToWorld, findPath, isInsideWorld, worldToCell } from './pathfinding';
 import { clearMovementRecoveryMetadata, planCharacterPath, resolveCharacterMovementBatch } from './movement';
-import { getCustomerGuideContext, releaseTableReservation } from './guidance';
+import { getCustomerGuideContext, markTableDirtyIfInUse } from './guidance';
 import { getDoorPosition, getDoors, getRestaurantWorld } from './world';
 import { isCheckoutState, prepareCheckoutCustomers } from './checkout';
 import {
@@ -494,13 +494,13 @@ export function prepareCustomersForMovement(state, gameDt) {
     .filter(Boolean));
   let updatedTables = state.tables || [];
   if (vacatedTableIds.size > 0) {
-    updatedTables = updatedTables.map(t =>
-      vacatedTableIds.has(t.id) && !updatedCustomers.some(customer =>
-        customer.tableId === t.id
+    updatedTables = updatedTables.map(table =>
+      vacatedTableIds.has(table.id) && !updatedCustomers.some(customer =>
+        customer.tableId === table.id
           && customer.state !== 'leaving'
           && !isCheckoutState(customer))
-        ? releaseTableReservation(t, 'dirty')
-        : t
+        ? markTableDirtyIfInUse(table)
+        : table
     );
   }
 

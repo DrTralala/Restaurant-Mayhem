@@ -533,6 +533,39 @@ describe('updateStaff', () => {
     expect(repeated.restaurant.totalServed).toBe(result.restaurant.totalServed);
   });
 
+  it('does not re-dirty an already cleaned table when payment completes', () => {
+    const result = updateStaff({
+      ...baseState,
+      restaurant: {
+        ...baseState.restaurant, gameTime: 60, totalServed: 0, reputation: 3,
+      },
+      staff: [{
+        id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100, path: [],
+        task: {
+          type: 'take_payment', customerId: 'payer',
+          stationId: 'cashier1', startedAt: 0,
+        },
+      }],
+      customers: [{
+        id: 'payer', state: 'checkout_processing', paymentReady: false,
+        cashierStationId: 'cashier1', x: 840, y: 180,
+        happiness: 80, dishId: 'd1', drinkId: null, tableId: 't1',
+      }],
+      dishes: [{ id: 'd1', price: 10 }],
+      tables: [{ id: 't1', status: 'empty', seats: 2, x: 200, y: 200 }],
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40,
+        assignedStaffId: 'cashier',
+      }],
+      completedCustomers: [],
+    }, 0);
+
+    expect(result.customers[0]).toMatchObject({
+      state: 'leaving', tableId: 't1', departureReason: 'served',
+    });
+    expect(result.tables[0].status).toBe('empty');
+  });
+
   it('advances and completes the next payment after a processor leaves slot zero', () => {
     const station = {
       id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',

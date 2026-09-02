@@ -19,6 +19,7 @@ import { hasWashStationCapacity, releaseClearedTables } from './dishwashing';
 import {
   getCustomerGuideContext,
   getGuidePartyContext,
+  markTableDirtyIfInUse,
   normaliseTableReservationOwners,
   releaseTableReservation,
   reserveTableForGuide,
@@ -805,8 +806,8 @@ function resolveTask({ state, staff, customers, queue, tables, serviceItems }) {
        serviceItems: serviceItems.filter(item => item.customerId !== customer.id
           || !['ordered', 'preparing'].includes(item.state)),
         clearCarriedServiceItemIds: carriedServiceItemIds,
-       tables: tables.map(table => table.id === customer.tableId && !remainingAtTable
-         ? releaseTableReservation(table, 'dirty') : table),
+        tables: tables.map(table => table.id === customer.tableId && !remainingAtTable
+          ? markTableDirtyIfInUse(table) : table),
       completedCustomers: [...(state.completedCustomers || []), payment],
       restaurant: {
         ...state.restaurant,

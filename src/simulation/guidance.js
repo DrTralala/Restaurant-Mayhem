@@ -14,6 +14,12 @@ export function releaseTableReservation(table, status) {
   return { ...released, status };
 }
 
+export function markTableDirtyIfInUse(table) {
+  return table.status === 'occupied' || table.status === 'reserved'
+    ? releaseTableReservation(table, 'dirty')
+    : table;
+}
+
 export function normaliseTableReservationOwners(tables, staff) {
   const guideIdsByTable = new Map();
   for (const guide of staff || []) {
