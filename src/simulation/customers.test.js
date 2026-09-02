@@ -745,7 +745,7 @@ describe('updateCustomers', () => {
     expect(result.customers[0].patience).toBe(98);
   });
 
-  it('reduces patience at half speed while waiting for service items', () => {
+  it('reduces patience at quarter speed while waiting for service items', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'waiting_for_items', dishId: 'd1', drinkId: 'water', tableId: 't1', tipAmount: 0,
@@ -755,7 +755,7 @@ describe('updateCustomers', () => {
 
     const result = updateCustomers(state, 2);
 
-    expect(result.customers[0].patience).toBe(99);
+    expect(result.customers[0].patience).toBe(99.5);
   });
 
   it('moves customer from arriving to waiting', () => {
@@ -1095,7 +1095,7 @@ describe('updateCustomers', () => {
     expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1 });
   });
 
-  it('continues seated patience loss when the active order targets another customer', () => {
+  it('continues half-rate seated patience loss when the active order targets another customer', () => {
     const customer = {
       id: 'c1', state: 'seated', patience: 2, happiness: 80,
       tableId: 't1', dishId: null, drinkId: null,
@@ -1107,23 +1107,26 @@ describe('updateCustomers', () => {
 
     const result = prepareCustomersForMovement({ ...baseState, customers: [customer], staff }, 1);
 
-    expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1 });
+    expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1.5 });
   });
 
-  it.each(['waiting', 'seated'])('reduces patience at full speed while a customer is %s', stateName => {
+  it.each([
+    ['waiting', 90],
+    ['seated', 95],
+  ])('uses the phase-specific patience rate while a customer is %s', (stateName, expectedPatience) => {
     const customer = { id: 'c1', state: stateName, patience: 100, happiness: 80 };
 
     const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
 
-    expect(result.customers[0].patience).toBe(90);
+    expect(result.customers[0].patience).toBe(expectedPatience);
   });
 
-  it('reduces patience at half speed while awaiting an order', () => {
+  it('reduces patience at quarter speed while awaiting ordered items', () => {
     const customer = { id: 'c1', state: 'waiting_for_items', patience: 100, happiness: 80 };
 
     const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
 
-    expect(result.customers[0].patience).toBe(95);
+    expect(result.customers[0].patience).toBe(97.5);
   });
 
   it('uses game time for patience independently of movement time', () => {
@@ -1156,7 +1159,7 @@ describe('updateCustomers', () => {
     const customers = [
       {
         id: 'waiting', partyId: 'p1', state: 'waiting_for_items',
-        patience: 1, happiness: 80,
+        patience: 0.5, happiness: 80,
       },
       {
         id: 'payer', partyId: 'p1', state: 'checkout_queued',
@@ -1176,7 +1179,7 @@ describe('updateCustomers', () => {
   it('penalises separate abandoning parties independently', () => {
     const customers = [
       { id: 'c1', partyId: 'p1', state: 'waiting', patience: 1, happiness: 80 },
-      { id: 'c2', partyId: 'p2', state: 'waiting_for_items', patience: 1, happiness: 80 },
+      { id: 'c2', partyId: 'p2', state: 'waiting_for_items', patience: 0.5, happiness: 80 },
     ];
 
     const result = updateCustomers({ ...baseState, customers }, 2);

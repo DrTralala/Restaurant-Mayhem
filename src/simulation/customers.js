@@ -55,7 +55,8 @@ function nextCustomerId() {
 
 const ARCHETYPES = ['regular', 'regular', 'regular', 'foodie', 'rusher', 'influencer'];
 const PATIENCE_STATES = new Set(['waiting', 'seated', 'waiting_for_items']);
-const ITEM_WAIT_PATIENCE_FACTOR = 0.5;
+const SEATED_ORDER_PATIENCE_FACTOR = 0.5;
+const ITEM_WAIT_PATIENCE_FACTOR = 0.25;
 
 function partyKey(customer) {
   return customer.partyId ?? customer.id;
@@ -70,7 +71,9 @@ function isWaitingForService(customer, staff) {
 }
 
 function getPatienceFactor(customer) {
-  return customer.state === 'waiting_for_items' ? ITEM_WAIT_PATIENCE_FACTOR : 1;
+  if (customer.state === 'seated') return SEATED_ORDER_PATIENCE_FACTOR;
+  if (customer.state === 'waiting_for_items') return ITEM_WAIT_PATIENCE_FACTOR;
+  return 1;
 }
 
 function getPatienceMax(customer) {
