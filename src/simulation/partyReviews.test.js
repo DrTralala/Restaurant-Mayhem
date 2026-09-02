@@ -36,6 +36,30 @@ describe('pending party reviews', () => {
     const records = [{ partyId: 'p1' }, { partyId: 'p2' }];
     expect(cancelPendingPartyReviews(records, new Set(['p1']))).toEqual([{ partyId: 'p2' }]);
   });
+
+  it('preserves stable outcome order for repeated identical outcomes', () => {
+    let records = recordPartyOrderOutcome([], party, party[0], 'ordered');
+    records = recordPartyOrderOutcome(records, party, party[1], 'ordered');
+    records = recordPartyOrderOutcome(records, party, party[0], 'ordered');
+
+    expect(records[0].orderedMemberIds).toEqual(['a', 'b']);
+  });
+
+  it('rejects same-party members absent from canonical membership', () => {
+    const forged = { id: 'forged', partyId: 'p1' };
+    const pending = [{
+      partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
+      unaffordableMemberIds: [], paidReviews: [],
+    }];
+    expect(recordPartyOrderOutcome(pending, [...party, forged], forged, 'ordered'))
+      .toEqual(pending);
+
+    const malformed = [{
+      partyId: 'p1', memberIds: ['a'], orderedMemberIds: ['forged'],
+      unaffordableMemberIds: [], paidReviews: [],
+    }];
+    expect(recordPartyPayment(malformed, forged, 100)).toEqual(malformed);
+  });
 });
 
 const baseSettlement = {
@@ -119,6 +143,30 @@ describe('settled party reviews', () => {
     expect(result.partyReviewHistory[0].partyId).toBe('old-1');
     expect(result.partyReviewHistory.at(-1).partyId).toBe('solo-party');
   });
+
+  it('rejects duplicate, unrelated, unaffordable, or invalid extra payments', () => {
+    const paymentVariants = [
+      [{ customerId: 'a', score: 100 }, { customerId: 'a', score: 80 }],
+      [{ customerId: 'a', score: 100 }, { customerId: 'b', score: 50 }],
+      [{ customerId: 'a', score: 100 }, { customerId: 'missing', score: 50 }],
+      [{ customerId: 'a', score: 100 }, { customerId: 'a', score: Number.NaN }],
+    ];
+
+    for (const paidReviews of paymentVariants) {
+      const pendingPartyReviews = [{
+        partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
+        unaffordableMemberIds: ['b'], paidReviews,
+      }];
+      const result = settlePartyReview({
+        ...baseSettlement, pendingPartyReviews,
+      }, 'p1');
+
+      expect(result.review).toBeNull();
+      expect(result.pendingPartyReviews).toBe(pendingPartyReviews);
+      expect(result.partyReviewHistory).toBe(baseSettlement.partyReviewHistory);
+      expect(result.restaurant).toBe(baseSettlement.restaurant);
+    }
+  });
 });
 
 describe('party review hydration', () => {
@@ -155,5 +203,58 @@ describe('party review hydration', () => {
     expect(result).toHaveLength(30);
     expect(result[0].partyId).toBe('p2');
     expect(result.at(-1).partyId).toBe('p31');
+  });
+
+  it('rejects pending records with wrong-typed outcome or payment containers', () => {
+    const valid = {
+      partyId: 'valid', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
+      unaffordableMemberIds: ['b'], paidReviews: [],
+    };
+    expect(normalisePendingPartyReviews([
+      { ...valid, partyId: 'bad-ordered', orderedMemberIds: 'a' },
+      { ...valid, partyId: 'bad-unaffordable', unaffordableMemberIds: 'b' },
+      { ...valid, partyId: 'bad-payments', paidReviews: {} },
+      valid,
+    ])).toEqual([valid]);
+  });
+
+  it('keeps the first pending record for each party ID', () => {
+    const first = {
+      partyId: 'p1', memberIds: ['a'], orderedMemberIds: ['a'],
+      unaffordableMemberIds: [], paidReviews: [],
+    };
+    const duplicate = {
+      partyId: 'p1', memberIds: ['b'], orderedMemberIds: [],
+      unaffordableMemberIds: ['b'], paidReviews: [],
+    };
+    const other = {
+      partyId: 'p2', memberIds: ['c'], orderedMemberIds: [],
+      unaffordableMemberIds: ['c'], paidReviews: [],
+    };
+
+    expect(normalisePendingPartyReviews([first, duplicate, other])).toEqual([first, other]);
+  });
+
+  it('normalises history before appending and retaining the latest thirty records', () => {
+    const solo = [{ id: 'solo', partyId: 'solo-party' }];
+    const pendingPartyReviews = recordPartyOrderOutcome([], solo, solo[0], 'unaffordable');
+    const history = [
+      ...Array.from({ length: 30 }, (_, index) => ({
+        partyId: `old-${index}`, day: 1, score: 50, memberCount: 1,
+        paidCount: 1, unaffordableCount: 0, reputationDelta: 0.01,
+      })),
+      {
+        partyId: 'bad', day: 1, score: Number.NaN, memberCount: 1,
+        paidCount: 1, unaffordableCount: 0, reputationDelta: 0.01,
+      },
+    ];
+    const result = settlePartyReview({
+      ...baseSettlement, pendingPartyReviews, partyReviewHistory: history,
+    }, 'solo-party');
+
+    expect(result.partyReviewHistory).toHaveLength(30);
+    expect(result.partyReviewHistory[0].partyId).toBe('old-1');
+    expect(result.partyReviewHistory.at(-1).partyId).toBe('solo-party');
+    expect(result.partyReviewHistory.some(review => review.partyId === 'bad')).toBe(false);
   });
 });

@@ -15,6 +15,52 @@ function uniquePartyMemberIds(partyMembers, partyId) {
   return memberIds;
 }
 
+function getPendingRecordParts(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)
+    || record.partyId == null
+    || !Array.isArray(record.memberIds)
+    || !Array.isArray(record.orderedMemberIds)
+    || !Array.isArray(record.unaffordableMemberIds)
+    || !Array.isArray(record.paidReviews)) return null;
+
+  const memberIds = record.memberIds;
+  const memberSet = new Set(memberIds);
+  if (!memberIds.length || memberIds.some(id => id == null || id === '')
+    || memberSet.size !== memberIds.length) return null;
+
+  const orderedMemberIds = record.orderedMemberIds;
+  const orderedSet = new Set();
+  for (const memberId of orderedMemberIds) {
+    if (memberId == null || orderedSet.has(memberId) || !memberSet.has(memberId)) return null;
+    orderedSet.add(memberId);
+  }
+
+  const unaffordableMemberIds = record.unaffordableMemberIds;
+  const unaffordableSet = new Set();
+  for (const memberId of unaffordableMemberIds) {
+    if (memberId == null || unaffordableSet.has(memberId)
+      || !memberSet.has(memberId) || orderedSet.has(memberId)) return null;
+    unaffordableSet.add(memberId);
+  }
+
+  const paidMemberIds = new Set();
+  for (const payment of record.paidReviews) {
+    if (!payment || typeof payment !== 'object' || Array.isArray(payment)
+      || !orderedSet.has(payment.customerId) || paidMemberIds.has(payment.customerId)
+      || !Number.isFinite(payment.score)) return null;
+    paidMemberIds.add(payment.customerId);
+  }
+
+  return {
+    memberIds,
+    memberSet,
+    orderedMemberIds,
+    orderedSet,
+    unaffordableMemberIds,
+    paidReviews: record.paidReviews,
+  };
+}
+
 export function getPartyKey(customer) {
   return customer?.partyId ?? customer?.id;
 }
@@ -44,12 +90,17 @@ export function recordPartyOrderOutcome(records, partyMembers, customer, outcome
   }
 
   const record = entries[recordIndex];
-  const orderedMemberIds = (Array.isArray(record.orderedMemberIds)
-    ? record.orderedMemberIds : []).filter(id => id !== customerId);
-  const unaffordableMemberIds = (Array.isArray(record.unaffordableMemberIds)
-    ? record.unaffordableMemberIds : []).filter(id => id !== customerId);
-  const paidReviews = (Array.isArray(record.paidReviews) ? record.paidReviews : [])
-    .filter(review => review?.customerId !== customerId || outcome === 'ordered');
+  const parts = getPendingRecordParts(record);
+  if (!parts || !parts.memberSet.has(customerId)) return records;
+  const requestedMemberIds = outcome === 'ordered'
+    ? parts.orderedMemberIds : parts.unaffordableMemberIds;
+  if (requestedMemberIds.includes(customerId)) return records;
+
+  const orderedMemberIds = parts.orderedMemberIds.filter(id => id !== customerId);
+  const unaffordableMemberIds = parts.unaffordableMemberIds.filter(id => id !== customerId);
+  const paidReviews = outcome === 'ordered'
+    ? parts.paidReviews
+    : parts.paidReviews.filter(review => review.customerId !== customerId);
   const updatedRecord = {
     ...record,
     orderedMemberIds: outcome === 'ordered'
@@ -71,18 +122,18 @@ export function recordPartyPayment(records, customer, score) {
   const recordIndex = entries.findIndex(record => record?.partyId === partyId);
   if (recordIndex === -1) return records;
   const record = entries[recordIndex];
-  if (!(Array.isArray(record.orderedMemberIds) && record.orderedMemberIds.includes(customerId))) {
+  const parts = getPendingRecordParts(record);
+  if (!parts || !parts.memberSet.has(customerId) || !parts.orderedSet.has(customerId)) {
     return records;
   }
-  const paidReviews = Array.isArray(record.paidReviews) ? record.paidReviews : [];
-  if (paidReviews.some(review => review?.customerId === customerId && Number.isFinite(review?.score))) {
+  if (parts.paidReviews.some(review => review.customerId === customerId)) {
     return records;
   }
   const payment = {
     customerId,
     score: Math.min(100, Math.max(0, score)),
   };
-  const updatedRecord = { ...record, paidReviews: [...paidReviews, payment] };
+  const updatedRecord = { ...record, paidReviews: [...parts.paidReviews, payment] };
   return entries.map((entry, index) => index === recordIndex ? updatedRecord : entry);
 }
 
@@ -92,22 +143,15 @@ export function cancelPendingPartyReviews(records, partyIds) {
   return entries.filter(record => !ids.has(record?.partyId));
 }
 
-function isCompletePartyReview(record) {
-  const memberIds = Array.isArray(record?.memberIds) ? record.memberIds : [];
-  const orderedMemberIds = Array.isArray(record?.orderedMemberIds)
-    ? record.orderedMemberIds : [];
-  const unaffordableMemberIds = Array.isArray(record?.unaffordableMemberIds)
-    ? record.unaffordableMemberIds : [];
-  const memberSet = new Set(memberIds);
-  const outcomeIds = [...orderedMemberIds, ...unaffordableMemberIds];
-  if (!memberIds.length || memberSet.size !== memberIds.length
-    || outcomeIds.length !== memberIds.length
-    || new Set(outcomeIds).size !== memberIds.length
-    || outcomeIds.some(id => !memberSet.has(id))) return false;
-
-  const paidReviews = Array.isArray(record?.paidReviews) ? record.paidReviews : [];
-  return orderedMemberIds.every(memberId => paidReviews.some(review =>
-    review?.customerId === memberId && Number.isFinite(review.score)));
+function getCompletePendingRecord(record) {
+  const parts = getPendingRecordParts(record);
+  if (!parts) return null;
+  const outcomeCount = parts.orderedMemberIds.length + parts.unaffordableMemberIds.length;
+  if (outcomeCount !== parts.memberIds.length
+    || parts.paidReviews.length !== parts.orderedMemberIds.length
+    || parts.orderedMemberIds.some(memberId => !parts.paidReviews.some(review =>
+      review.customerId === memberId))) return null;
+  return parts;
 }
 
 export function settlePartyReview({
@@ -119,7 +163,8 @@ export function settlePartyReview({
   const pendingRecord = Array.isArray(pendingPartyReviews)
     ? pendingPartyReviews.find(record => record?.partyId === partyId)
     : null;
-  if (!pendingRecord || !isCompletePartyReview(pendingRecord)) {
+  const completeRecord = getCompletePendingRecord(pendingRecord);
+  if (!completeRecord) {
     return {
       review: null,
       pendingPartyReviews,
@@ -128,16 +173,16 @@ export function settlePartyReview({
     };
   }
 
-  const orderedMemberIds = pendingRecord.orderedMemberIds;
-  const unaffordableMemberIds = pendingRecord.unaffordableMemberIds;
-  const paidReviews = pendingRecord.paidReviews;
+  const orderedMemberIds = completeRecord.orderedMemberIds;
+  const unaffordableMemberIds = completeRecord.unaffordableMemberIds;
+  const paidReviews = completeRecord.paidReviews;
   const paidTotal = orderedMemberIds.reduce((total, memberId) => {
     const payment = paidReviews.find(review =>
       review?.customerId === memberId && Number.isFinite(review?.score));
     const score = Math.min(100, Math.max(0, payment.score));
     return total + score;
   }, 0);
-  const memberCount = pendingRecord.memberIds.length;
+  const memberCount = completeRecord.memberIds.length;
   const unaffordableCount = unaffordableMemberIds.length;
   const unaffordableScore = memberCount === 1 ? -50 : -110;
   const contributionTotal = paidTotal + unaffordableCount * unaffordableScore;
@@ -158,7 +203,7 @@ export function settlePartyReview({
   return {
     review,
     pendingPartyReviews: pendingPartyReviews.filter(record => record?.partyId !== partyId),
-    partyReviewHistory: [...(Array.isArray(partyReviewHistory) ? partyReviewHistory : []), review]
+    partyReviewHistory: [...normalisePartyReviewHistory(partyReviewHistory), review]
       .slice(-30),
     restaurant: {
       ...restaurant,
@@ -183,13 +228,20 @@ function uniqueNonEmptyStrings(value) {
 
 export function normalisePendingPartyReviews(value) {
   if (!Array.isArray(value)) return [];
+  const seenPartyIds = new Set();
 
   return value.flatMap(record => {
     if (!record || typeof record !== 'object' || Array.isArray(record)
-      || !isNonEmptyString(record.partyId)) return [];
+      || !isNonEmptyString(record.partyId)
+      || !Array.isArray(record.memberIds)
+      || !Array.isArray(record.orderedMemberIds)
+      || !Array.isArray(record.unaffordableMemberIds)
+      || !Array.isArray(record.paidReviews)
+      || seenPartyIds.has(record.partyId)) return [];
 
     const memberIds = uniqueNonEmptyStrings(record.memberIds);
     if (!memberIds.length) return [];
+    seenPartyIds.add(record.partyId);
     const memberSet = new Set(memberIds);
     const orderedMemberIds = uniqueNonEmptyStrings(record.orderedMemberIds)
       .filter(memberId => memberSet.has(memberId));
@@ -198,7 +250,7 @@ export function normalisePendingPartyReviews(value) {
       .filter(memberId => memberSet.has(memberId) && !orderedSet.has(memberId));
     const paidReviews = [];
     const paidMemberIds = new Set();
-    for (const payment of Array.isArray(record.paidReviews) ? record.paidReviews : []) {
+    for (const payment of record.paidReviews) {
       if (!payment || typeof payment !== 'object' || Array.isArray(payment)
         || !orderedSet.has(payment.customerId) || paidMemberIds.has(payment.customerId)
         || !Number.isFinite(payment.score)) continue;
