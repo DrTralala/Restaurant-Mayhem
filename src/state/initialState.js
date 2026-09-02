@@ -128,6 +128,8 @@ export function createInitialState() {
     drinkOverrides: {},
     staffSlots: 7,
     completedCustomers: [],
+    pendingPartyReviews: [],
+    partyReviewHistory: [],
     dailyHistory: [],
     notifications: [],
     speed: 1,

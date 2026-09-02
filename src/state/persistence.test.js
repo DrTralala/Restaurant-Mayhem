@@ -167,6 +167,8 @@ describe('hydrateState', () => {
       customers: [],
       queue: [],
       queueAdmissionGate: null,
+      pendingPartyReviews: [],
+      partyReviewHistory: [],
       drinkOverrides: {},
       floorDirt: [],
       washStations: [],
@@ -456,5 +458,28 @@ describe('hydrateState', () => {
     expect(hydrated.queue[0].members[1]).toEqual({
       id: 'queued-invalid', partyId: 'queued-party', gender: 'male',
     });
+  });
+
+  it('defaults party review state for legacy version-five saves', () => {
+    const fresh = createInitialState();
+    const hydrated = hydrateState({ version: 5 }, fresh);
+    expect(hydrated.pendingPartyReviews).toEqual([]);
+    expect(hydrated.partyReviewHistory).toEqual([]);
+  });
+
+  it('round-trips valid pending and completed party reviews', () => {
+    const fresh = createInitialState();
+    const pendingPartyReviews = [{
+      partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
+      unaffordableMemberIds: ['b'], paidReviews: [],
+    }];
+    const partyReviewHistory = [{
+      partyId: 'old', day: 2, score: -5, memberCount: 2,
+      paidCount: 1, unaffordableCount: 1, reputationDelta: -0.002,
+    }];
+    saveState({ ...fresh, pendingPartyReviews, partyReviewHistory });
+    const hydrated = hydrateState(loadState(), fresh);
+    expect(hydrated.pendingPartyReviews).toEqual(pendingPartyReviews);
+    expect(hydrated.partyReviewHistory).toEqual(partyReviewHistory);
   });
 });

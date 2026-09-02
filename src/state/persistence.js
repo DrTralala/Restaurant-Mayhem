@@ -7,6 +7,10 @@ import { normaliseConsumptionState } from '../simulation/consumption';
 import { normaliseCustomerQueue } from '../simulation/customerQueue';
 import { normaliseTableReservationOwners } from '../simulation/guidance';
 import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
+import {
+  normalisePartyReviewHistory,
+  normalisePendingPartyReviews,
+} from '../simulation/partyReviews';
 
 export function saveState(state) {
   try {
@@ -55,6 +59,8 @@ export function hydrateState(saved, fresh) {
       })),
     queue,
     queueAdmissionGate: saved.queueAdmissionGate ?? fresh.queueAdmissionGate ?? null,
+    pendingPartyReviews: normalisePendingPartyReviews(saved.pendingPartyReviews),
+    partyReviewHistory: normalisePartyReviewHistory(saved.partyReviewHistory),
     drinkOverrides: normaliseDrinkOverrides(saved.drinkOverrides ?? fresh.drinkOverrides),
     floorDirt: Array.isArray(saved.floorDirt) ? saved.floorDirt : fresh.floorDirt,
     washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
