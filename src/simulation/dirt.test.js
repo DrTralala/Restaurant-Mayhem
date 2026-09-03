@@ -75,17 +75,17 @@ describe('updateDirt', () => {
   it('does not create floor dirt before a customer reaches the threshold', () => {
     const result = updateDirt({ ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 9.5 }] }, 60, () => 0.5);
     expect(result.floorDirt).toHaveLength(0);
-    expect(result.customers[0].dirtFactor).toBeCloseTo(9.75);
+    expect(result.customers[0].dirtFactor).toBeCloseTo(9.525);
   });
 
-  it('adds a quarter dirt-factor unit per minute in an active non-eating state', () => {
+  it('adds 0.025 dirt-factor units per minute in an active non-eating state', () => {
     const state = { ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 0 }] };
-    expect(updateDirt(state, 60).customers[0].dirtFactor).toBe(0.25);
+    expect(updateDirt(state, 60).customers[0].dirtFactor).toBeCloseTo(0.025);
   });
 
-  it('adds half a dirt-factor unit per minute while eating', () => {
+  it('adds 0.05 dirt-factor units per minute while eating', () => {
     const state = { ...baseState, customers: [{ ...baseState.customers[0], state: 'eating', dirtFactor: 0 }] };
-    expect(updateDirt(state, 60).customers[0].dirtFactor).toBe(0.5);
+    expect(updateDirt(state, 60).customers[0].dirtFactor).toBeCloseTo(0.05);
   });
 
   it('does not accumulate dirt factor for queued or leaving customers', () => {
@@ -149,7 +149,7 @@ describe('updateDirt', () => {
       customers: [{ ...baseState.customers[0], dirtFactor: 0 }],
     };
     const result = updateDirt(state, 600);
-    expect(result.customers[0].dirtFactor).toBe(0.25);
+    expect(result.customers[0].dirtFactor).toBeCloseTo(0.025);
     expect(result.customers[0].happiness).toBeCloseTo(79);
     expect(result.restaurant.reputation).toBeCloseTo(2.99);
   });
@@ -157,11 +157,11 @@ describe('updateDirt', () => {
   it('keeps the unchanged dirt threshold at ten units', () => {
     const result = updateDirt({ ...baseState, customers: [{ ...baseState.customers[0], dirtFactor: 9.5 }] }, 60, () => 0.5);
     expect(result.floorDirt).toHaveLength(0);
-    expect(result.customers[0].dirtFactor).toBeCloseTo(9.75);
+    expect(result.customers[0].dirtFactor).toBeCloseTo(9.525);
   });
 
-  it('creates exactly one mess at a 9.5 start while eating and resets the factor to zero', () => {
-    const state = { ...baseState, customers: [{ ...baseState.customers[0], state: 'eating', dirtFactor: 9.5 }] };
+  it('creates exactly one mess at a 9.95 start while eating and resets the factor to zero', () => {
+    const state = { ...baseState, customers: [{ ...baseState.customers[0], state: 'eating', dirtFactor: 9.95 }] };
     const result = updateDirt(state, 60, () => 0.5);
     expect(result.floorDirt).toHaveLength(1);
     expect(result.customers[0].dirtFactor).toBeCloseTo(0);

@@ -16,7 +16,7 @@ export default function MenuPanel() {
 
   return (
     <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingRight: 40 }}>
         <h3 style={{ color: '#f0a500', margin: 0 }}>Menu</h3>
         <button onClick={() => setShowCreator(true)} style={{
           background: '#f0a500', color: '#111', border: 'none',

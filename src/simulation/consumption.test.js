@@ -258,3 +258,132 @@ it('does not mutate inputs or their arrays across consumption operations', () =>
   expect(advanced.customers).not.toBe(customers);
   expect(advanced.serviceItems).not.toBe(started.serviceItems);
 });
+
+describe('party checkout synchronisation', () => {
+  it('keeps an early finisher seated until the final meal ends, then queues both together', () => {
+    const initial = {
+      customers: [
+        {
+          id: 'fast', partyId: 'p1', state: 'eating', menuOutcome: 'ordered',
+          orderedServiceItemIds: ['drink'], consumedServiceItemIds: [],
+        },
+        {
+          id: 'slow', partyId: 'p1', state: 'eating', menuOutcome: 'ordered',
+          orderedServiceItemIds: ['dish'], consumedServiceItemIds: [],
+        },
+      ],
+      serviceItems: [
+        {
+          id: 'drink', kind: 'drink', customerId: 'fast', state: 'delivered',
+          consumptionStartedAt: 0,
+        },
+        {
+          id: 'dish', kind: 'dish', customerId: 'slow', state: 'delivered',
+          consumptionStartedAt: 0,
+        },
+      ],
+      restaurant: { gameTime: 180 },
+    };
+
+    const waiting = advanceConsumption(initial);
+    expect(waiting.customers.find(customer => customer.id === 'fast')).toMatchObject({
+      state: 'eating', consumedServiceItemIds: ['drink'],
+    });
+    expect(waiting.customers.find(customer => customer.id === 'slow')).toMatchObject({
+      state: 'eating', consumedServiceItemIds: [],
+    });
+
+    const released = advanceConsumption({
+      ...waiting,
+      restaurant: { gameTime: 480 },
+    });
+    expect(released.customers.map(customer => customer.state))
+      .toEqual(['checkout_queued', 'checkout_queued']);
+    expect(released.customers.map(customer => customer.paymentQueuedAt))
+      .toEqual([480, 480]);
+  });
+
+  it('keeps an ordering member seated until every party member has a menu outcome', () => {
+    const result = advanceConsumption({
+      customers: [
+        {
+          id: 'ordered', partyId: 'p1', state: 'eating', menuOutcome: 'ordered',
+          orderedServiceItemIds: ['dish'], consumedServiceItemIds: [],
+        },
+        { id: 'deciding', partyId: 'p1', state: 'seated' },
+      ],
+      serviceItems: [{
+        id: 'dish', kind: 'dish', customerId: 'ordered', state: 'delivered',
+        consumptionStartedAt: 0,
+      }],
+      restaurant: { gameTime: 480 },
+    });
+
+    expect(result.customers.find(customer => customer.id === 'ordered')).toMatchObject({
+      state: 'eating', consumedServiceItemIds: ['dish'],
+    });
+  });
+
+  it('sends an unaffordable member away when ordering members leave for checkout', () => {
+    const result = advanceConsumption({
+      customers: [
+        {
+          id: 'payer', partyId: 'mixed', state: 'eating', menuOutcome: 'ordered',
+          tableId: 't1', orderedServiceItemIds: ['dish'], consumedServiceItemIds: [],
+        },
+        {
+          id: 'non-payer', partyId: 'mixed', state: 'waiting_for_party',
+          menuOutcome: 'unaffordable', tableId: 't1', path: [{ x: 1, y: 1 }],
+          pathGoal: { x: 2, y: 2 }, usingStaticFallback: true, paymentReady: true,
+        },
+      ],
+      serviceItems: [{
+        id: 'dish', kind: 'dish', customerId: 'payer', state: 'delivered',
+        consumptionStartedAt: 0,
+      }],
+      restaurant: { gameTime: 480 },
+    });
+
+    expect(result.customers.find(customer => customer.id === 'payer')).toMatchObject({
+      state: 'checkout_queued', paymentQueuedAt: 480,
+    });
+    const nonPayer = result.customers.find(customer => customer.id === 'non-payer');
+    expect(nonPayer).toMatchObject({
+      state: 'leaving', departureReason: 'menu_unaffordable', exitPhase: 'to_door',
+      exitDoorId: null, exitFadeProgress: 0, exitHeading: null, path: [], stalledFor: 0,
+      cashierStationId: null, checkoutPosition: null, paymentReady: false,
+    });
+    expect(nonPayer.paymentQueuedAt).toBeUndefined();
+    expect(nonPayer).not.toHaveProperty('pathGoal');
+    expect(nonPayer).not.toHaveProperty('usingStaticFallback');
+  });
+
+  it('keeps immediate individual checkout for an all-legacy party', () => {
+    const result = advanceConsumption({
+      customers: [
+        {
+          id: 'legacy-fast', partyId: 'legacy', state: 'eating',
+          orderedServiceItemIds: ['drink'], consumedServiceItemIds: [],
+        },
+        {
+          id: 'legacy-slow', partyId: 'legacy', state: 'eating',
+          orderedServiceItemIds: ['dish'], consumedServiceItemIds: [],
+        },
+      ],
+      serviceItems: [
+        {
+          id: 'drink', kind: 'drink', customerId: 'legacy-fast', state: 'delivered',
+          consumptionStartedAt: 0,
+        },
+        {
+          id: 'dish', kind: 'dish', customerId: 'legacy-slow', state: 'delivered',
+          consumptionStartedAt: 0,
+        },
+      ],
+      restaurant: { gameTime: 180 },
+    });
+
+    expect(result.customers.map(customer => customer.state))
+      .toEqual(['checkout_queued', 'eating']);
+  });
+});

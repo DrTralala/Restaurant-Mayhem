@@ -338,7 +338,7 @@ describe('runTick', () => {
       ...emptyState,
       tables: [{ id: 't1', status: 'occupied', seats: 1, x: 220, y: 180 }],
       chairs: [{ id: 'ch1', tableId: 't1', x: 200, y: 200 }],
-      customers: [{ id: 'c1', state: 'seated', tableId: 't1', chairId: 'ch1', x: 200, y: 200, dirtFactor: 9.75, happiness: 80, patience: 100 }],
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1', chairId: 'ch1', x: 200, y: 200, dirtFactor: 9.975, happiness: 80, patience: 100 }],
       staff: [{ id: 'j1', role: 'janitor', morale: 80, x: 180, y: 220, path: [], task: null }],
       floorDirt: [],
     };
@@ -1039,7 +1039,7 @@ describe('runTick', () => {
         { id: 'automatic-owner', state: 'leaving', tableId: 't2', patience: 1000, happiness: 80 },
         {
           id: 'dirt-maker', state: 'seated', tableId: 't3', x: 220, y: 380,
-          patience: 1000, happiness: 80, dirtFactor: 8,
+          patience: 1000, happiness: 80, dirtFactor: 9.8,
         },
       ],
       serviceItems: [

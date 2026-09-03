@@ -90,4 +90,13 @@ describe('MenuPanel drinks', () => {
 
     expect(screen.getByRole('button', { name: 'Unlock Tea ($150)' })).toBeDisabled();
   });
+
+  it('reserves room beside New Dish for the modal close button', () => {
+    render(<MenuPanel />);
+
+    const headingRow = screen.getByRole('heading', { name: 'Menu' }).parentElement;
+    expect(headingRow).toHaveStyle({ paddingRight: '40px' });
+    expect(within(headingRow).getByRole('button', { name: '+ New Dish' }))
+      .toBeInTheDocument();
+  });
 });

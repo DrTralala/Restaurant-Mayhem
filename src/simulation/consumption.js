@@ -1,5 +1,7 @@
 import { ACTIVITY_DURATIONS, getRemainingFraction } from './activity';
 import { enterCheckout, isCheckoutState } from './checkout';
+import { clearMovementRecoveryMetadata } from './movement';
+import { getPartyKey } from './partyReviews';
 
 const DIRTY_STATES = new Set([
   'dirty_at_table',
@@ -143,6 +145,23 @@ function completeServiceItem(item, gameTime) {
   };
 }
 
+function beginUnaffordableDeparture(customer) {
+  return clearMovementRecoveryMetadata({
+    ...customer,
+    state: 'leaving',
+    departureReason: 'menu_unaffordable',
+    exitPhase: 'to_door',
+    exitDoorId: null,
+    exitFadeProgress: 0,
+    exitHeading: null,
+    path: [],
+    stalledFor: 0,
+    cashierStationId: null,
+    checkoutPosition: null,
+    paymentReady: false,
+  });
+}
+
 export function advanceConsumption(state) {
   const gameTime = state.restaurant?.gameTime;
   const normalised = normaliseConsumptionState(
@@ -151,7 +170,8 @@ export function advanceConsumption(state) {
     gameTime,
   );
   let serviceItems = normalised.serviceItems;
-  const customers = normalised.customers.map(customer => {
+  const completeByCustomerId = new Map();
+  const customersAfterConsumption = normalised.customers.map(customer => {
     if (customer.state !== 'eating' && !isCheckoutState(customer)) return customer;
 
     const orderedServiceItemIds = Array.isArray(customer.orderedServiceItemIds)
@@ -182,9 +202,55 @@ export function advanceConsumption(state) {
     };
     const complete = orderedServiceItemIds.length > 0
       && orderedServiceItemIds.every(id => consumedIds.has(id));
+    completeByCustomerId.set(customer.id, complete);
+    return updatedCustomer;
+  });
+
+  const partyMembers = new Map();
+  for (const customer of customersAfterConsumption) {
+    if (customer.partyId == null) continue;
+    const partyId = getPartyKey(customer);
+    const members = partyMembers.get(partyId) || [];
+    members.push(customer);
+    partyMembers.set(partyId, members);
+  }
+
+  const synchronisedPartyIds = new Set();
+  const readyPartyIds = new Set();
+  const hasExplicitOutcome = customer =>
+    customer.menuOutcome === 'ordered' || customer.menuOutcome === 'unaffordable';
+  for (const [partyId, members] of partyMembers) {
+    if (members.length < 2 || !members.some(hasExplicitOutcome)) continue;
+    synchronisedPartyIds.add(partyId);
+    if (!members.every(hasExplicitOutcome)) continue;
+
+    const orderingMembers = members.filter(customer => customer.menuOutcome === 'ordered');
+    const allOrderingMembersComplete = orderingMembers.length > 0
+      && orderingMembers.every(customer =>
+        completeByCustomerId.get(customer.id) === true
+        || isCheckoutState(customer)
+        || customer.state === 'leaving');
+    if (allOrderingMembersComplete) readyPartyIds.add(partyId);
+  }
+
+  const customers = customersAfterConsumption.map(customer => {
+    const complete = completeByCustomerId.get(customer.id) === true;
+    const partyId = customer.partyId == null ? null : getPartyKey(customer);
+    if (partyId != null && synchronisedPartyIds.has(partyId)) {
+      if (!readyPartyIds.has(partyId)) return customer;
+      if (customer.menuOutcome === 'unaffordable'
+        && customer.state === 'waiting_for_party') {
+        return beginUnaffordableDeparture(customer);
+      }
+      if (customer.menuOutcome === 'ordered' && complete && !isCheckoutState(customer)) {
+        return enterCheckout(customer, gameTime);
+      }
+      return customer;
+    }
+
     return complete && !isCheckoutState(customer)
-      ? enterCheckout(updatedCustomer, gameTime)
-      : updatedCustomer;
+      ? enterCheckout(customer, gameTime)
+      : customer;
   });
 
   return { ...state, customers, serviceItems };
