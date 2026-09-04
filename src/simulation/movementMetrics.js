@@ -15,6 +15,20 @@ export function getExecutablePrefixProfile(metrics) {
   return executablePrefixProfiles.get(metrics) || null;
 }
 
+const movementResourceStrategies = new WeakMap();
+
+export function setMovementResourceStrategy(metrics, strategy) {
+  if (strategy !== 'baseline' && strategy !== 'optimised') {
+    throw new Error(`Unknown movement resource strategy: ${strategy}`);
+  }
+  movementResourceStrategies.set(metrics, strategy);
+  return metrics;
+}
+
+export function getMovementResourceStrategy(metrics) {
+  return movementResourceStrategies.get(metrics) || 'optimised';
+}
+
 export function createMovementMetrics() {
   return {
     batches: 0,
@@ -50,8 +64,14 @@ export function createMovementMetrics() {
     localConflictAttempts: 0,
     localConflictProgressAccepts: 0,
     localConflictSafetyFallbacks: 0,
+    blockedCellBuilds: 0,
     spaceTimePlanCalls: 0,
     spaceTimeExpandedStates: 0,
+    spaceTimeSuccessorNodesCreated: 0,
+    plannerCellDescriptorsCreated: 0,
+    routeDistanceCalculations: 0,
+    routeDistanceCacheHits: 0,
+    peakPlannerFrontier: 0,
     solverExecutablePrefixScores: 0,
     solverExecutablePrefixNodeVisits: 0,
     solverNodesBuilt: 0,
@@ -98,8 +118,14 @@ export function summariseMovementMetrics(metrics) {
     localConflictAttempts: metrics.localConflictAttempts,
     localConflictProgressAccepts: metrics.localConflictProgressAccepts,
     localConflictSafetyFallbacks: metrics.localConflictSafetyFallbacks,
+    blockedCellBuilds: metrics.blockedCellBuilds,
     spaceTimePlanCalls: metrics.spaceTimePlanCalls,
     spaceTimeExpandedStates: metrics.spaceTimeExpandedStates,
+    spaceTimeSuccessorNodesCreated: metrics.spaceTimeSuccessorNodesCreated,
+    plannerCellDescriptorsCreated: metrics.plannerCellDescriptorsCreated,
+    routeDistanceCalculations: metrics.routeDistanceCalculations,
+    routeDistanceCacheHits: metrics.routeDistanceCacheHits,
+    peakPlannerFrontier: metrics.peakPlannerFrontier,
     solverExecutablePrefixScores: metrics.solverExecutablePrefixScores,
     solverExecutablePrefixNodeVisits: metrics.solverExecutablePrefixNodeVisits,
     solverNodesBuilt: metrics.solverNodesBuilt,

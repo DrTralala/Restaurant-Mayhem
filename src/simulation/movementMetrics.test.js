@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   createMovementMetrics,
   getExecutablePrefixProfile,
+  getMovementResourceStrategy,
   setExecutablePrefixProfile,
+  setMovementResourceStrategy,
   summariseMovementMetrics,
 } from './movementMetrics';
 
@@ -40,8 +42,14 @@ const metricKeys = [
   'localConflictAttempts',
   'localConflictProgressAccepts',
   'localConflictSafetyFallbacks',
+  'blockedCellBuilds',
   'spaceTimePlanCalls',
   'spaceTimeExpandedStates',
+  'spaceTimeSuccessorNodesCreated',
+  'plannerCellDescriptorsCreated',
+  'routeDistanceCalculations',
+  'routeDistanceCacheHits',
+  'peakPlannerFrontier',
   'solverExecutablePrefixScores',
   'solverExecutablePrefixNodeVisits',
   'solverNodesBuilt',
@@ -113,5 +121,18 @@ describe('movement metrics', () => {
     expect(summariseMovementMetrics(metrics)).toEqual(summary);
     expect(getExecutablePrefixProfile(metrics)).toEqual({ mode: 'legacy', countWork: false });
     expect(getExecutablePrefixProfile(createMovementMetrics())).toBeNull();
+  });
+
+  it('defaults to optimised resources and stores explicit strategy privately', () => {
+    const metrics = createMovementMetrics();
+    const keys = Object.keys(metrics);
+    expect(getMovementResourceStrategy()).toBe('optimised');
+    expect(getMovementResourceStrategy(metrics)).toBe('optimised');
+    expect(setMovementResourceStrategy(metrics, 'baseline')).toBe(metrics);
+    expect(getMovementResourceStrategy(metrics)).toBe('baseline');
+    expect(Object.keys(metrics)).toEqual(keys);
+    expect(Object.getOwnPropertySymbols(metrics)).toEqual([]);
+    expect(() => setMovementResourceStrategy(metrics, 'other'))
+      .toThrow('Unknown movement resource strategy: other');
   });
 });
