@@ -1,5 +1,6 @@
 import { buildOccupiedCharacterCells, cellToWorld, findPath, isInsideWorld, worldToCell } from './pathfinding';
 import { orderActorsByMovementPriority, solveLocalConflictComponent } from './localConflictSolver';
+import { solveLocalConflictWithMovementMetrics } from './localConflict/solver';
 import { getRestaurantWorld, GRID_SIZE } from './world';
 import {
   createNavigationWorkspace,
@@ -73,15 +74,6 @@ const localConflictPhaseKeys = [
   'localConflictFallbackMilliseconds',
 ];
 
-const solverPhaseKeys = [
-  'solverInitialPlanningMilliseconds',
-  'solverNodeBuildMilliseconds',
-  'solverFrontierOrderingMilliseconds',
-  'solverReplanningMilliseconds',
-  'solverAgedFallbackMilliseconds',
-  'solverResidualMilliseconds',
-];
-
 function measureLocalConflictPhase(metrics, key, operation) {
   return measureMovementPhase(metrics, key, operation);
 }
@@ -99,21 +91,7 @@ function measureLocalConflictFallbackPhase(metrics, operation) {
   return result;
 }
 
-export function solveLocalConflictWithMovementMetrics(options, metrics = null) {
-  const phasesAtStart = metrics
-    ? Object.fromEntries(solverPhaseKeys.map(key => [key, metrics[key]]))
-    : null;
-  const outerAtStart = metrics ? metrics.localConflictSolverMilliseconds : 0;
-  const solved = measureLocalConflictPhase(metrics, 'localConflictSolverMilliseconds', () =>
-    solveLocalConflictComponent({ ...options, metrics }));
-  if (metrics) {
-    const outerDelta = metrics.localConflictSolverMilliseconds - outerAtStart;
-    const measured = solverPhaseKeys.reduce((total, key) =>
-      total + metrics[key] - phasesAtStart[key], 0);
-    metrics.solverResidualMilliseconds += Math.max(0, outerDelta - measured);
-  }
-  return solved;
-}
+export { solveLocalConflictWithMovementMetrics };
 
 function getMovementSpacing(character) {
   return 16;
@@ -1002,7 +980,13 @@ function resolveConflictComponentAttempt(
     }
     const { workspace = null, metrics: navigationMetrics = null } = navigation;
     const blockedCells = resolveNavigationWorkspace(state, workspace, navigationMetrics).blockedCells;
-    return { actors, blockedCells, horizon, progressHorizon };
+    return {
+      actors,
+      blockedCells,
+      horizon,
+      progressHorizon,
+      navigationWorkspace: workspace,
+    };
   });
   const solved = solveLocalConflictWithMovementMetrics({
     state,
