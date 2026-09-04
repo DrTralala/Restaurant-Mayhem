@@ -135,7 +135,6 @@ function findSafeDetour(state, intent, spacing, dt, intents, resolutions, checke
   }
   return null;
 }
-
 function findControlledOverlapDetour(state, intent, dt, intents, resolutions, component, navigation = {}) {
   const sideTargets = [
     { x: intent.start.x, y: intent.start.y - 40 },
@@ -173,15 +172,12 @@ function findControlledOverlapDetour(state, intent, dt, intents, resolutions, co
   }
   return null;
 }
-
 function resolveIntentPairs(state, intents, resolutions, dt, validationIntents = intents, metrics = null, navigation = {}) {
   for (const intent of intents) resolutions.set(intent.character.id, resolvedAtStart(intent));
   const yieldedHeadOnIds = new Set();
-
   for (let intentIndex = 0; intentIndex < intents.length; intentIndex += 1) {
     const intent = intents[intentIndex];
     if (yieldedHeadOnIds.has(intent.character.id)) continue;
-
     const headOnPeer = intents.find(peer => peer !== intent
       && String(intent.character.id) < String(peer.character.id)
       && hasExplicitHeadOnRecovery(intent)
@@ -221,7 +217,6 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
       }
       continue;
     }
-
     if (isResolutionSafeForIntent(intent, resolvedAtDesired(intent), validationIntents, resolutions)) {
       resolutions.set(intent.character.id, resolvedAtDesired(intent));
       continue;
@@ -233,18 +228,15 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
       () => furthestSafeTrajectoryPrefix(intent, validationIntents, resolutions, metrics),
     ));
   }
-
   if (!areIntentPairsSafeFor(intents, validationIntents, resolutions)) {
     for (const intent of intents) resolutions.set(intent.character.id, resolvedAtStart(intent));
   }
 }
-
 function orderIntentsByMovementPriority(intents) {
   const intentsById = new Map(intents.map(intent => [intent.character.id, intent]));
   return orderActorsByMovementPriority(intents.map(solverActorForIntent))
     .map(actor => intentsById.get(actor.id));
 }
-
 function selectControlledOverlapActor(component) {
   const selected = orderIntentsByMovementPriority(component
     .filter(intent => {
@@ -259,20 +251,17 @@ function selectControlledOverlapActor(component) {
     }))[0];
   return selected ? selected.character.id : null;
 }
-
 function componentHasMeasurableRouteProgress(component, resolutions) {
   return component.some(intent => hasMeasurableRouteProgress(
     intent,
     resolutions.get(intent.character.id)?.endpoint || intent.character,
   ));
 }
-
 function copyComponentResolutions(component, source, target) {
   for (const intent of component) {
     target.set(intent.character.id, source.get(intent.character.id));
   }
 }
-
 function resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics = null, navigation = {}) {
   const ordered = orderIntentsByMovementPriority(component);
   resolveIntentPairs(state, ordered, resolutions, dt, intents, metrics, navigation);
@@ -280,7 +269,6 @@ function resolveComponentWithExistingSafety(state, component, resolutions, dt, i
     for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
   }
 }
-
 function resolveConflictComponentAttempt(
   state,
   component,
@@ -300,7 +288,6 @@ function resolveConflictComponentAttempt(
       resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics, navigation));
     return;
   }
-
   const prepared = measureLocalConflictPhase(metrics, 'localConflictPreparationMilliseconds', () => {
     const desiredCellKeys = component.map(intent => {
       const cell = worldToCell(intent.desired);
@@ -395,7 +382,6 @@ function resolveConflictComponentAttempt(
     for (const [id, candidate] of candidates) resolutions.set(id, candidate);
     return;
   }
-
   if (metrics) metrics.localConflictSafetyFallbacks += 1;
   measureLocalConflictFallbackPhase(metrics, () => {
     for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
@@ -418,7 +404,6 @@ function resolveConflictComponentAttempt(
     }
   });
 }
-
 function resolveConflictComponent(state, component, resolutions, dt, intents, metrics = null, navigation = {}) {
   const exactExitIntents = component.filter(intent => intent.character.state === 'leaving'
     && (intent.target || intent.targetAfterPath));
@@ -439,7 +424,6 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
       return;
     }
   }
-
   const ordinaryResolutions = new Map(resolutions);
   resolveConflictComponentAttempt(state, component, ordinaryResolutions, dt, intents, null, metrics, navigation);
   if (componentHasMeasurableRouteProgress(component, ordinaryResolutions)) {
