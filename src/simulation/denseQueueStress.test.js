@@ -1,12 +1,96 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertDenseQueueDeterministicRuns,
+  assertDenseQueueEquivalentBehaviour,
+  buildDenseQueueBehaviourProjection,
   buildDenseQueueNonTimingProjection,
   buildDenseQueueScenario,
   calculateInitialPlanningOptimisation,
+  calculateMovementResourceAcceptance,
   runDenseQueueScenario,
   selectRepresentativeDenseQueueRun,
 } from './denseQueueStress';
+
+const RESOURCE_STRATEGY_SUMMARY_KEYS = new Set([
+  'blockedCellBuilds',
+  'plannerCellDescriptorsCreated',
+  'routeDistanceCalculations',
+  'routeDistanceCacheHits',
+]);
+
+const resourceSummary = ({
+  blocked, descriptors, distances, hits = 0, ...overrides
+}) => ({
+  blockedCellBuilds: blocked,
+  plannerCellDescriptorsCreated: descriptors,
+  routeDistanceCalculations: distances,
+  routeDistanceCacheHits: hits,
+  spaceTimePlanCalls: 200,
+  spaceTimeExpandedStates: 63105,
+  spaceTimeSuccessorNodesCreated: 250000,
+  peakPlannerFrontier: 64,
+  solverCalls: 100,
+  solverPbs: 90,
+  solverAgedFallback: 10,
+  solverNull: 0,
+  solverNodePops: 300,
+  solverNodesBuilt: 400,
+  solverBranchesGenerated: 200,
+  ...overrides,
+});
+
+const timingSummaryKeys = [
+  'batchMilliseconds',
+  'averageBatchMilliseconds',
+  'pairBuildMilliseconds',
+  'localConflictMilliseconds',
+  'localConflictPreparationMilliseconds',
+  'localConflictSolverMilliseconds',
+  'localConflictCandidateMilliseconds',
+  'localConflictSafetyMilliseconds',
+  'localConflictFallbackMilliseconds',
+  'localConflictResidualMilliseconds',
+  'solverInitialPlanningMilliseconds',
+  'solverNodeBuildMilliseconds',
+  'solverFrontierOrderingMilliseconds',
+  'solverReplanningMilliseconds',
+  'solverAgedFallbackMilliseconds',
+  'solverResidualMilliseconds',
+  'safePrefixMilliseconds',
+  'dynamicRepathMilliseconds',
+  'staticRepathMilliseconds',
+  'residualBatchMilliseconds',
+];
+
+const algorithmWorkKeys = [
+  'spaceTimePlanCalls',
+  'spaceTimeExpandedStates',
+  'spaceTimeSuccessorNodesCreated',
+  'peakPlannerFrontier',
+  'solverCalls',
+  'solverPbs',
+  'solverAgedFallback',
+  'solverNull',
+  'solverNodePops',
+  'solverNodesBuilt',
+  'solverBranchesGenerated',
+];
+
+const profileResult = summary => ({
+  summary: {
+    ...Object.fromEntries(timingSummaryKeys.map(key => [key, 10])),
+    ...summary,
+  },
+  tickMilliseconds: [1, 2],
+  actorsCompletingDoorRoutes: 1,
+  allCoordinatesFinite: true,
+  allActorsInsideWorld: true,
+  minimumEndpointSpacing: 16,
+  minimumSweptSpacing: 16,
+  actors: [{
+    id: 'actor', x: 100, y: 100, path: [], stalledFor: 0, usingStaticFallback: false,
+  }],
+});
 
 const deterministicSummary = result => {
   const {
@@ -202,5 +286,92 @@ describe('dense queue stress scenario', () => {
       optimisedMillisecondsByRun: [71],
       parentNodeVisits: 0,
     }).performanceAccepted).toBe(false);
+  });
+
+  it('omits only timing and resource-strategy counters from behaviour comparison', () => {
+    const first = profileResult(resourceSummary({
+      blocked: 20, descriptors: 200, distances: 100, hits: 80,
+    }));
+    const ignoredKeys = [...timingSummaryKeys, ...RESOURCE_STRATEGY_SUMMARY_KEYS];
+
+    for (const key of ignoredKeys) {
+      const second = profileResult({ ...first.summary, [key]: first.summary[key] + 1 });
+      expect(buildDenseQueueBehaviourProjection(second))
+        .toEqual(buildDenseQueueBehaviourProjection(first));
+      expect(() => assertDenseQueueEquivalentBehaviour([first, second]), key).not.toThrow();
+    }
+
+    const changedTickTimings = { ...first, tickMilliseconds: [99, 101] };
+    expect(buildDenseQueueBehaviourProjection(changedTickTimings))
+      .toEqual(buildDenseQueueBehaviourProjection(first));
+    expect(() => assertDenseQueueEquivalentBehaviour([first, changedTickTimings]))
+      .not.toThrow();
+
+    for (const key of algorithmWorkKeys) {
+      const second = profileResult({ ...first.summary, [key]: first.summary[key] + 1 });
+      expect(buildDenseQueueBehaviourProjection(second))
+        .not.toEqual(buildDenseQueueBehaviourProjection(first));
+      expect(() => assertDenseQueueEquivalentBehaviour([first, second]), key)
+        .toThrow('Dense queue behaviour changed between resource strategies');
+    }
+  });
+
+  it('accepts equal medians only when deterministic work is equal and resources fall', () => {
+    expect(calculateMovementResourceAcceptance({
+      baselineMillisecondsByRun: [102, 100, 101, 99, 98],
+      optimisedMillisecondsByRun: [100, 100, 100, 100, 100],
+      baselineSummary: resourceSummary({ blocked: 20, descriptors: 200, distances: 100 }),
+      optimisedSummary: resourceSummary({ blocked: 1, descriptors: 80, distances: 20, hits: 80 }),
+    })).toMatchObject({
+      baselineMedianMilliseconds: 100,
+      optimisedMedianMilliseconds: 100,
+      algorithmWorkEqual: true,
+      resourceWorkReduced: true,
+      performanceAccepted: true,
+      accepted: true,
+    });
+  });
+
+  it('rejects slower timing, missing reductions, missing hits, and changed algorithm work', () => {
+    const acceptedInput = {
+      baselineMillisecondsByRun: [102, 100, 101, 99, 98],
+      optimisedMillisecondsByRun: [100, 100, 100, 100, 100],
+      baselineSummary: resourceSummary({ blocked: 20, descriptors: 200, distances: 100 }),
+      optimisedSummary: resourceSummary({ blocked: 1, descriptors: 80, distances: 20, hits: 80 }),
+    };
+
+    expect(calculateMovementResourceAcceptance({
+      ...acceptedInput,
+      optimisedMillisecondsByRun: [101, 101, 101, 101, 101],
+    })).toMatchObject({ performanceAccepted: false, accepted: false });
+
+    for (const key of [
+      'blockedCellBuilds',
+      'plannerCellDescriptorsCreated',
+      'routeDistanceCalculations',
+    ]) {
+      expect(calculateMovementResourceAcceptance({
+        ...acceptedInput,
+        optimisedSummary: {
+          ...acceptedInput.optimisedSummary,
+          [key]: acceptedInput.baselineSummary[key],
+        },
+      }), key).toMatchObject({ resourceWorkReduced: false, accepted: false });
+    }
+
+    expect(calculateMovementResourceAcceptance({
+      ...acceptedInput,
+      optimisedSummary: { ...acceptedInput.optimisedSummary, routeDistanceCacheHits: 0 },
+    })).toMatchObject({ resourceWorkReduced: false, accepted: false });
+
+    for (const key of algorithmWorkKeys) {
+      expect(calculateMovementResourceAcceptance({
+        ...acceptedInput,
+        optimisedSummary: {
+          ...acceptedInput.optimisedSummary,
+          [key]: acceptedInput.optimisedSummary[key] + 1,
+        },
+      }), key).toMatchObject({ algorithmWorkEqual: false, accepted: false });
+    }
   });
 });

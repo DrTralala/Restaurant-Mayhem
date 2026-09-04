@@ -32,6 +32,25 @@ const solverKeys = [
 const eligibleLocalConflictLeafKeys = localConflictKeys
   .filter(key => key !== 'localConflictSolverMilliseconds');
 const eligibleLeafKeys = [...eligibleLocalConflictLeafKeys, ...solverKeys];
+const algorithmWorkKeys = [
+  'spaceTimePlanCalls',
+  'spaceTimeExpandedStates',
+  'spaceTimeSuccessorNodesCreated',
+  'peakPlannerFrontier',
+  'solverCalls',
+  'solverPbs',
+  'solverAgedFallback',
+  'solverNull',
+  'solverNodePops',
+  'solverNodesBuilt',
+  'solverBranchesGenerated',
+];
+const resourceCounterKeys = [
+  'blockedCellBuilds',
+  'plannerCellDescriptorsCreated',
+  'routeDistanceCalculations',
+  'routeDistanceCacheHits',
+];
 
 function name(key) {
   return key.replace('Milliseconds', '');
@@ -69,6 +88,16 @@ function percentile(values, ratio) {
   return sorted[Math.ceil(sorted.length * ratio) - 1];
 }
 
+const pickSummary = (summary, keys) => Object.fromEntries(
+  keys.map(key => [key, summary[key]]),
+);
+const describeBatchRuns = values => ({
+  byRun: values,
+  median: median(values),
+  p95: percentile(values, 0.95),
+  max: Math.max(...values),
+});
+
 const server = await createServer({
   logLevel: 'silent',
   server: { middlewareMode: true },
@@ -77,22 +106,37 @@ const server = await createServer({
 try {
   const {
     assertDenseQueueDeterministicRuns,
+    assertDenseQueueEquivalentBehaviour,
+    buildDenseQueueBehaviourProjection,
     buildDenseQueueNonTimingProjection,
     calculateInitialPlanningOptimisation,
+    calculateMovementResourceAcceptance,
     runDenseQueueScenario,
     selectRepresentativeDenseQueueRun,
   } = await server.ssrLoadModule('/src/simulation/denseQueueStress.js');
   const {
     createMovementMetrics,
     setExecutablePrefixProfile,
+    setMovementResourceStrategy,
   } = await server.ssrLoadModule('/src/simulation/movementMetrics.js');
-  const runMode = (mode, countWork = false) => runDenseQueueScenario({
+  const runProfile = ({
+    prefixMode = 'cached',
+    countPrefixWork = false,
+    resourceStrategy = 'optimised',
+  } = {}) => runDenseQueueScenario({
     ticks: TICKS,
-    metrics: setExecutablePrefixProfile(createMovementMetrics(), { mode, countWork }),
+    metrics: setMovementResourceStrategy(
+      setExecutablePrefixProfile(createMovementMetrics(), {
+        mode: prefixMode,
+        countWork: countPrefixWork,
+      }),
+      resourceStrategy,
+    ),
   });
+  const prefixResourceStrategy = 'baseline';
   for (let run = 0; run < WARMUP_RUNS; run += 1) {
-    runMode('legacy');
-    runMode('cached');
+    runProfile({ prefixMode: 'legacy', resourceStrategy: prefixResourceStrategy });
+    runProfile({ prefixMode: 'cached', resourceStrategy: prefixResourceStrategy });
   }
   const legacyRuns = [];
   const cachedRuns = [];
@@ -100,18 +144,27 @@ try {
   for (let pair = 0; pair < MEASURED_RUNS; pair += 1) {
     const modes = pair % 2 === 0 ? ['legacy', 'cached'] : ['cached', 'legacy'];
     measuredPairOrder.push(modes);
-    for (const mode of modes) {
-      const result = runMode(mode);
-      (mode === 'legacy' ? legacyRuns : cachedRuns).push(result);
+    for (const prefixMode of modes) {
+      const result = runProfile({ prefixMode, resourceStrategy: prefixResourceStrategy });
+      (prefixMode === 'legacy' ? legacyRuns : cachedRuns).push(result);
     }
   }
-  const runs = cachedRuns;
-  assertDenseQueueDeterministicRuns([...legacyRuns, ...cachedRuns]);
+  assertDenseQueueDeterministicRuns(legacyRuns);
+  assertDenseQueueDeterministicRuns(cachedRuns);
+  assertDenseQueueEquivalentBehaviour([...legacyRuns, ...cachedRuns]);
 
-  const legacyWorkRun = runMode('legacy', true);
-  const cachedWorkRun = runMode('cached', true);
+  const legacyWorkRun = runProfile({
+    prefixMode: 'legacy',
+    countPrefixWork: true,
+    resourceStrategy: prefixResourceStrategy,
+  });
+  const cachedWorkRun = runProfile({
+    prefixMode: 'cached',
+    countPrefixWork: true,
+    resourceStrategy: prefixResourceStrategy,
+  });
   const withoutPrefixWork = result => {
-    const projection = buildDenseQueueNonTimingProjection(result);
+    const projection = buildDenseQueueBehaviourProjection(result);
     delete projection.summary.solverExecutablePrefixScores;
     delete projection.summary.solverExecutablePrefixNodeVisits;
     return projection;
@@ -119,7 +172,7 @@ try {
   const expectedProjection = JSON.stringify(withoutPrefixWork(cachedRuns[0]));
   if (![legacyWorkRun, cachedWorkRun]
     .every(run => JSON.stringify(withoutPrefixWork(run)) === expectedProjection)) {
-    throw new Error('Counter-enabled executable-prefix evidence changed movement or invariants');
+    throw new Error('Executable-prefix profiling changed dense-queue behaviour');
   }
   const legacyWork = legacyWorkRun.summary;
   const cachedWork = cachedWorkRun.summary;
@@ -129,6 +182,84 @@ try {
     || cachedWork.solverExecutablePrefixNodeVisits !== 0) {
     throw new Error('Executable-prefix deterministic work evidence changed');
   }
+
+  for (let run = 0; run < WARMUP_RUNS; run += 1) {
+    runProfile({ resourceStrategy: 'baseline' });
+    runProfile({ resourceStrategy: 'optimised' });
+  }
+
+  const baselineResourceRuns = [];
+  const optimisedResourceRuns = [];
+  const resourceMeasuredPairOrder = [];
+  for (let pair = 0; pair < MEASURED_RUNS; pair += 1) {
+    const strategies = pair % 2 === 0
+      ? ['baseline', 'optimised']
+      : ['optimised', 'baseline'];
+    resourceMeasuredPairOrder.push(strategies);
+    for (const resourceStrategy of strategies) {
+      const result = runProfile({ resourceStrategy });
+      (resourceStrategy === 'baseline' ? baselineResourceRuns : optimisedResourceRuns)
+        .push(result);
+    }
+  }
+
+  assertDenseQueueDeterministicRuns(baselineResourceRuns);
+  assertDenseQueueDeterministicRuns(optimisedResourceRuns);
+  assertDenseQueueEquivalentBehaviour([...baselineResourceRuns, ...optimisedResourceRuns]);
+
+  for (const result of [...baselineResourceRuns, ...optimisedResourceRuns]) {
+    if (result.summary.spaceTimePlanCalls !== 200
+        || result.summary.spaceTimeExpandedStates !== 63105) {
+      throw new Error('Dense-queue planner work changed from the accepted baseline');
+    }
+  }
+
+  const baselineBatchMilliseconds = baselineResourceRuns
+    .map(run => run.summary.batchMilliseconds);
+  const optimisedBatchMilliseconds = optimisedResourceRuns
+    .map(run => run.summary.batchMilliseconds);
+  const baselineResourceSummary = baselineResourceRuns[0].summary;
+  const optimisedResourceSummary = optimisedResourceRuns[0].summary;
+  const movementResourceAcceptance = calculateMovementResourceAcceptance({
+    baselineMillisecondsByRun: baselineBatchMilliseconds,
+    optimisedMillisecondsByRun: optimisedBatchMilliseconds,
+    baselineSummary: baselineResourceSummary,
+    optimisedSummary: optimisedResourceSummary,
+  });
+  if (!movementResourceAcceptance.accepted) {
+    throw new Error('Movement resource optimisation acceptance failed');
+  }
+
+  const runs = optimisedResourceRuns;
+  const baselineResourceCounters = pickSummary(baselineResourceSummary, resourceCounterKeys);
+  const optimisedResourceCounters = pickSummary(optimisedResourceSummary, resourceCounterKeys);
+  const resourceReductions = Object.fromEntries([
+    'blockedCellBuilds',
+    'plannerCellDescriptorsCreated',
+    'routeDistanceCalculations',
+  ].map(key => [key, baselineResourceSummary[key] - optimisedResourceSummary[key]]));
+  const movementResourceOptimisation = {
+    warmupPerStrategy: WARMUP_RUNS,
+    measuredPairs: MEASURED_RUNS,
+    measuredPairOrder: resourceMeasuredPairOrder,
+    prefixMode: 'cached',
+    prefixWorkCountersEnabledDuringTiming: false,
+    sameProcess: true,
+    batchMilliseconds: {
+      baseline: describeBatchRuns(baselineBatchMilliseconds),
+      optimised: describeBatchRuns(optimisedBatchMilliseconds),
+    },
+    algorithmWork: {
+      baseline: pickSummary(baselineResourceSummary, algorithmWorkKeys),
+      optimised: pickSummary(optimisedResourceSummary, algorithmWorkKeys),
+    },
+    resources: {
+      baseline: baselineResourceCounters,
+      optimised: optimisedResourceCounters,
+      reductions: resourceReductions,
+    },
+    acceptance: movementResourceAcceptance,
+  };
   const { run: representative, index: representativeRunIndex } = selectRepresentativeDenseQueueRun(runs);
   const deterministicProjection = buildDenseQueueNonTimingProjection(representative);
   const phaseMilliseconds = Object.fromEntries(phaseKeys.map(key => [
@@ -168,7 +299,7 @@ try {
     && nestedAccountingReconciles;
   const baselineInitialPlanningMillisecondsByRun = legacyRuns
     .map(run => run.summary.solverInitialPlanningMilliseconds);
-  const optimisedInitialPlanningMillisecondsByRun = runs
+  const optimisedInitialPlanningMillisecondsByRun = cachedRuns
     .map(run => run.summary.solverInitialPlanningMilliseconds);
   const initialPlanningOptimisation = calculateInitialPlanningOptimisation({
     baselineMillisecondsByRun: baselineInitialPlanningMillisecondsByRun,
@@ -176,6 +307,9 @@ try {
     requiredImprovement: 0.30,
     parentNodeVisits: cachedWork.solverExecutablePrefixNodeVisits,
   });
+  if (!initialPlanningOptimisation.performanceAccepted) {
+    throw new Error('Executable-prefix initial-planning optimisation acceptance failed');
+  }
 
   console.log(JSON.stringify({
     ...deterministicProjection.summary,
@@ -186,6 +320,7 @@ try {
       measuredPairs: MEASURED_RUNS,
       ticksPerRun: TICKS,
       measuredPairOrder,
+      resourceStrategy: prefixResourceStrategy,
       sameProcess: true,
       prefixWorkCountersEnabledDuringTiming: false,
     },
@@ -230,7 +365,9 @@ try {
       sameProcess: true,
       interleavedPairs: true,
       prefixWorkCountersEnabledDuringTiming: false,
+      resourceStrategy: prefixResourceStrategy,
     },
+    movementResourceOptimisation,
     eligibleLeafOrderingByRun,
     innerHotspotCriterion: {
       largestEligibleLeafByRun,

@@ -28,6 +28,30 @@ const TIMING_SUMMARY_KEYS = new Set([
   'staticRepathMilliseconds',
   'residualBatchMilliseconds',
 ]);
+const RESOURCE_STRATEGY_SUMMARY_KEYS = new Set([
+  'blockedCellBuilds',
+  'plannerCellDescriptorsCreated',
+  'routeDistanceCalculations',
+  'routeDistanceCacheHits',
+]);
+const ALGORITHM_WORK_KEYS = [
+  'spaceTimePlanCalls',
+  'spaceTimeExpandedStates',
+  'spaceTimeSuccessorNodesCreated',
+  'peakPlannerFrontier',
+  'solverCalls',
+  'solverPbs',
+  'solverAgedFallback',
+  'solverNull',
+  'solverNodePops',
+  'solverNodesBuilt',
+  'solverBranchesGenerated',
+];
+const RESOURCE_REDUCTION_KEYS = [
+  'blockedCellBuilds',
+  'plannerCellDescriptorsCreated',
+  'routeDistanceCalculations',
+];
 
 const scenarioState = {
   restaurant: { expansionLevel: 1 },
@@ -146,7 +170,7 @@ export function buildDenseQueueScenario() {
   };
 }
 
-export function buildDenseQueueNonTimingProjection(result) {
+function buildDenseQueueProjection(result, omittedSummaryKeys) {
   const {
     summary,
     tickMilliseconds: _tickMilliseconds,
@@ -155,7 +179,7 @@ export function buildDenseQueueNonTimingProjection(result) {
   } = result;
   return {
     summary: Object.fromEntries(Object.entries(summary)
-      .filter(([key]) => !TIMING_SUMMARY_KEYS.has(key))),
+      .filter(([key]) => !omittedSummaryKeys.has(key))),
     ...deterministicResult,
     actors: actors.map(actor => ({
       id: actor.id,
@@ -166,6 +190,24 @@ export function buildDenseQueueNonTimingProjection(result) {
       usingStaticFallback: actor.usingStaticFallback || false,
     })),
   };
+}
+
+export function buildDenseQueueNonTimingProjection(result) {
+  return buildDenseQueueProjection(result, TIMING_SUMMARY_KEYS);
+}
+
+export function buildDenseQueueBehaviourProjection(result) {
+  return buildDenseQueueProjection(result, new Set([
+    ...TIMING_SUMMARY_KEYS,
+    ...RESOURCE_STRATEGY_SUMMARY_KEYS,
+  ]));
+}
+
+export function assertDenseQueueEquivalentBehaviour(runs) {
+  const expected = JSON.stringify(buildDenseQueueBehaviourProjection(runs[0]));
+  if (!runs.every(run => JSON.stringify(buildDenseQueueBehaviourProjection(run)) === expected)) {
+    throw new Error('Dense queue behaviour changed between resource strategies');
+  }
 }
 
 export function assertDenseQueueDeterministicRuns(runs) {
@@ -182,19 +224,46 @@ export function selectRepresentativeDenseQueueRun(runs) {
       || left.index - right.index)[Math.floor(runs.length / 2)];
 }
 
+function median(values) {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = sorted.length / 2;
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[Math.floor(middle)];
+}
+
+export function calculateMovementResourceAcceptance({
+  baselineMillisecondsByRun,
+  optimisedMillisecondsByRun,
+  baselineSummary,
+  optimisedSummary,
+}) {
+  const baselineMedianMilliseconds = median(baselineMillisecondsByRun);
+  const optimisedMedianMilliseconds = median(optimisedMillisecondsByRun);
+  const algorithmWorkEqual = ALGORITHM_WORK_KEYS
+    .every(key => baselineSummary[key] === optimisedSummary[key]);
+  const resourceWorkReduced = RESOURCE_REDUCTION_KEYS
+    .every(key => optimisedSummary[key] < baselineSummary[key])
+    && optimisedSummary.routeDistanceCacheHits > 0;
+  const performanceAccepted = optimisedMedianMilliseconds <= baselineMedianMilliseconds;
+  return {
+    baselineMillisecondsByRun,
+    baselineMedianMilliseconds,
+    optimisedMillisecondsByRun,
+    optimisedMedianMilliseconds,
+    algorithmWorkEqual,
+    resourceWorkReduced,
+    performanceAccepted,
+    accepted: algorithmWorkEqual && resourceWorkReduced && performanceAccepted,
+  };
+}
+
 export function calculateInitialPlanningOptimisation({
   baselineMillisecondsByRun,
   optimisedMillisecondsByRun,
   requiredImprovement = 0.30,
   parentNodeVisits,
 }) {
-  const median = values => {
-    const sorted = [...values].sort((left, right) => left - right);
-    const middle = sorted.length / 2;
-    return sorted.length % 2 === 0
-      ? (sorted[middle - 1] + sorted[middle]) / 2
-      : sorted[Math.floor(middle)];
-  };
   const baselineMedianMilliseconds = median(baselineMillisecondsByRun);
   const optimisedMedianMilliseconds = median(optimisedMillisecondsByRun);
   const improvement = (baselineMedianMilliseconds - optimisedMedianMilliseconds)
