@@ -1,5 +1,3 @@
-import { isInsideWorld } from './pathfinding';
-import { getExecutablePrefixProfile } from './movementMetrics';
 import {
   addPriorityEdge,
   buildPriorityGraph,
@@ -11,17 +9,14 @@ import {
   sameDoorEgressEdges,
   topologicalActorIds,
 } from './localConflict/priorityGraph';
+import { findSpaceTimePlan } from './localConflict/spaceTimePlanner';
 
 // Re-export the existing façade functions unchanged.
 export { addPriorityEdge, orderActorsByMovementPriority };
-
-const ACTIONS = [
-  { x: 0, y: 0 },
-  { x: 0, y: -1 },
-  { x: -1, y: 0 },
-  { x: 1, y: 0 },
-  { x: 0, y: 1 },
-];
+export {
+  advanceExecutablePrefixScore,
+  findSpaceTimePlan,
+} from './localConflict/spaceTimePlanner';
 
 const solverPhaseKeys = [
   'solverInitialPlanningMilliseconds',
@@ -55,160 +50,6 @@ function manhattan(left, right) {
   return Math.abs(left.x - right.x) + Math.abs(left.y - right.y);
 }
 
-function distanceFromRoute(cell, routeCells) {
-  if (routeCells.length === 0) return 0;
-  return Math.min(...routeCells.map(routeCell => manhattan(cell, routeCell)));
-}
-
-// Exported only as test-support API; production calls it internally for cached scoring.
-export function advanceExecutablePrefixScore(parentScore, successor, scoringSlot, routeDistance) {
-  if (successor.slot <= scoringSlot) {
-    return {
-      cell: { ...successor.cell },
-      waits: parentScore.waits + (successor.waited ? 1 : 0),
-      routeDeviation: parentScore.routeDeviation + routeDistance,
-    };
-  }
-  return {
-    cell: { ...parentScore.cell },
-    waits: parentScore.waits,
-    routeDeviation: parentScore.routeDeviation,
-  };
-}
-
-function compareNodes(left, right, goalCell) {
-  return manhattan(left.cell, goalCell) - manhattan(right.cell, goalCell)
-    || left.waits - right.waits
-    || left.routeDeviation - right.routeDeviation
-    || compareKeys(cellKey(left.cell), cellKey(right.cell));
-}
-
-function buildPlan(node, onVisit = null) {
-  const plan = [];
-  let current = node;
-  while (current.parent) {
-    onVisit?.();
-    plan.unshift(current.cell);
-    current = current.parent;
-  }
-  return plan;
-}
-
-export function findSpaceTimePlan({
-  state,
-  startCell,
-  goalCell,
-  routeCells,
-  blockedCells,
-  horizon = 8,
-  vertexReservations,
-  edgeReservations,
-  progressHorizon = horizon,
-  metrics = null,
-}) {
-  let legacyExecutablePrefixScoring = false;
-  let countExecutablePrefixWork = true;
-  if (metrics) {
-    metrics.spaceTimePlanCalls += 1;
-    const profile = getExecutablePrefixProfile(metrics);
-    legacyExecutablePrefixScoring = profile?.mode === 'legacy';
-    countExecutablePrefixWork = profile?.countWork !== false;
-  }
-  const startKey = cellKey(startCell);
-  const scoringSlot = Math.max(1, Math.min(horizon, progressHorizon));
-  const prefixScore = node => {
-    if (metrics && countExecutablePrefixWork) metrics.solverExecutablePrefixScores += 1;
-    if (legacyExecutablePrefixScoring) {
-      const prefix = buildPlan(node, countExecutablePrefixWork
-        ? () => { metrics.solverExecutablePrefixNodeVisits += 1; }
-        : null).slice(0, scoringSlot);
-      let previous = startCell;
-      let waits = 0;
-      let routeDeviation = 0;
-      for (const cell of prefix) {
-        if (cellKey(cell) === cellKey(previous)) waits += 1;
-        routeDeviation += distanceFromRoute(cell, routeCells);
-        previous = cell;
-      }
-      return { cell: prefix.at(-1) || startCell, waits, routeDeviation };
-    }
-    return {
-      cell: node.executableCell,
-      waits: node.executableWaits,
-      routeDeviation: node.executableRouteDeviation,
-    };
-  };
-  const compareByExecutablePrefix = (left, right) =>
-    compareNodes(prefixScore(left), prefixScore(right), goalCell)
-      || compareNodes(left, right, goalCell);
-  const startNode = {
-    cell: { ...startCell },
-    slot: 0,
-    waits: 0,
-    routeDeviation: 0,
-    parent: null,
-  };
-  if (!legacyExecutablePrefixScoring) {
-    startNode.executableCell = { ...startCell };
-    startNode.executableWaits = 0;
-    startNode.executableRouteDeviation = 0;
-  }
-  let frontier = [startNode];
-
-  for (let slot = 1; slot <= horizon; slot += 1) {
-    const bestByCellAndSlot = new Map();
-
-    for (const current of frontier) {
-      if (metrics) metrics.spaceTimeExpandedStates += 1;
-      const actions = cellKey(current.cell) === cellKey(goalCell) ? ACTIONS.slice(0, 1) : ACTIONS;
-      const successors = actions.map(action => {
-        const cell = { x: current.cell.x + action.x, y: current.cell.y + action.y };
-        const waited = action.x === 0 && action.y === 0;
-        const routeDistance = distanceFromRoute(cell, routeCells);
-        const successor = {
-          cell,
-          slot,
-          waits: current.waits + (waited ? 1 : 0),
-          routeDeviation: current.routeDeviation + routeDistance,
-          parent: current,
-        };
-        if (!legacyExecutablePrefixScoring) {
-          const executableScore = advanceExecutablePrefixScore({
-            cell: current.executableCell,
-            waits: current.executableWaits,
-            routeDeviation: current.executableRouteDeviation,
-          }, { cell, slot, waited }, scoringSlot, routeDistance);
-          successor.executableCell = executableScore.cell;
-          successor.executableWaits = executableScore.waits;
-          successor.executableRouteDeviation = executableScore.routeDeviation;
-        }
-        return successor;
-      }).sort((left, right) => compareNodes(left, right, goalCell));
-
-      for (const successor of successors) {
-        const key = cellKey(successor.cell);
-        if (!isInsideWorld(state, successor.cell)) continue;
-        if (key !== startKey && blockedCells.has(key)) continue;
-        if (vertexReservations.get(slot)?.has(key)) continue;
-        if (edgeReservations.has(edgeKey(successor.cell, current.cell, slot))) continue;
-
-        const stateKey = `${key}@${slot}`;
-        const previous = bestByCellAndSlot.get(stateKey);
-        if (!previous || (slot > scoringSlot
-          ? compareByExecutablePrefix(successor, previous)
-          : compareNodes(successor, previous, goalCell)) < 0) {
-          bestByCellAndSlot.set(stateKey, successor);
-        }
-      }
-    }
-
-    frontier = [...bestByCellAndSlot.values()]
-      .sort((left, right) => compareNodes(left, right, goalCell));
-    if (frontier.length === 0) return null;
-  }
-
-  return buildPlan([...frontier].sort(compareByExecutablePrefix)[0]);
-}
 
 function planCellAt(actor, plan, slot) {
   if (slot === 0) return actor.startCell;
