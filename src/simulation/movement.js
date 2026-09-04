@@ -1,6 +1,12 @@
-import { buildBlockedCells, buildOccupiedCharacterCells, cellToWorld, findPath, findPathWithDynamicFallback, isInsideWorld, worldToCell } from './pathfinding';
+import { buildOccupiedCharacterCells, cellToWorld, findPath, isInsideWorld, worldToCell } from './pathfinding';
 import { orderActorsByMovementPriority, solveLocalConflictComponent } from './localConflictSolver';
-import { getDefaultStaffPosition, getRestaurantWorld, GRID_SIZE } from './world';
+import { getRestaurantWorld, GRID_SIZE } from './world';
+import {
+  createNavigationWorkspace,
+  furthestWorldSegmentEndpoint,
+  isSafeSegment,
+  resolveNavigationWorkspace,
+} from './movement/navigationWorkspace';
 import {
   appendTimedSegment,
   buildDirectTrajectory,
@@ -16,6 +22,16 @@ import {
   trajectoryPrefix,
   trajectorySegment,
 } from './movement/trajectory';
+import {
+  clearMovementRecoveryMetadata,
+  ensureStaffRuntime,
+  hasArrived,
+  moveCharacterAlongPath,
+  moveCharacterTowards,
+  moveCharacterWithRecovery,
+  moveStaffAlongPath,
+  planCharacterPath,
+} from './movement/pathMotion';
 
 export {
   buildTimeParameterizedTrajectory,
@@ -24,7 +40,16 @@ export {
   minimumTrajectoryDistance,
 } from './movement/trajectory';
 
-const ROLE_SPEED = { waiter: 75, cook: 55 };
+export {
+  clearMovementRecoveryMetadata,
+  ensureStaffRuntime,
+  hasArrived,
+  moveCharacterAlongPath,
+  moveCharacterTowards,
+  moveCharacterWithRecovery,
+  moveStaffAlongPath,
+  planCharacterPath,
+} from './movement/pathMotion';
 
 function movementNow() {
   return globalThis.performance?.now?.() ?? Date.now();
@@ -90,279 +115,6 @@ export function solveLocalConflictWithMovementMetrics(options, metrics = null) {
   return solved;
 }
 
-export function clearMovementRecoveryMetadata(character) {
-  const cleared = { ...character, stalledFor: 0 };
-  delete cleared.pathGoal;
-  delete cleared.usingStaticFallback;
-  delete cleared.minimumSpacing;
-  delete cleared.localConflictTarget;
-  delete cleared.headOnRecovery;
-  delete cleared.recoveredHeadOnDetourTarget;
-  return cleared;
-}
-
-function continuousWorldBounds(state) {
-  const world = getRestaurantWorld(state.restaurant || {});
-  return {
-    left: world.floorX,
-    right: world.queueX + world.queueW,
-    top: world.kitchenY,
-    bottom: world.diningY + world.areaH + 50,
-  };
-}
-
-function isSafeWorldAxis(start, end, minimum, maximum) {
-  if (start < minimum) return end >= start && end <= maximum;
-  if (start > maximum) return end <= start && end >= minimum;
-  return end >= minimum && end <= maximum;
-}
-
-function isSafeWorldSegment(state, start, end) {
-  if (!state) return true;
-  const bounds = continuousWorldBounds(state);
-  return isSafeWorldAxis(start.x, end.x, bounds.left, bounds.right)
-    && isSafeWorldAxis(start.y, end.y, bounds.top, bounds.bottom);
-}
-
-function furthestWorldSegmentEndpoint(state, start, end) {
-  if (!state || isSafeWorldSegment(state, start, end)) return end;
-  const bounds = continuousWorldBounds(state);
-  let ratio = 1;
-  for (const [coordinate, minimum, maximum] of [
-    ['x', bounds.left, bounds.right],
-    ['y', bounds.top, bounds.bottom],
-  ]) {
-    const origin = start[coordinate];
-    const delta = end[coordinate] - origin;
-    if ((origin < minimum && delta <= 0) || (origin > maximum && delta >= 0)) return start;
-    if (delta > 0 && origin + delta > maximum) {
-      ratio = Math.min(ratio, (maximum - origin) / delta);
-    } else if (delta < 0 && origin + delta < minimum) {
-      ratio = Math.min(ratio, (minimum - origin) / delta);
-    }
-  }
-  if (ratio <= 0) return start;
-  return {
-    x: start.x + (end.x - start.x) * ratio,
-    y: start.y + (end.y - start.y) * ratio,
-  };
-}
-
-export function ensureStaffRuntime(staff, state) {
-  return (staff || []).map((s, index) => {
-    const hasCoord = Number.isFinite(s.x) && Number.isFinite(s.y);
-    const pos = hasCoord ? { x: s.x, y: s.y } : getDefaultStaffPosition(s.role, index, state, s.id);
-    return { ...s, x: pos.x, y: pos.y, path: s.path || [], task: s.task || null };
-  });
-}
-
-export function moveStaffAlongPath(staff, dt, others = []) {
-  return moveCharacterAlongPath(staff, dt, others, ROLE_SPEED[staff.role] || 60);
-}
-
-function isSafeSegment(state, start, end) {
-  if (!state) return true;
-  const blocked = buildBlockedCells(state);
-  const distance = Math.hypot(end.x - start.x, end.y - start.y);
-  const steps = Math.max(1, Math.ceil(distance / 2));
-  const startKey = `${worldToCell(start).x},${worldToCell(start).y}`;
-  for (let index = 1; index <= steps; index += 1) {
-    const ratio = index / steps;
-    const point = { x: start.x + (end.x - start.x) * ratio, y: start.y + (end.y - start.y) * ratio };
-    const key = `${worldToCell(point).x},${worldToCell(point).y}`;
-    if (key !== startKey && blocked.has(key)) return false;
-  }
-  return true;
-}
-
-export function moveCharacterAlongPath(character, dt, others = [], speed = 60, minimumSpacing = 16, state = null) {
-  if (!character.path || character.path.length === 0) return character;
-  const target = cellToWorld(character.path[0]);
-  if (!isSafeSegment(state, character, target)) return character;
-  const distance = Math.hypot(target.x - character.x, target.y - character.y);
-  const budget = Math.max(0, speed * dt);
-  if (distance <= 1 && distance <= budget + 1e-6) {
-    return { ...character, x: target.x, y: target.y, path: character.path.slice(1) };
-  }
-  if (distance <= budget + 1e-6) {
-    const moved = moveCharacterTowards(character, target, dt, others, speed, minimumSpacing, state);
-    return moved.x === target.x && moved.y === target.y
-      ? { ...moved, path: character.path.slice(1) }
-      : moved;
-  }
-  const moved = moveCharacterTowards(character, target, dt, others, speed, minimumSpacing, state);
-  if (moved === character) return character;
-  if (Math.hypot(target.x - moved.x, target.y - moved.y) <= 0.001) {
-    return { ...moved, path: character.path.slice(1) };
-  }
-  return moved;
-}
-
-export function planCharacterPath(state, character, goal, others = [], ignoredIds = []) {
-  const goalCell = goal?.cell ? goal.cell : worldToCell(goal?.world || goal);
-  const occupiedCells = buildOccupiedCharacterCells(others, [character.id, ...ignoredIds]);
-  const result = findPathWithDynamicFallback(state, worldToCell(character), goalCell, { occupiedCells });
-  // recovery metadata is attached at planning time so stalled movement can revisit the same goal
-  return {
-    ...character,
-    path: result.path,
-    pathGoal: goalCell,
-    usingStaticFallback: result.usedStaticFallback,
-    stalledFor: 0,
-    minimumSpacing: 16,
-  };
-}
-
-function constrainCrossingMovement(state, character, moved, peer, minimumSpacing, budget) {
-  const dx = moved.x - character.x;
-  const dy = moved.y - character.y;
-  const distance = Math.hypot(dx, dy);
-  if (distance === 0) return character;
-  const blocked = buildBlockedCells(state);
-  const epsilon = 1e-6;
-  const start = { x: character.x, y: character.y };
-  const ordinaryEndpoint = { x: moved.x, y: moved.y };
-  const direction = { x: ordinaryEndpoint.x - start.x, y: ordinaryEndpoint.y - start.y };
-  const directionLength = Math.hypot(direction.x, direction.y);
-  const startProjection = (start.x - peer.x) * direction.x + (start.y - peer.y) * direction.y;
-  const legal = candidate => {
-    if (Math.hypot(candidate.x - character.x, candidate.y - character.y) > budget + epsilon) return false;
-    const cell = worldToCell(candidate);
-    const candidateProjection = (candidate.x - peer.x) * direction.x + (candidate.y - peer.y) * direction.y;
-    const sameSide = String(character.id) <= String(peer.id)
-      || Math.abs(startProjection) <= epsilon || Math.abs(candidateProjection) <= epsilon
-      || startProjection * candidateProjection >= -epsilon;
-    return sameSide && isSafeSegment(state, character, candidate) && !blocked.has(`${cell.x},${cell.y}`)
-      && Math.hypot(candidate.x - peer.x, candidate.y - peer.y) >= minimumSpacing - epsilon;
-  };
-  const breakpoints = [0, 1];
-  const fromPeer = { x: start.x - peer.x, y: start.y - peer.y };
-  const a = dx * dx + dy * dy;
-  const b = 2 * (fromPeer.x * dx + fromPeer.y * dy);
-  const c = fromPeer.x * fromPeer.x + fromPeer.y * fromPeer.y - minimumSpacing ** 2;
-  const discriminant = b * b - 4 * a * c;
-  if (a > 0 && discriminant >= 0) {
-    breakpoints.push((-b - Math.sqrt(discriminant)) / (2 * a), (-b + Math.sqrt(discriminant)) / (2 * a));
-  }
-  for (const coordinate of ['x', 'y']) {
-    const delta = ordinaryEndpoint[coordinate] - start[coordinate];
-    if (Math.abs(delta) > epsilon) {
-      const first = Math.floor(start[coordinate] / 20) + (delta > 0 ? 1 : 0);
-      const last = Math.floor(ordinaryEndpoint[coordinate] / 20) + (delta > 0 ? 0 : 1);
-      for (let boundary = first; delta > 0 ? boundary <= last : boundary >= last; boundary += delta > 0 ? 1 : -1) {
-        breakpoints.push((boundary * 20 - start[coordinate]) / delta);
-      }
-    }
-  }
-  const points = [...new Set(breakpoints.filter(point => point >= 0 && point <= 1))].sort((left, right) => right - left);
-  for (const point of points) {
-    for (const candidateT of [point, point - epsilon, point + epsilon]) {
-      if (candidateT < 0 || candidateT > 1) continue;
-      const candidate = { x: start.x + dx * candidateT, y: start.y + dy * candidateT };
-      if (legal(candidate)) return { ...moved, x: candidate.x, y: candidate.y };
-    }
-  }
-  return character;
-}
-
-export function moveCharacterWithRecovery(state, character, dt, others = [], speed = 60, ignoredIds = []) {
-  if (!character.path?.length) {
-    return { ...character, stalledFor: 0, minimumSpacing: 16, usingStaticFallback: false, pathGoal: undefined };
-  }
-  const before = { x: character.x, y: character.y };
-  const pathGoal = character.pathGoal || character.path.at(-1);
-  const beforeLength = character.path.length;
-  const spacing = character.usingStaticFallback || (character.stalledFor || 0) >= 2 ? 6 : 16;
-  const ignored = new Set(ignoredIds);
-  const target = cellToWorld(character.path[0]);
-  const direction = { x: target.x - character.x, y: target.y - character.y };
-  const directionLength = Math.hypot(direction.x, direction.y) || 1;
-  const projectedOncoming = others.filter(other => other?.id !== character.id && !ignored.has(other.id)
-    && Number.isFinite(other.x) && Number.isFinite(other.y) && other.path?.length
-    && Math.hypot(other.x - character.x, other.y - character.y) < 40
-    && ((other.x - character.x) * direction.x + (other.y - character.y) * direction.y) > 0
-    && ((cellToWorld(other.path[0]).x - other.x) * direction.x
-      + (cellToWorld(other.path[0]).y - other.y) * direction.y) < 0
-    && Math.abs((other.x - character.x) * direction.y - (other.y - character.y) * direction.x) / directionLength < spacing);
-  const lowerOncoming = projectedOncoming.find(other => String(other.id) < String(character.id));
-  const higherOncoming = projectedOncoming.find(other => String(other.id) > String(character.id));
-  const collisionOthers = others.filter(other => !ignored.has(other?.id));
-  const crossingPeer = (character.stalledFor || 0) >= 2 && spacing === 6
-    && projectedOncoming.find(other => Math.hypot(other.x - character.x, other.y - character.y) <= 16 + 1e-6);
-  const movementOthers = crossingPeer
-    ? collisionOthers.filter(other => other.id !== crossingPeer.id)
-    : collisionOthers;
-  const movementSpacing = spacing === 16 && higherOncoming ? 6 : spacing;
-  const ordinaryMoved = moveCharacterAlongPath(character, dt, movementOthers, speed, movementSpacing);
-  let moved = lowerOncoming && spacing === 16 ? character : ordinaryMoved;
-  if (!crossingPeer && !isSafeSegment(state, character, ordinaryMoved)) moved = character;
-  if (lowerOncoming && spacing === 6
-    && (moved === character || Math.hypot(moved.x - character.x, moved.y - character.y) < speed * dt - 1e-6)) {
-    const retreatLength = Math.min(speed * dt, directionLength);
-    const retreat = {
-      x: character.x - direction.x * retreatLength,
-      y: character.y - direction.y * retreatLength,
-    };
-    const blocked = buildBlockedCells(state);
-    const cell = worldToCell(retreat);
-    if (!blocked.has(`${cell.x},${cell.y}`)
-      && Math.hypot(retreat.x - lowerOncoming.x, retreat.y - lowerOncoming.y) >= spacing - 1e-6) {
-      moved = { ...character, ...retreat };
-    }
-  }
-  if (crossingPeer) {
-    const controlledSpacing = String(character.id) < String(crossingPeer.id) ? 2 : 6;
-    moved = constrainCrossingMovement(state, character, ordinaryMoved, crossingPeer, controlledSpacing, speed * dt);
-    if (moved !== character) {
-      moved.path = Math.hypot(target.x - moved.x, target.y - moved.y) <= 0.001
-        ? character.path.slice(1)
-        : character.path;
-    }
-  }
-  if (!isSafeSegment(state, character, moved)) moved = character;
-  const progress = Math.hypot(moved.x - before.x, moved.y - before.y) >= 0.1 || moved.path.length < beforeLength;
-  const stalledFor = (character.stalledFor || 0) + dt;
-  if (progress) {
-    return { ...moved, stalledFor: 0, minimumSpacing: 16, usingStaticFallback: false };
-  }
-  let recovered = { ...moved, stalledFor, minimumSpacing: spacing };
-  if (stalledFor >= 0.75 && pathGoal) {
-    const replanned = planCharacterPath(state, recovered, { cell: pathGoal }, others, ignoredIds);
-    recovered = { ...replanned, stalledFor };
-  }
-  if (stalledFor >= 2 && pathGoal) {
-    const staticPath = findPath(state, worldToCell(recovered), pathGoal);
-    recovered = { ...recovered, path: staticPath, usingStaticFallback: true, minimumSpacing: 6 };
-  }
-  return recovered;
-}
-
-export function moveCharacterTowards(character, target, dt, others = [], speed = 60, minimumSpacing = 16, state = null) {
-  const dx = target.x - character.x;
-  const dy = target.y - character.y;
-  const distance = Math.hypot(dx, dy);
-  if (distance === 0) return character;
-  const direction = { x: dx / distance, y: dy / distance };
-  let step = Math.min(speed * dt, distance);
-
-  for (const other of others) {
-    if (!other || other.id === character.id || !Number.isFinite(other.x) || !Number.isFinite(other.y)) continue;
-    const relative = { x: other.x - character.x, y: other.y - character.y };
-    const along = relative.x * direction.x + relative.y * direction.y;
-    if (along <= 0 || along > step + minimumSpacing) continue;
-    const perpendicularSquared = Math.max(0, relative.x ** 2 + relative.y ** 2 - along ** 2);
-    if (perpendicularSquared >= minimumSpacing ** 2) continue;
-    const safeStep = along - Math.sqrt(minimumSpacing ** 2 - perpendicularSquared);
-    step = Math.min(step, Math.max(0, safeStep));
-  }
-
-  if (step <= 0) return character;
-  const endpoint = distance <= step
-    ? target
-    : { x: character.x + direction.x * step, y: character.y + direction.y * step };
-  return isSafeSegment(state, character, endpoint) ? { ...character, ...endpoint } : character;
-}
-
 function getMovementSpacing(character) {
   return 16;
 }
@@ -383,10 +135,10 @@ function isQueuedTarget(character, target) {
  * the remaining movement budget and still passes static validation. Its
  * piecewise trajectory is retained for swept dynamic collision resolution.
  */
-function moveAlongPathWithContinuation(state, entry, dt, spacing) {
+function moveAlongPathWithContinuation(state, entry, dt, spacing, navigation = {}) {
   const { character, speed } = entry;
   const beforeLength = character.path?.length || 0;
-  const pathMoved = moveCharacterAlongPath(character, dt, [], speed, spacing, state);
+  const pathMoved = moveCharacterAlongPath(character, dt, [], speed, spacing, state, navigation);
   const pathWasConsumed = (pathMoved.path?.length || 0) < beforeLength;
   const pathDisplacement = Math.hypot(pathMoved.x - character.x, pathMoved.y - character.y);
   const pathConsumedAt = pathWasConsumed
@@ -417,6 +169,7 @@ function moveAlongPathWithContinuation(state, entry, dt, spacing) {
     speed,
     spacing,
     state,
+    navigation,
   );
   return {
     moved: continued,
@@ -425,7 +178,7 @@ function moveAlongPathWithContinuation(state, entry, dt, spacing) {
   };
 }
 
-function buildMovementIntent(state, entry, dt) {
+function buildMovementIntent(state, entry, dt, navigation = {}) {
   const { speed } = entry;
   const sourceCharacter = entry.character;
   const useLocalConflictTarget = sourceCharacter.localConflictTarget
@@ -440,7 +193,7 @@ function buildMovementIntent(state, entry, dt) {
 
   if (useLocalConflictTarget) {
     const localTarget = cellToWorld(character.localConflictTarget);
-    const moved = moveCharacterTowards(character, localTarget, dt, [], speed, spacing, state);
+    const moved = moveCharacterTowards(character, localTarget, dt, [], speed, spacing, state, navigation);
     const reachedLocalTarget = isAtTarget(moved, localTarget);
     const { localConflictTarget: _localConflictTarget, ...withoutLocalTarget } = moved;
     desired = reachedLocalTarget
@@ -455,7 +208,7 @@ function buildMovementIntent(state, entry, dt) {
       pathConsumedAt: null,
     };
   } else if (entry.target) {
-    const moved = moveCharacterTowards(character, entry.target, dt, [], speed, spacing, state);
+    const moved = moveCharacterTowards(character, entry.target, dt, [], speed, spacing, state, navigation);
     desired = moved;
     if (entry.consumePath === true && isAtTarget(moved, entry.target) && isQueuedTarget(character, entry.target)) {
       desired = { ...moved, path: character.path.slice(1) };
@@ -473,7 +226,7 @@ function buildMovementIntent(state, entry, dt) {
         : null,
     };
   } else {
-    const moved = moveAlongPathWithContinuation(state, normalisedEntry, dt, spacing);
+    const moved = moveAlongPathWithContinuation(state, normalisedEntry, dt, spacing, navigation);
     desired = moved.moved;
     return {
       ...normalisedEntry,
@@ -535,13 +288,13 @@ function isExplicitRecoveredHorizontalHeadOn(intent, peer) {
     && isHorizontalHeadOnGeometry(intent, peer);
 }
 
-function findSafeDetour(state, intent, spacing, dt, intents, resolutions, checkedIntents = intents) {
+function findSafeDetour(state, intent, spacing, dt, intents, resolutions, checkedIntents = intents, navigation = {}) {
   for (const y of [intent.start.y - 40, intent.start.y + 40]) {
     const sideTarget = { x: intent.start.x, y };
     if (!isInsideWorld(state, worldToCell(sideTarget))
-      || !isSafeSegment(state, intent.start, sideTarget)) continue;
+      || !isSafeSegment(state, intent.start, sideTarget, navigation)) continue;
     let endpoint = moveCharacterTowards(intent.character, sideTarget, dt, [],
-      intent.speed, spacing, state);
+      intent.speed, spacing, state, navigation);
     if (Math.hypot(endpoint.x - intent.start.x, endpoint.y - intent.start.y) <= 1e-6) continue;
     if (intent.character.path?.length && !isAtTarget(endpoint, sideTarget)) {
       endpoint = {
@@ -554,7 +307,7 @@ function findSafeDetour(state, intent, spacing, dt, intents, resolutions, checke
       endpoint,
       buildTimeParameterizedTrajectory(intent.start, endpoint, intent.speed, dt),
     );
-    if (!isSafeSegment(state, intent.start, endpoint)) continue;
+    if (!isSafeSegment(state, intent.start, endpoint, navigation)) continue;
     const candidateResolutions = new Map(resolutions);
     candidateResolutions.set(intent.character.id, candidate);
     if (areIntentPairsSafeFor(checkedIntents, intents, candidateResolutions)) {
@@ -564,7 +317,7 @@ function findSafeDetour(state, intent, spacing, dt, intents, resolutions, checke
   return null;
 }
 
-function findControlledOverlapDetour(state, intent, dt, intents, resolutions, component) {
+function findControlledOverlapDetour(state, intent, dt, intents, resolutions, component, navigation = {}) {
   const sideTargets = [
     { x: intent.start.x, y: intent.start.y - 40 },
     { x: intent.start.x, y: intent.start.y + 40 },
@@ -573,7 +326,7 @@ function findControlledOverlapDetour(state, intent, dt, intents, resolutions, co
   ];
   for (const sideTarget of sideTargets) {
     if (!isInsideWorld(state, worldToCell(sideTarget))
-      || !isSafeSegment(state, intent.start, sideTarget)) continue;
+      || !isSafeSegment(state, intent.start, sideTarget, navigation)) continue;
     const moved = moveCharacterTowards(
       intent.character,
       sideTarget,
@@ -582,6 +335,7 @@ function findControlledOverlapDetour(state, intent, dt, intents, resolutions, co
       intent.speed,
       2,
       state,
+      navigation,
     );
     if (Math.hypot(moved.x - intent.start.x, moved.y - intent.start.y) <= 1e-6) continue;
     const endpoint = {
@@ -817,7 +571,7 @@ function consumeReachedPathCell(intent, path, cell) {
   return true;
 }
 
-function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon = 8, goalCell = null) {
+function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon = 8, goalCell = null, navigation = {}) {
   const startCell = worldToCell(intent.start);
   const plan = rawPlan?.length === horizon + 1 && cellsEqual(rawPlan[0], startCell)
     ? rawPlan.slice(1)
@@ -888,10 +642,10 @@ function resolutionFromSolverPlan(state, intent, rawPlan, component, dt, horizon
       x: current.x + (target.x - current.x) * ratio,
       y: current.y + (target.y - current.y) * ratio,
     };
-    const endpoint = furthestWorldSegmentEndpoint(state, current, requestedEndpoint);
+    const endpoint = furthestWorldSegmentEndpoint(state, current, requestedEndpoint, navigation.workspace);
     const safeDistance = Math.hypot(endpoint.x - current.x, endpoint.y - current.y);
     if (safeDistance <= 1e-9) break;
-    if (!isSafeSegment(state, current, endpoint)) break;
+    if (!isSafeSegment(state, current, endpoint, navigation)) break;
     const duration = intent.speed > 0 ? safeDistance / intent.speed : 0;
     appendTimedSegment(trajectory, current, endpoint, slotStart, slotStart + duration, dt);
     current = endpoint;
@@ -1062,7 +816,7 @@ function areIntentPairsSafeFor(checkedIntents, intents, resolutions) {
   ));
 }
 
-function resolveIntentPairs(state, intents, resolutions, dt, validationIntents = intents, metrics = null) {
+function resolveIntentPairs(state, intents, resolutions, dt, validationIntents = intents, metrics = null, navigation = {}) {
   for (const intent of intents) resolutions.set(intent.character.id, resolvedAtStart(intent));
   const yieldedHeadOnIds = new Set();
 
@@ -1089,6 +843,7 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
         validationIntents,
         detourResolutions,
         intents,
+        navigation,
       );
       if (detour) {
         intent.acceptedRecoveredHeadOnDetour = true;
@@ -1185,9 +940,9 @@ function componentIsSafe(component, intents, resolutions) {
   ));
 }
 
-function resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics = null) {
+function resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics = null, navigation = {}) {
   const ordered = orderIntentsByMovementPriority(component);
-  resolveIntentPairs(state, ordered, resolutions, dt, intents, metrics);
+  resolveIntentPairs(state, ordered, resolutions, dt, intents, metrics, navigation);
   if (!componentIsSafe(component, intents, resolutions)) {
     for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
   }
@@ -1201,6 +956,7 @@ function resolveConflictComponentAttempt(
   intents,
   allowControlledOverlapId = null,
   metrics = null,
+  navigation = {},
 ) {
   if (metrics) metrics.localConflictAttempts += 1;
   const isRecoveredStaffHeadOnPair = component.length === 2
@@ -1208,7 +964,7 @@ function resolveConflictComponentAttempt(
     && isExplicitRecoveredHorizontalHeadOn(component[0], component[1]);
   if (isRecoveredStaffHeadOnPair) {
     measureLocalConflictFallbackPhase(metrics, () =>
-      resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics));
+      resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics, navigation));
     return;
   }
 
@@ -1244,7 +1000,9 @@ function resolveConflictComponentAttempt(
     } else if (hasContestedDesiredCell && hasAgedPriority) {
       progressHorizon = Math.min(horizon, contestedRouteHorizon, executableSlots);
     }
-    return { actors, blockedCells: buildBlockedCells(state), horizon, progressHorizon };
+    const { workspace = null, metrics: navigationMetrics = null } = navigation;
+    const blockedCells = resolveNavigationWorkspace(state, workspace, navigationMetrics).blockedCells;
+    return { actors, blockedCells, horizon, progressHorizon };
   });
   const solved = solveLocalConflictWithMovementMetrics({
     state,
@@ -1254,7 +1012,7 @@ function resolveConflictComponentAttempt(
   }, metrics);
   if (!solved) {
     measureLocalConflictFallbackPhase(metrics, () =>
-      resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics));
+      resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics, navigation));
     return;
   }
   const candidates = measureLocalConflictPhase(metrics, 'localConflictCandidateMilliseconds', () => {
@@ -1269,6 +1027,7 @@ function resolveConflictComponentAttempt(
         dt,
         prepared.horizon,
         actorsById.get(intent.character.id).goalCell,
+        navigation,
       ),
     ]));
   });
@@ -1318,7 +1077,7 @@ function resolveConflictComponentAttempt(
   });
 }
 
-function resolveConflictComponent(state, component, resolutions, dt, intents, metrics = null) {
+function resolveConflictComponent(state, component, resolutions, dt, intents, metrics = null, navigation = {}) {
   const exactExitIntents = component.filter(intent => intent.character.state === 'leaving'
     && (intent.target || intent.targetAfterPath));
   const isExactExitOnlyComponent = exactExitIntents.length > 0
@@ -1326,7 +1085,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
   if (isExactExitOnlyComponent) {
     const exactResolutions = new Map(resolutions);
     const exactProgress = measureLocalConflictFallbackPhase(metrics, () => {
-      resolveComponentWithExistingSafety(state, component, exactResolutions, dt, intents, metrics);
+      resolveComponentWithExistingSafety(state, component, exactResolutions, dt, intents, metrics, navigation);
       const progressed = exactExitIntents.some(intent => hasMeasurableRouteProgress(
         intent,
         exactResolutions.get(intent.character.id)?.endpoint || intent.character,
@@ -1340,7 +1099,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
   }
 
   const ordinaryResolutions = new Map(resolutions);
-  resolveConflictComponentAttempt(state, component, ordinaryResolutions, dt, intents, null, metrics);
+  resolveConflictComponentAttempt(state, component, ordinaryResolutions, dt, intents, null, metrics, navigation);
   if (componentHasMeasurableRouteProgress(component, ordinaryResolutions)) {
     if (metrics) metrics.localConflictProgressAccepts += 1;
     measureLocalConflictFallbackPhase(metrics, () =>
@@ -1381,6 +1140,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
     intents,
     selectedId,
     metrics,
+    navigation,
   );
   measureLocalConflictFallbackPhase(metrics, () => {
     const selectedIntent = component.find(intent => intent.character.id === selectedId);
@@ -1395,6 +1155,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
         intents,
         relaxedResolutions,
         component,
+        navigation,
       );
       if (detour) {
         selectedIntent.controlledOverlapDetour = true;
@@ -1408,7 +1169,7 @@ function resolveConflictComponent(state, component, resolutions, dt, intents, me
   });
 }
 
-function applyBatchRecovery(state, intent, endpoint, dt, intents, metrics = null) {
+function applyBatchRecovery(state, intent, endpoint, dt, intents, metrics = null, navigation = {}) {
   const character = intent.character;
   const moved = endpoint || resolvedAtStart(intent).endpoint;
   const displacement = Math.hypot(moved.x - intent.start.x, moved.y - intent.start.y);
@@ -1507,7 +1268,7 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents, metrics = null
       const dynamicPath = measureMovementPhase(
         metrics,
         'dynamicRepathMilliseconds',
-        () => findPath(state, worldToCell(recovered), pathGoal, { occupiedCells }),
+        () => findPath(state, worldToCell(recovered), pathGoal, { ...navigation, occupiedCells }),
       );
       if (dynamicPath.length) {
         recovered = {
@@ -1523,7 +1284,7 @@ function applyBatchRecovery(state, intent, endpoint, dt, intents, metrics = null
     const staticPath = measureMovementPhase(
       metrics,
       'staticRepathMilliseconds',
-      () => findPath(state, worldToCell(recovered), pathGoal),
+      () => findPath(state, worldToCell(recovered), pathGoal, navigation),
     );
     recovered = staticPath.length
       ? { ...recovered, path: staticPath, usingStaticFallback: true }
@@ -1541,10 +1302,14 @@ function resolveCharacterMovementBatchInternal(state, entries, dt, metrics = nul
     dynamicRepathMilliseconds: metrics.dynamicRepathMilliseconds,
     staticRepathMilliseconds: metrics.staticRepathMilliseconds,
   } : null;
+  const navigation = {
+    workspace: state ? createNavigationWorkspace(state, metrics) : null,
+    metrics,
+  };
   if (metrics) metrics.batches += 1;
   const intents = entries
     .filter(entry => entry?.character?.id != null)
-    .map(entry => buildMovementIntent(state, entry, dt))
+    .map(entry => buildMovementIntent(state, entry, dt, navigation))
     .sort((left, right) => String(left.character.id).localeCompare(String(right.character.id)));
   for (const intent of intents) {
     intent.movementDt = dt;
@@ -1560,13 +1325,13 @@ function resolveCharacterMovementBatchInternal(state, entries, dt, metrics = nul
   for (const component of components) {
     if (component.length <= 1) continue;
     if (!metrics) {
-      resolveConflictComponent(state, component, resolutions, dt, intents, metrics);
+      resolveConflictComponent(state, component, resolutions, dt, intents, metrics, navigation);
       continue;
     }
     const conflictStartedAt = movementNow();
     const safePrefixAtStart = metrics.safePrefixMilliseconds;
     const phasesAtStart = Object.fromEntries(localConflictPhaseKeys.map(key => [key, metrics[key]]));
-    resolveConflictComponent(state, component, resolutions, dt, intents, metrics);
+    resolveConflictComponent(state, component, resolutions, dt, intents, metrics, navigation);
     const nestedSafePrefix = metrics.safePrefixMilliseconds - safePrefixAtStart;
     const localConflictElapsed = Math.max(
       0,
@@ -1581,6 +1346,7 @@ function resolveCharacterMovementBatchInternal(state, entries, dt, metrics = nul
     intent.character.id,
     applyBatchRecovery(
       state, intent, resolutions.get(intent.character.id)?.endpoint, dt, intents, metrics,
+      navigation,
     ),
   ]));
   if (metrics) {
@@ -1605,8 +1371,4 @@ export function resolveCharacterMovementBatch(state, entries, dt, metrics = null
 
 export function resolveCharacterMovementBatchWithDiagnostics(state, entries, dt, metrics = null) {
   return resolveCharacterMovementBatchInternal(state, entries, dt, metrics);
-}
-
-export function hasArrived(staff) {
-  return !staff || !staff.path || staff.path.length === 0;
 }
