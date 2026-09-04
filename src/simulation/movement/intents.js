@@ -115,14 +115,15 @@ export function buildMovementIntent(state, entry, dt, navigation = {}) {
     } else if (character.path) {
       desired = { ...moved, path: character.path };
     }
+    const trajectory = buildDirectTrajectory(character, moved, speed, dt);
     return {
       ...normalisedEntry,
       start,
       desired,
       spacing,
-      trajectory: buildDirectTrajectory(character, moved, speed, dt),
+      trajectory,
       pathConsumedAt: (desired.path?.length || 0) < (character.path?.length || 0)
-        ? buildDirectTrajectory(character, moved, speed, dt)[0].endTime
+        ? trajectory[0].endTime
         : null,
     };
   } else {
