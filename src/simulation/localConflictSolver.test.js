@@ -5,6 +5,7 @@ import {
   findSpaceTimePlan,
   solveLocalConflictComponent,
 } from './localConflictSolver';
+import * as localConflictFacade from './localConflictSolver';
 import { createMovementMetrics, setExecutablePrefixProfile } from './movementMetrics';
 
 const openState = {
@@ -82,6 +83,26 @@ function expectFiniteNonNegativeTimings(metrics) {
     expect(metrics[key], key).toBeGreaterThanOrEqual(0);
   }
 }
+
+describe('local-conflict facade', () => {
+  it('preserves the complete local-conflict facade and function arities', () => {
+    expect(Object.keys(localConflictFacade).sort()).toEqual([
+      'addPriorityEdge',
+      'advanceExecutablePrefixScore',
+      'findSpaceTimePlan',
+      'orderActorsByMovementPriority',
+      'solveLocalConflictComponent',
+    ]);
+    expect(Object.fromEntries(Object.entries(localConflictFacade)
+      .map(([name, implementation]) => [name, implementation.length]))).toEqual({
+      addPriorityEdge: 4,
+      advanceExecutablePrefixScore: 4,
+      findSpaceTimePlan: 1,
+      orderActorsByMovementPriority: 1,
+      solveLocalConflictComponent: 1,
+    });
+  });
+});
 
 describe('findSpaceTimePlan', () => {
   it('advances immutable executable-prefix scores exactly through the scoring horizon', () => {

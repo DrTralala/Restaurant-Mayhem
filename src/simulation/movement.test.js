@@ -14,6 +14,7 @@ import {
   resolveCharacterMovementBatchWithDiagnostics,
   solveLocalConflictWithMovementMetrics,
 } from './movement';
+import * as movementFacade from './movement';
 import { buildBlockedCells, findPath, worldToCell } from './pathfinding';
 import { createMovementMetrics, setExecutablePrefixProfile } from './movementMetrics';
 import { getRestaurantWorld } from './world';
@@ -89,6 +90,46 @@ const corridorState = {
     { id: `south-${index}`, x, y: 120 },
   ]),
 };
+
+describe('movement facade', () => {
+  it('preserves the complete movement facade and function arities', () => {
+    expect(Object.keys(movementFacade).sort()).toEqual([
+      'buildTimeParameterizedTrajectory',
+      'clearMovementRecoveryMetadata',
+      'coincidentStartTrajectoriesSeparateSafely',
+      'ensureStaffRuntime',
+      'hasArrived',
+      'minimumSweptDistance',
+      'minimumTrajectoryDistance',
+      'moveCharacterAlongPath',
+      'moveCharacterTowards',
+      'moveCharacterWithRecovery',
+      'moveStaffAlongPath',
+      'planCharacterPath',
+      'resolveCharacterMovementBatch',
+      'resolveCharacterMovementBatchWithDiagnostics',
+      'solveLocalConflictWithMovementMetrics',
+    ]);
+    expect(Object.fromEntries(Object.entries(movementFacade)
+      .map(([name, implementation]) => [name, implementation.length]))).toEqual({
+      buildTimeParameterizedTrajectory: 4,
+      clearMovementRecoveryMetadata: 1,
+      coincidentStartTrajectoriesSeparateSafely: 2,
+      ensureStaffRuntime: 2,
+      hasArrived: 1,
+      minimumSweptDistance: 4,
+      minimumTrajectoryDistance: 2,
+      moveCharacterAlongPath: 2,
+      moveCharacterTowards: 3,
+      moveCharacterWithRecovery: 3,
+      moveStaffAlongPath: 2,
+      planCharacterPath: 3,
+      resolveCharacterMovementBatch: 3,
+      resolveCharacterMovementBatchWithDiagnostics: 3,
+      solveLocalConflictWithMovementMetrics: 1,
+    });
+  });
+});
 
 describe('movement runtime', () => {
   it('rejects co-located piecewise trajectories that share a positive-duration first segment', () => {
@@ -811,12 +852,27 @@ describe('movement runtime', () => {
     const diagnostic = resolveCharacterMovementBatchWithDiagnostics(openState, entries, 1);
 
     expect(serialiseById(diagnostic.moved)).toEqual(serialiseById(ordinary));
-    expect([...diagnostic.trajectories.keys()].sort()).toEqual(['a', 'b', 'c']);
-    for (const trajectory of diagnostic.trajectories.values()) {
-      expect(trajectory.length).toBeGreaterThan(0);
-      expect(trajectory[0].startTime).toBe(0);
-      expect(trajectory.at(-1).endTime).toBe(1);
-    }
+    expect([...diagnostic.trajectories.entries()].sort(([left], [right]) => left.localeCompare(right)))
+      .toEqual([
+        ['a', [
+          { start: { x: 80, y: 100 }, end: { x: 60, y: 100 }, startTime: 0, endTime: 0.5 },
+          { start: { x: 60, y: 100 }, end: { x: 60, y: 100 }, startTime: 0.5, endTime: 0.5 },
+          { start: { x: 60, y: 100 }, end: { x: 80, y: 100 }, startTime: 0.5, endTime: 1 },
+          { start: { x: 80, y: 100 }, end: { x: 80, y: 100 }, startTime: 1, endTime: 1 },
+        ]],
+        ['b', [
+          { start: { x: 100, y: 80 }, end: { x: 120, y: 80 }, startTime: 0, endTime: 0.5 },
+          { start: { x: 120, y: 80 }, end: { x: 120, y: 80 }, startTime: 0.5, endTime: 0.5 },
+          { start: { x: 120, y: 80 }, end: { x: 120, y: 100 }, startTime: 0.5, endTime: 1 },
+          { start: { x: 120, y: 100 }, end: { x: 120, y: 100 }, startTime: 1, endTime: 1 },
+        ]],
+        ['c', [
+          { start: { x: 120, y: 100 }, end: { x: 100, y: 100 }, startTime: 0, endTime: 0.5 },
+          { start: { x: 100, y: 100 }, end: { x: 100, y: 100 }, startTime: 0.5, endTime: 0.5 },
+          { start: { x: 100, y: 100 }, end: { x: 100, y: 80 }, startTime: 0.5, endTime: 1 },
+          { start: { x: 100, y: 80 }, end: { x: 100, y: 80 }, startTime: 1, endTime: 1 },
+        ]],
+      ]);
   });
 
   it('keeps local conflict movement within every actor budget', () => {
