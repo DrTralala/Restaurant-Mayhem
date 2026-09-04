@@ -1,6 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mergeMovementEntries, runTick } from './gameLoop';
-import { recoverStuckCustomers } from './customers';
 import { createInitialState } from '../state/initialState';
 import { hydrateState } from '../state/persistence';
 
@@ -140,31 +139,39 @@ describe('runTick', () => {
     expect(result.customers[0]).not.toMatchObject({ x: 960, y: 360 });
   });
 
-  it('recovers a pathless checkout customer through shared post-movement resolution', () => {
-    const checkoutPosition = { x: 840, y: 180 };
+  it('applies customer oscillation recovery once after the shared movement batch', () => {
     const state = {
       ...emptyState,
-      cashierStations: [{
-        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
-      }],
+      restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, reputation: 3 },
+      tables: [{ id: 't1', seats: 1, status: 'reserved', x: 500, y: 300 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 510, y: 280 }],
       floorDirt: [], washStations: [],
       staff: [{
-        id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100,
-        path: [], task: null, carryingServiceItemId: null,
+        id: 'guide', role: 'waiter', morale: 80, x: 100, y: 100,
+        path: [{ x: 20, y: 5 }],
+        task: { type: 'guide_customer', customerIds: ['oscillating'], tableId: 't1' },
       }],
       customers: [{
-        id: 'checkout', state: 'checkout_moving', cashierStationId: 'cashier1',
-        checkoutPosition, paymentQueuedAt: 1, paymentReady: false,
-        x: 859, y: 199, path: [], patience: 100, happiness: 80,
+        id: 'oscillating', state: 'guided', guideStaffId: 'guide', tableId: 't1',
+        x: 80, y: 120, path: [{ x: 10, y: 6 }], pathGoal: { x: 10, y: 6 },
+        patience: 100, happiness: 80,
+        oscillationRecovery: {
+          state: 'guided',
+          goalKey: 'guided:10,6:200,120',
+          previousCell: { x: 4, y: 6 },
+          previousPosition: { x: 80, y: 120 },
+          corridorCells: ['4,6', '5,6'],
+          edges: ['4,6>5,6', '5,6>4,6'],
+          pendingMovementFor: 2,
+          oscillatingFor: 1,
+          bestGoalDistance: 80,
+        },
       }],
     };
-    const observed = recoverStuckCustomers(state, 0);
-    const aged = recoverStuckCustomers(observed, 9);
 
-    const result = runTick(aged, { gameDt: 0, movementDt: 1 });
+    const result = runTick(state, { gameDt: 0, movementDt: 0.01 });
 
-    expect(result.customers[0]).toMatchObject({ x: 840, y: 180 });
-    expect(result.customers[0].stuckWatchdog).toBeUndefined();
+    expect(result.customers[0].oscillationRecovery.pendingMovementFor).toBeCloseTo(2.01);
   });
 
   it('prefers the guide-provenance staff descriptor over the duplicate customer descriptor', () => {

@@ -1,15 +1,15 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   getExitHeading,
+  getQueueSafeExitMovement,
   getCustomerMovementEntries,
   prepareCustomersForMovement,
-  recoverStuckCustomers,
   resolveCustomersAfterMovement,
   spawnCustomers,
   updateCustomers,
 } from './customers';
 import { buildBlockedCells, worldToCell } from './pathfinding';
-import { getRestaurantWorld } from './world';
+import { getQueueProjectedMembers } from './customerQueue';
 import { UPGRADES } from '../data/upgrades';
 
 const baseState = {
@@ -25,6 +25,18 @@ const baseState = {
   serviceItems: [],
   completedCustomers: [],
 };
+
+function minimumPointToSegmentDistance(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const divisor = dx * dx + dy * dy;
+  const ratio = divisor === 0 ? 0 : Math.max(0, Math.min(1,
+    ((point.x - start.x) * dx + (point.y - start.y) * dy) / divisor));
+  return Math.hypot(
+    point.x - (start.x + dx * ratio),
+    point.y - (start.y + dy * ratio),
+  );
+}
 
 describe('spawnCustomers', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -579,6 +591,113 @@ describe('updateCustomers', () => {
     expect(first.x).toBeGreaterThan(0);
   });
 
+  it('tries direct outward fading movement before a safe ID-derived angle', () => {
+    const customer = {
+      id: 'c2', state: 'leaving', exitPhase: 'fading',
+      x: 900, y: 300, exitFadeProgress: 0, path: [],
+    };
+
+    const movement = getQueueSafeExitMovement(baseState, customer, 1);
+
+    expect(getExitHeading('c2').angleDegrees).toBe(35);
+    expect(movement).toEqual({
+      heading: { angleDegrees: 0, x: 1, y: 0 },
+      target: { x: 1020, y: 300 },
+    });
+  });
+
+  it('uses customer identity only to order equal-magnitude fading alternatives', () => {
+    const state = {
+      ...baseState,
+      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued' }] }],
+    };
+    const customer = id => ({
+      id, state: 'leaving', exitPhase: 'fading',
+      x: 933, y: 390, exitFadeProgress: 0, path: [],
+    });
+
+    const positiveFirst = getQueueSafeExitMovement(state, customer('c2'), 1);
+    const negativeFirst = getQueueSafeExitMovement(state, customer('c3'), 1);
+
+    expect(positiveFirst.heading.angleDegrees).toBe(35);
+    expect(negativeFirst.heading.angleDegrees).toBe(-35);
+  });
+
+  it('uses queue-safe fading departure geometry for projected exterior queue members', () => {
+    const state = {
+      ...baseState,
+      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued', patience: 100, happiness: 80 }] }],
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'fading',
+        x: 933, y: 390, exitFadeProgress: 0, path: [],
+        patience: 0, happiness: 50,
+      }],
+    };
+    const fadingCustomer = state.customers[0];
+    const projected = getQueueProjectedMembers(state, state.queue);
+    const movement = getQueueSafeExitMovement(state, fadingCustomer, 1);
+
+    expect(getExitHeading(fadingCustomer.id).angleDegrees).toBe(0);
+    expect(movement).not.toBeNull();
+    expect(movement.heading.angleDegrees).not.toBe(getExitHeading(fadingCustomer.id).angleDegrees);
+    for (const queued of projected) {
+      expect(minimumPointToSegmentDistance(queued, fadingCustomer, movement.target))
+        .toBeGreaterThanOrEqual(16 - 1e-6);
+    }
+  });
+
+  it('fades a queue-safe departure away over four seconds', () => {
+    let state = {
+      ...baseState,
+      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued', patience: 100, happiness: 80 }] }],
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'fading',
+        x: 933, y: 390, exitFadeProgress: 0, path: [],
+        patience: 0, happiness: 50,
+      }],
+    };
+    const projected = getQueueProjectedMembers(state, state.queue);
+
+    for (let tick = 0; tick < 4; tick += 1) {
+      const fadingCustomer = state.customers[0];
+      const movement = getQueueSafeExitMovement(state, fadingCustomer, 1);
+      const [entry] = getCustomerMovementEntries(state, 1);
+      expect(movement).not.toBeNull();
+      expect(entry).toMatchObject({ target: movement.target, character: { exitHeading: movement.heading } });
+      for (const queued of projected) {
+        expect(minimumPointToSegmentDistance(queued, fadingCustomer, movement.target))
+          .toBeGreaterThanOrEqual(16 - 1e-6);
+      }
+      state = updateCustomers(state, { gameDt: 0, movementDt: 1 });
+    }
+
+    expect(state.customers).toEqual([]);
+  });
+
+  it('keeps queue-safe fading progress still while every candidate is blocked', () => {
+    const blockedState = {
+      ...baseState,
+      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued', patience: 100, happiness: 80 }] }],
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'fading',
+        x: 973, y: 390, exitFadeProgress: 0, path: [],
+        patience: 0, happiness: 50,
+      }],
+    };
+
+    expect(getQueueSafeExitMovement(blockedState, blockedState.customers[0], 1)).toBeNull();
+    const blockedEntries = getCustomerMovementEntries(blockedState, 1);
+    const blocked = updateCustomers(blockedState, { gameDt: 0, movementDt: 1 });
+
+    expect(blockedEntries).toEqual([]);
+    expect(blocked.customers[0]).toMatchObject({ x: 973, y: 390, exitFadeProgress: 0 });
+
+    const unblocked = updateCustomers({ ...blocked, queue: [] }, { gameDt: 0, movementDt: 1 });
+    expect(getQueueSafeExitMovement({ ...blocked, queue: [] }, blocked.customers[0], 1)).not.toBeNull();
+    expect(unblocked.customers[0].x).not.toBe(973);
+    expect(unblocked.customers[0].exitFadeProgress).toBeCloseTo(0.25);
+  });
+
   it('passes the outside door point, moves outward, and fades over four seconds', () => {
     const state = {
       ...baseState,
@@ -957,6 +1076,25 @@ describe('updateCustomers', () => {
     expect(result.customers[0]).not.toHaveProperty('recoveredHeadOnDetourTarget');
   });
 
+  it('clears entryDoorId in the customer phase when patience abandonment cancels guidance', () => {
+    const customer = {
+      id: 'c1', state: 'waiting', patience: 1, happiness: 80,
+      entryDoorId: 'door1', x: 400, y: 300, path: [],
+    };
+    const state = {
+      ...baseState,
+      doors: [{ id: 'door1', y: 340 }],
+      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
+      customers: [customer],
+    };
+
+    const result = prepareCustomersForMovement(state, 2);
+
+    expect(result.customers[0]).toMatchObject({ state: 'leaving', exitPhase: 'to_door' });
+    expect(result.customers[0]).not.toHaveProperty('entryDoorId');
+    expect(customer).toHaveProperty('entryDoorId', 'door1');
+  });
+
   it('keeps leaving customers visible while they walk towards an exit', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 0, happiness: 50,
@@ -1327,331 +1465,61 @@ describe('updateCustomers', () => {
   });
 });
 
-describe('recoverStuckCustomers observation', () => {
+describe('customer oscillation recovery integration', () => {
   const guidedState = customer => ({
     ...baseState,
-    chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-    customers: [customer],
+    tables: [],
+    chairs: [{ id: 'fixed-blocker', x: 120, y: 100 }],
+    kitchenStations: [], serviceTables: [], cashierStations: [],
+    staff: [{
+      id: 'guide', role: 'waiter',
+      task: { type: 'guide_customer', customerIds: [customer.id], tableId: 'target' },
+    }],
+    customers: [{
+      patience: 100,
+      happiness: 80,
+      guideStaffId: 'guide',
+      ...customer,
+    }],
   });
 
-  it('starts at zero and accumulates only movement-seconds without meaningful displacement', () => {
-    const initial = guidedState({
-      id: 'guided', state: 'guided', x: 100, y: 100,
-      path: [{ x: 6, y: 5 }], pathGoal: { x: 6, y: 5 },
-    });
-
-    const observed = recoverStuckCustomers(initial, 4);
-    const aged = recoverStuckCustomers(observed, 4);
-    const invalidDuration = recoverStuckCustomers(aged, -10);
-
-    expect(observed.customers[0].stuckWatchdog).toMatchObject({
-      state: 'guided', x: 100, y: 100, noProgressFor: 0,
-    });
-    expect(aged.customers[0].stuckWatchdog.noProgressFor).toBe(4);
-    expect(invalidDuration.customers[0].stuckWatchdog.noProgressFor).toBe(4);
-    expect(initial.customers[0].stuckWatchdog).toBeUndefined();
-  });
-
-  it('resets observation after meaningful movement or a goal change', () => {
-    const observed = recoverStuckCustomers(guidedState({
-      id: 'guided', state: 'guided', x: 100, y: 100,
-      path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
-    }), 0);
-    const aged = recoverStuckCustomers(observed, 5);
-    const moved = recoverStuckCustomers({
-      ...aged,
-      customers: [{ ...aged.customers[0], x: 100.1 }],
-    }, 1);
-    const oldGoalKey = moved.customers[0].stuckWatchdog.goalKey;
-    const retargeted = recoverStuckCustomers({
-      ...moved,
-      customers: [{
-        ...moved.customers[0],
-        path: [{ x: 9, y: 5 }],
-        pathGoal: { x: 9, y: 5 },
-      }],
-    }, 1);
-
-    expect(moved.customers[0].stuckWatchdog).toMatchObject({
-      x: 100.1, y: 100, noProgressFor: 0,
-    });
-    expect(retargeted.customers[0].stuckWatchdog.noProgressFor).toBe(0);
-    expect(retargeted.customers[0].stuckWatchdog.goalKey).not.toBe(oldGoalKey);
-  });
-
-  it.each([
-    ['a non-array path', { path: { x: 8, y: 5 } }, null],
-    ['a non-finite final path element', { path: [{ x: Infinity, y: 5 }] }, null],
-    [
-      'a non-finite pathGoal with a finite path fallback',
-      { pathGoal: { x: Infinity, y: 5 }, path: [{ x: 8, y: 5 }] },
-      'guided:8,5:160,100',
-    ],
-    [
-      'a finite pathGoal with a malformed path',
-      { pathGoal: { x: 8, y: 5 }, path: { x: 9, y: 5 } },
-      'guided:8,5:160,100',
-    ],
-  ])('handles guided goal data with %s without throwing', (_name, goalFields, goalKey) => {
-    let result;
-    expect(() => {
-      result = recoverStuckCustomers(guidedState({
-        id: 'guided', state: 'guided', x: 100, y: 100,
-        ...goalFields,
-      }), 10);
-    }).not.toThrow();
-
-    expect(result.customers[0]).toMatchObject({ x: 100, y: 100 });
-    if (goalKey) {
-      expect(result.customers[0].stuckWatchdog).toMatchObject({ goalKey, noProgressFor: 0 });
-    } else {
-      expect(result.customers[0].stuckWatchdog).toBeUndefined();
-    }
-  });
-
-  it.each([
-    ['a non-finite x anchor', watchdog => ({ ...watchdog, x: Infinity })],
-    ['a symbol x anchor', watchdog => ({ ...watchdog, x: Symbol('x') })],
-    ['a non-finite y anchor', watchdog => ({ ...watchdog, y: NaN })],
-    ['a string elapsed duration', watchdog => ({ ...watchdog, noProgressFor: 'Infinity' })],
-    ['a symbol elapsed duration', watchdog => ({ ...watchdog, noProgressFor: Symbol('elapsed') })],
-    ['a negative elapsed duration', watchdog => ({ ...watchdog, noProgressFor: -1 })],
-  ])('safely resets invalid prior observation metadata with %s', (_name, corrupt) => {
-    const initial = guidedState({
-      id: 'guided', state: 'guided', x: 100, y: 100,
-      path: [{ x: 6, y: 5 }, { x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
-    });
-    const observed = recoverStuckCustomers(initial, 0);
-    const malformed = {
-      ...observed,
-      customers: [{
-        ...observed.customers[0],
-        stuckWatchdog: corrupt(observed.customers[0].stuckWatchdog),
-      }],
-    };
-    let result;
-
-    expect(() => {
-      result = recoverStuckCustomers(malformed, 10);
-    }).not.toThrow();
-
-    expect(result.customers[0]).toMatchObject({
-      x: 100,
-      y: 100,
-      path: initial.customers[0].path,
-      stuckWatchdog: {
+  it('runs oscillation recovery after committed customer movement', () => {
+    const stateWithSeededReversal = guidedState({
+      id: 'oscillating', state: 'guided', x: 100.62, y: 100,
+      path: [{ x: 5, y: 5 }, { x: 10, y: 5 }], pathGoal: { x: 10, y: 5 },
+      oscillationRecovery: {
         state: 'guided',
-        goalKey: observed.customers[0].stuckWatchdog.goalKey,
-        x: 100,
-        y: 100,
-        noProgressFor: 0,
+        goalKey: 'guided:10,5:200,100',
+        previousCell: { x: 6, y: 5 },
+        previousPosition: { x: 120, y: 100 },
+        corridorCells: ['5,5', '6,5'],
+        edges: ['5,5>6,5', '6,5>5,5'],
+        pendingMovementFor: 0,
+        oscillatingFor: 5,
+        bestGoalDistance: 80,
       },
     });
-    expect(Number.isFinite(result.customers[0].stuckWatchdog.noProgressFor)).toBe(true);
-  });
 
-  it.each(['queued', 'waiting', 'seated', 'eating', 'checkout_processing'])(
-    'does not monitor the %s lifecycle state',
-    stateName => {
-      const customer = {
-        id: stateName, state: stateName, x: 100, y: 100, path: [],
-        stuckWatchdog: { state: 'guided', goalKey: 'old', x: 100, y: 100, noProgressFor: 9 },
-      };
-      const result = recoverStuckCustomers(guidedState(customer), 1);
-      expect(result.customers[0].stuckWatchdog).toBeUndefined();
-    },
-  );
+    const result = updateCustomers(stateWithSeededReversal, { gameDt: 0, movementDt: 0.01 });
+    const recovered = result.customers.find(customer => customer.id === 'oscillating');
 
-  it('removes stale watchdog metadata from a fading leaver', () => {
-    const result = recoverStuckCustomers(guidedState({
-      id: 'leaver', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
-      x: 980, y: 360, path: [],
-      stuckWatchdog: { state: 'leaving', goalKey: 'old', x: 980, y: 360, noProgressFor: 9 },
-    }), 1);
-    expect(result.customers[0].stuckWatchdog).toBeUndefined();
-  });
-
-  it('removes stale watchdog metadata from a fading guided customer', () => {
-    const result = recoverStuckCustomers(guidedState({
-      id: 'guided-fading', state: 'guided', exitPhase: 'fading',
-      x: 100, y: 100, path: [{ x: 6, y: 5 }], pathGoal: { x: 6, y: 5 },
-      stuckWatchdog: { state: 'guided', goalKey: 'old', x: 100, y: 100, noProgressFor: 9 },
-    }), 1);
-    expect(result.customers[0].stuckWatchdog).toBeUndefined();
-  });
-
-  it('recovers a same-cell pathless checkout customer through updateCustomers', () => {
-    const checkoutPosition = { x: 840, y: 180 };
-    const state = {
-      ...baseState,
-      chairs: [], kitchenStations: [], serviceTables: [],
-      cashierStations: [{
-        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
-      }],
-      staff: [{ id: 'cashier', role: 'waiter', x: 840, y: 100, path: [], task: null }],
-      customers: [{
-        id: 'checkout', state: 'checkout_moving', cashierStationId: 'cashier1',
-        checkoutPosition, paymentQueuedAt: 1, paymentReady: false,
-        x: 859, y: 199, path: [],
-      }],
-    };
-    const observed = recoverStuckCustomers(state, 0);
-    const aged = recoverStuckCustomers(observed, 9);
-
-    const result = updateCustomers(aged, { gameDt: 0, movementDt: 1 });
-
-    expect(result.customers[0]).toMatchObject({ x: 840, y: 180 });
-    expect(result.customers[0].stuckWatchdog).toBeUndefined();
-  });
-});
-
-describe('recoverStuckCustomers recovery', () => {
-  const openState = overrides => ({
-    ...baseState,
-    chairs: [], tables: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-    doors: [{ id: 'door1', y: 340 }],
-    ...overrides,
-  });
-  const ageToThreshold = state => recoverStuckCustomers(
-    recoverStuckCustomers(state, 0),
-    10,
-  );
-
-  it.each([
-    ['guided', {
-      id: 'guided', state: 'guided', x: 100, y: 100,
-      path: [{ x: 6, y: 5 }, { x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
-    }, { x: 8, y: 5 }],
-    ['checkout_moving', {
-      id: 'checkout', state: 'checkout_moving', x: 100, y: 100,
-      checkoutPosition: { x: 200, y: 100 }, path: [],
-    }, { x: 10, y: 5 }],
-    ['leaving', {
-      id: 'leaving', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-      x: 900, y: 360, path: [],
-    }, { x: 49, y: 18 }],
-  ])('relocates and replans a stuck %s customer at ten seconds', (_name, customer, goal) => {
-    const result = ageToThreshold(openState({ customers: [{
-      ...customer,
-      stalledFor: 8,
-      headOnRecovery: true,
-      localConflictTarget: { x: 1, y: 1 },
-    }] }));
-    const recovered = result.customers[0];
-
-    expect({ x: recovered.x, y: recovered.y }).not.toEqual({ x: customer.x, y: customer.y });
-    expect(recovered.pathGoal).toEqual(goal);
-    expect(recovered.stalledFor).toBe(0);
-    expect(recovered.headOnRecovery).toBeUndefined();
-    expect(recovered.localConflictTarget).toBeUndefined();
+    expect({ x: recovered.x, y: recovered.y }).not.toEqual({ x: 100, y: 100 });
+    expect(recovered.oscillationRecovery).toBeUndefined();
     expect(recovered.stuckWatchdog).toBeUndefined();
   });
 
-  it('uses a safe exact checkout destination when start and goal share a cell', () => {
-    const result = ageToThreshold(openState({
-      customers: [{
-        id: 'checkout', state: 'checkout_moving', x: 139, y: 119,
-        checkoutPosition: { x: 120, y: 100 }, path: [],
-      }],
-    }));
-    expect(result.customers[0]).toMatchObject({ x: 120, y: 100, path: [] });
-  });
-
-  it('skips an occupied first route position', () => {
-    const state = openState({
-      staff: [{ id: 'blocker', role: 'waiter', x: 120, y: 100, path: [] }],
-      customers: [{
-        id: 'stuck', state: 'guided', x: 100, y: 100,
-        path: [{ x: 10, y: 5 }], pathGoal: { x: 10, y: 5 },
-      }],
-    });
-    const result = ageToThreshold(state);
-    const recovered = result.customers[0];
-
-    expect(recovered).toMatchObject({ x: 140, y: 100 });
-    expect(Math.hypot(recovered.x - 120, recovered.y - 100)).toBeGreaterThanOrEqual(16);
-  });
-
-  it('rejects a blocked same-cell exact candidate', () => {
-    const path = [{ x: 8, y: 8 }];
-    const state = openState({
-      tables: [{ id: 'block', x: 120, y: 100, status: 'occupied' }],
-      customers: [{
-        id: 'checkout', state: 'checkout_moving', x: 139, y: 119,
-        checkoutPosition: { x: 120, y: 100 }, path,
-      }],
-    });
-
-    const result = ageToThreshold(state);
-
-    expect(worldToCell(state.customers[0])).toEqual(worldToCell(state.customers[0].checkoutPosition));
-    expect(buildBlockedCells(state).has('6,5')).toBe(true);
-    expect(result.customers[0]).toMatchObject({
-      x: 139,
-      y: 119,
-      path,
-      stuckWatchdog: { noProgressFor: 10 },
-    });
-  });
-
-  const world = getRestaurantWorld(baseState.restaurant);
-  it.each([
-    ['left', { x: world.floorX, y: 200 }, { x: world.floorX - 1, y: 200 }],
-    ['right', { x: world.queueX + world.queueW - 1, y: 640 }, { x: world.queueX + world.queueW + 1, y: 640 }],
-    ['top', { x: 200, y: world.kitchenY }, { x: 200, y: world.kitchenY - 1 }],
-    ['bottom', { x: 800, y: world.diningY + world.areaH + 49 }, { x: 800, y: world.diningY + world.areaH + 51 }],
-  ])('rejects a same-cell exact checkout goal outside the %s world boundary', (_name, position, checkoutPosition) => {
-    const path = [{ x: 8, y: 8 }];
-    const state = openState({
-      customers: [{
-        id: 'checkout', state: 'checkout_moving', ...position, checkoutPosition, path,
-      }],
-    });
-
-    const result = ageToThreshold(state);
-
-    expect(worldToCell(position)).toEqual(worldToCell(checkoutPosition));
-    expect(result.customers[0]).toMatchObject({
-      ...position,
-      path,
-      stuckWatchdog: { noProgressFor: 10 },
-    });
-  });
-
-  it('preserves position and path until the next ten-second retry interval', () => {
-    const stuck = {
-      id: 'stuck', state: 'guided', x: 100, y: 100,
-      path: [{ x: 6, y: 5 }, { x: 7, y: 5 }, { x: 8, y: 5 }, { x: 9, y: 5 }, { x: 10, y: 5 }],
-      pathGoal: { x: 10, y: 5 },
-    };
-    const blockers = [120, 140, 160, 180, 200].map(x => ({
-      id: `blocker-${x}`, state: 'eating', x, y: 100, path: [],
-    }));
-    const blocked = ageToThreshold(openState({ customers: [stuck, ...blockers] }));
-    const unblocked = { ...blocked, customers: [blocked.customers[0]] };
-    const beforeNextInterval = recoverStuckCustomers(unblocked, 9);
-    const retried = recoverStuckCustomers(beforeNextInterval, 1);
-
-    expect(blocked.customers[0]).toMatchObject({ x: 100, y: 100, path: stuck.path });
-    expect(blocked.customers[0].stuckWatchdog.noProgressFor).toBe(10);
-    expect(beforeNextInterval.customers[0]).toMatchObject({ x: 100, y: 100 });
-    expect(retried.customers[0].x).toBe(120);
-    expect(retried.customers[0].stuckWatchdog).toBeUndefined();
-  });
-
-  it('recovers simultaneous customers by stable ID without changing array order', () => {
-    const customers = ['b', 'a'].map(id => ({
-      id, state: 'guided', x: 100, y: 100,
+  it('does not relocate a motionless customer after ten seconds', () => {
+    const motionlessGuidedState = guidedState({
+      id: 'motionless', state: 'guided', x: 100, y: 100,
       path: [{ x: 6, y: 5 }, { x: 10, y: 5 }], pathGoal: { x: 10, y: 5 },
-    }));
-    const result = ageToThreshold(openState({ customers }));
+      stuckWatchdog: {
+        state: 'guided', goalKey: 'guided:10,5:200,100',
+        x: 100, y: 100, noProgressFor: 0,
+      },
+    });
 
-    expect(result.customers.map(customer => customer.id)).toEqual(['b', 'a']);
-    expect(result.customers.find(customer => customer.id === 'a')).toMatchObject({ x: 120, y: 100 });
-    expect(result.customers.find(customer => customer.id === 'b')).toMatchObject({ x: 140, y: 100 });
-    expect(Math.hypot(
-      result.customers[0].x - result.customers[1].x,
-      result.customers[0].y - result.customers[1].y,
-    )).toBeGreaterThanOrEqual(16);
+    const result = updateCustomers(motionlessGuidedState, { gameDt: 0, movementDt: 10.1 });
+
+    expect(result.customers[0]).toMatchObject({ x: 100, y: 100 });
   });
 });

@@ -1,8 +1,9 @@
 import { getRushHourMultiplier, isRestaurantOpen } from './clock';
-import { buildBlockedCells, cellToWorld, findPath, isInsideWorld, worldToCell } from './pathfinding';
+import { buildBlockedCells, worldToCell } from './pathfinding';
 import { clearMovementRecoveryMetadata, planCharacterPath, resolveCharacterMovementBatch } from './movement';
 import { getCustomerGuideContext, markTableDirtyIfInUse } from './guidance';
-import { getDoorPosition, getDoors, getRestaurantWorld } from './world';
+import { getDoorPosition, getDoors } from './world';
+import { recoverOscillatingCustomers } from './customerOscillationRecovery';
 import { isCheckoutState, prepareCheckoutCustomers } from './checkout';
 import {
   QUEUE_PARTY_CAPACITY,
@@ -30,9 +31,123 @@ export function getExitHeading(customerId) {
   return { angleDegrees, x: Math.cos(radians), y: Math.sin(radians) };
 }
 
+const EXIT_QUEUE_CLEARANCE = 16;
+const EXIT_GEOMETRY_EPSILON = 1e-9;
+
+function isFinitePoint(point) {
+  return Number.isFinite(point?.x) && Number.isFinite(point?.y);
+}
+
+function getHeadingForAngle(angleDegrees) {
+  const radians = angleDegrees * Math.PI / 180;
+  return { angleDegrees, x: Math.cos(radians), y: Math.sin(radians) };
+}
+
+function minimumPointToSegmentDistance(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const divisor = dx * dx + dy * dy;
+  const ratio = divisor === 0 ? 0 : Math.max(0, Math.min(1,
+    ((point.x - start.x) * dx + (point.y - start.y) * dy) / divisor));
+  return Math.hypot(
+    point.x - (start.x + dx * ratio),
+    point.y - (start.y + dy * ratio),
+  );
+}
+
+function isQueueClear(start, end, projectedMembers) {
+  return projectedMembers.every(member =>
+    minimumPointToSegmentDistance(member, start, end)
+      >= EXIT_QUEUE_CLEARANCE - EXIT_GEOMETRY_EPSILON);
+}
+
+function longestQueueSafePrefix(start, heading, maximumDistance, projectedMembers) {
+  let prefix = maximumDistance;
+  for (const member of projectedMembers) {
+    const offsetX = member.x - start.x;
+    const offsetY = member.y - start.y;
+    const distanceSquared = offsetX * offsetX + offsetY * offsetY;
+    if (distanceSquared < EXIT_QUEUE_CLEARANCE ** 2 - EXIT_GEOMETRY_EPSILON) return 0;
+
+    const along = offsetX * heading.x + offsetY * heading.y;
+    if (along <= EXIT_GEOMETRY_EPSILON) continue;
+    const perpendicularSquared = Math.max(0, distanceSquared - along * along);
+    if (perpendicularSquared >= EXIT_QUEUE_CLEARANCE ** 2 - EXIT_GEOMETRY_EPSILON) continue;
+
+    const entryDistance = along - Math.sqrt(
+      Math.max(0, EXIT_QUEUE_CLEARANCE ** 2 - perpendicularSquared),
+    );
+    if (entryDistance <= EXIT_GEOMETRY_EPSILON) return 0;
+    prefix = Math.min(prefix, entryDistance);
+  }
+  return Math.max(0, prefix);
+}
+
+export function getQueueSafeExitMovement(state, customer, movementDt) {
+  if (!isFinitePoint(customer)) return null;
+
+  const exitFadeProgress = Number.isFinite(customer.exitFadeProgress)
+    ? Math.min(1, Math.max(0, customer.exitFadeProgress))
+    : 0;
+  const remainingDistance = 30 * 4 * (1 - exitFadeProgress);
+  if (remainingDistance <= EXIT_GEOMETRY_EPSILON) return null;
+
+  const projectedMembers = getQueueProjectedMembers(state, state.queue).filter(isFinitePoint);
+  const stableHeading = getExitHeading(customer.id);
+  const preferredSign = stableHeading.angleDegrees > 0 ? 1 : -1;
+  const angleCandidates = [
+    0,
+    35 * preferredSign,
+    -35 * preferredSign,
+    60 * preferredSign,
+    -60 * preferredSign,
+  ];
+
+  for (const angleDegrees of angleCandidates) {
+    const heading = angleDegrees === stableHeading.angleDegrees
+      ? stableHeading
+      : getHeadingForAngle(angleDegrees);
+    const target = {
+      x: customer.x + heading.x * remainingDistance,
+      y: customer.y + heading.y * remainingDistance,
+    };
+    if (isQueueClear(customer, target, projectedMembers)) {
+      return { heading, target };
+    }
+  }
+
+  let longestPrefix = null;
+  for (const angleDegrees of angleCandidates) {
+    const heading = angleDegrees === stableHeading.angleDegrees
+      ? stableHeading
+      : getHeadingForAngle(angleDegrees);
+    const prefix = longestQueueSafePrefix(
+      customer,
+      heading,
+      remainingDistance,
+      projectedMembers,
+    );
+    if (prefix <= EXIT_GEOMETRY_EPSILON
+      || longestPrefix && prefix <= longestPrefix.distance + EXIT_GEOMETRY_EPSILON) continue;
+    longestPrefix = { heading, distance: prefix };
+  }
+
+  if (!longestPrefix) return null;
+  const movementBudget = 30 * Math.max(0, Number.isFinite(movementDt) ? movementDt : 0);
+  const distance = Math.min(longestPrefix.distance, movementBudget);
+  return {
+    heading: longestPrefix.heading,
+    target: {
+      x: customer.x + longestPrefix.heading.x * distance,
+      y: customer.y + longestPrefix.heading.y * distance,
+    },
+  };
+}
+
 function leavingFields(customer, overrides = {}) {
+  const { entryDoorId: _entryDoorId, ...withoutEntryDoor } = customer;
   return clearMovementRecoveryMetadata({
-    ...customer,
+    ...withoutEntryDoor,
     state: 'leaving',
     exitPhase: 'to_door',
     exitDoorId: null,
@@ -241,206 +356,6 @@ function getExitDestination(state, customer) {
   return door ? getDoorPosition(state, door).outside : null;
 }
 
-const CUSTOMER_STUCK_SECONDS = 10;
-const CUSTOMER_PROGRESS_DISTANCE = 0.1;
-const CUSTOMER_RECOVERY_SPACING = 16;
-const STUCK_MOVEMENT_STATES = new Set(['guided', 'checkout_moving', 'leaving']);
-
-function withoutStuckWatchdog(customer) {
-  if (!Object.hasOwn(customer, 'stuckWatchdog')) return customer;
-  const { stuckWatchdog: _stuckWatchdog, ...remaining } = customer;
-  return remaining;
-}
-
-function isFinitePoint(point) {
-  return Number.isFinite(point?.x) && Number.isFinite(point?.y);
-}
-
-function getCustomerStuckGoal(state, customer) {
-  if (!STUCK_MOVEMENT_STATES.has(customer.state)
-    || customer.exitPhase === 'fading'
-    || !isFinitePoint(customer)) return null;
-
-  let cell = null;
-  let world = null;
-  let useWorldGoal = false;
-  if (customer.state === 'guided') {
-    const finalPathCell = Array.isArray(customer.path) ? customer.path.at(-1) : null;
-    cell = isFinitePoint(customer.pathGoal)
-      ? customer.pathGoal
-      : isFinitePoint(finalPathCell) ? finalPathCell : null;
-    world = isFinitePoint(cell) ? cellToWorld(cell) : null;
-  } else if (customer.state === 'checkout_moving') {
-    world = customer.checkoutPosition;
-    cell = isFinitePoint(world) ? worldToCell(world) : null;
-    useWorldGoal = true;
-  } else {
-    world = getExitDestination(state, customer);
-    cell = isFinitePoint(world) ? worldToCell(world) : null;
-    useWorldGoal = true;
-  }
-  if (!isFinitePoint(cell) || !isFinitePoint(world)) return null;
-  return {
-    cell,
-    world,
-    useWorldGoal,
-    key: `${customer.state}:${cell.x},${cell.y}:${world.x},${world.y}`,
-  };
-}
-
-function observeCustomerProgress(customer, goal, movementDt) {
-  const previous = customer.stuckWatchdog;
-  const validPrevious = previous
-    && Number.isFinite(previous.x)
-    && Number.isFinite(previous.y)
-    && Number.isFinite(previous.noProgressFor)
-    && previous.noProgressFor >= 0;
-  const fresh = !validPrevious
-    || previous.state !== customer.state
-    || previous.goalKey !== goal.key;
-  const progress = !fresh && Math.hypot(customer.x - previous.x, customer.y - previous.y)
-    + 1e-9 >= CUSTOMER_PROGRESS_DISTANCE;
-  if (fresh || progress) {
-    return {
-      customer: {
-        ...customer,
-        stuckWatchdog: {
-          state: customer.state,
-          goalKey: goal.key,
-          x: customer.x,
-          y: customer.y,
-          noProgressFor: 0,
-        },
-      },
-      shouldRecover: false,
-    };
-  }
-
-  const before = previous.noProgressFor;
-  const elapsed = before + movementDt;
-  const after = Number.isFinite(elapsed) ? elapsed : Number.MAX_VALUE;
-  const nextAttemptAt = (Math.floor(before / CUSTOMER_STUCK_SECONDS) + 1)
-    * CUSTOMER_STUCK_SECONDS;
-  return {
-    customer: {
-      ...customer,
-      stuckWatchdog: { ...previous, noProgressFor: after },
-    },
-    shouldRecover: movementDt > 0 && after + 1e-9 >= nextAttemptAt,
-  };
-}
-
-function isInsideRestaurantWorld(state, point) {
-  const world = getRestaurantWorld(state.restaurant || {});
-  return point.x >= world.floorX
-    && point.x <= world.queueX + world.queueW
-    && point.y >= world.kitchenY
-    && point.y <= world.diningY + world.areaH + 50;
-}
-
-function getStuckRecoveryCandidates(state, customer, goal) {
-  const startCell = worldToCell(customer);
-  const sameGoalCell = startCell.x === goal.cell.x && startCell.y === goal.cell.y;
-  const route = findPath(state, startCell, goal.cell);
-  if (!sameGoalCell && route.length === 0) return [];
-
-  const candidates = route.map(cellToWorld);
-  const exactWorldAdvances = goal.useWorldGoal
-    && Math.hypot(goal.world.x - customer.x, goal.world.y - customer.y)
-      >= CUSTOMER_PROGRESS_DISTANCE
-    && (sameGoalCell || route.length > 0);
-  const finalCandidate = candidates.at(-1);
-  if (exactWorldAdvances && (!finalCandidate
-    || Math.hypot(finalCandidate.x - goal.world.x, finalCandidate.y - goal.world.y) > 1e-9)) {
-    candidates.push(goal.world);
-  }
-  return candidates;
-}
-
-function isSafeStuckRecoveryCandidate(state, customer, candidate, occupiedActors) {
-  if (!isFinitePoint(candidate)
-    || !isInsideRestaurantWorld(state, candidate)
-    || Math.hypot(candidate.x - customer.x, candidate.y - customer.y)
-      < CUSTOMER_PROGRESS_DISTANCE) return false;
-  const cell = worldToCell(candidate);
-  if (!isInsideWorld(state, cell) || buildBlockedCells(state).has(`${cell.x},${cell.y}`)) {
-    return false;
-  }
-  return occupiedActors.every(actor => actor.kind === 'customer' && actor.id === customer.id
-    || Math.hypot(candidate.x - actor.x, candidate.y - actor.y)
-      >= CUSTOMER_RECOVERY_SPACING - 1e-9);
-}
-
-function replaceOccupiedCustomer(occupiedActors, customer) {
-  return [
-    ...occupiedActors.filter(actor => actor.kind !== 'customer' || actor.id !== customer.id),
-    { kind: 'customer', id: customer.id, x: customer.x, y: customer.y },
-  ];
-}
-
-export function recoverStuckCustomers(state, movementDt) {
-  const dt = Math.max(0, Number.isFinite(movementDt) ? movementDt : 0);
-  const customers = state.customers || [];
-  const byId = new Map(customers.map(customer => [customer.id, customer]));
-  let occupiedActors = [
-    ...(state.staff || []).map(actor => ({ ...actor, kind: 'staff' })),
-    ...customers.map(actor => ({ ...actor, kind: 'customer' })),
-  ].filter(isFinitePoint);
-
-  const ordered = [...customers].sort((left, right) =>
-    String(left.id).localeCompare(String(right.id)));
-  for (const original of ordered) {
-    const customer = byId.get(original.id);
-    const workingState = {
-      ...state,
-      customers: customers.map(candidate => byId.get(candidate.id) || candidate),
-    };
-    const goal = getCustomerStuckGoal(workingState, customer);
-    if (!goal) {
-      byId.set(customer.id, withoutStuckWatchdog(customer));
-      continue;
-    }
-
-    const observed = observeCustomerProgress(customer, goal, dt);
-    byId.set(customer.id, observed.customer);
-    if (!observed.shouldRecover) continue;
-
-    const candidate = getStuckRecoveryCandidates(workingState, observed.customer, goal)
-      .find(point => isSafeStuckRecoveryCandidate(
-        workingState,
-        observed.customer,
-        point,
-        occupiedActors,
-      ));
-    if (!candidate) continue;
-
-    const currentCustomers = customers.map(current => byId.get(current.id) || current);
-    const recoveryState = { ...state, customers: currentCustomers };
-    const guideContext = getCustomerGuideContext(recoveryState, observed.customer);
-    const cleared = withoutStuckWatchdog(clearMovementRecoveryMetadata({
-      ...observed.customer,
-      ...candidate,
-    }));
-    const recovered = planCharacterPath(
-      recoveryState,
-      cleared,
-      goal.useWorldGoal ? { world: goal.world } : { cell: goal.cell },
-      [
-        ...(state.staff || []),
-        ...currentCustomers.filter(current => current.id !== customer.id),
-      ],
-      guideContext?.ignoredIds || [],
-    );
-    byId.set(customer.id, recovered);
-    occupiedActors = replaceOccupiedCustomer(occupiedActors, recovered);
-  }
-
-  return {
-    ...state,
-    customers: customers.map(customer => byId.get(customer.id) || customer),
-  };
-}
-
 function isSameCell(left, right) {
   const leftCell = worldToCell(left);
   const rightCell = worldToCell(right);
@@ -621,14 +536,12 @@ export function prepareCustomersForMovement(state, gameDt) {
 export function getCustomerMovementEntries(state, movementDt) {
   return (state.customers || []).flatMap(character => {
     if (character.state === 'leaving' && character.exitPhase === 'fading') {
-      const heading = character.exitHeading || getExitHeading(character.id);
+      const movement = getQueueSafeExitMovement(state, character, movementDt);
+      if (!movement) return [];
       return [{
-        character,
+        character: { ...character, exitHeading: movement.heading },
         speed: 30,
-        target: {
-          x: character.x + heading.x * 30 * movementDt,
-          y: character.y + heading.y * 30 * movementDt,
-        },
+        target: movement.target,
         consumePath: false,
         ignoredIds: [],
       }];
@@ -700,7 +613,10 @@ export function resolveCustomersAfterMovement(state, movementDt, fadingMovementI
     return customer;
   });
 
-  const recoveredState = recoverStuckCustomers({ ...state, customers: updatedCustomers }, movementDt);
+  const recoveredState = recoverOscillatingCustomers(
+    { ...state, customers: updatedCustomers },
+    movementDt,
+  );
   updatedCustomers = recoveredState.customers;
 
   updatedCustomers = updatedCustomers.map(customer => {

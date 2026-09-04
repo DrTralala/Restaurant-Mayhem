@@ -179,9 +179,14 @@ function getPartySize(party, lead) {
   return Math.max(party.length, Number.isFinite(lead?.partySize) ? lead.partySize : 0);
 }
 
+function withoutEntryDoorId(customer) {
+  const { entryDoorId: _entryDoorId, ...withoutEntryDoor } = customer;
+  return withoutEntryDoor;
+}
+
 function leavingFields(customer) {
   return clearMovementRecoveryMetadata({
-    ...customer,
+    ...withoutEntryDoorId(customer),
     state: 'leaving',
     exitPhase: 'to_door',
     exitDoorId: null,
@@ -618,12 +623,15 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       });
       if (party && reachable) {
         const { table, path, chairs } = reachable;
-        const door = [...getDoors(state)]
-          .sort((a, b) => Math.abs(a.y - staff.y) - Math.abs(b.y - staff.y))[0];
-        const planned = planQueuePartyAdmission(
-          { ...state, staff: allStaff || state.staff || [], customers },
-          { party, door, guide: staff, guidePath: path, tableId: table.id },
-        );
+        const doors = [...getDoors(state)].sort((left, right) =>
+          Math.abs(left.y - staff.y) - Math.abs(right.y - staff.y)
+            || String(left.id).localeCompare(String(right.id)));
+        const planned = doors
+          .map(door => planQueuePartyAdmission(
+            { ...state, staff: allStaff || state.staff || [], customers },
+            { party, door, guide: staff, guidePath: path, tableId: table.id },
+          ))
+          .find(Boolean) || null;
         if (planned) {
           const partyIds = party.members.map(customer => customer.id);
           return {
@@ -1535,6 +1543,10 @@ export function prepareStaffForMovement(state, gameDt) {
     carryingServiceItemId: s.carryingServiceItemId ?? null,
   }));
   if (gateStatus.clear) {
+    const gateMemberIds = new Set(queueAdmissionGate?.customerIds || []);
+    customers = customers.map(customer => gateMemberIds.has(customer.id)
+      ? withoutEntryDoorId(customer)
+      : customer);
     queueAdmissionGate = null;
   } else if (gateStatus.stale) {
     const gateMemberIds = new Set(queueAdmissionGate.customerIds || []);
@@ -1546,10 +1558,11 @@ export function prepareStaffForMovement(state, gameDt) {
     staff = staff.map(worker => hasMatchingQueueAdmissionTask(worker, queueAdmissionGate)
       ? { ...worker, task: null, path: [] }
       : worker);
-    customers = customers.map(customer => gateMemberIds.has(customer.id)
-      && customer.state !== 'leaving'
-      ? leavingFields({ ...customer, tableId: null, guideStaffId: null, chairId: null })
-      : customer);
+    customers = customers.map(customer => {
+      if (!gateMemberIds.has(customer.id)) return customer;
+      if (customer.state === 'leaving') return withoutEntryDoorId(customer);
+      return leavingFields({ ...customer, tableId: null, guideStaffId: null, chairId: null });
+    });
   }
   const activityState = { ...state, staff, customers, tables, serviceItems };
   staff = staff.map(worker => prepareStaffActivity(activityState, worker));
@@ -1605,7 +1618,9 @@ export function prepareStaffForMovement(state, gameDt) {
       customers = customers.map(customer => {
         if (!ids.includes(customer.id)) return customer;
         if (customer.state === 'leaving') {
-          return { ...customer, tableId: null, guideStaffId: null, chairId: null };
+          return {
+            ...withoutEntryDoorId(customer), tableId: null, guideStaffId: null, chairId: null,
+          };
         }
         return {
           ...leavingFields(customer),

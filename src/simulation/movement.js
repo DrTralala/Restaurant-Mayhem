@@ -1,5 +1,5 @@
 import { buildBlockedCells, buildOccupiedCharacterCells, cellToWorld, findPath, findPathWithDynamicFallback, isInsideWorld, worldToCell } from './pathfinding';
-import { solveLocalConflictComponent } from './localConflictSolver';
+import { orderActorsByMovementPriority, solveLocalConflictComponent } from './localConflictSolver';
 import { getDefaultStaffPosition, getRestaurantWorld, GRID_SIZE } from './world';
 
 const ROLE_SPEED = { waiter: 75, cook: 55 };
@@ -876,6 +876,12 @@ function solverActorForIntent(intent) {
       || routeCells.at(-1)
       || worldToCell(intent.desired))
     : startCell;
+  const leaving = intent.character.state === 'leaving' && intent.character.exitPhase !== 'fading';
+  const entering = intent.character.state === 'guided' && intent.character.entryDoorId;
+  const doorId = leaving
+    ? intent.character.exitDoorId || null
+    : entering ? intent.character.entryDoorId : null;
+  const doorFlow = leaving ? 'out' : entering ? 'in' : null;
   return {
     id: intent.character.id,
     startCell,
@@ -883,6 +889,8 @@ function solverActorForIntent(intent) {
     routeCells: moving ? routeCells : [startCell],
     stalledFor: intent.character.stalledFor || 0,
     moving,
+    doorId,
+    doorFlow,
   };
 }
 
@@ -1252,15 +1260,24 @@ function resolveIntentPairs(state, intents, resolutions, dt, validationIntents =
   }
 }
 
-function compareIntentsByAgedPriority(left, right) {
-  return (right.character.stalledFor || 0) - (left.character.stalledFor || 0)
-    || String(left.character.id).localeCompare(String(right.character.id));
+function orderIntentsByMovementPriority(intents) {
+  const intentsById = new Map(intents.map(intent => [intent.character.id, intent]));
+  return orderActorsByMovementPriority(intents.map(solverActorForIntent))
+    .map(actor => intentsById.get(actor.id));
 }
 
 function selectControlledOverlapActor(component) {
-  const selected = [...component]
-    .filter(intent => (intent.character.stalledFor || 0) >= 2 && intent.hasValidStaticRoute)
-    .sort(compareIntentsByAgedPriority)[0];
+  const selected = orderIntentsByMovementPriority(component
+    .filter(intent => {
+      if ((intent.character.stalledFor || 0) < 2 || !intent.hasValidStaticRoute) return false;
+      const entryDoorId = intent.character.state === 'guided'
+        ? intent.character.entryDoorId
+        : null;
+      if (!entryDoorId) return true;
+      return !component.some(peer => peer.character.state === 'leaving'
+        && peer.character.exitPhase !== 'fading'
+        && peer.character.exitDoorId === entryDoorId);
+    }))[0];
   return selected ? selected.character.id : null;
 }
 
@@ -1303,7 +1320,7 @@ function componentIsSafe(component, intents, resolutions) {
 }
 
 function resolveComponentWithExistingSafety(state, component, resolutions, dt, intents, metrics = null) {
-  const ordered = [...component].sort(compareIntentsByAgedPriority);
+  const ordered = orderIntentsByMovementPriority(component);
   resolveIntentPairs(state, ordered, resolutions, dt, intents, metrics);
   if (!componentIsSafe(component, intents, resolutions)) {
     for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
@@ -1415,7 +1432,7 @@ function resolveConflictComponentAttempt(
   if (metrics) metrics.localConflictSafetyFallbacks += 1;
   measureLocalConflictFallbackPhase(metrics, () => {
     for (const intent of component) resolutions.set(intent.character.id, resolvedAtStart(intent));
-    for (const intent of [...component].sort(compareIntentsByAgedPriority)) {
+    for (const intent of orderIntentsByMovementPriority(component)) {
       const candidate = measureMovementPhase(
         metrics,
         'safePrefixMilliseconds',

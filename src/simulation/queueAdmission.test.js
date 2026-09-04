@@ -43,10 +43,12 @@ function buildGuidedGateState() {
       customerIds: ['q1', 'q2'],
       guideStaffId: 'w1',
       tableId: 't1',
+      doorId: 'door1',
     },
     customers: state.queue[0].members.map((customer, index) => ({
       ...customer,
       state: 'guided',
+      entryDoorId: 'door1',
       guideStaffId: 'w1',
       tableId: 't1',
       x: 1000 + index * 20,
@@ -83,10 +85,44 @@ describe('queue admission', () => {
     });
 
     expect(planned.admittedCustomers).toHaveLength(state.queue[0].members.length);
+    expect(planned.admittedCustomers.every(customer => customer.entryDoorId === 'door1')).toBe(true);
     expect(planned.gate).toEqual({
       partyId: 'p1', customerIds: ['q1', 'q2'], guideStaffId: 'w1', tableId: 't1',
+      doorId: 'door1',
     });
     expect(state).toEqual(snapshot);
+  });
+
+  it('reserves a door while a non-fading customer is leaving through it', () => {
+    const state = buildAdmissionState();
+    state.customers = [{
+      id: 'out', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+      x: 900, y: 360, path: [{ x: 49, y: 18 }],
+    }];
+
+    expect(planQueuePartyAdmission(state, {
+      party: state.queue[0],
+      door: state.doors[0],
+      guide: state.staff[0],
+      guidePath: [{ x: 20, y: 10 }],
+      tableId: 't1',
+    })).toBeNull();
+  });
+
+  it('ignores a fading customer assigned to the requested door', () => {
+    const state = buildAdmissionState();
+    state.customers = [{
+      id: 'out', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
+      x: 980, y: 360, path: [],
+    }];
+
+    expect(planQueuePartyAdmission(state, {
+      party: state.queue[0],
+      door: state.doors[0],
+      guide: state.staff[0],
+      guidePath: [{ x: 20, y: 10 }],
+      tableId: 't1',
+    })).not.toBeNull();
   });
 
   it('preserves queue patience and resets service patience when admission starts', () => {

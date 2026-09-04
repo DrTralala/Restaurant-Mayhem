@@ -551,6 +551,93 @@ describe('movement runtime', () => {
     expectAllEndpointPairsAtLeast(entries, moved, 16);
   });
 
+  it('gives same-door egress priority over an older entrant', () => {
+    const entries = [
+      {
+        character: {
+          id: 'z-leaver', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+          x: 80, y: 100, path: [{ x: 5, y: 5 }], pathGoal: { x: 5, y: 5 }, stalledFor: 0,
+        },
+        speed: 20,
+      },
+      {
+        character: {
+          id: 'a-entrant', state: 'guided', entryDoorId: 'door1',
+          x: 100, y: 80, path: [{ x: 5, y: 5 }], pathGoal: { x: 5, y: 5 }, stalledFor: 4,
+        },
+        speed: 20,
+      },
+    ];
+
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('z-leaver')).toMatchObject({ x: 100, y: 100 });
+    expect(moved.get('a-entrant')).toMatchObject({ x: 100, y: 80 });
+  });
+
+  it('keeps three-actor same-door priority deterministic and transitive', () => {
+    const entries = [
+      {
+        character: {
+          id: 'a-entrant', state: 'guided', entryDoorId: 'door1',
+          x: 80, y: 100, path: [{ x: 5, y: 5 }], pathGoal: { x: 5, y: 5 }, stalledFor: 4,
+        },
+        speed: 20,
+      },
+      {
+        character: {
+          id: 'm-unrelated', x: 100, y: 80,
+          path: [{ x: 5, y: 5 }], pathGoal: { x: 5, y: 5 }, stalledFor: 2,
+        },
+        speed: 20,
+      },
+      {
+        character: {
+          id: 'z-leaver', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+          x: 120, y: 100, path: [{ x: 5, y: 5 }], pathGoal: { x: 5, y: 5 }, stalledFor: 0,
+        },
+        speed: 20,
+      },
+    ];
+
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+    const reversed = resolveCharacterMovementBatch(openState, [...entries].reverse(), 1);
+
+    expect(moved.get('m-unrelated')).toMatchObject({ x: 100, y: 100 });
+    expect(moved.get('a-entrant')).toMatchObject({ x: 80, y: 100 });
+    expect(serialiseById(moved)).toEqual(serialiseById(reversed));
+  });
+
+  it.each([
+    ['different doors', {
+      leaver: { state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door2' },
+      entrant: { state: 'guided', entryDoorId: 'door1' },
+    }],
+    ['non-door actors', { leaver: {}, entrant: {} }],
+  ])('keeps aged priority for %s during egress priority checks', (_label, metadata) => {
+    const entries = [
+      {
+        character: {
+          id: 'z-young', ...metadata.leaver,
+          x: 80, y: 100, path: [{ x: 5, y: 5 }], pathGoal: { x: 5, y: 5 }, stalledFor: 0,
+        },
+        speed: 20,
+      },
+      {
+        character: {
+          id: 'a-old', ...metadata.entrant,
+          x: 100, y: 80, path: [{ x: 5, y: 5 }], pathGoal: { x: 5, y: 5 }, stalledFor: 4,
+        },
+        speed: 20,
+      },
+    ];
+
+    const moved = resolveCharacterMovementBatch(openState, entries, 1);
+
+    expect(moved.get('a-old')).toMatchObject({ x: 100, y: 100 });
+    expect(moved.get('z-young')).toMatchObject({ x: 80, y: 100 });
+  });
+
   it('does not let a conflicted component stop an independent actor', () => {
     const moved = resolveCharacterMovementBatch(openState, [...conflictEntries(), independentEntry], 1);
     expect(moved.get('independent').x).toBe(340);
@@ -2085,6 +2172,37 @@ describe('movement runtime', () => {
     );
     expect(stableId.get('a').x).toBeGreaterThan(92);
     expect(stableId.get('a').x - 92).toBeGreaterThan(108 - stableId.get('z').x);
+  });
+
+  it('never selects an older same-door entrant for controlled overlap ahead of a young leaver', () => {
+    const entries = [
+      {
+        character: {
+          id: 'z-leaver', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+          x: 92, y: 100,
+          path: [{ x: 8, y: 5 }], pathGoal: { x: 8, y: 5 },
+          stalledFor: 0, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+      {
+        character: {
+          id: 'a-entrant', state: 'guided', entryDoorId: 'door1',
+          x: 108, y: 100,
+          path: [{ x: 3, y: 5 }], pathGoal: { x: 3, y: 5 },
+          stalledFor: 3, usingStaticFallback: true, minimumSpacing: 16,
+        },
+        speed: 60,
+      },
+    ];
+
+    const moved = resolveCharacterMovementBatch(corridorState, entries, 0.2);
+
+    expect(moved.get('a-entrant')).toMatchObject({ x: 108, minimumSpacing: 16 });
+    expect(Math.hypot(
+      moved.get('z-leaver').x - moved.get('a-entrant').x,
+      moved.get('z-leaver').y - moved.get('a-entrant').y,
+    )).toBeGreaterThanOrEqual(16 - 1e-6);
   });
 
   it('applies normal spacing and controlled-overlap eligibility boundaries to leaving customers', () => {

@@ -206,9 +206,52 @@ function compareActorsById(left, right) {
   return compareKeys(left.id, right.id);
 }
 
-function actorByAgedPriority(left, right) {
+function compareActorsByAgedPriority(left, right) {
   return (right.stalledFor || 0) - (left.stalledFor || 0)
     || compareActorsById(left, right);
+}
+
+function hasSameDoorEgressPrecedence(higher, lower) {
+  return higher.doorId != null
+    && higher.doorId === lower.doorId
+    && higher.doorFlow === 'out'
+    && lower.doorFlow === 'in';
+}
+
+function sameDoorEgressEdges(actors) {
+  const edges = [];
+  for (const higher of actors) {
+    for (const lower of actors) {
+      if (hasSameDoorEgressPrecedence(higher, lower)) edges.push([higher.id, lower.id]);
+    }
+  }
+  return edges;
+}
+
+export function orderActorsByMovementPriority(actors) {
+  const actorMap = new Map(actors.map(actor => [actor.id, actor]));
+  const graph = buildPriorityGraph(actors, sameDoorEgressEdges(actors));
+  const indegrees = new Map(actors.map(actor => [actor.id, 0]));
+  for (const lowerIds of graph.values()) {
+    for (const lowerId of lowerIds) indegrees.set(lowerId, indegrees.get(lowerId) + 1);
+  }
+  const ready = actors.filter(actor => indegrees.get(actor.id) === 0)
+    .sort(compareActorsByAgedPriority);
+  const ordered = [];
+  while (ready.length > 0) {
+    const actor = ready.shift();
+    ordered.push(actor);
+    for (const lowerId of [...graph.get(actor.id)].sort(compareKeys)) {
+      indegrees.set(lowerId, indegrees.get(lowerId) - 1);
+      if (indegrees.get(lowerId) === 0) {
+        ready.push(actorMap.get(lowerId));
+        ready.sort(compareActorsByAgedPriority);
+      }
+    }
+  }
+  return ordered.length === actors.length
+    ? ordered
+    : [...actors].sort(compareActorsByAgedPriority);
 }
 
 function planCellAt(actor, plan, slot) {
@@ -353,12 +396,22 @@ function planActor({
   });
 }
 
-function planInitialActors({ state, actors, blockedCells, horizon, progressHorizon, metrics = null }) {
+function planInitialActors({
+  state, actors, blockedCells, horizon, progressHorizon, initialEdges = [], metrics = null,
+}) {
+  const actorMap = new Map(actors.map(actor => [actor.id, actor]));
+  const orderedIds = topologicalActorIds(actors, initialEdges);
+  if (!orderedIds) return null;
   const plans = new Map();
-  for (const actor of actors) {
+  for (const id of orderedIds) {
+    const actor = actorMap.get(id);
+    const ancestorIds = priorityAncestors(actors, initialEdges, id);
+    const higherActors = orderedIds
+      .filter(higherId => ancestorIds.has(higherId))
+      .map(higherId => actorMap.get(higherId));
     const plan = planActor({
       state, actor, blockedCells, horizon, progressHorizon,
-      higherActors: [], plans, ignoreReservations: false, metrics,
+      higherActors, plans, ignoreReservations: false, metrics,
     });
     if (!plan) return null;
     plans.set(actor.id, plan);
@@ -473,7 +526,7 @@ function agedFallback({
   state, actors, blockedCells, horizon, progressHorizon, allowControlledOverlapId, metrics = null,
 }) {
   return measureSolverPhase(metrics, 'solverAgedFallbackMilliseconds', () => {
-    const orderedActors = [...actors].sort(actorByAgedPriority);
+    const orderedActors = orderActorsByMovementPriority(actors);
     const plans = new Map();
     const plannedActors = [];
     for (const actor of orderedActors) {
@@ -524,10 +577,14 @@ export function solveLocalConflictComponent({
   if (metrics) metrics.solverCalls += 1;
   const boundedProgressHorizon = Math.max(1, Math.min(horizon, progressHorizon));
   const stableActors = [...actors].sort(compareActorsById);
+  const movementPriorityActors = orderActorsByMovementPriority(stableActors);
+  const movementPriorityRanks = new Map(movementPriorityActors
+    .map((actor, index) => [actor.id, index]));
+  const initialEdges = sameDoorEgressEdges(stableActors);
   const movingActorCount = stableActors.filter(actor => actor.moving !== false).length;
   const options = {
     state, actors: stableActors, blockedCells, horizon,
-    progressHorizon: boundedProgressHorizon, allowControlledOverlapId, metrics,
+    progressHorizon: boundedProgressHorizon, allowControlledOverlapId, initialEdges, metrics,
   };
   if (movingActorCount > 12 || maxHighLevelNodes <= 0) return finish(agedFallback(options));
 
@@ -537,7 +594,7 @@ export function solveLocalConflictComponent({
   );
   if (!initialPlans) return finish(null);
   const frontier = [createHighLevelNode(
-    stableActors, [], initialPlans, horizon, allowControlledOverlapId, [], boundedProgressHorizon,
+    stableActors, initialEdges, initialPlans, horizon, allowControlledOverlapId, [], boundedProgressHorizon,
     metrics,
   )];
   let poppedNodes = 0;
@@ -554,7 +611,9 @@ export function solveLocalConflictComponent({
     const conflict = node.conflicts[0];
     const left = actorMap.get(conflict.leftId);
     const right = actorMap.get(conflict.rightId);
-    const preferredHigher = actorByAgedPriority(left, right) <= 0 ? left : right;
+    const preferredHigher = movementPriorityRanks.get(left.id) < movementPriorityRanks.get(right.id)
+      ? left
+      : right;
     const other = preferredHigher === left ? right : left;
     for (const [branchIndex, [higher, lower]] of [
       [0, [preferredHigher, other]],

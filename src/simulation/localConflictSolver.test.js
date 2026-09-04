@@ -475,6 +475,20 @@ describe('solveLocalConflictComponent PBS', () => {
     expectConflictFree(result.plans, actors);
   });
 
+  it('uses stable ID for equal-age unrelated actors in aged fallback', () => {
+    const actors = [
+      actor('z', { x: 4, y: 5 }, { x: 5, y: 5 }, 2),
+      actor('a', { x: 5, y: 4 }, { x: 5, y: 5 }, 2),
+    ];
+    const result = solveLocalConflictComponent({
+      state: openState, actors, blockedCells: new Set(), horizon: 1, maxHighLevelNodes: 0,
+    });
+
+    expect(result.plans.get('a')[0]).toEqual({ x: 5, y: 5 });
+    expect(result.plans.get('z')[0]).not.toEqual({ x: 5, y: 5 });
+    expectConflictFree(result.plans, actors);
+  });
+
   it('gives the older stalled actor the preferred PBS branch', () => {
     const actors = [
       actor('a-new', { x: 4, y: 5 }, { x: 5, y: 5 }, 0),
@@ -488,6 +502,74 @@ describe('solveLocalConflictComponent PBS', () => {
     expect(result.plans.get('z-old')[0]).toEqual({ x: 5, y: 5 });
     expect(result.plans.get('a-new')[0]).not.toEqual({ x: 5, y: 5 });
     expectConflictFree(result.plans, actors);
+  });
+
+  it('gives a same-door leaver the preferred PBS branch over an older entrant', () => {
+    const actors = [
+      { ...actor('a-entrant', { x: 4, y: 5 }, { x: 5, y: 5 }, 4), doorId: 'door1', doorFlow: 'in' },
+      { ...actor('z-leaver', { x: 5, y: 4 }, { x: 5, y: 5 }, 0), doorId: 'door1', doorFlow: 'out' },
+    ];
+    const result = solveLocalConflictComponent({
+      state: openState, actors, blockedCells: new Set(), horizon: 1, maxHighLevelNodes: 128,
+    });
+
+    expect(result.mode).toBe('pbs');
+    expect(result.plans.get('z-leaver')[0]).toEqual({ x: 5, y: 5 });
+    expect(result.plans.get('a-entrant')[0]).not.toEqual({ x: 5, y: 5 });
+    expectConflictFree(result.plans, actors);
+  });
+
+  it('gives a same-door leaver priority in the aged fallback over an older entrant', () => {
+    const actors = [
+      { ...actor('a-entrant', { x: 4, y: 5 }, { x: 5, y: 5 }, 4), doorId: 'door1', doorFlow: 'in' },
+      { ...actor('z-leaver', { x: 5, y: 4 }, { x: 5, y: 5 }, 0), doorId: 'door1', doorFlow: 'out' },
+    ];
+    const result = solveLocalConflictComponent({
+      state: openState, actors, blockedCells: new Set(), horizon: 1, maxHighLevelNodes: 0,
+    });
+
+    expect(result.mode).toBe('aged-fallback');
+    expect(result.plans.get('z-leaver')[0]).toEqual({ x: 5, y: 5 });
+    expect(result.plans.get('a-entrant')[0]).not.toEqual({ x: 5, y: 5 });
+    expectConflictFree(result.plans, actors);
+  });
+
+  it('uses a transitive same-door priority order for a three-actor PBS conflict', () => {
+    const actors = [
+      { ...actor('a-entrant', { x: 4, y: 5 }, { x: 5, y: 5 }, 4), doorId: 'door1', doorFlow: 'in' },
+      actor('m-unrelated', { x: 5, y: 4 }, { x: 5, y: 5 }, 2),
+      { ...actor('z-leaver', { x: 6, y: 5 }, { x: 5, y: 5 }, 0), doorId: 'door1', doorFlow: 'out' },
+    ];
+    const solve = entries => solveLocalConflictComponent({
+      state: openState, actors: entries, blockedCells: new Set(), horizon: 1, maxHighLevelNodes: 128,
+    });
+
+    const result = solve(actors);
+
+    expect(result.mode).toBe('pbs');
+    expect(result.plans.get('m-unrelated')[0]).toEqual({ x: 5, y: 5 });
+    expect(result.plans.get('a-entrant')[0]).not.toEqual({ x: 5, y: 5 });
+    expectConflictFree(result.plans, actors);
+    expect(serialisePlans(result.plans)).toBe(serialisePlans(solve([...actors].reverse()).plans));
+  });
+
+  it('uses a transitive same-door priority order in three-actor forced fallback', () => {
+    const actors = [
+      { ...actor('a-entrant', { x: 4, y: 5 }, { x: 5, y: 5 }, 4), doorId: 'door1', doorFlow: 'in' },
+      actor('m-unrelated', { x: 10, y: 10 }, { x: 11, y: 10 }, 2),
+      { ...actor('z-leaver', { x: 5, y: 4 }, { x: 5, y: 5 }, 0), doorId: 'door1', doorFlow: 'out' },
+    ];
+    const solve = entries => solveLocalConflictComponent({
+      state: openState, actors: entries, blockedCells: new Set(), horizon: 1, maxHighLevelNodes: 0,
+    });
+
+    const result = solve(actors);
+
+    expect(result.mode).toBe('aged-fallback');
+    expect(result.plans.get('z-leaver')[0]).toEqual({ x: 5, y: 5 });
+    expect(result.plans.get('a-entrant')[0]).not.toEqual({ x: 5, y: 5 });
+    expectConflictFree(result.plans, actors);
+    expect(serialisePlans(result.plans)).toBe(serialisePlans(solve([...actors].reverse()).plans));
   });
 
   it('keeps aged executable-prefix progress while reserving the remaining eight-slot route', () => {

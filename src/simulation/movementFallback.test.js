@@ -2,12 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 
 const solverCalls = vi.hoisted(() => []);
 
-vi.mock('./localConflictSolver', () => ({
-  solveLocalConflictComponent(options) {
-    solverCalls.push(options);
-    return null;
-  },
-}));
+vi.mock('./localConflictSolver', async (importOriginal) => {
+  const { orderActorsByMovementPriority } = await importOriginal();
+  return {
+    orderActorsByMovementPriority,
+    solveLocalConflictComponent(options) {
+      solverCalls.push(options);
+      return null;
+    },
+  };
+});
 
 import { resolveCharacterMovementBatch } from './movement';
 

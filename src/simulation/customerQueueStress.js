@@ -13,7 +13,7 @@ import {
 const PARTY_SIZE = 4;
 const INITIAL_PARTIES = 8;
 const MAX_TICKS_PER_PARTY = 5_000;
-const GATE_KEYS = ['customerIds', 'guideStaffId', 'partyId', 'tableId'];
+const GATE_KEYS = ['customerIds', 'doorId', 'guideStaffId', 'partyId', 'tableId'];
 
 function buildParty(index) {
   const partyId = `stress-party-${String(index).padStart(2, '0')}`;
@@ -95,8 +95,9 @@ export function getValidatedGateOwnerPartyIds(state) {
     || gate.customerIds.length === 0
     || new Set(gate.customerIds).size !== gate.customerIds.length
     || typeof gate.guideStaffId !== 'string'
-    || typeof gate.tableId !== 'string') {
-    throw new Error('Customer queue stress gate must contain exactly partyId, customerIds, guideStaffId, and tableId');
+    || typeof gate.tableId !== 'string'
+    || typeof gate.doorId !== 'string') {
+    throw new Error('Customer queue stress gate must contain exactly partyId, customerIds, guideStaffId, tableId, and doorId');
   }
 
   const guide = (state.staff || []).find(worker => worker.id === gate.guideStaffId);

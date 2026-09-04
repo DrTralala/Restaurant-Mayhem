@@ -37,15 +37,21 @@ describe('party customer queue stress', () => {
     expect(result.completedPartyIds[8]).toBe('stress-party-09');
   });
 
-  it('counts an owner party only after validating the exact four-field gate shape', () => {
+  it('counts an owner party after validating the exact gate shape including its door', () => {
     const admitted = buildOccupiedGateState();
+    expect(admitted.queueAdmissionGate.doorId).toBe('queue-door');
     expect(getValidatedGateOwnerPartyIds(admitted))
       .toEqual(['stress-party-01']);
 
     expect(() => getValidatedGateOwnerPartyIds({
       ...admitted,
       queueAdmissionGate: { ...admitted.queueAdmissionGate, unexpected: true },
-    })).toThrow('Customer queue stress gate must contain exactly partyId, customerIds, guideStaffId, and tableId');
+    })).toThrow('Customer queue stress gate must contain exactly partyId, customerIds, guideStaffId, tableId, and doorId');
+
+    expect(() => getValidatedGateOwnerPartyIds({
+      ...admitted,
+      queueAdmissionGate: { ...admitted.queueAdmissionGate, doorId: null },
+    })).toThrow('Customer queue stress gate must contain exactly partyId, customerIds, guideStaffId, tableId, and doorId');
   });
 
   it('rejects gate identity that differs from its party, customers, or guide task', () => {

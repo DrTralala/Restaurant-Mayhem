@@ -1773,6 +1773,55 @@ describe('updateStaff', () => {
     expect(result.queueAdmissionGate).toMatchObject({ partyId: 'p1', guideStaffId: 'w1' });
   });
 
+  it('uses the next-nearest door when the nearest door has active egress', () => {
+    const state = queuedAdmissionState();
+    state.staff = [state.staff[0]];
+    state.doors = [{ id: 'door-near', y: 300 }, { id: 'door-alt', y: 420 }];
+    state.customers = [{
+      id: 'out', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door-near',
+      x: 900, y: 300, path: [{ x: 49, y: 15 }],
+    }];
+
+    const result = updateStaff(state, 0);
+
+    expect(result.queueAdmissionGate).toMatchObject({ partyId: 'p1', doorId: 'door-alt' });
+    expect(result.customers.find(customer => customer.id === 'q1'))
+      .toMatchObject({ state: 'guided', entryDoorId: 'door-alt' });
+  });
+
+  it('keeps a party queued when every door has active egress', () => {
+    const state = queuedAdmissionState();
+    state.staff = [state.staff[0]];
+    state.doors = [{ id: 'door-near', y: 300 }, { id: 'door-alt', y: 420 }];
+    state.customers = state.doors.map((door, index) => ({
+      id: `out-${index}`, state: 'leaving', exitPhase: 'to_door', exitDoorId: door.id,
+      x: 900, y: door.y, path: [{ x: 49, y: door.y / 20 }],
+    }));
+
+    const result = updateStaff(state, 0);
+
+    expect(result.queue).toEqual(state.queue);
+    expect(result.queueAdmissionGate).toBeNull();
+    expect(result.customers).toEqual(expect.arrayContaining(state.customers.map(customer =>
+      expect.objectContaining(customer))));
+    expect(result.customers.some(customer => customer.id === 'q1')).toBe(false);
+  });
+
+  it('removes entry-door metadata when an admitted customer abandons guidance', () => {
+    const admitted = updateStaff(queuedAdmissionState(), 0);
+    const abandoned = {
+      ...admitted,
+      customers: admitted.customers.map(customer => customer.id === 'q1'
+        ? { ...customer, state: 'leaving', exitPhase: 'to_door' }
+        : customer),
+    };
+
+    const prepared = prepareStaffForMovement(abandoned, 0);
+
+    expect(prepared.customers.find(customer => customer.id === 'q1'))
+      .not.toHaveProperty('entryDoorId');
+  });
+
   it('does not admit another party until every gate member clears the entrance', () => {
     const admitted = updateStaff(queuedAdmissionState(), 0);
     const blocked = updateStaff({
@@ -1807,6 +1856,7 @@ describe('updateStaff', () => {
     expect(stale.customers[0]).toMatchObject({
       id: 'q1', state: 'leaving', tableId: null, guideStaffId: null, chairId: null,
     });
+    expect(stale.customers[0]).not.toHaveProperty('entryDoorId');
     expect(stale.tables.find(table => table.id === 't1').status).toBe('empty');
     expect(stale.queueAdmissionGate).toEqual(admitted.queueAdmissionGate);
 
@@ -1877,6 +1927,7 @@ describe('updateStaff', () => {
     const prepared = prepareStaffForMovement(inside, 0);
 
     expect(prepared.queueAdmissionGate).toBeNull();
+    expect(prepared.customers[0]).not.toHaveProperty('entryDoorId');
     expect(prepared.customers[0]).toMatchObject({
       id: 'q1', state: 'seated', x: 800, tableId: 't1', chairId: 'ch1', guideStaffId: null,
     });

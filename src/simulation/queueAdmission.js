@@ -72,6 +72,11 @@ export function planQueuePartyAdmission(state, {
   tableId,
 }) {
   if (!party?.members?.length || !door || !guide || !tableId) return null;
+  const activeEgress = (state.customers || []).some(customer =>
+    customer.state === 'leaving'
+      && customer.exitPhase !== 'fading'
+      && customer.exitDoorId === door.id);
+  if (activeEgress) return null;
   const staff = state.staff || [];
   const customers = state.customers || [];
   const partyIds = party.members.map(member => member.id);
@@ -110,6 +115,7 @@ export function planQueuePartyAdmission(state, {
         ? customer.queuePatienceMax
         : patienceMax,
       state: 'guided',
+      entryDoorId: door.id,
       guideStaffId: guide.id,
       chairId: null,
       x: candidate.x,
@@ -128,6 +134,7 @@ export function planQueuePartyAdmission(state, {
       customerIds: party.members.map(member => member.id),
       guideStaffId: guide.id,
       tableId,
+      doorId: door.id,
     },
   };
 }
