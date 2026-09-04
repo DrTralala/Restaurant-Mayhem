@@ -1,67 +1,35 @@
-import { GRID_SIZE, getDoors, getRestaurantWorld } from './world';
-import { getPlaceableDimensions } from '../data/placeables';
+import { GRID_SIZE } from './world';
+import {
+  buildBlockedCells,
+  buildOccupiedCharacterCells,
+  cellKey,
+  cellToWorld,
+  isInsideWorld,
+  worldToCell,
+} from './movement/navigationWorkspace';
+import { resolveNavigationWorkspace } from './movement/navigationWorkspace';
 
-export function cellKey(cell) {
-  return `${cell.x},${cell.y}`;
-}
-
-export function worldToCell(point) {
-  return { x: Math.floor(point.x / GRID_SIZE), y: Math.floor(point.y / GRID_SIZE) };
-}
-
-export function cellToWorld(cell) {
-  return { x: cell.x * GRID_SIZE, y: cell.y * GRID_SIZE };
-}
-
-function blockRect(blocked, rect) {
-  const start = worldToCell({ x: rect.x, y: rect.y });
-  const end = worldToCell({ x: rect.x + rect.w - 1, y: rect.y + rect.h - 1 });
-  for (let y = start.y; y <= end.y; y += 1) {
-    for (let x = start.x; x <= end.x; x += 1) blocked.add(cellKey({ x, y }));
-  }
-}
-
-export function buildBlockedCells(state) {
-  const blocked = new Set();
-  for (const table of state.tables || []) blockRect(blocked, { x: table.x, y: table.y, w: 40, h: 40 });
-  for (const chair of state.chairs || []) blockRect(blocked, { x: chair.x, y: chair.y, w: 20, h: 20 });
-  for (const station of state.kitchenStations || []) blockRect(blocked, { x: station.x, y: station.y, w: 40, h: 40 });
-  for (const service of state.serviceTables || []) {
-    const dimensions = getPlaceableDimensions('serviceTable', service.rotation);
-    blockRect(blocked, { x: service.x, y: service.y, w: dimensions.width, h: dimensions.height });
-  }
-  for (const cashier of state.cashierStations || []) blockRect(blocked, cashier);
-  for (const station of state.washStations || []) blockRect(blocked, { x: station.x, y: station.y, w: station.w || 40, h: station.h || 40 });
-  const world = getRestaurantWorld(state.restaurant || {});
-  blockRect(blocked, { x: world.doorX, y: world.kitchenY, w: 6, h: world.floorH });
-  const wallCellX = worldToCell({ x: world.doorX, y: 0 }).x;
-  for (const door of getDoors(state)) {
-    const firstDoorCell = worldToCell({ x: world.doorX, y: door.y }).y;
-    const lastDoorCell = worldToCell({ x: world.doorX, y: door.y + 39 }).y;
-    for (let y = firstDoorCell; y <= lastDoorCell; y += 1) blocked.delete(cellKey({ x: wallCellX, y }));
-  }
-  return blocked;
-}
-
-export function buildOccupiedCharacterCells(characters, excludedIds = []) {
-  const excluded = new Set(excludedIds);
-  return new Set((characters || [])
-    .filter(character => !excluded.has(character.id) && Number.isFinite(character.x) && Number.isFinite(character.y))
-    .map(character => cellKey(worldToCell(character))));
-}
-
-export function isInsideWorld(state, cell) {
-  const world = getRestaurantWorld(state.restaurant || {});
-  const point = cellToWorld(cell);
-  return point.x >= world.floorX && point.x <= world.queueX + world.queueW && point.y >= world.kitchenY && point.y <= world.diningY + world.areaH + 50;
-}
+export {
+  buildBlockedCells,
+  buildOccupiedCharacterCells,
+  cellKey,
+  cellToWorld,
+  isInsideWorld,
+  worldToCell,
+} from './movement/navigationWorkspace';
 
 function isOpen(state, blocked, cell) {
   return isInsideWorld(state, cell) && !blocked.has(cellKey(cell));
 }
 
-export function findPath(state, start, goal, { occupiedCells = null, allowOccupiedGoal = false } = {}) {
-  const blocked = buildBlockedCells(state);
+export function findPath(state, start, goal, {
+  occupiedCells = null,
+  allowOccupiedGoal = false,
+  workspace = null,
+  metrics = null,
+} = {}) {
+  const navigation = resolveNavigationWorkspace(state, workspace, metrics);
+  const blocked = navigation.blockedCells;
   const queue = [start];
   const cameFrom = new Map([[cellKey(start), null]]);
   const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -89,15 +57,22 @@ export function findPath(state, start, goal, { occupiedCells = null, allowOccupi
   return path.slice(1);
 }
 
-export function findPathWithDynamicFallback(state, start, goal, { occupiedCells = null } = {}) {
-  const path = findPath(state, start, goal, { occupiedCells, allowOccupiedGoal: true });
+export function findPathWithDynamicFallback(state, start, goal, {
+  occupiedCells = null,
+  workspace = null,
+  metrics = null,
+} = {}) {
+  const path = findPath(state, start, goal, {
+    occupiedCells, allowOccupiedGoal: true, workspace, metrics,
+  });
   if (path.length) return { path, usedStaticFallback: false };
-  const staticPath = findPath(state, start, goal);
+  const staticPath = findPath(state, start, goal, { workspace, metrics });
   return { path: staticPath, usedStaticFallback: staticPath.length > 0 };
 }
 
-export function findAdjacentOpenCells(state, rect, fromCell = null) {
-  const blocked = buildBlockedCells(state);
+export function findAdjacentOpenCells(state, rect, fromCell = null, { workspace = null, metrics = null } = {}) {
+  const navigation = resolveNavigationWorkspace(state, workspace, metrics);
+  const blocked = navigation.blockedCells;
   const left = worldToCell({ x: rect.x - GRID_SIZE, y: rect.y });
   const right = worldToCell({ x: rect.x + rect.w, y: rect.y });
   const top = worldToCell({ x: rect.x, y: rect.y - GRID_SIZE });
@@ -116,8 +91,8 @@ export function findAdjacentOpenCells(state, rect, fromCell = null) {
   return open.sort((a, b) => Math.abs(a.x - fromCell.x) + Math.abs(a.y - fromCell.y) - (Math.abs(b.x - fromCell.x) + Math.abs(b.y - fromCell.y)));
 }
 
-export function findAdjacentOpenCell(state, rect, fromCell = null) {
-  const candidates = findAdjacentOpenCells(state, rect, fromCell);
+export function findAdjacentOpenCell(state, rect, fromCell = null, { workspace = null, metrics = null } = {}) {
+  const candidates = findAdjacentOpenCells(state, rect, fromCell, { workspace, metrics });
   if (!fromCell) return candidates[0] || null;
-  return candidates.find(candidate => findPath(state, fromCell, candidate).length > 0) || null;
+  return candidates.find(candidate => findPath(state, fromCell, candidate, { workspace, metrics }).length > 0) || null;
 }

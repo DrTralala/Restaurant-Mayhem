@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { buildBlockedCells, findAdjacentOpenCell, findPath, findPathWithDynamicFallback, worldToCell } from './pathfinding';
+import * as pathfindingFacade from './pathfinding';
+import { createNavigationWorkspace } from './movement/navigationWorkspace';
+import { createMovementMetrics } from './movementMetrics';
 import { GRID_SIZE } from './world';
 
 const state = {
@@ -168,5 +171,53 @@ describe('pathfinding', () => {
     const result = findPathWithDynamicFallback(unreachable, start, goal, { occupiedCells: new Set() });
 
     expect(result).toEqual({ path: [], usedStaticFallback: false });
+  });
+
+  it('preserves the complete pathfinding API and function arities', () => {
+    expect(Object.keys(pathfindingFacade).sort()).toEqual([
+      'buildBlockedCells',
+      'buildOccupiedCharacterCells',
+      'cellKey',
+      'cellToWorld',
+      'findAdjacentOpenCell',
+      'findAdjacentOpenCells',
+      'findPath',
+      'findPathWithDynamicFallback',
+      'isInsideWorld',
+      'worldToCell',
+    ]);
+    expect(Object.fromEntries(Object.entries(pathfindingFacade)
+      .map(([name, implementation]) => [name, implementation.length]))).toEqual({
+      buildBlockedCells: 1,
+      buildOccupiedCharacterCells: 1,
+      cellKey: 1,
+      cellToWorld: 1,
+      findAdjacentOpenCell: 2,
+      findAdjacentOpenCells: 2,
+      findPath: 3,
+      findPathWithDynamicFallback: 3,
+      isInsideWorld: 2,
+      worldToCell: 1,
+    });
+  });
+
+  it('reuses one optional workspace across path searches', () => {
+    const metrics = createMovementMetrics();
+    const workspace = createNavigationWorkspace(state, metrics);
+    const start = worldToCell({ x: 100, y: 300 });
+    const goal = worldToCell({ x: 300, y: 300 });
+
+    const first = findPath(state, start, goal, { workspace, metrics });
+    const second = findPath(state, start, goal, { workspace, metrics });
+    expect(second).toEqual(first);
+    expect(metrics.blockedCellBuilds).toBe(1);
+  });
+
+  it('falls back from a malformed optional workspace', () => {
+    const metrics = createMovementMetrics();
+    const path = findPath(state, worldToCell({ x: 100, y: 300 }),
+      worldToCell({ x: 300, y: 300 }), { workspace: {}, metrics });
+    expect(path.length).toBeGreaterThan(0);
+    expect(metrics.blockedCellBuilds).toBe(1);
   });
 });
