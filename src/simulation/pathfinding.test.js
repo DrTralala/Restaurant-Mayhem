@@ -98,6 +98,75 @@ describe('pathfinding', () => {
     expect(path.some(cell => blocked.has(`${cell.x},${cell.y}`))).toBe(false);
   });
 
+  it('finds a dining-floor route along the lower edge of the top wall', () => {
+    const openState = {
+      restaurant: { expansionLevel: 1 },
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [],
+      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340 }],
+    };
+    const start = worldToCell({ x: 80, y: 100 });
+    const goal = worldToCell({ x: 260, y: 100 });
+    const blocked = buildBlockedCells(openState);
+    const path = findPath(openState, start, goal);
+
+    expect(path.length).toBeGreaterThan(0);
+    expect(path.some(cell => blocked.has(`${cell.x},${cell.y}`))).toBe(false);
+  });
+
+  it('rejects a target inside the top interior wall', () => {
+    const openState = {
+      restaurant: { expansionLevel: 1 },
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [],
+      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340 }],
+    };
+    expect(findPath(openState, worldToCell({ x: 80, y: 100 }), { x: 5, y: 4 })).toEqual([]);
+  });
+
+  it('keeps the queue route open at the top edge of the restaurant', () => {
+    const openState = {
+      restaurant: { expansionLevel: 1 },
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [],
+      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340 }],
+    };
+    const start = worldToCell({ x: 973, y: 60 });
+    const goal = worldToCell({ x: 973, y: 140 });
+    const blocked = buildBlockedCells(openState);
+    const path = findPath(openState, start, goal);
+
+    expect(path.length).toBeGreaterThan(0);
+    expect(path.some(cell => blocked.has(`${cell.x},${cell.y}`))).toBe(false);
+  });
+
+  it('does not route through the top-wall cell at a top-band side door', () => {
+    const topDoorState = {
+      restaurant: { expansionLevel: 1 },
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [],
+      cashierStations: [], washStations: [], doors: [{ id: 'top-door', y: 80 }],
+    };
+    const blocked = buildBlockedCells(topDoorState);
+    const path = findPath(topDoorState, { x: 48, y: 4 }, { x: 44, y: 5 });
+
+    expect(blocked.has('45,4')).toBe(true);
+    expect(path).not.toContainEqual({ x: 45, y: 4 });
+    expect(path.some(cell => blocked.has(`${cell.x},${cell.y}`))).toBe(false);
+  });
+
+  it.each([
+    ['kitchen', { id: 'k1', x: 100, y: 120 }, { x: 80, y: 120 }],
+    ['cashier', { id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }, { x: 840, y: 100 }],
+    ['wash', { id: 'wash1', type: 'manual', x: 300, y: 120, w: 40, h: 40 }, { x: 280, y: 120 }],
+  ])('keeps the %s approach reachable below the top wall', (_name, fixture, approach) => {
+    const openState = {
+      restaurant: { expansionLevel: 1 },
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [],
+      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340 }],
+    };
+    const collection = fixture.w ? (fixture.type ? 'washStations' : 'cashierStations') : 'kitchenStations';
+    const state = { ...openState, [collection]: [fixture] };
+    expect(findPath(state, worldToCell({ x: 80, y: 100 }), worldToCell(approach)).length)
+      .toBeGreaterThan(0);
+  });
+
   it('returns the direct static lattice path between open cells', () => {
     const openState = {
       restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [],

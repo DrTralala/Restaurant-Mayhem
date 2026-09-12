@@ -113,11 +113,13 @@ export function recordPartyOrderOutcome(records, partyMembers, customer, outcome
   return entries.map((entry, index) => index === recordIndex ? updatedRecord : entry);
 }
 
-export function recordPartyPayment(records, customer, score) {
+export const PAID_REVIEW_SCORE = 100;
+
+export function recordPartyPayment(records, customer) {
   const entries = getRecordEntries(records);
   const partyId = getPartyKey(customer);
   const customerId = customer?.id;
-  if (partyId == null || customerId == null || !Number.isFinite(score)) return records;
+  if (partyId == null || customerId == null) return records;
 
   const recordIndex = entries.findIndex(record => record?.partyId === partyId);
   if (recordIndex === -1) return records;
@@ -131,7 +133,7 @@ export function recordPartyPayment(records, customer, score) {
   }
   const payment = {
     customerId,
-    score: Math.min(100, Math.max(0, score)),
+    score: PAID_REVIEW_SCORE,
   };
   const updatedRecord = { ...record, paidReviews: [...parts.paidReviews, payment] };
   return entries.map((entry, index) => index === recordIndex ? updatedRecord : entry);

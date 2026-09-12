@@ -147,7 +147,7 @@ describe('independent static navigation router', () => {
 
   it('resumes bounded search with the same route as an uninterrupted search', () => {
     const grid = createGrid(openState());
-    const start = { x: 80, y: 80 };
+    const start = { x: 80, y: 100 };
     const goal = { x: 880, y: 600 };
     const cursor = beginRouteSearch(grid, start, goal);
     let result;

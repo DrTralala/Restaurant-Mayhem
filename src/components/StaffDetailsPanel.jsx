@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 
 const taskLabels = {
-  guide_customer: 'Guiding customer',
   clean_table: 'Cleaning table',
   take_order: 'Taking order',
   take_payment: 'Taking payment',

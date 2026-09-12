@@ -4,6 +4,7 @@ import { hydrateState, loadState, saveState } from './persistence';
 import { saveRepositoryState } from './repositorySaves';
 import { moveFixtures } from './fixtureMoves';
 import { runTick } from '../simulation/gameLoop';
+import { resolveSelfSeating } from '../simulation/selfSeating';
 import { updateCustomers } from '../simulation/customers';
 import { enterCheckout, requeueCheckoutCustomer } from '../simulation/checkout';
 import { createMovementCoordinator, getCharacterMovementStatus } from '../simulation/movement';
@@ -17,20 +18,23 @@ const point = actor => ({ x: actor.x, y: actor.y });
 function seated() {
   vi.spyOn(Math, 'random').mockReturnValue(1);
   const initial = createInitialState();
-  const state = runTick({ ...initial,
+  const approachPoint = { x: 160, y: 200 };
+  const assignment = {
+    customerId: 'departure', chairId: 'ch1',
+    approachCell: { x: 8, y: 10 }, approachPoint,
+  };
+  const state = resolveSelfSeating({
+    ...initial,
     restaurant: { ...initial.restaurant, gameTime: 43200 }, queue: [], serviceItems: [],
     kitchenStations: [], serviceTables: [], washStations: [], cashierStations: [],
-    tables: [{ id: 't1', status: 'reserved', seats: 1, x: 200, y: 200 }],
+    tables: [{ id: 't1', status: 'reserved', seats: 1, x: 200, y: 200,
+      diningPartyId: 'solo', diningCustomerIds: ['departure'], seatingAssignments: [assignment] }],
     chairs: [{ id: 'ch1', tableId: 't1', x: 180, y: 200 }],
-    staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, task: {
-      type: 'guide_customer', customerIds: ['departure'], tableId: 't1',
-      chairIds: ['ch1'], stage: 'approach_chairs', approaches: [{ customerId: 'departure',
-        chairId: 'ch1', approachCell: { x: 8, y: 10 }, approachPoint: { x: 160, y: 200 } }],
-    } }],
-    customers: [{ id: 'departure', partyId: 'solo', partySize: 1, state: 'guided',
-      guideStaffId: 'w1', tableId: 't1', chairId: 'ch1', patience: 1000, happiness: 80,
-      x: 160, y: 200, navigationGoal: { x: 160, y: 200 } }],
-  }, { gameDt: 0, movementDt: 0.1 });
+    staff: [],
+    customers: [{ id: 'departure', partyId: 'solo', partySize: 1, state: 'entering',
+      tableId: 't1', chairId: 'ch1', patience: 1000, happiness: 80,
+      x: approachPoint.x, y: approachPoint.y }],
+  }, new Map([['departure', { plan: 'arrived' }]]));
   expect(state.customers[0]).toMatchObject({ state: 'seated', x: 190, y: 210 });
   return state;
 }
@@ -104,7 +108,14 @@ describe('durable domain seated residency', () => {
 
   it('resumes a partially departed abandoning customer without switching its exact door goal', () => {
     let state = seated();
-    state.customers[0].patience = 0;
+    state.customers[0] = {
+      ...state.customers[0],
+      state: 'leaving',
+      exitPhase: 'to_door',
+      exitDoorId: null,
+      exitFadeProgress: 0,
+      exitHeading: null,
+    };
     state = updateCustomers(state, { gameDt: 1, movementDt: 0.1 });
     state = advance(state);
     const before = point(state.customers[0]);
@@ -246,25 +257,6 @@ describe('durable domain seated residency', () => {
     expect(restored.customers[0].seatResidency.phase).toBe('revoked');
   });
 
-  it('reconstructs fresh genuine seating after a coordinator reset without replaying old guide evidence', () => {
-    const prior = seated();
-    const saved = { ...prior, customers: [{ ...prior.customers[0], state: 'guided',
-      guideStaffId: 'w1', x: 160, y: 200, navigationGoal: { x: 160, y: 200 } }],
-    tables: [{ ...prior.tables[0], status: 'reserved', reservationOwnerStaffId: 'w1' }],
-    staff: [{ ...prior.staff[0], task: { type: 'guide_customer', customerIds: ['departure'],
-      tableId: 't1', chairIds: ['ch1'], stage: 'approach_chairs', approaches: [{
-        customerId: 'departure', chairId: 'ch1', approachCell: { x: 8, y: 10 },
-        approachPoint: { x: 160, y: 200 },
-      }] } }],
-    };
-    let state = hydrateState(saved, createInitialState());
-    expect(state.customers[0]).not.toHaveProperty('seatingTransition');
-    state = runTick(state, { gameDt: 0, movementDt: 0.1 });
-    expect(state.customers[0]).toMatchObject({ state: 'seated', x: 190, y: 210 });
-    expect(state.customers[0].seatingGeneration).toBe(prior.customers[0].seatingGeneration + 1);
-    state = advance(checkout(state));
-    expect(getCharacterMovementStatus(state, 'departure').plan).toBe('scheduled');
-  });
 
   it('finishes the real checkout journey after partial-source reload and gates readiness at the exact goal', () => {
     let state = reload(partial());
@@ -296,32 +288,32 @@ function coupleFixture() {
     restaurant: { ...initial.restaurant, gameTime: 43200 }, queue: [], serviceItems: [],
     kitchenStations: [], serviceTables: [], washStations: [], cashierStations: [],
     unlockedDrinkIds: [],
-    tables: [{ id: 't1', status: 'reserved', reservationOwnerStaffId: 'w1', seats: 2, x: 200, y: 200 }],
+    tables: [{ id: 't1', status: 'reserved', seats: 2, x: 200, y: 200,
+      diningPartyId: 'mixed', diningCustomerIds: ['non-payer', 'payer'],
+      seatingAssignments: [
+        { customerId: 'non-payer', chairId: 'ch1', approachCell: { x: 9, y: 9 }, approachPoint: { x: 180, y: 180 } },
+        { customerId: 'payer', chairId: 'ch2', approachCell: { x: 9, y: 12 }, approachPoint: { x: 180, y: 240 } },
+      ] }],
     chairs: [
       { id: 'ch1', tableId: 't1', x: 210, y: 180 },
       { id: 'ch2', tableId: 't1', x: 210, y: 240 },
     ],
-    staff: [{ id: 'w1', role: 'waiter', x: 240, y: 220, task: {
-      type: 'guide_customer', customerIds: ['non-payer', 'payer'], tableId: 't1',
-      chairIds: ['ch1', 'ch2'], stage: 'approach_chairs', approaches: [
-        { customerId: 'non-payer', chairId: 'ch1', approachCell: { x: 9, y: 9 }, approachPoint: { x: 180, y: 180 } },
-        { customerId: 'payer', chairId: 'ch2', approachCell: { x: 9, y: 12 }, approachPoint: { x: 180, y: 240 } },
-      ],
-    } }],
+    staff: [],
     customers: [
-      { id: 'non-payer', partyId: 'mixed', partySize: 2, partyType: 'couple', state: 'guided',
-        guideStaffId: 'w1', tableId: 't1', chairId: 'ch1', patience: 1000, happiness: 80,
-        x: 180, y: 180, navigationGoal: { x: 180, y: 180 } },
-      { id: 'payer', partyId: 'mixed', partySize: 2, partyType: 'couple', state: 'guided',
-        guideStaffId: 'w1', tableId: 't1', chairId: 'ch2', patience: 1000, happiness: 80,
-        x: 180, y: 240, navigationGoal: { x: 180, y: 240 } },
+      { id: 'non-payer', partyId: 'mixed', partySize: 2, partyType: 'couple', state: 'entering',
+        tableId: 't1', chairId: 'ch1', patience: 1000, happiness: 80, x: 180, y: 180 },
+      { id: 'payer', partyId: 'mixed', partySize: 2, partyType: 'couple', state: 'entering',
+        tableId: 't1', chairId: 'ch2', patience: 1000, happiness: 80, x: 180, y: 240 },
     ],
   };
 }
 
 function seatedCouple() {
   vi.spyOn(Math, 'random').mockReturnValue(1);
-  const state = runTick(coupleFixture(), { gameDt: 0, movementDt: 0.1 });
+  const state = resolveSelfSeating(coupleFixture(), new Map([
+    ['non-payer', { plan: 'arrived' }],
+    ['payer', { plan: 'arrived' }],
+  ]));
   const nonPayer = state.customers.find(customer => customer.id === 'non-payer');
   const payer = state.customers.find(customer => customer.id === 'payer');
   expect(nonPayer).toMatchObject({ state: 'seated', x: 220, y: 190 });

@@ -70,6 +70,6 @@ export function getDefaultStaffPosition(role, index = 0, state = {}, staffId = n
     ? currentState.cashierStations?.find(station => station.assignedStaffId === staffId)
     : null;
   if (assigned) return getCashierWorkPosition(assigned);
-  if (role === 'cook') return { x: world.floorX + 40 + index * 45, y: world.kitchenY + 25 };
+  if (role === 'cook') return { x: world.floorX + 40 + index * 45, y: world.diningY };
   return { x: world.floorX + world.floorW / 2 + index * 25, y: world.diningY + world.areaH / 2 };
 }

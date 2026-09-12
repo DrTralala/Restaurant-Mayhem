@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createInitialState } from './initialState';
+import { SAVE_VERSION } from './saveVersion';
 import { hydrateState, loadState, saveState } from './persistence';
 import { advanceCharacterMovementBatch } from '../simulation/movement';
 import { GameProvider, useGameState } from './GameContext';
@@ -12,19 +13,22 @@ beforeEach(() => localStorage.clear());
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('replacement navigation save boundary', () => {
-  it('starts new games with save version seven', () => {
-    expect(createInitialState().version).toBe(7);
+  it('starts new games with the current save version', () => {
+    expect(createInitialState().version).toBe(SAVE_VERSION);
   });
 
-  it.each([1, 5, 6, 8, undefined])('ignores unsupported autosave version %s without trying to hydrate it', version => {
+  it.each([1, 5, 6, 7, undefined])('ignores unsupported autosave version %s without trying to hydrate it', version => {
     localStorage.setItem('restaurant-sim-save', JSON.stringify({ ...createInitialState(), version }));
     expect(loadState()).toBeNull();
   });
 
-  it('rejects explicit older versions at hydration rather than silently migrating movement state', () => {
-    const fresh = createInitialState();
-    expect(() => hydrateState({ ...fresh, version: 6 }, fresh)).toThrow(/incompatible/i);
-  });
+  it.each([5, 6, 7])(
+    'rejects explicit older version %s at hydration rather than silently migrating movement state',
+    version => {
+      const fresh = createInitialState();
+      expect(() => hydrateState({ ...fresh, version }, fresh)).toThrow(/incompatible/i);
+    },
+  );
 
   it('round-trips gameplay intent while rebuilding empty replacement runtime state', () => {
     const fresh = createInitialState();
@@ -33,7 +37,7 @@ describe('replacement navigation save boundary', () => {
     state = { ...state, staff: [batch.moved.get(state.staff[0].id)], movementCoordinator: batch.coordinator };
     saveState(state);
     const stored = loadState();
-    expect(stored.version).toBe(7);
+    expect(stored.version).toBe(SAVE_VERSION);
     expect(stored.movementCoordinator).toBeUndefined();
     const restored = hydrateState(stored, fresh);
     expect(restored.movementCoordinator).toMatchObject({ version: 1, tick: 0 });

@@ -2,7 +2,9 @@ import { getQueueProjectedMembers } from './customerQueue.js';
 import { advanceCharacterMovementBatch } from './movement';
 import { createMovementMetrics, summariseMovementMetrics } from './movementMetrics';
 import { nonTimingSummary, recordStressTick } from './navigation/stressDiagnostics';
-import { getQueueAdmissionGateStatus } from './queueAdmission.js';
+import { getCustomerMovementEntries } from './customers.js';
+import { mergeMovementEntries } from './gameLoop.js';
+import { prepareSelfSeating, resolveSelfSeating } from './selfSeating.js';
 import {
   getStaffMovementEntries,
   prepareStaffForMovement,
@@ -12,7 +14,7 @@ import {
 const PARTY_SIZE = 4;
 const INITIAL_PARTIES = 8;
 const MAX_TICKS_PER_PARTY = 5_000;
-const GATE_KEYS = ['customerIds', 'doorId', 'guideStaffId', 'partyId', 'tableId'];
+const GATE_KEYS = ['customerIds', 'doorId', 'partyId', 'tableId'];
 
 function buildParty(index) {
   const partyId = `stress-party-${String(index).padStart(2, '0')}`;
@@ -92,34 +94,23 @@ export function getValidatedGateOwnerPartyIds(state) {
     || !Array.isArray(gate.customerIds)
     || gate.customerIds.length === 0
     || new Set(gate.customerIds).size !== gate.customerIds.length
-    || typeof gate.guideStaffId !== 'string'
     || typeof gate.tableId !== 'string'
     || typeof gate.doorId !== 'string') {
-    throw new Error('Customer queue stress gate must contain exactly partyId, customerIds, guideStaffId, tableId, and doorId');
+    throw new Error('Customer queue stress gate must contain exactly partyId, customerIds, tableId, and doorId');
   }
 
-  const guide = (state.staff || []).find(worker => worker.id === gate.guideStaffId);
-  const task = guide?.task;
-  if (task?.type !== 'guide_customer'
-    || task.partyId !== gate.partyId
-    || task.tableId !== gate.tableId
-    || task.customerId !== gate.customerIds[0]
-    || !Array.isArray(task.customerIds)
-    || !sameOrderedIds(task.customerIds, gate.customerIds)) {
-    throw new Error('Customer queue stress gate identity does not match its guide task');
-  }
-
-  const status = getQueueAdmissionGateStatus(state);
+  const table = (state.tables || []).find(candidate => candidate.id === gate.tableId);
+  const reservedMemberIds = Array.isArray(table?.diningCustomerIds) ? table.diningCustomerIds : null;
   const gateCustomerIds = new Set(gate.customerIds);
   const materialisedPartyMembers = (state.customers || [])
     .filter(customer => customer.partyId === gate.partyId);
-  if (!status.occupied
-    || status.stale
-    || status.gateMembers.length !== gate.customerIds.length
+  if (table?.status !== 'reserved'
+    || table.diningPartyId !== gate.partyId
+    || reservedMemberIds == null
+    || !sameOrderedIds(reservedMemberIds, gate.customerIds)
     || materialisedPartyMembers.length !== gate.customerIds.length
-    || !status.gateMembers.every(customer => gateCustomerIds.has(customer.id)
-      && customer.partyId === gate.partyId)
-    || !materialisedPartyMembers.every(customer => gateCustomerIds.has(customer.id))) {
+    || !materialisedPartyMembers.every(customer => gateCustomerIds.has(customer.id)
+      && customer.tableId === gate.tableId)) {
     throw new Error('Customer queue stress gate identity does not match its materialised customers');
   }
 
@@ -224,16 +215,23 @@ export function runCustomerQueueStressScenario({ cycles, movementDt, metrics = c
     assertLogicalQueueRecords(state);
     observeGateOwners(state);
 
+    state = prepareSelfSeating(state);
+    observeGateOwners(state);
     state = prepareStaffForMovement(state, movementDt);
     observeGateOwners(state);
 
     const queuedIds = new Set(getQueueProjectedMembers(state, state.queue)
       .map(member => member.id));
-    const entries = getStaffMovementEntries(state);
+    const entries = mergeMovementEntries(
+      getCustomerMovementEntries(state, movementDt),
+      getStaffMovementEntries(state),
+    );
     const entryIds = entries.map(entry => entry.character.id);
     movementEntryIds.push(...entryIds);
     maximumMovementActors = Math.max(maximumMovementActors, entries.length);
-    const queuedEntries = entryIds.filter(id => queuedIds.has(id));
+    const queuedEntries = entries
+      .filter(entry => queuedIds.has(String(entry.character.id)) && Number(entry.speed) > 0)
+      .map(entry => String(entry.character.id));
     queuedMemberMovementEntries += queuedEntries.length;
     if (queuedEntries.length) {
       throw new Error(`Queued customers entered movement planning: ${queuedEntries.join(', ')}`);
@@ -256,6 +254,7 @@ export function runCustomerQueueStressScenario({ cycles, movementDt, metrics = c
       staff: state.staff.map(actor => moved.get(actor.id) || actor),
       customers: state.customers.map(actor => moved.get(actor.id) || actor),
     };
+    state = resolveSelfSeating(state, statuses);
     const customerIdsBeforeResolution = new Set(state.customers.map(customer => customer.id));
     state = resolveStaffAfterMovement(state, movementDt, statuses);
     const materialisedIds = new Set(state.customers
@@ -296,7 +295,7 @@ export function runCustomerQueueStressScenario({ cycles, movementDt, metrics = c
     timings.ticks.push(elapsedNow() - tickStartedAt);
     if (ticksForCurrentParty >= MAX_TICKS_PER_PARTY) {
       const partyId = state.queueAdmissionGate?.partyId
-        || state.staff.find(worker => worker.task?.type === 'guide_customer')?.task?.partyId
+        || state.tables.find(table => table.status === 'reserved')?.diningPartyId
         || state.queue[0]?.partyId
         || 'unknown';
       const error = new Error(`Customer queue stress party ${partyId} did not complete within 5,000 ticks`);

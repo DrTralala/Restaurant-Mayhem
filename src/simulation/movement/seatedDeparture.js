@@ -1,6 +1,7 @@
 import { getDoors, getRestaurantWorld } from '../world';
 import {
-  cellKey, cellToWorld, createNavigationWorkspace, isSafeSegment, navigationFixtureRectangles, worldToCell,
+  cellKey, cellToWorld, createNavigationWorkspace, isSafeSegment, isTopInteriorWallCell,
+  navigationFixtureRectangles, worldToCell,
 } from './navigationWorkspace';
 
 const samePoint = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y;
@@ -27,6 +28,7 @@ function onlyOwnChair(state, chair, origin) {
   const blockers = navigationFixtureRectangles(state).filter(rect => coversCell(rect, cell));
   if (blockers.length !== 1 || blockers[0].kind !== 'chair' || blockers[0].id !== chair.id) return false;
   const world = getRestaurantWorld(state.restaurant || {});
+  if (isTopInteriorWallCell(world, cell)) return false;
   const wall = { x: world.doorX, y: world.kitchenY, w: 6, h: world.floorH };
   return !coversCell(wall, cell) || getDoors(state).some(door =>
     cell.y >= worldToCell({ x: 0, y: door.y }).y

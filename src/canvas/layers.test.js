@@ -237,6 +237,35 @@ describe('drawFurnitureLayer', () => {
     }));
   });
 
+  it('draws one canonical manual-wash progress bar across the sink and janitor layers', () => {
+    const state = {
+      restaurant: { gameTime: 30 },
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
+      washStations: [{ id: 'sink', type: 'manual', x: 300, y: 100, w: 40, h: 40 }],
+      serviceItems: [{
+        id: 'item', kind: 'dish', state: 'washing', washStationId: 'sink', washStartedAt: 0,
+      }],
+      staff: [{
+        id: 'm', name: 'M', role: 'janitor', x: 300, y: 100, activityPhase: 'working',
+        task: { type: 'wash_item', serviceItemId: 'item', washStationId: 'sink', washingStartedAt: 0 },
+      }],
+    };
+    const staffStart = recordCtx();
+    const staffLater = recordCtx();
+    const furniture = recordCtx();
+
+    drawStaffLayer(staffStart, state, { x: 0, y: 0, zoom: 1 }, { timeMs: 0 });
+    drawStaffLayer(staffLater, state, { x: 0, y: 0, zoom: 1 }, { timeMs: 200 });
+    drawFurnitureLayer(furniture, state, { x: 0, y: 0, zoom: 1 });
+
+    const progressFills = [...staffStart._calls.rects, ...furniture._calls.rects]
+      .filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14);
+    expect(progressFills).toHaveLength(1);
+    expect(furniture._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14))
+      .toContainEqual(expect.objectContaining({ h: 12.6 }));
+    expect(staffStart._calls.lines).not.toEqual(staffLater._calls.lines);
+  });
+
   it('draws a quarter-turned service counter with a vertical footprint', () => {
     const ctx = recordCtx();
     drawFurnitureLayer(ctx, {
@@ -333,7 +362,7 @@ describe('drawFurnitureLayer', () => {
       .toHaveLength(1);
   });
 
-  it('uses canonical drink, recipe/equipment, and manual wash durations', () => {
+  it('uses canonical drink and recipe/equipment durations', () => {
     const ctx = recordCtx();
     drawStaffLayer(ctx, {
       restaurant: { gameTime: 30 },
@@ -351,10 +380,22 @@ describe('drawFurnitureLayer', () => {
       ],
     }, { x: 0, y: 0, zoom: 1 });
     const fills = ctx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14);
-    expect(fills).toHaveLength(3);
+    expect(fills).toHaveLength(2);
     expect(fills.map(fill => fill.h)).toEqual(expect.arrayContaining([
-      10.5, 5.6000000000000005, 12.6,
+      10.5, 5.6000000000000005,
     ]));
+  });
+
+  it('does not draw a second progress bar above a washing janitor', () => {
+    const ctx = recordCtx();
+    drawStaffLayer(ctx, {
+      restaurant: { gameTime: 30 },
+      serviceItems: [],
+      staff: [{ id: 'm', name: 'M', role: 'janitor', x: 300, y: 100,
+        task: { type: 'wash_item', washingStartedAt: 0 } }],
+    }, { x: 0, y: 0, zoom: 1 });
+    expect(ctx._calls.rects.filter(r => r.w === 1 && r.h > 0 && r.h <= 14)).toHaveLength(0);
+    expect(ctx._calls.arcs.length).toBeGreaterThan(0); // character still renders
   });
 
   it('suppresses delivered-item drawing for overlapping chair geometry', () => {
@@ -657,10 +698,10 @@ describe('drawStaffLayer', () => {
     const ctx = recordCtx();
     drawStaffLayer(ctx, state, camera);
     expect(ctx._calls.arcs.length).toBe(1);
-    // getDefaultStaffPosition for cook index 0 at expansionLevel 1: world.floorX=50, world.kitchenY=50
-    // x = 50 + 40 + 0*45 = 90, y = 50 + 25 = 75
+    // getDefaultStaffPosition for cook index 0 at expansionLevel 1: world.floorX=50
+    // x = 50 + 40 + 0*45 = 90, y = world.diningY = 100
     expect(ctx._calls.arcs[0].x).toBe(90);
-    expect(ctx._calls.arcs[0].y).toBe(75);
+    expect(ctx._calls.arcs[0].y).toBe(100);
   });
 
   it('falls back when x is not finite', () => {
@@ -671,7 +712,7 @@ describe('drawStaffLayer', () => {
     const ctx = recordCtx();
     drawStaffLayer(ctx, state, camera);
     expect(ctx._calls.arcs[0].x).toBe(90);
-    expect(ctx._calls.arcs[0].y).toBe(75);
+    expect(ctx._calls.arcs[0].y).toBe(100);
   });
 
   it('falls back to the assigned cashier position when waiter coordinates are missing', () => {
@@ -843,7 +884,7 @@ describe('drawStaffLayer', () => {
     const state = {
       customers: [
         { id: 'fade', state: 'leaving', exitPhase: 'fading', exitFadeProgress: 0.4, x: 500, y: 300 },
-        { id: 'solid', state: 'guided', x: 700, y: 350 },
+        { id: 'solid', state: 'entering', x: 700, y: 350 },
       ], tables: [], chairs: [], restaurant: {},
     };
     const ctx = recordCtx();
@@ -913,7 +954,7 @@ describe('drawCustomerLayer', () => {
     ['ordering', { state: 'ordering', dishId: 'dish' }, { x: 110, y: 105 }],
     ['eating', { state: 'eating', dishId: 'dish' }, { x: 110, y: 105 }],
     ['waiting_for_items', { state: 'waiting_for_items', dishId: 'dish' }, { x: 110, y: 105 }],
-    ['moving', { state: 'guided' }, { x: 800, y: 400 }],
+    ['moving', { state: 'entering' }, { x: 800, y: 400 }],
     ['paying', { state: 'paying' }, { x: 800, y: 400 }],
   ])('uses chair geometry only for seated visual states: %s', (_label, customer, expected) => {
     const ctx = recordCtx();
@@ -928,7 +969,7 @@ describe('drawCustomerLayer', () => {
 
   it('renders guided customer at dynamic x/y even without tableId', () => {
     const customers = [
-      { id: 'c1', archetype: 'regular', state: 'guided', x: 850, y: 370, guideStaffId: 'w1' },
+      { id: 'c1', archetype: 'regular', state: 'entering', x: 850, y: 370 },
     ];
     const state = { customers, tables: [], restaurant: {} };
     const ctx = recordCtx();
@@ -941,13 +982,13 @@ describe('drawCustomerLayer', () => {
   it('animates a guided customer only while public movement status is traversing', () => {
     const goal = { x: 950, y: 370 };
     const traversing = withMovementStatuses({
-      customers: [{ id: 'c1', state: 'guided', x: 850, y: 370, navigationGoal: goal }],
+      customers: [{ id: 'c1', state: 'entering', x: 850, y: 370, navigationGoal: goal }],
       tables: [], restaurant: {},
     }, {
       c1: { goal, status: { plan: 'scheduled', motion: 'traversing' } },
     });
     const holding = withMovementStatuses({
-      customers: [{ id: 'c1', state: 'guided', x: 850, y: 370, navigationGoal: goal }],
+      customers: [{ id: 'c1', state: 'entering', x: 850, y: 370, navigationGoal: goal }],
       tables: [], restaurant: {},
     }, {
       c1: { goal, status: { plan: 'scheduled', motion: 'holding' } },
@@ -1084,7 +1125,7 @@ describe('drawCustomerLayer', () => {
   it('renders guided customer by x/y even when tableId is also set', () => {
     // guided customer has tableId assigned but hasn't been seated yet
     const customers = [
-      { id: 'c1', archetype: 'regular', state: 'guided', x: 850, y: 370, tableId: 't1', guideStaffId: 'w1' },
+      { id: 'c1', archetype: 'regular', state: 'entering', x: 850, y: 370, tableId: 't1' },
     ];
     const tables = [{ id: 't1', x: 200, y: 200, status: 'reserved', seats: 2 }];
     const state = { customers, tables, restaurant: {} };

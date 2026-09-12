@@ -21,6 +21,24 @@ function blockRect(blocked, rect) {
   }
 }
 
+export function getTopInteriorWall(world) {
+  return {
+    x: world.floorX, y: world.kitchenY,
+    w: world.doorX - world.floorX, h: world.diningY - world.kitchenY,
+  };
+}
+
+export function isTopInteriorWallCell(world, cell) {
+  const wall = getTopInteriorWall(world);
+  const start = worldToCell(wall);
+  const end = worldToCell({
+    x: wall.x + wall.w - 1,
+    y: wall.y + wall.h - 1,
+  });
+  return cell.x >= start.x && cell.x <= end.x
+    && cell.y >= start.y && cell.y <= end.y;
+}
+
 export function navigationFixtureRectangles(state) {
   const rectangles = [];
   const add = (kind, fixture, w, h) => rectangles.push({
@@ -42,12 +60,17 @@ export function buildBlockedCells(state, metrics = null) {
   const blocked = new Set();
   for (const rect of navigationFixtureRectangles(state)) blockRect(blocked, rect);
   const world = getRestaurantWorld(state.restaurant || {});
+  blockRect(blocked, getTopInteriorWall(world));
   blockRect(blocked, { x: world.doorX, y: world.kitchenY, w: 6, h: world.floorH });
   const wallCellX = worldToCell({ x: world.doorX, y: 0 }).x;
   for (const door of getDoors(state)) {
     const firstDoorCell = worldToCell({ x: world.doorX, y: door.y }).y;
     const lastDoorCell = worldToCell({ x: world.doorX, y: door.y + 39 }).y;
-    for (let y = firstDoorCell; y <= lastDoorCell; y += 1) blocked.delete(cellKey({ x: wallCellX, y }));
+    for (let y = firstDoorCell; y <= lastDoorCell; y += 1) {
+      if (!isTopInteriorWallCell(world, { x: wallCellX, y })) {
+        blocked.delete(cellKey({ x: wallCellX, y }));
+      }
+    }
   }
   return blocked;
 }
@@ -156,12 +179,15 @@ export function isSafeSegment(state, start, end, { workspace = null, metrics = n
   const navigation = resolveNavigationWorkspace(state, workspace, metrics);
   const distance = Math.hypot(end.x - start.x, end.y - start.y);
   const steps = Math.max(1, Math.ceil(distance / 2));
-  const startKey = cellKey(worldToCell(start));
+  const startCell = worldToCell(start);
+  const startKey = cellKey(startCell);
+  const world = getRestaurantWorld(state.restaurant || {});
+  const sourceIsTopInteriorWall = isTopInteriorWallCell(world, startCell);
   for (let index = 1; index <= steps; index += 1) {
     const ratio = index / steps;
     const point = { x: start.x + (end.x - start.x) * ratio, y: start.y + (end.y - start.y) * ratio };
     const key = cellKey(worldToCell(point));
-    if (key !== startKey && navigation.blockedCells.has(key)) return false;
+    if ((key !== startKey || sourceIsTopInteriorWall) && navigation.blockedCells.has(key)) return false;
   }
   return true;
 }

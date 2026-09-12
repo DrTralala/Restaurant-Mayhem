@@ -1,26 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { buildChairApproachAssignments, getChairCentre } from './seating';
 import { createInitialState } from '../state/initialState';
-import { updateStaff } from './staff';
 
 describe('chair approaches', () => {
-  it('seats a customer without assigning the chair approach occupied by its own waiting guide', () => {
+  it('never assigns a chair approach occupied by an existing actor', () => {
     const fresh = createInitialState();
-    let state = { ...fresh,
-      tables: fresh.tables.map(table => table.id === 't2' ? { ...table, status: 'reserved', reservationOwnerStaffId: 'guide' } : table),
-      staff: [{ id: 'guide', role: 'waiter', x: 340, y: 180, navigationGoal: { x: 340, y: 180 },
-        task: { type: 'guide_customer', customerIds: ['customer'], tableId: 't2', chairIds: ['ch3'], stage: 'follow_guide' } }],
-      customers: [{ id: 'customer', partyId: 'party', partySize: 1, state: 'guided', guideStaffId: 'guide',
-        tableId: 't2', x: 340, y: 200, happiness: 80, patience: 900 }],
+    const state = {
+      ...fresh,
+      tables: fresh.tables.map(table => table.id === 't2' ? { ...table, status: 'empty' } : table),
+      staff: [{ id: 'blocker', role: 'waiter', x: 370, y: 170 }],
+      customers: [{ id: 'customer', partyId: 'party', partySize: 1, state: 'entering', x: 340, y: 200 }],
     };
     const assignments = buildChairApproachAssignments(state, ['customer'], ['ch3']);
     expect(assignments).not.toBeNull();
-    expect(Math.hypot(assignments[0].approachPoint.x - 340, assignments[0].approachPoint.y - 180)).toBeGreaterThanOrEqual(16);
-    for (let tick = 0; tick < 300 && state.customers[0].state !== 'seated'; tick += 1) {
-      state = updateStaff(state, 0.1);
-      expect(Math.hypot(state.customers[0].x - state.staff[0].x, state.customers[0].y - state.staff[0].y)).toBeGreaterThanOrEqual(16 - 1e-9);
-    }
-    expect(state.customers[0]).toMatchObject({ state: 'seated', chairId: 'ch3', x: 380, y: 190 });
+    // The nearest (north) approach cell is physically occupied by the blocker.
+    expect(assignments[0].approachPoint).not.toEqual({ x: 370, y: 160 });
   });
   it('preserves ordered chair reservations and chooses distinct reachable approaches', () => {
     const state = {

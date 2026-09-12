@@ -1,4 +1,10 @@
-import { createNavigationWorkspace, navigationFixtureRectangles, worldToCell } from '../simulation/movement/navigationWorkspace';
+import {
+  cellKey,
+  createNavigationWorkspace,
+  isTopInteriorWallCell,
+  navigationFixtureRectangles,
+  worldToCell,
+} from '../simulation/movement/navigationWorkspace';
 import { hydrateSeatResidency } from '../simulation/movement/seatedDeparture';
 import { getDoors, getRestaurantWorld } from '../simulation/world';
 
@@ -27,6 +33,17 @@ export function validateSavedNavigationGeometry(state) {
     if (![start.x, start.y, end.x, end.y].every(Number.isSafeInteger)
       || end.x < start.x || end.y < start.y) invalid();
   }
+  const navigation = createNavigationWorkspace(state);
+  const actors = [
+    ...(Array.isArray(state.staff) ? state.staff : []),
+    ...(Array.isArray(state.customers) ? state.customers : []),
+    ...(Array.isArray(state.queue) ? state.queue.flatMap(party => party?.members || []) : []),
+  ];
+  if (actors.some(actor => {
+    if (!Number.isFinite(actor?.x) || !Number.isFinite(actor?.y)) return false;
+    const cell = worldToCell(actor);
+    return isTopInteriorWallCell(world, cell) && navigation.blockedCells.has(cellKey(cell));
+  })) invalid();
 }
 
 const withoutSeatingTransition = actor => {

@@ -83,6 +83,21 @@ describe('bounded traffic coordinator', () => {
     expect(Math.hypot(next.staff[0].x - 416, next.staff[0].y - 300)).toBeGreaterThanOrEqual(16);
   });
 
+  it.each([
+    ['ingress', 2],
+    ['egress', 0],
+  ])('assigns the domain priority for %s door traffic', (direction, expectedPriority) => {
+    const state = world([actor('actor', 400, 300, { x: 460, y: 300 })]);
+    const [character] = state.staff;
+    const result = advanceCharacterMovementBatch(state, [{
+      character,
+      speed: 60,
+      doorFlow: { doorId: 'door1', direction },
+    }], 1 / 30);
+
+    expect(result.coordinator.requests.get('actor').priority).toBe(expectedPriority);
+  });
+
   it('resolves opposing corridor traffic through a passing bay without teleporting', () => {
     let state = world([actor('a', 400, 300, { x: 580, y: 300 }), actor('b', 580, 300, { x: 400, y: 300 })]);
     state.chairs = [];
@@ -121,9 +136,9 @@ describe('bounded traffic coordinator', () => {
   });
 
   it('continues a budget-limited static search instead of restarting it forever', () => {
-    let state = world([actor('worker', 80, 80, { x: 880, y: 600 })]);
+    let state = world([actor('worker', 80, 100, { x: 880, y: 600 })]);
     for (let index = 0; index < 30; index += 1) state = tick(state);
-    expect(Math.hypot(state.staff[0].x - 80, state.staff[0].y - 80)).toBeGreaterThan(0);
+    expect(Math.hypot(state.staff[0].x - 80, state.staff[0].y - 100)).toBeGreaterThan(0);
   });
 
   it('does not mistake an invalid requested destination for arrival', () => {
@@ -157,8 +172,8 @@ describe('bounded traffic coordinator', () => {
   });
 
   it('rotates bounded planning work so all 24 independent movers finish', () => {
-    let state = world(Array.from({ length: 24 }, (_, index) => actor(`worker-${index}`, 300, 80 + index * 20,
-      { x: 540, y: 80 + index * 20 })));
+    let state = world(Array.from({ length: 24 }, (_, index) => actor(`worker-${index}`, 300, 100 + index * 20,
+      { x: 540, y: 100 + index * 20 })));
     for (let index = 0; index < 900; index += 1) {
       state = tick(state);
       if (state.staff.every(worker => worker.x === 540)) break;

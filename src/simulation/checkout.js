@@ -47,10 +47,12 @@ function hasMatchingPaymentTask(state, customer, station) {
 }
 
 export function prepareCheckoutCustomers(state, customers = state.customers || []) {
-  const staffedStations = (state.cashierStations || []).filter(station =>
+  const stations = (state.cashierStations || []).filter(station => station?.id != null);
+  const stationById = new Map(stations.map(station => [station.id, station]));
+  const staffedStations = stations.filter(station =>
     (state.staff || []).some(worker =>
       worker.id === station.assignedStaffId && worker.role === 'waiter'));
-  const stationById = new Map(staffedStations.map(station => [station.id, station]));
+  const staffedStationIds = new Set(staffedStations.map(station => station.id));
   const requeuedIds = new Set();
   const requeue = customer => {
     requeuedIds.add(customer.id);
@@ -64,20 +66,24 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
     if (!isCheckoutState(customer)) return customer;
     if (customer.state === 'checkout_processing') {
       const station = stationById.get(customer.cashierStationId);
-      return station && hasMatchingPaymentTask(state, customer, station)
+      return station && staffedStationIds.has(station.id)
+        && hasMatchingPaymentTask(state, customer, station)
         ? customer
         : requeue(customer);
     }
     if (customer.state === 'checkout_queued') {
       return requeueCheckoutCustomer(customer);
     }
+    // A physical cashier station remains a valid queue destination even while
+    // unstaffed: the diner can still vacate the seat. Payment itself stays
+    // gated on a matching waiter task.
     return customer.state === 'checkout_moving' && !stationById.has(customer.cashierStationId)
       ? requeue(customer)
       : customer;
   });
 
-  const processingCounts = new Map(staffedStations.map(station => [station.id, 0]));
-  const queueLengths = new Map(staffedStations.map(station => [station.id, 0]));
+  const processingCounts = new Map(stations.map(station => [station.id, 0]));
+  const queueLengths = new Map(stations.map(station => [station.id, 0]));
   for (const customer of prepared) {
     if (!queueLengths.has(customer.cashierStationId)) continue;
     if (customer.state === 'checkout_processing') {
@@ -93,10 +99,11 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
 
   prepared = prepared.map(customer => {
     if (customer.state !== 'checkout_queued' || requeuedIds.has(customer.id)
-      || staffedStations.length === 0) return customer;
-    const station = staffedStations.reduce((shortest, candidate) =>
+      || stations.length === 0) return customer;
+    const candidates = staffedStations.length > 0 ? staffedStations : stations;
+    const station = candidates.reduce((shortest, candidate) =>
       queueLengths.get(candidate.id) < queueLengths.get(shortest.id) ? candidate : shortest,
-    staffedStations[0]);
+    candidates[0]);
     queueLengths.set(station.id, queueLengths.get(station.id) + 1);
     return {
       ...customer,
@@ -108,7 +115,7 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
 
   const positions = new Map();
   const queueIndexes = new Map();
-  for (const station of staffedStations) {
+  for (const station of stations) {
     const movingIndexOffset = processingCounts.get(station.id);
     prepared
       .filter(customer => customer.state === 'checkout_moving'

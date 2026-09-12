@@ -1020,3 +1020,20 @@ describe('GameProvider fixture movement actions', () => {
     ]);
   });
 });
+
+describe('GameProvider pause toggles', () => {
+  beforeEach(() => localStorage.clear());
+
+  it.each([1, 2, 4])('preserves the original speed %s across two pause toggles', speed => {
+    const game = renderReducer();
+
+    game.dispatch({ type: 'SET_SPEED', speed });
+    expect(game.state).toMatchObject({ speed, paused: false });
+
+    game.dispatch({ type: 'TOGGLE_PAUSE' });
+    expect(game.state).toMatchObject({ speed, paused: true });
+
+    game.dispatch({ type: 'TOGGLE_PAUSE' });
+    expect(game.state).toMatchObject({ speed, paused: false });
+  });
+});

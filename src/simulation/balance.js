@@ -40,8 +40,10 @@ export function getQueuePatienceMultiplier(queue) {
   return Math.min(1.5, 1 + Math.max(0, parties - 1) * 0.1);
 }
 
-export function getTipRate(happiness) {
-  return Math.min(0.25, Math.max(0, finiteNumber(happiness) / 400));
+export function getTipRate(random = Math.random) {
+  const sample = random();
+  const bounded = Number.isFinite(sample) ? Math.min(1, Math.max(0, sample)) : 0;
+  return (10 + Math.min(20, Math.floor(bounded * 21))) / 100;
 }
 
 export function getDishValueScore(dish) {

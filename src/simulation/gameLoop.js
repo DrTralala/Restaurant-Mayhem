@@ -17,42 +17,25 @@ import { updateAutomaticDishwashers } from './dishwashing';
 import { calculateRevenue } from './revenue';
 import { checkMilestones } from './milestones';
 import { advanceConsumption } from './consumption';
+import { prepareSelfSeating, resolveSelfSeating } from './selfSeating';
 
 /**
- * Combine customer- and staff-phase movement descriptors into one batch.
- * A genuine guided-customer staff-phase descriptor (`provenance: 'guide'`)
- * overrides the duplicate customer-phase descriptor because it carries exact
- * guide-party ignored-ID exemptions; a staff-phase stationary blocker filler
- * must never override a real customer mover.
+ * Combine customer- and staff-phase movement descriptors into one batch. A
+ * duplicate id keeps the moving descriptor over a stationary filler; no
+ * guide/ignored-ID override remains after guide removal.
  */
 export function mergeMovementEntries(customerEntries, staffEntries) {
   const byId = new Map();
-  const sourceById = new Map();
-  const shouldReplace = (existing, candidate, source, existingSource) => {
-    if (candidate.provenance === 'guide') {
-      if (existing.provenance !== 'guide') return true;
-      return source === 'staff' && existingSource !== 'staff';
-    }
-    return candidate.provenance !== 'guide'
-      && existing.provenance !== 'guide'
-      && Number(candidate.speed) > 0
-      && !(Number(existing.speed) > 0);
-  };
-  const add = (entry, source) => {
+  const add = entry => {
     if (entry?.character?.id == null) return;
     const id = String(entry.character.id);
     const existing = byId.get(id);
-    if (!existing || shouldReplace(existing, entry, source, sourceById.get(id))) {
+    if (!existing || (Number(entry.speed) > 0 && !(Number(existing.speed) > 0))) {
       byId.set(id, entry);
-      sourceById.set(id, source);
     }
   };
-  for (const entry of customerEntries) {
-    add(entry, 'customer');
-  }
-  for (const entry of staffEntries) {
-    add(entry, 'staff');
-  }
+  for (const entry of customerEntries) add(entry);
+  for (const entry of staffEntries) add(entry);
   return [...byId.values()];
 }
 
@@ -78,6 +61,7 @@ export function runTick(state, timing) {
   s = prepareCustomersForMovement(s, gameDt);
   s = updateDirt(s, gameDt);
   s = advanceConsumption(s);
+  s = prepareSelfSeating(s);
   s = prepareStaffForMovement(s, gameDt);
 
   const entries = mergeMovementEntries(
@@ -90,6 +74,7 @@ export function runTick(state, timing) {
     movementCoordinator: batch.coordinator,
   };
   s = resolveCustomersAfterMovement(s, movementDt, batch.statuses);
+  s = resolveSelfSeating(s, batch.statuses);
   s = resolveStaffAfterMovement(s, gameDt, batch.statuses);
 
   s = processKitchen(s);

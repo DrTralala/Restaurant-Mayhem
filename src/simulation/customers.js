@@ -6,9 +6,9 @@ import {
   sameNavigationGoal,
   setNavigationGoal,
 } from './movement/navigationGoal';
-import { getCustomerGuideContext, markTableDirtyIfInUse } from './guidance';
 import { getDoorPosition, getDoors } from './world';
 import { isCheckoutState, prepareCheckoutCustomers } from './checkout';
+import { releaseVacatedTables } from './tableLifecycle';
 import {
   QUEUE_PARTY_CAPACITY,
   getQueueFreeBandSlots,
@@ -212,26 +212,9 @@ function getPartyIdentityIds(state, queue) {
 }
 
 const ARCHETYPES = ['regular', 'regular', 'regular', 'foodie', 'rusher', 'influencer'];
-const PATIENCE_STATES = new Set(['waiting', 'seated', 'waiting_for_items']);
-const SEATED_ORDER_PATIENCE_FACTOR = 0.5;
-const ITEM_WAIT_PATIENCE_FACTOR = 0.25;
 
 function partyKey(customer) {
   return customer.partyId ?? customer.id;
-}
-
-function isWaitingForService(customer, staff) {
-  const activeOrder = customer.state === 'seated'
-    && (staff || []).some(worker => worker.task?.type === 'take_order'
-      && worker.task.customerId === customer.id);
-  if (activeOrder) return false;
-  return PATIENCE_STATES.has(customer.state);
-}
-
-function getPatienceFactor(customer) {
-  if (customer.state === 'seated') return SEATED_ORDER_PATIENCE_FACTOR;
-  if (customer.state === 'waiting_for_items') return ITEM_WAIT_PATIENCE_FACTOR;
-  return 1;
 }
 
 function getPatienceMax(customer) {
@@ -448,20 +431,14 @@ export function prepareCustomersForMovement(state, gameDt) {
   }
   let abandonmentCount = 0;
   let updatedCustomers = [...customersWithStaged, ...closedQueue].map(c => {
-    const waitingForService = isWaitingForService(c, state.staff);
-    const newPatience = waitingForService
-      ? Math.max(0, c.patience - gameDt * getPatienceFactor(c))
-      : c.patience;
-
     let newState = c.state;
     if (c.state === 'arriving') {
       newState = 'waiting';
     }
 
-    const canMove = ['checkout_moving', 'leaving', 'guided'].includes(newState);
+    const canMove = ['checkout_moving', 'leaving', 'entering'].includes(newState);
     return {
       ...(canMove ? c : clearNavigationGoal(c)),
-      patience: newPatience,
       state: newState,
     };
   });
@@ -483,14 +460,9 @@ export function prepareCustomersForMovement(state, gameDt) {
     }),
   }));
 
-  const abandoningParties = new Set([
-    ...updatedCustomers
-      .filter(customer => isWaitingForService(customer, state.staff) && customer.patience <= 0)
-      .map(partyKey),
-    ...updatedQueue
-      .filter(party => party.members.some(customer => customer.queuePatience <= 0))
-      .map(party => party.partyId),
-  ]);
+  const abandoningParties = new Set(updatedQueue
+    .filter(party => party.members.some(customer => customer.queuePatience <= 0))
+    .map(party => party.partyId));
 
   if (abandoningParties.size > 0) {
     const allPartyMembers = [...updatedCustomers, ...updatedQueue.flatMap(party => party.members)];
@@ -535,24 +507,6 @@ export function prepareCustomersForMovement(state, gameDt) {
     { ...state, customers: updatedCustomers },
     updatedCustomers,
   );
-
-  // Free tables as soon as their last customer leaves the dining area, while
-  // retaining checkout and leaving customers for their visible journeys.
-  const vacatedTableIds = new Set(updatedCustomers
-    .filter(customer => customer.state === 'leaving' || isCheckoutState(customer))
-    .map(customer => customer.tableId)
-    .filter(Boolean));
-  let updatedTables = state.tables || [];
-  if (vacatedTableIds.size > 0) {
-    updatedTables = updatedTables.map(table =>
-      vacatedTableIds.has(table.id) && !updatedCustomers.some(customer =>
-        customer.tableId === table.id
-          && customer.state !== 'leaving'
-          && !isCheckoutState(customer))
-        ? markTableDirtyIfInUse(table)
-        : table
-    );
-  }
 
   const doors = getDoors(state);
   const claimedDoors = new Map();
@@ -632,7 +586,7 @@ export function prepareCustomersForMovement(state, gameDt) {
     queue: updatedQueue,
     queueDepartures,
     queueSlots,
-    tables: updatedTables,
+    tables: state.tables || [],
     pendingPartyReviews: abandoningParties.size > 0
       ? cancelPendingPartyReviews(state.pendingPartyReviews, abandoningParties)
       : state.pendingPartyReviews,
@@ -717,12 +671,9 @@ function admittedDoorApproachIds(state) {
 }
 
 function descriptorForCustomer(state, character, admittedCustomers) {
-  const guideContext = character.state === 'guided'
-    ? getCustomerGuideContext(state, character)
-    : null;
   const movingState = character.state === 'checkout_moving'
     || character.state === 'leaving'
-    || character.state === 'guided' && guideContext;
+    || character.state === 'entering';
   const descriptorCharacter = movingState
     ? character
     : clearNavigationGoal(character);
@@ -732,23 +683,23 @@ function descriptorForCustomer(state, character, admittedCustomers) {
   const isFading = isLeaving && character.exitPhase === 'fading';
   const isToDoor = isLeaving && !isFading;
   const isCheckout = character.state === 'checkout_moving';
-  const isGuided = character.state === 'guided' && guideContext;
+  const isEntering = character.state === 'entering';
   const doorApproachAdmitted = !isToDoor
     || admittedCustomers.has(String(character.id));
   const speed = !hasGoal ? 0
     : isFading ? 30
       : isToDoor ? doorApproachAdmitted ? 55 : 0
-        : isCheckout || isGuided ? 62
+        : isCheckout || isEntering ? 62
           : 0;
-  const direction = isLeaving ? 'egress' : isGuided ? 'ingress' : 'none';
+  const direction = isLeaving ? 'egress' : isEntering ? 'ingress' : 'none';
   const descriptor = {
     character: descriptorCharacter,
     speed,
-    ignoredIds: guideContext?.ignoredIds || [],
+    ignoredIds: [],
     doorFlow: { doorId: direction === 'none' ? null : doorId, direction },
     queueRank: isCheckout ? getCheckoutQueueRank(state, character) : null,
     terminalPolicy: isFading ? 'release' : 'hold',
-    provenance: guideContext ? 'guide' : 'customer',
+    provenance: 'customer',
   };
   return descriptor;
 }
@@ -786,9 +737,7 @@ function getCustomerBatchEntries(state, movementDt) {
     const id = String(entry.character.id);
     const existing = entriesById.get(id);
     if (!existing
-      || (entry.provenance === 'guide' && existing.provenance !== 'guide')
-      || (entry.provenance !== 'guide' && existing.provenance !== 'guide'
-        && Number(entry.speed) > 0 && !(Number(existing.speed) > 0))) {
+      || (Number(entry.speed) > 0 && !(Number(existing.speed) > 0))) {
       entriesById.set(id, entry);
     }
   };
@@ -856,7 +805,7 @@ export function resolveCustomersAfterMovement(state, _movementDt, statuses = new
     return !(status.plan === 'arrived' && isAtNavigationGoal(customer));
   });
 
-  return { ...state, customers: updatedCustomers };
+  return releaseVacatedTables({ ...state, customers: updatedCustomers });
 }
 
 export function updateCustomers(state, timing) {

@@ -25,8 +25,7 @@ function staffProgress(state, staff, movement) {
     && movement.plan !== 'arrived';
   if (!staff.task || travellingToTask) return null;
   let duration = { take_order: ACTIVITY_DURATIONS.takeOrder, take_payment: ACTIVITY_DURATIONS.takePayment,
-    clean_table: ACTIVITY_DURATIONS.wipeFloor, clean_floor: ACTIVITY_DURATIONS.wipeFloor,
-    wash_item: ACTIVITY_DURATIONS.manualWash }[staff.task.type];
+    clean_table: ACTIVITY_DURATIONS.wipeFloor, clean_floor: ACTIVITY_DURATIONS.wipeFloor }[staff.task.type];
   let started = staff.task.startedAt ?? staff.task.cleaningStartedAt ?? staff.task.washingStartedAt;
   const item = (state.serviceItems || []).find(candidate => candidate.id === staff.task.serviceItemId);
   if (staff.task.type === 'prepare_drink') duration = ACTIVITY_DURATIONS.prepareDrink;
@@ -513,7 +512,7 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       seated,
       scale: seated ? 0.7 : 1,
       rotation: 0,
-      walking: ['guided', 'leaving'].includes(c.state) && walking,
+      walking: ['entering', 'leaving'].includes(c.state) && walking,
       id: c.id,
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,

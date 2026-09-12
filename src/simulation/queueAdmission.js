@@ -1,25 +1,17 @@
 import {
   buildBlockedCells,
   cellToWorld,
-  findPath,
   isInsideWorld,
-  worldToCell,
 } from './pathfinding';
 import { getDoorPosition, getRestaurantWorld } from './world';
-import { getCustomerPatience } from './balance';
-import { clearNavigationGoal } from './movement/navigationGoal';
+import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoal';
 import { getQueueVisibleMembers } from './customerQueue';
+import {
+  buildChairApproachAssignments,
+  validateChairApproachAssignments,
+} from './seating';
 
 const QUEUE_ADMISSION_SPACING = 16;
-
-function getPatienceMax(customer) {
-  if (Number.isFinite(customer.patienceMax) && customer.patienceMax > 0) {
-    return customer.patienceMax;
-  }
-  const archetypePatience = getCustomerPatience(customer.archetype, customer.partySize);
-  if (Number.isFinite(archetypePatience) && archetypePatience > 0) return archetypePatience;
-  return Math.max(0, Number(customer.patience) || 0);
-}
 
 function sameOrderedIds(left, right) {
   return Array.isArray(left)
@@ -61,22 +53,21 @@ function getQueueAdmissionCandidates(state, door) {
     || left.x - right.x);
 }
 
-function hasStaticConnection(state, from, to) {
-  const start = worldToCell(from);
-  const goal = worldToCell(to);
-  return (start.x === goal.x && start.y === goal.y)
-    || findPath(state, start, goal).length > 0;
+function isFinitePoint(point) {
+  return Number.isFinite(point?.x) && Number.isFinite(point?.y);
 }
 
-export function planQueuePartyAdmission(state, {
-  party,
-  door,
-  guide,
-  guideGoal,
-  tableId,
-}) {
-  if (!party?.members?.length || !door || !guide || !tableId
-    || !Number.isFinite(guideGoal?.x) || !Number.isFinite(guideGoal?.y)) return null;
+/**
+ * Plan a whole-party admission without any guide. Stage every member at a safe
+ * queue-band origin first, then compute chair approaches against that staged
+ * candidate state and require each staged candidate to rout to its own approach.
+ * All-or-nothing: returns `null` rather than a partial party.
+ *
+ * `chairIds` is indexed in party-member order.
+ */
+export function planQueuePartyAdmission(state, { party, door, tableId, chairIds }) {
+  if (!party?.members?.length || !door || !tableId
+    || !Array.isArray(chairIds) || chairIds.length !== party.members.length) return null;
   const { inside, outside } = getDoorPosition(state, door);
   // Reserve the crossing, not the departing customer's entire journey to it.
   // A distant exit request must not starve incoming parties while tables are free.
@@ -87,89 +78,92 @@ export function planQueuePartyAdmission(state, {
       && Math.hypot(customer.x - Math.max(inside.x, Math.min(outside.x, customer.x)),
         customer.y - outside.y) < QUEUE_ADMISSION_SPACING);
   if (activeEgress) return null;
-  const staff = state.staff || [];
-  const customers = state.customers || [];
-  const occupiedPositions = [
-    ...staff,
-    ...customers,
-    ...getQueueVisibleMembers(state, state.queue),
-  ].filter(actor => Number.isFinite(actor.x) && Number.isFinite(actor.y));
-  const admittedCustomers = [];
 
-  if (!hasStaticConnection(state, guide, guideGoal)) return null;
+  const occupiedPositions = [
+    ...(state.staff || []),
+    ...(state.customers || []),
+    ...getQueueVisibleMembers(state, state.queue),
+  ].filter(isFinitePoint);
+  const staged = [];
 
   for (const customer of party.members) {
     const candidate = getQueueAdmissionCandidates(state, door).find(point =>
       occupiedPositions.every(actor =>
         Math.hypot(point.x - actor.x, point.y - actor.y) >= QUEUE_ADMISSION_SPACING));
     if (!candidate) return null;
-    if (!hasStaticConnection(state, candidate, guide)) return null;
-    const patienceMax = getPatienceMax(customer);
-    const customerFields = { ...customer };
-    const admitted = clearNavigationGoal({
-      ...customerFields,
-      patience: patienceMax,
-      patienceMax,
-      queuePatience: Number.isFinite(customer.queuePatience)
-        ? customer.queuePatience
-        : customer.patience,
-      queuePatienceMax: Number.isFinite(customer.queuePatienceMax)
-        ? customer.queuePatienceMax
-        : patienceMax,
-      state: 'guided',
+    const fields = clearNavigationGoal(customer);
+    const admitted = {
+      ...fields,
+      state: 'entering',
       entryDoorId: door.id,
-      guideStaffId: guide.id,
       chairId: null,
       x: candidate.x,
       y: candidate.y,
       tableId,
-    });
-    admittedCustomers.push(admitted);
+    };
+    staged.push(admitted);
     occupiedPositions.push(admitted);
   }
 
+  const customerIds = staged.map(customer => customer.id);
+  const candidateState = {
+    ...state,
+    customers: [...(state.customers || []), ...staged],
+  };
+  const assignments = buildChairApproachAssignments(candidateState, customerIds, chairIds);
+  if (!assignments
+    || !validateChairApproachAssignments(
+      candidateState, customerIds, chairIds, assignments, tableId,
+    )) return null;
+
+  const assignmentByCustomer = new Map(assignments
+    .map(assignment => [assignment.customerId, assignment]));
+  const admittedCustomers = staged.map(customer => {
+    const assignment = assignmentByCustomer.get(customer.id);
+    const withChair = { ...customer, chairId: assignment.chairId };
+    return setNavigationGoal(withChair, assignment.approachPoint);
+  });
+
   return {
     admittedCustomers,
+    assignments,
     gate: {
       partyId: party.partyId,
-      customerIds: party.members.map(member => member.id),
-      guideStaffId: guide.id,
+      customerIds,
       tableId,
       doorId: door.id,
     },
   };
 }
 
+/**
+ * Gate status keeps its public return shape. Ownership is validated from the
+ * canonical party/table/member fields only: no staff task identity and no guide
+ * linkage is consulted.
+ */
 export function getQueueAdmissionGateStatus(state) {
   const gate = state.queueAdmissionGate;
   if (!gate) return { occupied: false, clear: false, stale: false, gateMembers: [] };
 
-  const gateMemberIds = new Set(gate.customerIds || []);
+  const gateMemberIds = new Set(Array.isArray(gate.customerIds) ? gate.customerIds : []);
   const gateMembers = (state.customers || []).filter(customer => gateMemberIds.has(customer.id));
-  const materialisedPartyMembers = (state.customers || [])
-    .filter(customer => customer.partyId === gate.partyId);
   const world = getRestaurantWorld(state.restaurant || {});
   const clear = gateMembers.length === 0
     || gateMembers.every(customer => Number.isFinite(customer.x)
       && customer.x <= world.doorX - world.gridSize);
-  const guide = (state.staff || []).find(worker => worker.id === gate.guideStaffId);
-  const matchingGuideTask = guide?.task?.type === 'guide_customer'
-    && guide.task.partyId === gate.partyId
-    && guide.task.tableId === gate.tableId
-    && guide.task.customerId === gate.customerIds?.[0]
-    && sameOrderedIds(guide.task.customerIds, gate.customerIds);
-  const ownedReservation = (state.tables || []).some(table => table.id === gate.tableId
-    && table.status === 'reserved'
-    && table.reservationOwnerStaffId === gate.guideStaffId);
+  const table = (state.tables || []).find(candidate => candidate.id === gate.tableId);
+  const tableMemberIds = Array.isArray(table?.diningCustomerIds) ? table.diningCustomerIds : null;
+  const ownedReservation = table?.status === 'reserved'
+    && table.diningPartyId === gate.partyId
+    && tableMemberIds != null
+    && tableMemberIds.length === gate.customerIds?.length
+    && sameOrderedIds(tableMemberIds, gate.customerIds);
   const matchingMemberOwnership = gateMemberIds.size === gate.customerIds?.length
     && gateMembers.length === gate.customerIds.length
-    && materialisedPartyMembers.length === gate.customerIds.length
     && gateMembers.every(customer => customer.partyId === gate.partyId
-      && customer.guideStaffId === gate.guideStaffId
-      && customer.tableId === gate.tableId)
-    && materialisedPartyMembers.every(customer => gateMemberIds.has(customer.id));
+      && customer.tableId === gate.tableId);
   const stale = gateMembers.length > 0
-    && (!matchingGuideTask || !ownedReservation || !matchingMemberOwnership);
+    && (!ownedReservation || !matchingMemberOwnership);
 
   return { occupied: true, clear, stale, gateMembers };
 }

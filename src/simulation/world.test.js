@@ -29,6 +29,7 @@ describe('restaurant world geometry', () => {
     const cook = getDefaultStaffPosition('cook', 0, { restaurant: { expansionLevel: 1 } });
     const waiter = getDefaultStaffPosition('waiter', 0, { restaurant: { expansionLevel: 1 } });
 
+    expect(cook).toEqual({ x: 90, y: 100 });
     expect(cook.y).toBeLessThan(waiter.y);
     expect(waiter.y).toBeGreaterThan(100);
   });

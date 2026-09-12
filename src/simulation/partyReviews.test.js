@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PAID_REVIEW_SCORE,
   cancelPendingPartyReviews,
   normalisePartyReviewHistory,
   normalisePendingPartyReviews,
@@ -24,12 +25,14 @@ describe('pending party reviews', () => {
     }]);
   });
 
-  it('records one bounded payment only for an ordered member', () => {
+  it('records a fixed positive paid contribution once', () => {
     let records = recordPartyOrderOutcome([], party, party[0], 'ordered');
     records = recordPartyOrderOutcome(records, party, party[1], 'unaffordable');
-    records = recordPartyPayment(records, party[0], 120);
-    records = recordPartyPayment(records, party[0], 80);
-    expect(records[0].paidReviews).toEqual([{ customerId: 'a', score: 100 }]);
+    records = recordPartyPayment(records, party[0]);
+    records = recordPartyPayment(records, party[0]);
+    expect(records[0].paidReviews).toEqual([{ customerId: 'a', score: PAID_REVIEW_SCORE }]);
+    const result = settlePartyReview({ ...baseSettlement, pendingPartyReviews: records }, 'p1');
+    expect(result.review.reputationDelta).toBeCloseTo(-0.002);
   });
 
   it('cancels only specified party records', () => {
@@ -58,7 +61,7 @@ describe('pending party reviews', () => {
       partyId: 'p1', memberIds: ['a'], orderedMemberIds: ['forged'],
       unaffordableMemberIds: [], paidReviews: [],
     }];
-    expect(recordPartyPayment(malformed, forged, 100)).toEqual(malformed);
+    expect(recordPartyPayment(malformed, forged)).toEqual(malformed);
   });
 });
 
@@ -72,7 +75,7 @@ describe('settled party reviews', () => {
   it('makes a perfect-plus-unaffordable couple slightly negative', () => {
     let pending = recordPartyOrderOutcome([], party, party[0], 'ordered');
     pending = recordPartyOrderOutcome(pending, party, party[1], 'unaffordable');
-    pending = recordPartyPayment(pending, party[0], 100);
+    pending = recordPartyPayment(pending, party[0]);
     const result = settlePartyReview({ ...baseSettlement, pendingPartyReviews: pending }, 'p1');
     expect(result.review).toMatchObject({
       partyId: 'p1', score: -5, memberCount: 2, paidCount: 1,
@@ -97,8 +100,8 @@ describe('settled party reviews', () => {
     }];
     let positive = recordPartyOrderOutcome([], party, party[0], 'ordered');
     positive = recordPartyOrderOutcome(positive, party, party[1], 'ordered');
-    positive = recordPartyPayment(positive, party[0], 100);
-    positive = recordPartyPayment(positive, party[1], 100);
+    positive = recordPartyPayment(positive, party[0]);
+    positive = recordPartyPayment(positive, party[1]);
     const positiveResult = settlePartyReview({
       ...baseSettlement, upgrades, pendingPartyReviews: positive,
     }, 'p1');
@@ -132,8 +135,8 @@ describe('settled party reviews', () => {
   it('discards a complete pending record whose globally unique party ID is already settled', () => {
     let pending = recordPartyOrderOutcome([], party, party[0], 'ordered');
     pending = recordPartyOrderOutcome(pending, party, party[1], 'ordered');
-    pending = recordPartyPayment(pending, party[0], 100);
-    pending = recordPartyPayment(pending, party[1], 100);
+    pending = recordPartyPayment(pending, party[0]);
+    pending = recordPartyPayment(pending, party[1]);
     const completed = {
       partyId: 'p1', day: 1, score: 60, memberCount: 2,
       paidCount: 2, unaffordableCount: 0, reputationDelta: 0.024,

@@ -6,8 +6,10 @@ import * as staffDomain from './staff';
 import * as movementDomain from './movement';
 import { createInitialState } from '../state/initialState';
 import { hydrateState, loadState, saveState } from '../state/persistence';
+import { recordSeatResidency } from './movement/seatedDeparture';
 import { buildCustomerQueueStressState } from './customerQueueStress';
 import { getQueueVisibleMembers, reconcileQueueSlots } from './customerQueue';
+import { getTipRate } from './balance';
 
 const emptyState = {
   restaurant: { funds: 500, gameTime: 100, day: 1, openHour: 10, closeHour: 22, totalServed: 0, reputation: 2.0 },
@@ -61,7 +63,7 @@ function runDeterministicMovementSequence(reverseEntries) {
       navigationGoal: { x: 220, y: 100 }, task: null,
     }],
     customers: [{
-      id: 'customer', state: 'guided', x: 100, y: 180,
+      id: 'customer', state: 'eating', x: 100, y: 180,
       navigationGoal: { x: 220, y: 180 }, task: null,
     }],
   };
@@ -320,6 +322,136 @@ describe('runTick', () => {
     });
   });
 
+  it('bounds the payment-to-first-motion handoff to the next preparation tick', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const initial = createInitialState();
+    let state = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant, gameTime: 60, funds: 500, dailyRevenue: 0, totalServed: 0,
+      },
+      tables: [{ id: 't1', status: 'occupied', seats: 2, x: 200, y: 200 }],
+      chairs: [],
+      staff: [{
+        id: 'cw1', name: 'Elena', role: 'waiter', morale: 80, x: 840, y: 100,
+        task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1', startedAt: 0 },
+      }],
+      customers: [{
+        id: 'c1', state: 'checkout_processing', paymentReady: false,
+        cashierStationId: 'cashier1', x: 840, y: 180,
+        checkoutPosition: { x: 840, y: 180 }, dishId: 'd1', tableId: 't1', patience: 100,
+      }],
+      dishes: [{ id: 'd1', price: 12 }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
+      doors: [{ id: 'door1', y: 340 }],
+      completedCustomers: [],
+    };
+    const trace = [];
+    for (let tick = 0; tick < 30; tick += 1) {
+      const before = state.customers.find(customer => customer.id === 'c1');
+      state = runTick(state, { gameDt: 2, movementDt: 1 / 30 });
+      const payer = state.customers.find(customer => customer.id === 'c1');
+      trace.push({
+        tick,
+        gameTime: state.restaurant.gameTime,
+        x: payer?.x,
+        y: payer?.y,
+        state: payer?.state,
+        goal: payer?.navigationGoal,
+        changed: Boolean(before && payer && (before.x !== payer.x || before.y !== payer.y)),
+        completed: state.completedCustomers.length,
+        served: state.restaurant.totalServed,
+        doorAdmission: state.doorAdmissions?.requests?.c1 || null,
+        expansions: state.movementCoordinator.diagnostics.expansionsThisTick,
+      });
+    }
+
+    const paid = trace.find(row => row.served === 1);
+    expect(paid).toBeDefined();
+    const goal = trace.find(row => row.goal
+      && Number.isFinite(row.goal.x) && Number.isFinite(row.goal.y));
+    expect(goal).toMatchObject({
+      tick: paid.tick + 1,
+      state: 'leaving',
+      goal: { x: 993, y: 360 },
+      doorAdmission: { doorId: 'door1', sequence: expect.any(Number) },
+    });
+    const moved = trace.find(row => row.tick > paid.tick && row.changed);
+    expect(moved).toBeDefined();
+    expect((moved.tick - paid.tick) / 30).toBeLessThan(1);
+    expect(trace.every(row => row.expansions <= 2048)).toBe(true);
+  });
+
+  it('keeps a post-payment wait attributable to existing door traffic', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const initial = createInitialState();
+    let state = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant, gameTime: 60, funds: 500, dailyRevenue: 0, totalServed: 0,
+      },
+      tables: [],
+      chairs: [],
+      staff: [{
+        id: 'cw1', name: 'Elena', role: 'waiter', morale: 80, x: 840, y: 100,
+        task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1', startedAt: 0 },
+      }],
+      customers: [
+        {
+          id: 'c1', state: 'checkout_processing', paymentReady: false,
+          cashierStationId: 'cashier1', x: 840, y: 180,
+          checkoutPosition: { x: 840, y: 180 }, dishId: 'd1', patience: 100,
+        },
+        {
+          id: 'c2', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+          x: 950, y: 360, navigationGoal: { x: 993, y: 360 },
+        },
+        {
+          id: 'c3', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+          x: 850, y: 440, navigationGoal: { x: 993, y: 360 },
+        },
+        {
+          id: 'c4', state: 'entering', entryDoorId: 'door1',
+          x: 993, y: 360, navigationGoal: { x: 800, y: 360 },
+        },
+      ],
+      dishes: [{ id: 'd1', price: 12 }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
+      doors: [{ id: 'door1', y: 340 }],
+      completedCustomers: [],
+    };
+    const trace = [];
+    for (let tick = 0; tick < 240; tick += 1) {
+      const before = state.customers.find(customer => customer.id === 'c1');
+      state = runTick(state, { gameDt: 2, movementDt: 1 / 30 });
+      const payer = state.customers.find(customer => customer.id === 'c1');
+      trace.push({
+        tick,
+        x: payer?.x,
+        y: payer?.y,
+        state: payer?.state,
+        goal: payer?.navigationGoal,
+        changed: Boolean(before && payer && (before.x !== payer.x || before.y !== payer.y)),
+        served: state.restaurant.totalServed,
+        doorAdmission: state.doorAdmissions?.requests?.c1 || null,
+        traffic: state.customers.filter(customer => ['c2', 'c3', 'c4'].includes(customer.id))
+          .map(customer => ({ id: customer.id, state: customer.state, exitPhase: customer.exitPhase })),
+      });
+    }
+
+    const paid = trace.find(row => row.served === 1);
+    const firstGoal = trace.find(row => row.goal
+      && Number.isFinite(row.goal.x) && Number.isFinite(row.goal.y));
+    const moved = trace.find(row => row.tick > paid.tick && row.changed);
+    expect(paid).toBeDefined();
+    expect(firstGoal).toBeDefined();
+    expect(firstGoal.doorAdmission).toMatchObject({ doorId: 'door1', sequence: expect.any(Number) });
+    expect(firstGoal.doorAdmission.sequence).toBeGreaterThan(1);
+    expect(moved).toBeDefined();
+    expect(firstGoal.tick).toBeGreaterThan(paid.tick + 1);
+    expect(moved.tick).toBe(firstGoal.tick);
+  });
+
   it('resolves customer and staff movement from one tick snapshot', () => {
     const state = {
       ...emptyState,
@@ -348,46 +480,20 @@ describe('runTick', () => {
     expect(result.customers[0]).not.toMatchObject({ x: 960, y: 360 });
   });
 
-  it('prefers the guide-provenance staff descriptor over the duplicate customer descriptor', () => {
-    const customerEntry = {
-      character: { id: 'party-1', state: 'guided', guideStaffId: 'guide' },
+  it('never lets a lower-speed duplicate override a moving descriptor regardless of provenance', () => {
+    const movingEntry = {
+      character: { id: 'party-1', state: 'entering' },
       speed: 62, ignoredIds: [],
     };
-    const guideStaffEntry = {
-      character: { id: 'party-1', state: 'guided', guideStaffId: 'guide' },
-      speed: 0, ignoredIds: ['guide', 'party-1'], provenance: 'guide',
+    const stationaryDuplicate = {
+      character: { id: 'party-1', state: 'entering' },
+      speed: 0, ignoredIds: [], provenance: 'guide',
     };
 
-    const merged = mergeMovementEntries([customerEntry], [guideStaffEntry]);
+    const merged = mergeMovementEntries([movingEntry], [stationaryDuplicate]);
 
     expect(merged).toHaveLength(1);
-    expect(merged[0]).toBe(guideStaffEntry);
-    expect(merged[0].ignoredIds).toEqual(['guide', 'party-1']);
-    expect(merged[0].provenance).toBe('guide');
-  });
-
-  it('prefers the staff guide descriptor over a genuine customer guide duplicate', () => {
-    const state = {
-      ...emptyState,
-      restaurant: { ...emptyState.restaurant, expansionLevel: 1 },
-      staff: [{
-        id: 'guide', role: 'waiter', x: 100, y: 100,
-        navigationGoal: { x: 260, y: 100 },
-        task: { type: 'guide_customer', customerIds: ['party-1'], tableId: 't1' },
-      }],
-      customers: [{
-        id: 'party-1', state: 'guided', guideStaffId: 'guide', entryDoorId: 'door1',
-        x: 80, y: 120, navigationGoal: { x: 88, y: 112 },
-      }],
-    };
-    const customerEntry = customerDomain.getCustomerMovementEntries(state, 1)
-      .find(entry => entry.character.id === 'party-1');
-    const staffEntry = staffDomain.getStaffMovementEntries(state)
-      .find(entry => entry.character.id === 'party-1');
-
-    expect(customerEntry.provenance).toBe('guide');
-    expect(staffEntry.provenance).toBe('guide');
-    expect(mergeMovementEntries([customerEntry], [staffEntry])[0]).toBe(staffEntry);
+    expect(merged[0]).toBe(movingEntry);
   });
 
   it('never lets a stationary staff filler override a moving customer descriptor', () => {
@@ -406,78 +512,6 @@ describe('runTick', () => {
     expect(merged[0]).toBe(customerEntry);
   });
 
-  it('keeps a stale guided customer stationary when only the staff filler reaches the merge', () => {
-    const staleFillerEntry = {
-      character: { id: 'party-1', state: 'guided', guideStaffId: 'guide' },
-      speed: 0, ignoredIds: [],
-    };
-
-    const merged = mergeMovementEntries([], [staleFillerEntry]);
-
-    expect(merged).toHaveLength(1);
-    expect(merged[0]).toBe(staleFillerEntry);
-    expect(merged[0].speed).toBe(0);
-    expect(merged[0].ignoredIds).toEqual([]);
-    expect(merged[0].provenance).toBeUndefined();
-  });
-
-  it.each([
-    ['null task', null, []],
-    ['non-guide task', { type: 'clean_table', tableId: 'missing' }, []],
-    ['excluded party', { type: 'guide_customer', customerIds: ['other-party'], tableId: 't1' }, [
-      { id: 'other-party', state: 'guided', guideStaffId: 'guide', x: 60, y: 140, patience: 100, happiness: 80 },
-    ]],
-  ])('keeps a stale guided customer stationary through the world batch for a %s', (_name, task, otherCustomers) => {
-    const state = {
-      ...emptyState,
-      restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, reputation: 3 },
-      floorDirt: [], washStations: [], cashierStations: [],
-      tables: task?.type === 'guide_customer'
-        ? [{ id: 't1', seats: 1, status: 'reserved', x: 400, y: 300 }]
-        : [],
-      staff: [{
-        id: 'guide', role: 'waiter', morale: 80, x: 100, y: 100,
-        task,
-      }],
-      customers: [{
-        id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 80, y: 120, patience: 100, happiness: 80,
-      }, ...otherCustomers],
-    };
-
-    const result = runTick(state, { gameDt: 0, movementDt: 1 });
-    const stale = result.customers.find(customer => customer.id === 'party-1');
-
-    expect(stale).toMatchObject({ x: 80, y: 120 });
-  });
-
-  it.each([
-    ['plural', { customerIds: ['party-1'] }],
-    ['legacy singular', { customerId: 'party-1' }],
-  ])('moves a genuine %s guided party through the merged world batch', (_name, partyFields) => {
-    const state = {
-      ...emptyState,
-      restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, reputation: 3 },
-      floorDirt: [], washStations: [], cashierStations: [],
-      tables: [{ id: 't1', seats: 1, status: 'reserved', x: 500, y: 300 }],
-      chairs: [{ id: 'ch1', tableId: 't1', x: 510, y: 280 }],
-      staff: [{
-        id: 'guide', role: 'waiter', morale: 80, x: 100, y: 100,
-        navigationGoal: { x: 260, y: 100 },
-        task: { type: 'guide_customer', ...partyFields, tableId: 't1' },
-      }],
-      customers: [{
-        id: 'party-1', state: 'guided', guideStaffId: 'guide', tableId: 't1',
-        x: 80, y: 120, navigationGoal: { x: 88, y: 112 }, patience: 100, happiness: 80,
-      }],
-    };
-
-    const result = runTick(state, { gameDt: 0, movementDt: 0.1 });
-    const next = runTick(result, { gameDt: 0, movementDt: 0.1 });
-
-    expect(next.staff[0].x).toBeGreaterThan(100);
-    expect(next.customers[0].x).toBeGreaterThan(80);
-  });
-
   it('emits exactly one entry per actor including stationary actors', () => {
     const entries = mergeMovementEntries([
       { character: { id: 'moving', state: 'leaving' }, speed: 55, ignoredIds: [] },
@@ -485,7 +519,7 @@ describe('runTick', () => {
     ], [
       { character: { id: 'moving', state: 'leaving' }, speed: 0, ignoredIds: [] },
       { character: { id: 'moving', state: 'leaving' }, speed: 0, ignoredIds: [] },
-      { character: { id: 'guide', state: 'guided' }, speed: 62, ignoredIds: [], provenance: 'guide' },
+      { character: { id: 'guide', state: 'entering' }, speed: 62, ignoredIds: [] },
       { character: { id: 'filler', state: 'eating' }, speed: 0, ignoredIds: [] },
     ]);
 
@@ -595,7 +629,14 @@ describe('runTick', () => {
     state = {
       ...state,
       customers: state.customers.map(customer => customer.id === 'older'
-        ? { ...customer, patience: 0 }
+        ? {
+            ...customer,
+            state: 'leaving',
+            exitPhase: 'to_door',
+            exitDoorId: null,
+            exitFadeProgress: 0,
+            exitHeading: null,
+          }
         : customer),
     };
     state = runTick(state, { gameDt: 1, movementDt: 0.1 });
@@ -1032,7 +1073,10 @@ describe('runTick', () => {
         dirtFactor: 0,
       }],
       tables: initial.tables.map(table => table.id === 't1'
-        ? { ...table, status: 'occupied' }
+        ? {
+            ...table, status: 'occupied',
+            diningPartyId: 'lifecycle-party', diningCustomerIds: [customerId],
+          }
         : table),
       staff: initial.staff
         .filter(staff => ['starter-cook', 'starter-waiter', 'starter-cashier-waiter', 'starter-janitor'].includes(staff.id))
@@ -1045,7 +1089,7 @@ describe('runTick', () => {
             'starter-janitor': 600,
           }[staff.id],
           y: {
-            'starter-cook': 80,
+            'starter-cook': 100,
             'starter-waiter': 180,
             'starter-cashier-waiter': 100,
             'starter-janitor': 360,
@@ -1069,7 +1113,6 @@ describe('runTick', () => {
     };
     const stageIndex = stage => observedStages.indexOf(stage);
     const observedCompletionIds = new Set();
-    let observedPaymentHappiness = null;
     let completed = false;
     let previousTableStatus = state.tables.find(table => table.id === 't1').status;
     let emptyTransitions = 0;
@@ -1083,7 +1126,6 @@ describe('runTick', () => {
       state = runTick(state, 1 / 60);
       if (state.restaurant.totalServed > previousTotalServed) {
         observedCompletionIds.add(customerId);
-        observedPaymentHappiness = state.customers.find(customer => customer.id === customerId)?.happiness;
       }
 
       const item = state.serviceItems.find(candidate => candidate.customerId === customerId);
@@ -1144,10 +1186,10 @@ describe('runTick', () => {
     expect(finalState.serviceItems).toEqual([]);
     expect(finalState.tables[0].status).toBe('empty');
     const lifecycleDish = initial.dishes.find(dish => dish.id === 'starter-toast');
-    const expectedRevenue = lifecycleDish.price
-      + Math.round(lifecycleDish.price * (observedPaymentHappiness / 400) * 100) / 100;
-    expect(Math.round(expectedRevenue * 100) / 100).toBe(14.4);
-    expect(Math.round(finalState.restaurant.dailyRevenue * 100) / 100).toBe(14.4);
+    const expectedTip = Math.round(lifecycleDish.price * getTipRate(() => 1) * 100) / 100;
+    const expectedRevenue = lifecycleDish.price + expectedTip;
+    expect(Math.round(expectedRevenue * 100) / 100).toBe(15.6);
+    expect(Math.round(finalState.restaurant.dailyRevenue * 100) / 100).toBe(15.6);
     expect(JSON.stringify(finalState)).not.toContain('revenueProcessed');
 
     expect(stageIndex('take_order')).toBeLessThan(stageIndex('prepare_dish'));
@@ -1188,7 +1230,10 @@ describe('runTick', () => {
         },
       ],
       tables: initial.tables.map(table => table.id === 't1'
-        ? { ...table, status: 'occupied' }
+        ? {
+            ...table, status: 'occupied',
+            diningPartyId: 'mixed-party', diningCustomerIds: ['payer', 'waiter'],
+          }
         : table),
       staff: initial.staff
         .filter(staff => [
@@ -1203,7 +1248,7 @@ describe('runTick', () => {
             'starter-janitor': 600,
           }[staff.id],
           y: {
-            'starter-cook': 80,
+            'starter-cook': 100,
             'starter-waiter': 180,
             'starter-cashier-waiter': 100,
             'starter-janitor': 360,
@@ -1258,7 +1303,7 @@ describe('runTick', () => {
     expect(tableStates.has('empty')).toBe(true);
     expect(paymentsObserved).toBe(1);
     expect(state.restaurant).toMatchObject({
-      totalServed: 1, dailyRevenue: 15, reputation: 1.998,
+      totalServed: 1, dailyRevenue: 15.6, reputation: 1.998,
     });
     expect(state.partyReviewHistory).toEqual([
       expect.objectContaining({
@@ -1289,13 +1334,17 @@ describe('runTick', () => {
         openHour: 10, closeHour: 22,
       },
       dishes: [{ id: 'd1', price: 10 }],
-      tables: [{ id: 't1', seats: 2, status: 'occupied', x: 200, y: 220 }],
+      tables: [{
+        id: 't1', seats: 2, status: 'occupied', x: 200, y: 220,
+        diningPartyId: 'former-party', diningCustomerIds: ['former'],
+      }],
       customers: [{
-        id: 'former', state: 'checkout_queued', paymentQueuedAt: 1,
+        id: 'former', partyId: 'former-party', state: 'checkout_queued', paymentQueuedAt: 1,
         cashierStationId: null, checkoutPosition: null, paymentReady: false,
         x: 400, y: 300, tableId: 't1', happiness: 80,
         patience: 1000, dishId: 'd1', drinkId: null,
         orderedServiceItemIds: ['dirty'], consumedServiceItemIds: ['dirty'],
+        seatResidency: { schema: 1, phase: 'clear', actorId: 'former', partyId: 'former-party' },
       }],
       serviceItems: [{
         id: 'dirty', kind: 'dish', menuItemId: 'd1', customerId: 'former',
@@ -1336,6 +1385,10 @@ describe('runTick', () => {
     expect(state.customers.find(customer => customer.id === 'former')).toMatchObject({
       state: 'checkout_queued', tableId: 't1',
     });
+    // No cashier waiter exists yet: the physical table lifecycle must not pay.
+    expect(state.restaurant.totalServed).toBe(0);
+    expect(state.restaurant.dailyRevenue).toBe(0);
+    expect(state.completedCustomers).toEqual([]);
 
     state = {
       ...state,
@@ -1362,6 +1415,69 @@ describe('runTick', () => {
     expect(state.customers.some(customer => customer.id === 'former')).toBe(false);
     expect(state.restaurant.totalServed).toBe(1);
     expect(state.tables[0].status).toBe('empty');
+  });
+
+  it('vacates a seated diner to an existing unstaffed cashier and withholds payment until a waiter is assigned', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const initial = createInitialState();
+    const table = initial.tables[0];
+    const chair = initial.chairs.find(candidate => candidate.id === 'ch1');
+    const diner = {
+      id: 'diner', partyId: 'solo', partySize: 1, state: 'checkout_queued',
+      tableId: 't1', chairId: 'ch1', x: chair.x + 10, y: chair.y + 10,
+      patience: 5000, happiness: 80,
+      paymentQueuedAt: 0, cashierStationId: null, checkoutPosition: null, paymentReady: false,
+    };
+    let state = {
+      ...initial,
+      restaurant: { ...initial.restaurant, gameTime: 0, reputation: 3, openHour: 10, closeHour: 22 },
+      queue: [], floorDirt: [], unlockedDrinkIds: [],
+      dishes: [{ id: 'd1', price: 10 }],
+      tables: initial.tables.map(candidate => candidate.id === 't1'
+        ? { ...candidate, status: 'occupied', diningPartyId: 'solo', diningCustomerIds: ['diner'] }
+        : candidate),
+      chairs: initial.chairs,
+      customers: [{ ...diner, ...recordSeatResidency(diner, chair, table) }],
+      serviceItems: [],
+      // Existing physical cashier destination with no matching waiter assigned.
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier' }],
+      staff: initial.staff
+        .filter(member => ['starter-cook', 'starter-waiter', 'starter-janitor'].includes(member.id))
+        .map((member, index) => ({
+          ...member, x: 80 + index * 40, y: 100, task: null, carryingServiceItemId: null,
+        })),
+    };
+
+    let sawVacating = false;
+    for (let tick = 0; tick < 1200; tick += 1) {
+      state = runTick(state, 1 / 60);
+      const diner = state.customers.find(customer => customer.id === 'diner');
+      if (diner?.state === 'checkout_moving') sawVacating = true;
+      if (sawVacating && state.tables[0].status === 'empty') break;
+    }
+
+    // Normal movement carried the diner out of the seat and freed the table
+    // for cleaning without any payment authority.
+    expect(sawVacating).toBe(true);
+    expect(state.tables[0].status).toBe('empty');
+    expect(state.restaurant.totalServed).toBe(0);
+    expect(state.restaurant.dailyRevenue).toBe(0);
+    expect(state.completedCustomers).toEqual([]);
+
+    state = {
+      ...state,
+      staff: [...state.staff, {
+        id: 'cashier', role: 'waiter', morale: 80, salary: 150,
+        x: 840, y: 100, task: null, carryingServiceItemId: null,
+      }],
+    };
+
+    let paid = false;
+    for (let tick = 0; tick < 1200; tick += 1) {
+      state = runTick(state, 1 / 60);
+      if (state.restaurant.totalServed > 0) { paid = true; break; }
+    }
+    expect(paid).toBe(true);
   });
 
   it('processes manual and automatic dirty items concurrently while returning the janitor to floor dirt', () => {
@@ -1529,8 +1645,10 @@ describe('queue overflow through the merged production pipeline', () => {
       const stationaryQueueIds = new Set([...coordinator.requests]
         .filter(([id, request]) => request.speed === 0 && (expectedVisible.has(id) || expectedHidden.has(id)))
         .map(([id]) => id));
-      expect(stationaryQueueIds).toEqual(expectedVisible);
+      // Admitted members leave the queue and become moving customers before the
+      // batch, so the stationary queue set is the visible set minus admissions.
       for (const id of stationaryQueueIds) {
+        expect(expectedVisible.has(id)).toBe(true);
         expect(coordinator.plans.get(id).every(action => action.from.x === action.to.x && action.from.y === action.to.y)).toBe(true);
       }
       const statuses = [...(coordinator.statuses?.values?.() || [])];
@@ -1541,13 +1659,12 @@ describe('queue overflow through the merged production pipeline', () => {
 
     // The backlog is preserved while admission makes real progress.
     expect(state.queue.length).toBeGreaterThanOrEqual(5);
-    // Some staff member physically progressed (the pipeline is not frozen).
-    const first = staffByTick[0];
-    const last = staffByTick.at(-1);
-    expect(last.some((position, index) => {
-      const before = first[index];
-      return Math.hypot(position.x - before.x, position.y - before.y) > 1e-6;
-    })).toBe(true);
+    // Simulation-owned admission materialised at least one party and reserved
+    // its table without any waiter guide task.
+    expect(state.customers.length).toBeGreaterThan(0);
+    expect(state.tables.some(table => table.status === 'reserved' || table.status === 'occupied'))
+      .toBe(true);
+    expect(state.staff.every(worker => worker.task?.type !== 'guide_customer')).toBe(true);
     // No actor was ever terminalised as unreachable.
     expect(statusesByTick.flat().every(status => !['unreachable', 'unschedulable'].includes(status.plan)))
       .toBe(true);
@@ -1618,7 +1735,7 @@ describe('queue overflow through the merged production pipeline', () => {
     // standing position. The other six parties retain their logical FIFO order.
     expect(state.queue.length).toBe(6);
     expect(state.customers.filter(customer => customer.partyId === 'merged-party-2'
-      && customer.state === 'guided')).toHaveLength(4);
+      && customer.state === 'entering')).toHaveLength(4);
 
     // The queue-origin leavers still own their origins: no survivor or hidden
     // member has been relocated onto a leaver's slot, so the leavers clear and
@@ -1723,7 +1840,7 @@ describe('queue overflow through the merged production pipeline', () => {
     expect(minimumPhysicalSpacing(physical)).toBeGreaterThanOrEqual(16);
     // Queue-origin leases remain occupied, but a distinct admission staging
     // position can safely materialise the new arrival beside those leavers.
-    expect(state.customers.find(customer => newIds.includes(customer.id)).state).toBe('guided');
+    expect(state.customers.find(customer => newIds.includes(customer.id)).state).toBe('entering');
     expect(getQueueVisibleMembers(state, state.queue).some(member => newIds.includes(member.id)))
       .toBe(false);
     expect(state.customers.filter(customer => seedIds.has(customer.id))).toHaveLength(leaversAfterDecision);
@@ -1811,27 +1928,11 @@ describe('queue overflow through the merged production pipeline', () => {
   });
 });
 
-// The movement kernel exempts only genuinely authorised guide formations: a
-// guided customer and its own guide staff, or guided customers of the same
-// party under the same guide task. Every other pair (queue, leaver,
-// new-arrival, admission, unrelated guided parties) stays strictly >= 16.
-function isAuthorisedGuideFormationPair(left, right) {
-  if (left.role || right.role) {
-    const staff = left.role ? left : right;
-    const guided = left.role ? right : left;
-    return guided?.state === 'guided' && guided.guideStaffId === staff.id;
-  }
-  return left.state === 'guided' && right.state === 'guided'
-    && left.guideStaffId != null
-    && left.guideStaffId === right.guideStaffId
-    && left.partyId === right.partyId;
-}
-
+// Every physical pair stays strictly >= 16: no guide formation exemption remains.
 function minimumPhysicalSpacing(actors) {
   let minimum = Infinity;
   for (let left = 0; left < actors.length; left += 1) {
     for (let right = left + 1; right < actors.length; right += 1) {
-      if (isAuthorisedGuideFormationPair(actors[left], actors[right])) continue;
       minimum = Math.min(minimum, Math.hypot(
         actors[left].x - actors[right].x,
         actors[left].y - actors[right].y,
@@ -1841,8 +1942,8 @@ function minimumPhysicalSpacing(actors) {
   return minimum;
 }
 
-describe('queue-lease occupancy is respected by the missing-coordinate guided materialiser', () => {
-  function missingCoordinateGuideFixture() {
+describe('queue-lease occupancy is never stolen by a coordinate-less actor', () => {
+  function coordinateLessFixture() {
     const fixture = buildCustomerQueueStressState();
     const base = createInitialState();
     return {
@@ -1860,27 +1961,12 @@ describe('queue-lease occupancy is respected by the missing-coordinate guided ma
       queueDepartures: [],
       queueAdmissionGate: null,
       customers: [{
-        id: 'legacy-guided', partyId: 'guided-party', state: 'guided',
-        guideStaffId: 'queue-guide', tableId: 'queue-table', x: 973,
-        dishId: null, drinkId: null, chairId: null, patience: 100, happiness: 80,
+        id: 'coordinate-less', partyId: 'coordless-party', state: 'waiting_for_items',
+        tableId: 'queue-table', dishId: null, drinkId: null, chairId: null,
+        patience: 100, happiness: 80,
       }],
-      staff: fixture.staff.map(worker => ({
-        ...worker,
-        task: {
-          type: 'guide_customer',
-          customerId: 'legacy-guided',
-          customerIds: ['legacy-guided'],
-          partyId: 'guided-party',
-          tableId: 'queue-table',
-          stage: 'follow_guide',
-          approaches: [],
-        },
-      })),
-      tables: fixture.tables.map(table => ({
-        ...table,
-        status: 'reserved',
-        reservationOwnerStaffId: 'queue-guide',
-      })),
+      staff: [],
+      tables: fixture.tables.map(table => ({ ...table, status: 'dirty' })),
       chairs: fixture.chairs,
       doors: fixture.doors.map(door => ({ ...door, y: 370 })),
       serviceItems: [],
@@ -1896,22 +1982,22 @@ describe('queue-lease occupancy is respected by the missing-coordinate guided ma
     ].filter(actor => actor?.id != null && Number.isFinite(actor.x) && Number.isFinite(actor.y));
   }
 
-  it('merged production ticks never place the guided customer on the standing lease', () => {
+  it('merged production ticks keep the standing lease and never materialise the actor', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
-    let state = missingCoordinateGuideFixture();
+    let state = coordinateLessFixture();
     for (let tick = 0; tick < 2; tick += 1) {
       state = runTick(state, { gameDt: 0, movementDt: 0.1 });
       expect(state.movementCoordinator.diagnostics.invariantFailure).toBeUndefined();
       expect(state.queueSlots).toEqual([{ memberId: 'q', partyId: 'p', x: 973, y: 390, slot: 0 }]);
       expect(minimumPhysicalSpacing(physicalActors(state))).toBeGreaterThanOrEqual(16);
-      const guided = state.customers.find(customer => customer.id === 'legacy-guided');
-      expect(guided).toBeDefined();
-      if (Number.isFinite(guided.y)) expect(Math.abs(guided.y - 390)).toBeGreaterThanOrEqual(16);
+      const coordless = state.customers.find(customer => customer.id === 'coordinate-less');
+      expect(coordless).toBeDefined();
+      expect(Number.isFinite(coordless.y)).toBe(false);
     }
   });
 
   it('standalone staff updates respect the same canonical lease occupancy', () => {
-    let state = missingCoordinateGuideFixture();
+    let state = coordinateLessFixture();
     for (let tick = 0; tick < 2; tick += 1) {
       state = staffDomain.updateStaff(state, { gameDt: 0, movementDt: 0.1 });
       expect(state.movementCoordinator.diagnostics.invariantFailure).toBeUndefined();
@@ -1921,7 +2007,7 @@ describe('queue-lease occupancy is respected by the missing-coordinate guided ma
   });
 
   it('the hydrated fixture keeps queue spacing through the two preparation phases', () => {
-    const fixture = missingCoordinateGuideFixture();
+    const fixture = coordinateLessFixture();
     saveState(fixture);
     let state = hydrateState(loadState(), createInitialState());
     expect(state.queueSlots).toEqual([{ memberId: 'q', partyId: 'p', x: 973, y: 390, slot: 0 }]);
@@ -1929,8 +2015,8 @@ describe('queue-lease occupancy is respected by the missing-coordinate guided ma
     state = staffDomain.prepareStaffForMovement(state, 0);
     expect(state.queueSlots).toEqual([{ memberId: 'q', partyId: 'p', x: 973, y: 390, slot: 0 }]);
     expect(minimumPhysicalSpacing(physicalActors(state))).toBeGreaterThanOrEqual(16);
-    const guided = state.customers.find(customer => customer.id === 'legacy-guided');
-    expect(guided).toBeDefined();
-    expect(Math.abs(guided.y - 390)).toBeGreaterThanOrEqual(16);
+    const coordless = state.customers.find(customer => customer.id === 'coordinate-less');
+    expect(coordless).toBeDefined();
+    expect(Number.isFinite(coordless.y)).toBe(false);
   });
 });

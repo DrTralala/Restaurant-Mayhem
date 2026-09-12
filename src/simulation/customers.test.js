@@ -328,6 +328,23 @@ function movementState(overrides = {}) {
   };
 }
 
+function clearedResidency(customer) {
+  return {
+    ...customer,
+    seatResidency: {
+      schema: 1, phase: 'clear', actorId: String(customer.id),
+      partyId: customer.partyId == null ? null : String(customer.partyId),
+    },
+  };
+}
+
+function occupiedOwningTable(overrides = {}) {
+  return {
+    id: 't1', seats: 2, status: 'occupied', x: 200, y: 200,
+    diningPartyId: 'p1', diningCustomerIds: ['c1'], ...overrides,
+  };
+}
+
 function status(plan, motion = 'holding') {
   return { plan, motion };
 }
@@ -437,12 +454,8 @@ describe('customer goal preparation and movement descriptors', () => {
     expect(result.movementCoordinator.plans.get('queued').every(action => action.from.x === action.to.x && action.from.y === action.to.y)).toBe(true);
   });
 
-  it('describes checkout, door, fading, and guided goals with domain priorities', () => {
+  it('describes checkout, door, fading, and entering goals with domain priorities', () => {
     const state = movementState({
-      staff: [{
-        id: 'guide', role: 'waiter', x: 700, y: 300,
-        task: { type: 'guide_customer', customerIds: ['guided'], tableId: 't1' },
-      }],
       customers: [
         {
           id: 'checkout', state: 'checkout_moving', checkoutQueueIndex: 1, cashierStationId: 'register',
@@ -458,8 +471,8 @@ describe('customer goal preparation and movement descriptors', () => {
           navigationGoal: { x: 1113, y: 360 }, x: 993, y: 360,
         },
         {
-          id: 'guided', state: 'guided', guideStaffId: 'guide', entryDoorId: 'door1',
-          navigationGoal: { x: 700, y: 300 }, x: 600, y: 300,
+          id: 'entering', state: 'entering', entryDoorId: 'door1', tableId: 't1', chairId: 'ch1',
+          navigationGoal: { x: 220, y: 190 }, x: 600, y: 300,
         },
       ],
     });
@@ -476,9 +489,9 @@ describe('customer goal preparation and movement descriptors', () => {
     expect(entries.find(entry => entry.character.id === 'fading')).toMatchObject({
       speed: 30, terminalPolicy: 'release', doorFlow: { doorId: 'door1', direction: 'egress' },
     });
-    expect(entries.find(entry => entry.character.id === 'guided')).toMatchObject({
-      speed: 62, provenance: 'guide', doorFlow: { doorId: 'door1', direction: 'ingress' },
-      ignoredIds: ['guide', 'guided'],
+    expect(entries.find(entry => entry.character.id === 'entering')).toMatchObject({
+      speed: 62, provenance: 'customer', doorFlow: { doorId: 'door1', direction: 'ingress' },
+      ignoredIds: [],
     });
     expect(entries.find(entry => entry.character.id === 'checkout').provenance).toBe('customer');
   });
@@ -734,17 +747,17 @@ describe('stable fading goals', () => {
 });
 
 describe('customer lifecycle', () => {
-  it('prepares patience changes without moving customer coordinates', () => {
+  it('prepares without draining indoor patience and without moving customer coordinates', () => {
     const state = movementState({
       customers: [{ id: 'c1', state: 'waiting', patience: 10, happiness: 50, x: 400, y: 300 }],
     });
 
     const prepared = prepareCustomersForMovement(state, 2);
 
-    expect(prepared.customers[0]).toMatchObject({ patience: 8, x: 400, y: 300 });
+    expect(prepared.customers[0]).toMatchObject({ patience: 10, x: 400, y: 300 });
   });
 
-  it('sets leaving state and reduces happiness when patience runs out', () => {
+  it('keeps a waiting customer seated when indoor patience runs out', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 5, happiness: 80,
       state: 'waiting', dishId: null, tableId: 't1', tipAmount: 0,
@@ -753,18 +766,23 @@ describe('customer lifecycle', () => {
 
     const result = updateCustomers({ ...baseState, customers: [customer] }, { gameDt: 10, movementDt: 0 });
 
-    expect(result.customers[0]).toMatchObject({ patience: 0, state: 'leaving' });
-    expect(result.customers[0].navigationGoal).toEqual({ x: 993, y: 360 });
-    expect(result.customers[0].happiness).toBeLessThan(80);
+    expect(result.customers[0]).toMatchObject({ patience: 5, state: 'waiting' });
+    expect(result.restaurant.reputation).toBe(3.0);
   });
 
-  it('makes the whole party leave and lowers reputation once per abandoning party', () => {
-    const customers = [
-      { id: 'c1', partyId: 'p1', state: 'waiting', patience: 1, happiness: 80 },
-      { id: 'c2', partyId: 'p1', state: 'ordering', patience: 100, happiness: 80 },
-    ];
+  it('makes the whole queued party leave and lowers reputation once per abandoning party', () => {
+    const state = {
+      ...baseState,
+      queue: [{
+        partyId: 'p1',
+        members: [
+          { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
+          { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
+        ],
+      }],
+    };
 
-    const abandoned = updateCustomers({ ...baseState, customers }, 2);
+    const abandoned = updateCustomers(state, 2);
     const updatedAgain = updateCustomers(abandoned, 2);
 
     expect(abandoned.restaurant.reputation).toBe(2.9);
@@ -793,22 +811,36 @@ describe('customer lifecycle', () => {
     expect(result.restaurant.reputation).toBe(3);
   });
 
-  it('marks the dining table dirty when the final customer leaves for checkout or departure', () => {
-    const customer = {
-      id: 'c1', state: 'checkout_queued', tableId: 't1', patience: 100, happiness: 80,
-    };
+  it('marks the dining table dirty when the final customer physically clears checkout or departure', () => {
+    const customer = clearedResidency({
+      id: 'c1', partyId: 'p1', state: 'checkout_queued', tableId: 't1', patience: 100, happiness: 80,
+    });
     const tables = baseState.tables.map(table => table.id === 't1'
-      ? { ...table, status: 'occupied' }
+      ? occupiedOwningTable()
       : table);
 
-    const result = prepareCustomersForMovement({ ...baseState, customers: [customer], tables }, 0);
+    const result = updateCustomers({ ...baseState, customers: [customer], tables }, { gameDt: 0, movementDt: 0 });
 
     expect(result.tables.find(table => table.id === 't1').status).toBe('dirty');
+  });
+
+  it('keeps the dining table occupied while the final customer is still physically seated', () => {
+    const customer = {
+      id: 'c1', partyId: 'p1', state: 'checkout_queued', tableId: 't1', patience: 100, happiness: 80, x: 220, y: 190,
+      seatResidency: { schema: 1, phase: 'seated', actorId: 'c1', partyId: 'p1' },
+    };
+    const tables = baseState.tables.map(table => table.id === 't1'
+      ? occupiedOwningTable()
+      : table);
+
+    const result = updateCustomers({ ...baseState, customers: [customer], tables }, { gameDt: 0, movementDt: 0 });
+
+    expect(result.tables.find(table => table.id === 't1').status).toBe('occupied');
   });
 });
 
 describe('restored baseline customer gameplay', () => {
-  it('reduces patience over time', () => {
+  it('does not reduce indoor patience over time', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'waiting', dishId: null, tableId: 't1', tipAmount: 0,
@@ -817,10 +849,10 @@ describe('restored baseline customer gameplay', () => {
 
     const result = updateCustomers({ ...baseState, customers: [customer] }, 2);
 
-    expect(result.customers[0].patience).toBe(98);
+    expect(result.customers[0].patience).toBe(100);
   });
 
-  it('reduces patience at quarter speed while waiting for service items', () => {
+  it('does not reduce patience while waiting for service items', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'waiting_for_items', dishId: 'd1', drinkId: 'water', tableId: 't1', tipAmount: 0,
@@ -829,7 +861,7 @@ describe('restored baseline customer gameplay', () => {
 
     const result = updateCustomers({ ...baseState, customers: [customer] }, 2);
 
-    expect(result.customers[0].patience).toBe(99.5);
+    expect(result.customers[0].patience).toBe(100);
   });
 
   it('moves an arriving customer to waiting without assigning movement intent', () => {
@@ -938,29 +970,15 @@ describe('restored baseline customer gameplay', () => {
     });
   });
 
-  it('clears entry-door intent when patience abandonment cancels guidance', () => {
-    const customer = {
-      id: 'c1', state: 'waiting', patience: 1, happiness: 80,
-      entryDoorId: 'door1', x: 400, y: 300,
-    };
-    const result = prepareCustomersForMovement(movementState({
-      customers: [customer], doors: [{ id: 'door1', y: 340 }],
-    }), 2);
-
-    expect(result.customers[0]).toMatchObject({ state: 'leaving', exitPhase: 'to_door' });
-    expect(result.customers[0]).not.toHaveProperty('entryDoorId');
-    expect(customer).toHaveProperty('entryDoorId', 'door1');
-  });
-
   it('keeps leaving customers visible while they move towards an exit', () => {
-    const customer = {
-      id: 'c1', archetype: 'regular', patience: 0, happiness: 50,
+    const customer = clearedResidency({
+      id: 'c1', partyId: 'p1', archetype: 'regular', patience: 0, happiness: 50,
       state: 'leaving', dishId: null, tableId: 't1', tipAmount: 0,
       seatTime: null, orderTime: null, eatTime: null,
-    };
+    });
     const state = {
       ...movementState({ customers: [customer] }),
-      tables: baseState.tables.map(table => table.id === 't1' ? { ...table, status: 'occupied' } : table),
+      tables: baseState.tables.map(table => table.id === 't1' ? occupiedOwningTable() : table),
     };
 
     const result = updateCustomers(state, 1);
@@ -973,11 +991,11 @@ describe('restored baseline customer gameplay', () => {
   });
 
   it('does not auto-seat a queued customer when a table frees', () => {
-    const leavingCustomer = {
-      id: 'c2', archetype: 'regular', patience: 0, happiness: 50,
+    const leavingCustomer = clearedResidency({
+      id: 'c2', partyId: 'p2', archetype: 'regular', patience: 0, happiness: 50,
       state: 'leaving', dishId: null, tableId: 't1', tipAmount: 0,
       seatTime: null, orderTime: null, eatTime: null,
-    };
+    });
     const queuedCustomer = {
       id: 'q1', archetype: 'foodie', patience: 150, happiness: 80,
       state: 'queued', dishId: null, tableId: null, tipAmount: 0,
@@ -988,7 +1006,9 @@ describe('restored baseline customer gameplay', () => {
         customers: [leavingCustomer],
         queue: [{ partyId: 'q1', members: [queuedCustomer] }],
       }),
-      tables: baseState.tables.map(table => table.id === 't1' ? { ...table, status: 'occupied' } : table),
+      tables: baseState.tables.map(table => table.id === 't1'
+        ? occupiedOwningTable({ diningPartyId: 'p2', diningCustomerIds: ['c2'] })
+        : table),
     }, 1);
 
     expect(result.customers).toHaveLength(1);
@@ -1047,7 +1067,7 @@ describe('restored baseline customer gameplay', () => {
     expect(result.customers[0].patience).toBe(100);
   });
 
-  it.each(['guided', 'ordering', 'eating'])('does not reduce patience while a customer is %s', stateName => {
+  it.each(['entering', 'ordering', 'eating'])('does not reduce patience while a customer is %s', stateName => {
     const result = updateCustomers({
       ...baseState, customers: [{ id: 'c1', state: stateName, patience: 100, happiness: 80 }],
     }, 10);
@@ -1066,29 +1086,35 @@ describe('restored baseline customer gameplay', () => {
     });
 
   it.each(['checkout_queued', 'checkout_moving', 'checkout_processing'])
-    ('releases the dining table when its final customer is %s', stateName => {
-      const customer = { id: 'c1', state: stateName, tableId: 't1', patience: 100, happiness: 80 };
+    ('releases the dining table after its final physically cleared customer is %s', stateName => {
+      const customer = clearedResidency({
+        id: 'c1', partyId: 'p1', state: stateName, tableId: 't1', patience: 100, happiness: 80,
+      });
       const tables = baseState.tables.map(table => table.id === 't1'
-        ? { ...table, status: 'occupied' }
+        ? occupiedOwningTable()
         : table);
 
-      const result = prepareCustomersForMovement({ ...baseState, customers: [customer], tables }, 0);
+      const result = updateCustomers({ ...baseState, customers: [customer], tables }, { gameDt: 0, movementDt: 0 });
 
       expect(result.tables.find(table => table.id === 't1').status).toBe('dirty');
     });
 
   it.each(['occupied', 'reserved'])
-    ('marks an in-use %s table dirty and clears its reservation owner', tableStatus => {
-      const customer = { id: 'payer', state: 'checkout_queued', tableId: 't1', patience: 100, happiness: 80, x: 400, y: 300 };
+    ('does not dirty an in-use %s table before physical clearance and retains its owner', tableStatus => {
+      const customer = {
+        id: 'payer', partyId: 'p1', state: 'checkout_queued', tableId: 't1',
+        patience: 100, happiness: 80, x: 400, y: 300,
+        seatResidency: { schema: 1, phase: 'seated', actorId: 'payer', partyId: 'p1' },
+      };
       const tables = baseState.tables.map(table => table.id === 't1'
-        ? { ...table, status: tableStatus, reservationOwnerStaffId: 'guide' }
+        ? { ...table, status: tableStatus, diningPartyId: 'p1', diningCustomerIds: ['payer'] }
         : table);
 
-      const result = prepareCustomersForMovement({ ...baseState, customers: [customer], tables }, 0);
+      const result = updateCustomers({ ...baseState, customers: [customer], tables }, { gameDt: 0, movementDt: 0 });
       const table = result.tables.find(candidate => candidate.id === 't1');
 
-      expect(table.status).toBe('dirty');
-      expect(table).not.toHaveProperty('reservationOwnerStaffId');
+      expect(table.status).toBe(tableStatus);
+      expect(table.diningPartyId).toBe('p1');
       expect(result.customers[0].tableId).toBe('t1');
     });
 
@@ -1148,41 +1174,38 @@ describe('restored baseline customer gameplay', () => {
     expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1 });
   });
 
-  it('continues half-rate seated patience loss when the active order targets another customer', () => {
+  it('does not drain seated patience when the active order targets another customer', () => {
     const result = prepareCustomersForMovement({
       ...baseState,
       customers: [{ id: 'c1', state: 'seated', patience: 2, happiness: 80, tableId: 't1', dishId: null, drinkId: null }],
       staff: [{ id: 'w1', role: 'waiter', task: { type: 'take_order', customerId: 'c2', startedAt: 0 } }],
     }, 1);
 
-    expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1.5 });
+    expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 2 });
   });
 
-  it.each([
-    ['waiting', 90],
-    ['seated', 95],
-  ])('uses the phase-specific patience rate while a customer is %s', (stateName, expectedPatience) => {
+  it.each(['waiting', 'seated'])('does not drain patience while a customer is %s', stateName => {
     const result = updateCustomers({
       ...baseState, customers: [{ id: 'c1', state: stateName, patience: 100, happiness: 80 }],
     }, 10);
 
-    expect(result.customers[0].patience).toBe(expectedPatience);
+    expect(result.customers[0].patience).toBe(100);
   });
 
-  it('reduces patience at quarter speed while awaiting ordered items', () => {
+  it('does not reduce patience while awaiting ordered items', () => {
     const result = updateCustomers({
       ...baseState, customers: [{ id: 'c1', state: 'waiting_for_items', patience: 100, happiness: 80 }],
     }, 10);
 
-    expect(result.customers[0].patience).toBe(97.5);
+    expect(result.customers[0].patience).toBe(100);
   });
 
-  it('uses game time for patience independently of movement time', () => {
+  it('does not drain indoor patience as game time advances', () => {
     const result = updateCustomers({
       ...baseState, customers: [{ id: 'c1', state: 'waiting', patience: 100, happiness: 80 }],
     }, { gameDt: 60, movementDt: 0 });
 
-    expect(result.customers[0].patience).toBe(40);
+    expect(result.customers[0].patience).toBe(100);
   });
 
   it('continues serving admitted customers after closing', () => {
@@ -1196,30 +1219,34 @@ describe('restored baseline customer gameplay', () => {
     expect(result.customers).toEqual([customer]);
   });
 
-  it('cancels only the pending review for a party abandoning from seated patience', () => {
-    const customers = [
-      { id: 'c1', partyId: 'p1', state: 'seated', tableId: 't1', patience: 1, happiness: 80 },
-      { id: 'c2', partyId: 'p1', state: 'ordering', tableId: 't1', patience: 100, happiness: 80 },
+  it('cancels only the pending review for a queued party that abandons', () => {
+    const queue = [
+      { partyId: 'p1', members: [
+        { id: 'q1', partyId: 'p1', state: 'queued', patience: 0, happiness: 80 },
+        { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
+      ] },
     ];
     const pendingPartyReviews = [
-      { partyId: 'p1', memberIds: ['c1', 'c2'], orderedMemberIds: ['c2'], unaffordableMemberIds: [], paidReviews: [] },
+      { partyId: 'p1', memberIds: ['q1', 'q2'], orderedMemberIds: ['q2'], unaffordableMemberIds: [], paidReviews: [] },
       { partyId: 'p2', memberIds: ['other'], orderedMemberIds: [], unaffordableMemberIds: ['other'], paidReviews: [] },
     ];
 
-    const result = updateCustomers({ ...baseState, customers, pendingPartyReviews }, 2);
+    const result = updateCustomers({ ...baseState, queue, pendingPartyReviews }, 2);
 
     expect(result.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
     expect(result.restaurant.reputation).toBe(2.9);
     expect(result.pendingPartyReviews).toEqual([pendingPartyReviews[1]]);
   });
 
-  it('does not remove a checkout-committed member when their party abandons', () => {
+  it('does not remove a checkout-committed member when their queued party abandons', () => {
     const customers = [
-      { id: 'waiting', partyId: 'p1', state: 'waiting_for_items', patience: 0.5, happiness: 80 },
       { id: 'payer', partyId: 'p1', state: 'checkout_queued', patience: 1, happiness: 80, paymentQueuedAt: 20 },
     ];
+    const queue = [{ partyId: 'p1', members: [
+      { id: 'waiting', partyId: 'p1', state: 'queued', patience: 0.5, happiness: 80 },
+    ] }];
 
-    const result = updateCustomers({ ...baseState, customers }, 2);
+    const result = updateCustomers({ ...baseState, customers, queue }, 2);
 
     expect(result.customers.find(customer => customer.id === 'waiting').state).toBe('leaving');
     expect(result.customers.find(customer => customer.id === 'payer')).toMatchObject({
@@ -1228,12 +1255,16 @@ describe('restored baseline customer gameplay', () => {
     expect(result.restaurant.reputation).toBe(2.9);
   });
 
-  it('penalises separate abandoning parties independently', () => {
+  it('penalises separate abandoning queued parties independently', () => {
     const result = updateCustomers({
       ...baseState,
-      customers: [
-        { id: 'c1', partyId: 'p1', state: 'waiting', patience: 1, happiness: 80 },
-        { id: 'c2', partyId: 'p2', state: 'waiting_for_items', patience: 0.5, happiness: 80 },
+      queue: [
+        { partyId: 'p1', members: [
+          { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
+        ] },
+        { partyId: 'p2', members: [
+          { id: 'q2', partyId: 'p2', state: 'queued', patience: 0.5, happiness: 80 },
+        ] },
       ],
     }, 2);
 
@@ -1931,4 +1962,41 @@ describe('runtime queue-slot reconciliation stays fail-closed without relocating
       expect(visible[0]).toMatchObject({ id: 'q', x: 973, y: 390 });
     }
   });
+});
+
+describe('queue-only indoor patience', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ['seated', { chairId: 'ch1' }],
+    ['waiting', {}],
+    ['waiting_for_items', { dishId: 'starter-toast' }],
+    ['waiting_for_party', {}],
+    ['eating', { dishId: 'starter-toast' }],
+  ])('keeps an indoor %s customer after a long timeout without reputation loss',
+    (stateName, extra) => {
+      const fresh = createInitialState();
+      const state = {
+        ...fresh,
+        staff: [],
+        queue: [],
+        customers: [{
+          id: 'c1',
+          state: stateName,
+          tableId: 't1',
+          x: 210,
+          y: 180,
+          patience: 0,
+          patienceMax: 100,
+          happiness: 80,
+          ...extra,
+        }],
+        restaurant: { ...fresh.restaurant, gameTime: 12 * 3600, reputation: 3 },
+      };
+
+      const result = updateCustomers(state, { gameDt: 600, movementDt: 0 });
+
+      expect(result.customers[0]).toMatchObject({ id: 'c1', state: stateName });
+      expect(result.restaurant.reputation).toBe(3);
+    });
 });

@@ -38,21 +38,26 @@ describe('updateDirt', () => {
   });
 
   it('retains the threshold when every adjacent interior dirt cell is blocked', () => {
-    const result = updateDirt({
+    const state = {
       ...baseState,
       customers: [{ id: 'c1', state: 'seated', tableId: 't1', dirtFactor: 10 }],
-      tables: [{ id: 't1', x: 50, y: 50 }],
+      tables: [{ id: 't1', x: 200, y: 200 }],
       chairs: [
-        { id: 'east-top', x: 90, y: 50 }, { id: 'east-bottom', x: 90, y: 70 },
-        { id: 'south-left', x: 50, y: 90 }, { id: 'south-right', x: 70, y: 90 },
+        { id: 'left-top', x: 180, y: 200 }, { id: 'left-bottom', x: 180, y: 220 },
+        { id: 'north-left', x: 180, y: 180 }, { id: 'north', x: 200, y: 180 },
+        { id: 'north-right', x: 220, y: 180 },
       ],
-    }, 0, () => 0);
+    };
+    const result = updateDirt(state, 0, () => 0);
+    const withoutFurniture = updateDirt({ ...state, chairs: [] }, 0, () => 0);
+
     expect(result.floorDirt).toEqual([]);
     expect(result.customers[0].dirtFactor).toBe(10);
+    expect(withoutFurniture.floorDirt).toHaveLength(1);
   });
 
   it.each([
-    ['top', { x: 200, y: 50 }, () => 0],
+    ['top dining', { x: 200, y: 100 }, () => 0],
     ['bottom', { x: 200, y: 670 }, () => 0.999999],
     ['left', { x: 50, y: 350 }, () => 0],
     ['right', { x: 890, y: 350 }, () => 0.5],

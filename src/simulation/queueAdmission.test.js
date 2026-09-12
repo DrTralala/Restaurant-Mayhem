@@ -28,42 +28,25 @@ function buildAdmissionState() {
   };
 }
 
-function buildGuidedGateState() {
+function planArgs(state) {
+  return { party: state.queue[0], door: state.doors[0], tableId: 't1', chairIds: ['ch1', 'ch2'] };
+}
+
+function buildGateState() {
   const state = buildAdmissionState();
+  const planned = planQueuePartyAdmission(state, planArgs(state));
   return {
     ...state,
     queue: [],
-    queueAdmissionGate: {
-      partyId: 'p1',
-      customerIds: ['q1', 'q2'],
-      guideStaffId: 'w1',
-      tableId: 't1',
-      doorId: 'door1',
-    },
-    customers: state.queue[0].members.map((customer, index) => ({
-      ...customer,
-      state: 'guided',
-      entryDoorId: 'door1',
-      guideStaffId: 'w1',
-      tableId: 't1',
-      x: 1000 + index * 20,
-      y: 360,
-    })),
-    staff: [{
-      ...state.staff[0],
-      task: {
-        type: 'guide_customer',
-        partyId: 'p1',
-        customerId: 'q1',
-        customerIds: ['q1', 'q2'],
-        tableId: 't1',
-      },
-    }],
+    customers: planned.admittedCustomers,
     tables: [{
       ...state.tables[0],
       status: 'reserved',
-      reservationOwnerStaffId: 'w1',
+      diningPartyId: 'p1',
+      diningCustomerIds: ['q1', 'q2'],
+      seatingAssignments: planned.assignments,
     }],
+    queueAdmissionGate: planned.gate,
   };
 }
 
@@ -71,50 +54,36 @@ describe('queue admission', () => {
   it('plans every member without changing input state', () => {
     const state = buildAdmissionState();
     const snapshot = structuredClone(state);
-    const planned = planQueuePartyAdmission(state, {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
-    });
+    const planned = planQueuePartyAdmission(state, planArgs(state));
 
     expect(planned.admittedCustomers).toHaveLength(state.queue[0].members.length);
     expect(planned.admittedCustomers.every(customer => customer.entryDoorId === 'door1')).toBe(true);
     expect(planned.admittedCustomers[0]).toMatchObject({
-      state: 'guided', entryDoorId: 'door1', guideStaffId: 'w1', tableId: 't1',
+      state: 'entering', entryDoorId: 'door1', tableId: 't1', chairId: 'ch1',
     });
-    expect(planned.admittedCustomers[0]).not.toHaveProperty('path');
-    expect(planned.admittedCustomers[0]).not.toHaveProperty('navigationGoal');
+    expect(planned.admittedCustomers[0].navigationGoal).toBeTruthy();
+    expect(planned.assignments).toHaveLength(2);
     expect(planned.gate).toEqual({
-      partyId: 'p1', customerIds: ['q1', 'q2'], guideStaffId: 'w1', tableId: 't1',
-      doorId: 'door1',
+      partyId: 'p1', customerIds: ['q1', 'q2'], tableId: 't1', doorId: 'door1',
     });
+    expect(planned.gate).not.toHaveProperty('guideStaffId');
     expect(state).toEqual(snapshot);
   });
 
-  it('clears inherited domain goals atomically without mutating queued input or adding route fields', () => {
+  it('clears inherited domain goals atomically without mutating queued input', () => {
     const state = buildAdmissionState();
     state.queue[0].members = state.queue[0].members.map((customer, index) => ({
       ...customer,
       navigationGoal: { x: 500 + index * 20, y: 300 },
     }));
     const snapshot = structuredClone(state);
-    const planned = planQueuePartyAdmission(state, {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
-    });
+    const planned = planQueuePartyAdmission(state, planArgs(state));
 
     expect(planned).not.toBeNull();
     expect(planned.admittedCustomers).toHaveLength(2);
-    expect(planned.admittedCustomers.every(customer => !Object.hasOwn(customer, 'navigationGoal')))
-      .toBe(true);
-    expect(planned.admittedCustomers.every(customer => !Object.hasOwn(customer, 'path')))
-      .toBe(true);
     expect(planned.admittedCustomers[0]).not.toBe(state.queue[0].members[0]);
+    // The inherited goal is replaced by the member's own chair approach.
+    expect(planned.admittedCustomers.every(customer => customer.navigationGoal)).toBe(true);
     expect(state).toEqual(snapshot);
   });
 
@@ -125,27 +94,21 @@ describe('queue admission', () => {
       x: 900, y: 360,
     }];
 
-    expect(planQueuePartyAdmission(state, {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
-    })).toBeNull();
+    expect(planQueuePartyAdmission(state, planArgs(state))).toBeNull();
   });
 
-  it.each([{ x: 100, y: 600 }, { x: 973, y: 600 }])('does not reserve the doorway for a distant departing customer at %j', position => {
-    const state = buildAdmissionState();
-    state.customers = [{ id: 'out', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1', ...position }];
-    const planned = planQueuePartyAdmission(state, {
-      party: state.queue[0], door: state.doors[0], guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }), tableId: 't1',
-    });
-    expect(planned).not.toBeNull();
-    for (const customer of planned.admittedCustomers) {
-      expect(Math.hypot(customer.x - position.x, customer.y - position.y)).toBeGreaterThanOrEqual(16);
-    }
-  });
+  it.each([{ x: 100, y: 600 }, { x: 973, y: 600 }])(
+    'does not reserve the doorway for a distant departing customer at %j',
+    position => {
+      const state = buildAdmissionState();
+      state.customers = [{ id: 'out', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1', ...position }];
+      const planned = planQueuePartyAdmission(state, planArgs(state));
+      expect(planned).not.toBeNull();
+      for (const customer of planned.admittedCustomers) {
+        expect(Math.hypot(customer.x - position.x, customer.y - position.y)).toBeGreaterThanOrEqual(16);
+      }
+    },
+  );
 
   it('ignores a fading customer assigned to the requested door', () => {
     const state = buildAdmissionState();
@@ -154,16 +117,10 @@ describe('queue admission', () => {
       x: 980, y: 360,
     }];
 
-    expect(planQueuePartyAdmission(state, {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
-    })).not.toBeNull();
+    expect(planQueuePartyAdmission(state, planArgs(state))).not.toBeNull();
   });
 
-  it('preserves queue patience and resets service patience when admission starts', () => {
+  it('preserves queue patience without resetting service patience when admission starts', () => {
     const state = buildAdmissionState();
     state.queue[0].members = state.queue[0].members.map(customer => ({
       ...customer,
@@ -173,16 +130,10 @@ describe('queue admission', () => {
       queuePatienceMax: 100,
     }));
 
-    const planned = planQueuePartyAdmission(state, {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
-    });
+    const planned = planQueuePartyAdmission(state, planArgs(state));
 
     expect(planned.admittedCustomers[0]).toMatchObject({
-      patience: 100,
+      patience: 20,
       patienceMax: 100,
       queuePatience: 40,
       queuePatienceMax: 100,
@@ -207,28 +158,13 @@ describe('queue admission', () => {
     }
     const before = JSON.stringify(state);
 
-    const planned = planQueuePartyAdmission(state, {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
-    });
-
-    expect(planned).toBeNull();
+    expect(planQueuePartyAdmission(state, planArgs(state))).toBeNull();
     expect(JSON.stringify(state)).toBe(before);
   });
 
   it('rolls back when a later party member has no safe admission cell', () => {
     const state = buildAdmissionState();
-    const args = {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
-    };
-    const baseline = planQueuePartyAdmission(state, args);
+    const baseline = planQueuePartyAdmission(state, planArgs(state));
     const freePoint = baseline.admittedCustomers[0];
     const world = getRestaurantWorld(state.restaurant);
     const first = {
@@ -252,9 +188,7 @@ describe('queue admission', () => {
     state.customers = blockers;
     const before = structuredClone(state);
 
-    const planned = planQueuePartyAdmission(state, args);
-
-    expect(planned).toBeNull();
+    expect(planQueuePartyAdmission(state, planArgs(state))).toBeNull();
     expect(state).toEqual(before);
   });
 
@@ -262,16 +196,7 @@ describe('queue admission', () => {
     const state = buildAdmissionState();
     state.customers = [{ id: 'route-occupant', state: 'eating', x: 1000, y: 340 }];
 
-    const planned = planQueuePartyAdmission(state, {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
-    });
-
-    expect(planned).not.toBeNull();
-    expect(planned.admittedCustomers[0]).not.toHaveProperty('path');
+    expect(planQueuePartyAdmission(state, planArgs(state))).not.toBeNull();
   });
 
   it('does not treat logical waiting projections as admission occupancy', () => {
@@ -281,19 +206,12 @@ describe('queue admission', () => {
       members: [{ id: 'waiting-1', partyId: 'waiting', partySize: 1, state: 'queued', x: 1000, y: 360 }],
     });
 
-    const planned = planQueuePartyAdmission(state, {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
-    });
-
+    const planned = planQueuePartyAdmission(state, planArgs(state));
     expect(planned.admittedCustomers[0]).toMatchObject({ x: 1000, y: 360 });
   });
 
   it('reports occupied, clear, and stale gate states deterministically', () => {
-    const state = buildGuidedGateState();
+    const state = buildGateState();
     expect(getQueueAdmissionGateStatus(state)).toMatchObject({
       occupied: true, clear: false, stale: false,
     });
@@ -302,33 +220,30 @@ describe('queue admission', () => {
       customers: state.customers.map(customer => ({ ...customer, x: 800 })),
     };
     expect(getQueueAdmissionGateStatus(inside).clear).toBe(true);
-    expect(getQueueAdmissionGateStatus({ ...state, staff: [] }).stale).toBe(true);
+    expect(getQueueAdmissionGateStatus({
+      ...state,
+      tables: [{ ...state.tables[0], diningPartyId: 'other' }],
+    }).stale).toBe(true);
   });
 
   it.each([
-    ['a different task party', state => {
-      state.staff[0].task.partyId = 'other-party';
-    }],
-    ['a task customer-ID superset', state => {
-      state.staff[0].task.customerIds.push('other-customer');
-    }],
-    ['reordered task customer IDs', state => {
-      state.staff[0].task.customerIds.reverse();
-    }],
     ['a missing materialised gate member', state => {
       state.customers.pop();
     }],
     ['a member owned by a different party', state => {
       state.customers[0].partyId = 'other-party';
     }],
-    ['a member owned by a different guide', state => {
-      state.customers[0].guideStaffId = 'other-guide';
-    }],
     ['a member owned by a different table', state => {
       state.customers[0].tableId = 'other-table';
     }],
+    ['a replaced table owner', state => {
+      state.tables[0].diningPartyId = 'other-party';
+    }],
+    ['a mismatched reservation member list', state => {
+      state.tables[0].diningCustomerIds = ['q1', 'else'];
+    }],
   ])('marks an occupied gate stale for %s', (_label, mutate) => {
-    const state = buildGuidedGateState();
+    const state = buildGateState();
     mutate(state);
 
     expect(getQueueAdmissionGateStatus(state)).toMatchObject({
@@ -336,17 +251,6 @@ describe('queue admission', () => {
       clear: false,
       stale: true,
     });
-  });
-
-  it.each([
-    ['a same-length string', 'xx'],
-    ['a same-length array-like object', { 0: 'q1', 1: 'q2', length: 2 }],
-  ])('safely marks non-array task customer IDs stale for %s', (_label, customerIds) => {
-    const state = buildGuidedGateState();
-    state.staff[0].task.customerIds = customerIds;
-
-    expect(() => getQueueAdmissionGateStatus(state)).not.toThrow();
-    expect(getQueueAdmissionGateStatus(state).stale).toBe(true);
   });
 
   it('plans a partially visible four-member party atomically at candidates clear of its own exact leases', () => {
@@ -362,6 +266,10 @@ describe('queue admission', () => {
         happiness: 80,
       })),
     }];
+    state.tables = [{ id: 't4', seats: 4, status: 'empty', x: 360, y: 220 }];
+    state.chairs = [1, 2, 3, 4].map((index, offset) => ({
+      id: `ch${index}`, tableId: 't4', x: 360, y: 180 + offset * 20,
+    }));
     state.queueSlots = [
       { memberId: 'q1', partyId: 'p1', x: 973, y: 390, slot: 0 },
       { memberId: 'q2', partyId: 'p1', x: 973, y: 420, slot: 1 },
@@ -369,15 +277,10 @@ describe('queue admission', () => {
     const snapshot = structuredClone(state);
 
     const planned = planQueuePartyAdmission(state, {
-      party: state.queue[0],
-      door: state.doors[0],
-      guide: state.staff[0],
-      guideGoal: cellToWorld({ x: 9, y: 11 }),
-      tableId: 't1',
+      party: state.queue[0], door: state.doors[0], tableId: 't4',
+      chairIds: ['ch1', 'ch2', 'ch3', 'ch4'],
     });
 
-    // Admission does not wait for the two hidden members to acquire queue
-    // leases: the whole logical party is planned or nothing changes.
     expect(planned).not.toBeNull();
     expect(planned.admittedCustomers).toHaveLength(4);
     const occupants = [

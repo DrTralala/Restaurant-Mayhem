@@ -13,6 +13,14 @@ function currentActor(state, id) {
     .find(actor => String(actor?.id) === expected) || null;
 }
 
+// Shared supplied-status lookup used by both the staff and self-seating phases.
+export function getMovementStatus(state, statuses, id) {
+  if (statuses instanceof Map) {
+    return statuses.get(id) ?? statuses.get(String(id)) ?? getCharacterMovementStatus(state, id);
+  }
+  return getCharacterMovementStatus(state, id);
+}
+
 export function getCharacterMovementStatus(state, id) {
   const actor = currentActor(state, id);
   if (!actor) return { plan: 'unreachable', motion: 'holding', reason: 'missing-actor' };

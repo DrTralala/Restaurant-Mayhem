@@ -44,10 +44,10 @@ it('releases a passing bay once the peer has cleared the conflict, not only its 
   const grid = createGrid({ restaurant: { expansionLevel: 1 }, tables: [], chairs: [] });
   const goal = { x: 60, y: 100 };
   const records = new Map([['yielding', { goal, recovery: { origin: { x: 200, y: 100 },
-    goal: { x: 200, y: 80 }, peers: [{ id: 'passing', start: { x: 180, y: 100 }, goal: { x: 320, y: 100 } }] } }]]);
+    goal: { x: 200, y: 100 }, peers: [{ id: 'passing', start: { x: 180, y: 100 }, goal: { x: 320, y: 100 } }] } }]]);
   const check = x => chooseRecoveries({ grid, records, statuses: new Map(), budget: 0,
     requests: new Map([
-      ['yielding', { id: 'yielding', start: { x: 200, y: 80 }, goal, speed: 20, waitingTicks: 0 }],
+      ['yielding', { id: 'yielding', start: { x: 200, y: 100 }, goal, speed: 20, waitingTicks: 0 }],
       ['passing', { id: 'passing', start: { x, y: 100 }, goal: { x: 320, y: 100 }, speed: 20, waitingTicks: 0 }],
     ]) }).recoveries;
   expect(check(210).has('yielding')).toBe(true);

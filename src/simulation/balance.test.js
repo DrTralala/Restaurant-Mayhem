@@ -63,9 +63,11 @@ describe('balance helpers', () => {
     expect(1 / (getBaseArrivalRate(5) * 60)).toBeCloseTo(22.222, 3);
   });
 
-  it('preserves a 20% tip at 80 happiness', () => {
-    expect(getTipRate(80)).toBe(0.2);
-  });
+  it.each([[0, 0.10], [0.5, 0.20], [0.999999, 0.30], [1, 0.30]])(
+    'samples a bounded integer tip rate for %s', (sample, expected) => {
+      expect(getTipRate(() => sample)).toBe(expected);
+    },
+  );
 
   it('values a reasonably priced dish over an exploitatively priced one', () => {
     const goodValue = { popularity: 70, quality: 7, price: 20 };

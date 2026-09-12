@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { saveState, loadState, hydrateState } from './persistence';
 import { saveRepositoryState } from './repositorySaves';
@@ -12,6 +12,10 @@ import { buildCustomerQueueStressState } from '../simulation/customerQueueStress
 
 beforeEach(() => {
   localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('saveState', () => {
@@ -84,7 +88,7 @@ describe('loadState', () => {
       warning.mockRestore();
     }
   });
-  it.each([1, 2, 3, 4, 5, 6])('rejects obsolete version %s local saves without deleting evidence or attempting migration', version => {
+  it.each([1, 2, 3, 4, 5, 6, 7])('rejects obsolete version %s local saves without deleting evidence or attempting migration', version => {
     localStorage.setItem('restaurant-sim-save', JSON.stringify({ version, restaurant: { funds: 999 } }));
     expect(loadState()).toBeNull();
     expect(JSON.parse(localStorage.getItem('restaurant-sim-save')).version).toBe(version);
@@ -376,67 +380,101 @@ describe('hydrateState', () => {
     });
   });
 
-  it('restores a unique active guide as owner of an ownerless legacy table reservation', () => {
+  function reservedPartySave() {
     const fresh = createInitialState();
-    const saved = {
-      ...fresh,
-      staff: [{
-        id: 'guide-a', role: 'waiter',
-        task: { type: 'guide_customer', customerIds: ['party-a'], tableId: 't1' },
-      }],
-      tables: fresh.tables.map(table => table.id === 't1'
-        ? { ...table, status: 'reserved' }
-        : table),
+    return {
+      fresh,
+      saved: {
+        ...fresh,
+        customers: [{
+          id: 'customer-a', partyId: 'party-a', partySize: 1, state: 'entering',
+          tableId: 't1', chairId: 'ch1', x: 180, y: 180,
+        }],
+        tables: fresh.tables.map(table => table.id === 't1'
+          ? {
+              ...table, status: 'reserved', diningPartyId: 'party-a',
+              diningCustomerIds: ['customer-a'],
+              seatingAssignments: [{
+                customerId: 'customer-a', chairId: 'ch1',
+                approachCell: { x: 9, y: 9 }, approachPoint: { x: 180, y: 180 },
+              }],
+            }
+          : table),
+      },
     };
+  }
 
+  it('retains a reserved self-seating party and its approach across hydration', () => {
+    const { fresh, saved } = reservedPartySave();
     const hydrated = hydrateState(saved, fresh);
+    const table = hydrated.tables.find(candidate => candidate.id === 't1');
 
-    expect(hydrated.tables.find(table => table.id === 't1')).toMatchObject({
-      status: 'reserved',
-      reservationOwnerStaffId: 'guide-a',
+    expect(table).toMatchObject({
+      status: 'reserved', diningPartyId: 'party-a', diningCustomerIds: ['customer-a'],
+    });
+    expect(table.seatingAssignments).toHaveLength(1);
+    expect(hydrated.customers[0]).toMatchObject({
+      state: 'entering', tableId: 't1', chairId: 'ch1',
     });
   });
 
-  it.each([
-    ['zero guides', []],
-    ['multiple guides', [
-      {
-        id: 'guide-a', role: 'waiter',
-        task: { type: 'guide_customer', customerIds: ['party-a'], tableId: 't1' },
-      },
-      {
-        id: 'guide-b', role: 'waiter',
-        task: { type: 'guide_customer', customerIds: ['party-b'], tableId: 't1' },
-      },
-    ]],
-  ])('releases an ownerless legacy reservation with %s without assigning an arbitrary owner', (_case, staff) => {
+  it('rejects a current-version save with a seated actor whose chair origin occupies the top wall', () => {
     const fresh = createInitialState();
     const saved = {
       ...fresh,
-      staff,
       tables: fresh.tables.map(table => table.id === 't1'
-        ? { ...table, status: 'reserved' }
+        ? {
+            ...table, status: 'occupied', diningPartyId: 'wall-party',
+            diningCustomerIds: ['wall-customer'],
+          }
+        : table),
+      chairs: fresh.chairs.map(chair => chair.id === 'ch1'
+        ? { ...chair, x: 100, y: 60 }
+        : chair),
+      customers: [{
+        id: 'wall-customer', partyId: 'wall-party', state: 'seated',
+        tableId: 't1', chairId: 'ch1', x: 110, y: 70,
+      }],
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow('Invalid saved navigation geometry');
+  });
+
+  it.each(['staff', 'customer'])('rejects a current-version save with a %s position inside the top wall', kind => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      ...(kind === 'staff'
+        ? { staff: fresh.staff.map((worker, index) => index === 0
+          ? { ...worker, x: 90, y: 75 } : worker) }
+        : { customers: [{ id: 'wall-customer', state: 'moving', x: 100, y: 75 }] }),
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow('Invalid saved navigation geometry');
+  });
+
+  it('releases a reserved table whose recorded party members are absent', () => {
+    const { fresh, saved } = reservedPartySave();
+    const orphaned = { ...saved, customers: [] };
+    const table = hydrateState(orphaned, fresh).tables.find(candidate => candidate.id === 't1');
+
+    expect(table).toEqual(expect.objectContaining({ id: 't1', status: 'empty' }));
+    expect(table).not.toHaveProperty('diningPartyId');
+    expect(table).not.toHaveProperty('seatingAssignments');
+  });
+
+  it('leaves an occupied table untouched across hydration', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      tables: fresh.tables.map(table => table.id === 't1'
+        ? { ...table, status: 'occupied', diningPartyId: 'party-a' }
         : table),
     };
 
     const table = hydrateState(saved, fresh).tables.find(candidate => candidate.id === 't1');
 
-    expect(table).toEqual({ ...fresh.tables[0], status: 'empty' });
-    expect(table).not.toHaveProperty('reservationOwnerStaffId');
-  });
-
-  it('removes stale reservation ownership from a legacy non-reserved table', () => {
-    const fresh = createInitialState();
-    const saved = {
-      ...fresh,
-      tables: fresh.tables.map(table => table.id === 't1'
-        ? { ...table, status: 'occupied', reservationOwnerStaffId: 'old-guide' }
-        : table),
-    };
-
-    const hydrated = hydrateState(saved, fresh);
-
-    expect(hydrated.tables.find(table => table.id === 't1')).not.toHaveProperty('reservationOwnerStaffId');
+    expect(table).toMatchObject({ id: 't1', status: 'occupied', diningPartyId: 'party-a' });
   });
 
   it('hydrates missing wash collections from fresh state and preserves populated saves', () => {
@@ -491,30 +529,30 @@ describe('hydrateState', () => {
     expect(hydrateState(hydrated, fresh)).toEqual(hydrated);
   });
 
-  it('hydrates a consistent active gate and reservation twice without changing their identity', () => {
+  it('hydrates a consistent active self-seating gate and reservation twice without changing their identity', () => {
     const fresh = createInitialState();
     const gate = {
       partyId: 'party-a',
       customerIds: ['customer-a'],
-      guideStaffId: 'guide-a',
       tableId: 't1',
+      doorId: 'door1',
     };
     const saved = {
       ...fresh,
       queueAdmissionGate: gate,
       customers: [{
-        id: 'customer-a', partyId: 'party-a', state: 'guided',
-        guideStaffId: 'guide-a', tableId: 't1', x: 1000, y: 360,
-      }],
-      staff: [{
-        id: 'guide-a', role: 'waiter',
-        task: {
-          type: 'guide_customer', customerId: 'customer-a', customerIds: ['customer-a'],
-          partyId: 'party-a', tableId: 't1',
-        },
+        id: 'customer-a', partyId: 'party-a', state: 'entering',
+        tableId: 't1', chairId: 'ch1', x: 1000, y: 360,
       }],
       tables: fresh.tables.map(table => table.id === 't1'
-        ? { ...table, status: 'reserved', reservationOwnerStaffId: 'guide-a' }
+        ? {
+            ...table, status: 'reserved', diningPartyId: 'party-a',
+            diningCustomerIds: ['customer-a'],
+            seatingAssignments: [{
+              customerId: 'customer-a', chairId: 'ch1',
+              approachCell: { x: 9, y: 9 }, approachPoint: { x: 180, y: 180 },
+            }],
+          }
         : table),
     };
 
@@ -527,7 +565,7 @@ describe('hydrateState', () => {
     expect(twice.queueAdmissionGate).toEqual(gate);
     expect(twiceReservation).toEqual(onceReservation);
     expect(twiceReservation).toMatchObject({
-      id: 't1', status: 'reserved', reservationOwnerStaffId: 'guide-a',
+      id: 't1', status: 'reserved', diningPartyId: 'party-a',
     });
   });
 
@@ -691,6 +729,7 @@ describe('hydrateState', () => {
       paidCount: 1, unaffordableCount: 0, reputationDelta: 0.016,
     };
     const completedPayment = { customerId: 'c1', revenue: 12 };
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const hydrated = hydrateState({
       ...fresh,
       customers: [{
@@ -706,6 +745,7 @@ describe('hydrateState', () => {
       partyReviewHistory: [completedReview],
     }, fresh);
 
+    expect(randomSpy).not.toHaveBeenCalled();
     expect(hydrated.completedCustomers).toEqual([completedPayment]);
     expect(hydrated.pendingPartyReviews).toEqual([]);
     expect(hydrated.partyReviewHistory).toEqual([completedReview]);

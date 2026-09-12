@@ -6,7 +6,7 @@ import { normaliseOperatingHour } from '../simulation/clock';
 import { normaliseConsumptionState } from '../simulation/consumption';
 import { isCheckoutState } from '../simulation/checkout';
 import { normaliseCustomerQueue, normaliseQueueDepartures, normaliseQueueSlots, reconcileQueueSlots } from '../simulation/customerQueue';
-import { normaliseTableReservationOwners } from '../simulation/guidance';
+import { reconcileSelfSeatingState } from '../simulation/selfSeating';
 import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
 import { createMovementCoordinator } from '../simulation/navigation/coordinator';
 import { SAVE_VERSION } from './saveVersion';
@@ -72,7 +72,7 @@ export function hydrateState(saved, fresh) {
   // Partial domain fixtures may omit a version; imported saves are version-gated
   // by loadState/Settings before reaching this normalisation boundary.
   if (saved.version != null && saved.version !== SAVE_VERSION) {
-    throw new Error('Saved game is incompatible with the current navigation version');
+    throw new Error('Saved game is incompatible with the current game version');
   }
   const staff = (saved.staff || fresh.staff || []).map(character => ({
     ...character,
@@ -132,7 +132,7 @@ export function hydrateState(saved, fresh) {
     !completedCustomerIds.has(item?.customerId)
       || !['ordered', 'preparing'].includes(item?.state));
   if ('tables' in saved || 'tables' in fresh) {
-    hydrated.tables = normaliseTableReservationOwners(saved.tables || fresh.tables || [], staff);
+    hydrated.tables = saved.tables || fresh.tables || [];
   }
   hydrated.restaurant.openHour = normaliseOperatingHour(
     hydrated.restaurant.openHour,
@@ -192,8 +192,9 @@ export function hydrateState(saved, fresh) {
     seedQueueSlots,
   );
 
+  const residencies = hydrateMovementResidencies(normaliseDoorAdmissions(hydrated));
   return {
-    ...hydrateMovementResidencies(normaliseDoorAdmissions(hydrated)),
+    ...reconcileSelfSeatingState(residencies),
     version: fresh.version,
     movementCoordinator: createMovementCoordinator(),
   };

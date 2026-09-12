@@ -35,7 +35,6 @@ vi.mock('./components/BookIcon', () => ({
 vi.mock('./components/MenuIcon', () => ({
   default: ({ onClick }) => <button onClick={onClick}>Menu</button>,
 }));
-vi.mock('./components/SpeedControls', () => ({ default: () => null }));
 vi.mock('./components/Toast', () => ({ default: () => null }));
 vi.mock('./panels/ManagementModal', () => ({
   default: ({ isOpen }) => isOpen ? <div>Management panel</div> : null,
@@ -150,5 +149,24 @@ describe('settings menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Empty canvas' }));
 
     expect(screen.queryByText('Menu panel')).not.toBeInTheDocument();
+  });
+
+  it('mounts the Space shortcut owner exactly once so a keypress toggles a single time', () => {
+    render(<App />);
+
+    expect(screen.getAllByRole('button', { name: 'Resume game' })).toHaveLength(1);
+
+    fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+    fireEvent.keyDown(window, { key: ' ', code: 'Space', repeat: true });
+
+    expect(dispatch.mock.calls).toEqual([[{ type: 'TOGGLE_PAUSE' }]]);
+  });
+
+  it('dispatches one pause toggle when the pause button is clicked', () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume game' }));
+
+    expect(dispatch.mock.calls).toEqual([[{ type: 'TOGGLE_PAUSE' }]]);
   });
 });

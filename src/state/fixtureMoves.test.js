@@ -467,27 +467,31 @@ describe('moveFixtures', () => {
     expect(result.serviceItems[0]).toMatchObject({ x: 410, y: 160 });
   });
 
-  it('invalidates all routed actors when a door moves and safely cancels guidance', () => {
+  it('invalidates routed actors when a door moves and preserves self-seating reservations', () => {
     const state = makeState({
       tables: [
-        { id: 't1', seats: 2, status: 'reserved', reservationOwnerStaffId: 'guide', x: 200, y: 200 },
-        { id: 't2', seats: 1, status: 'reserved', reservationOwnerStaffId: 'other-guide', x: 400, y: 200 },
+        {
+          id: 't1', seats: 2, status: 'reserved', x: 200, y: 200,
+          diningPartyId: 'p1', diningCustomerIds: ['c1'],
+          seatingAssignments: [{
+            customerId: 'c1', chairId: 'ch1',
+            approachCell: { x: 9, y: 9 }, approachPoint: { x: 180, y: 180 },
+          }],
+        },
+        { id: 't2', seats: 1, status: 'reserved', x: 400, y: 200 },
       ],
       kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
       washStations: [{ id: 'wash1', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],
       staff: [
-        {
-          id: 'guide', role: 'waiter', navigationGoal: { x: 200, y: 200 },
-          task: { type: 'guide_customer', customerIds: ['c1'], tableId: 't1', chairIds: ['ch1'] },
-        },
+        { id: 'waiter', role: 'waiter', navigationGoal: { x: 224, y: 200 }, task: { type: 'take_order', customerId: 'c2' } },
         { id: 'janitor', role: 'janitor', navigationGoal: { x: 220, y: 200 }, task: { type: 'clean_floor', dirtId: 'd1' } },
         { id: 'cook', role: 'cook', navigationGoal: { x: 100, y: 120 }, task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' } },
         { id: 'washer', role: 'janitor', navigationGoal: { x: 300, y: 120 }, task: { type: 'wash_item', serviceItemId: 'i2', washStationId: 'wash1' } },
       ],
       customers: [
         {
-          id: 'c1', state: 'guided', guideStaffId: 'guide', tableId: 't1', chairId: null,
-          x: 100, y: 200, navigationGoal: { x: 200, y: 200 },
+          id: 'c1', state: 'entering', tableId: 't1', chairId: 'ch1',
+          x: 180, y: 180, navigationGoal: { x: 180, y: 180 },
         },
         { id: 'c2', state: 'paying', x: 700, y: 300, navigationGoal: { x: 800, y: 200 } },
         { id: 'c3', state: 'waiting_for_items' },
@@ -508,23 +512,47 @@ describe('moveFixtures', () => {
       { type: 'door', id: 'door1', x: 907, y: 440 },
     ]);
 
+    expect(result.queueAdmissionGate ?? null).toBeNull();
     expect(result.staff.every(worker => worker.task == null && !worker.navigationGoal)).toBe(true);
-    expect(result.customers[0]).toMatchObject({
-      state: 'waiting', guideStaffId: null, tableId: null, chairId: null,
-    });
+    expect(result.customers[0]).toMatchObject({ state: 'entering', tableId: 't1', chairId: 'ch1' });
     expect(result.customers[1]).toMatchObject({ state: 'paying' });
-    expect(result.customers[0]).not.toHaveProperty('navigationGoal');
     expect(result.customers[1]).not.toHaveProperty('navigationGoal');
-    expect(result.tables[0]).toEqual({ id: 't1', seats: 2, status: 'empty', x: 200, y: 200 });
-    expect(result.tables[1]).toMatchObject({
-      status: 'reserved', reservationOwnerStaffId: 'other-guide',
+    expect(result.tables[0]).toMatchObject({
+      id: 't1', status: 'reserved', diningPartyId: 'p1', diningCustomerIds: ['c1'],
     });
+    expect(result.tables[1]).toMatchObject({ id: 't2', status: 'reserved' });
     expect(result.serviceItems[0]).toMatchObject({
       state: 'ordered', stationId: null, assignedStaffId: null, preparationStartedAt: null,
     });
     expect(result.serviceItems[1]).toMatchObject({
       state: 'queued_for_wash', washStationId: 'wash1', washStartedAt: null,
     });
+  });
+
+  it('invalidates only the gate whose own door moved', () => {
+    const base = makeState({
+      doors: [{ id: 'door1', y: 340 }, { id: 'door2', y: 180 }],
+      tables: [{
+        id: 't1', seats: 1, status: 'reserved', x: 200, y: 200,
+        diningPartyId: 'p1', diningCustomerIds: ['c1'],
+        seatingAssignments: [{
+          customerId: 'c1', chairId: 'ch1',
+          approachCell: { x: 9, y: 9 }, approachPoint: { x: 180, y: 180 },
+        }],
+      }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180, rotation: 2 }],
+      customers: [{
+        id: 'c1', partyId: 'p1', state: 'entering', tableId: 't1', chairId: 'ch1',
+        x: 1000, y: 360, navigationGoal: { x: 1000, y: 360 },
+      }],
+      queueAdmissionGate: { partyId: 'p1', customerIds: ['c1'], tableId: 't1', doorId: 'door1' },
+    });
+
+    const unrelated = moveFixtures(base, [{ type: 'door', id: 'door2', x: 907, y: 200 }]);
+    expect(unrelated.queueAdmissionGate).toEqual(base.queueAdmissionGate);
+
+    const matching = moveFixtures(base, [{ type: 'door', id: 'door1', x: 907, y: 440 }]);
+    expect(matching.queueAdmissionGate).toBeNull();
   });
 
   it('reroutes around a moved fixture while independent traffic keeps moving', () => {

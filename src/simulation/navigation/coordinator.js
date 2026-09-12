@@ -22,8 +22,7 @@ export function createMovementCoordinator() {
 }
 
 function priority(actor, entry) {
-  if (entry?.doorFlow === 'egress') return 0;
-  if (actor.state === 'guided' || actor.task?.type === 'guide_customer') return 1;
+  if (entry?.doorFlow?.direction === 'egress') return 0;
   return actor.activityPhase === 'idle_roaming' ? 4 : 2;
 }
 

@@ -89,7 +89,7 @@ describe('checkout state', () => {
     });
   });
 
-  it('waits queued when no cashier station is staffed', () => {
+  it('assigns a physical queue destination at an existing unstaffed cashier', () => {
     const customers = [{
       id: 'c1', state: 'checkout_queued', paymentQueuedAt: 10, x: 400, y: 300,
     }];
@@ -97,8 +97,43 @@ describe('checkout state', () => {
     const result = prepareCheckoutCustomers({ ...state, staff: [], customers }, customers);
 
     expect(result[0]).toMatchObject({
-      state: 'checkout_queued', cashierStationId: null,
+      state: 'checkout_moving', cashierStationId: 'register',
+      checkoutPosition: { x: 840, y: 180 }, navigationGoal: { x: 840, y: 180 },
+      paymentReady: false,
     });
+  });
+
+  it('keeps queued holding when no cashier station exists', () => {
+    const customers = [{
+      id: 'c1', state: 'checkout_queued', paymentQueuedAt: 10, x: 400, y: 300,
+    }];
+
+    const result = prepareCheckoutCustomers({
+      ...state, staff: [], cashierStations: [], customers,
+    }, customers);
+
+    expect(result[0]).toMatchObject({ state: 'checkout_queued', cashierStationId: null });
+  });
+
+  it('requeues an unstaffed processor but keeps a physically moving diner', () => {
+    const processing = {
+      id: 'processing', state: 'checkout_processing', paymentQueuedAt: 1,
+      cashierStationId: 'register', checkoutPosition: { x: 840, y: 180 },
+      paymentReady: false, x: 840, y: 180,
+    };
+    const moving = {
+      id: 'moving', state: 'checkout_moving', paymentQueuedAt: 2,
+      cashierStationId: 'register', paymentReady: false, x: 400, y: 300,
+    };
+
+    const result = prepareCheckoutCustomers({
+      ...state, staff: [], customers: [processing, moving],
+    }, [processing, moving]);
+
+    expect(result.find(customer => customer.id === 'processing'))
+      .toMatchObject({ state: 'checkout_queued', cashierStationId: null });
+    expect(result.find(customer => customer.id === 'moving'))
+      .toMatchObject({ state: 'checkout_moving', cashierStationId: 'register' });
   });
 
   it('requeues processing when its matching cashier task is stale', () => {

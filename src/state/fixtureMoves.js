@@ -8,6 +8,7 @@ import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout
 import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
 import { createNavigationWorkspace } from '../simulation/movement/navigationWorkspace';
 import { reconcileFixtureResidencies } from '../simulation/movement/seatedDeparture';
+import { reconcileSelfSeatingState } from '../simulation/selfSeating';
 
 const PHYSICALLY_SEATED_CUSTOMER_STATES = new Set([
   'seated',
@@ -104,13 +105,6 @@ function taskIsAffected(task, affected) {
     || intersectsIds(task.customerIds, affected.customerIds);
 }
 
-function releaseGuideReservation(table, guideId, task) {
-  if (table.id !== task.tableId || table.status !== 'reserved'
-    || table.reservationOwnerStaffId !== guideId) return table;
-  const { reservationOwnerStaffId: _reservationOwnerStaffId, ...released } = table;
-  return { ...released, status: 'empty' };
-}
-
 export function moveFixtures(state, requestedMoves) {
   const expandedMoves = expandFixtureMoves(state, requestedMoves);
   if (!expandedMoves || expandedMoves.length === 0) return state;
@@ -139,7 +133,8 @@ export function moveFixtures(state, requestedMoves) {
   const serviceTableIds = idsByType.get('serviceTable') || new Set();
   const cashierIds = idsByType.get('cashierTable') || new Set();
   const washStationIds = idsByType.get('washStation') || new Set();
-  const doorMoved = (idsByType.get('door')?.size || 0) > 0;
+  const movedDoorIds = idsByType.get('door') || new Set();
+  const doorMoved = movedDoorIds.size > 0;
   const movedCashierStaffIds = new Set((state.cashierStations || [])
     .filter(station => cashierIds.has(station.id) && station.assignedStaffId != null)
     .map(station => station.assignedStaffId));
@@ -169,15 +164,11 @@ export function moveFixtures(state, requestedMoves) {
   };
 
   let next = applyValidatedMoves(state, moves);
-  const cancelledGuides = [];
   const cancelledTasks = [];
   const cancelledPaymentCustomerIds = new Set();
   next.staff = (state.staff || []).map(worker => {
     const affectedTask = taskIsAffected(worker.task, affected) || (doorMoved && worker.task != null);
     if (affectedTask) cancelledTasks.push({ workerId: worker.id, task: worker.task });
-    if (affectedTask && worker.task.type === 'guide_customer') {
-      cancelledGuides.push({ guideId: worker.id, task: worker.task });
-    }
     if (affectedTask && worker.task.type === 'take_payment'
       && cashierIds.has(worker.task.stationId)) {
       cancelledPaymentCustomerIds.add(worker.task.customerId);
@@ -187,11 +178,6 @@ export function moveFixtures(state, requestedMoves) {
       ? cancelNavigation(worker)
       : worker;
   });
-
-  next.tables = (next.tables || []).map(table => cancelledGuides.reduce(
-    (current, guide) => releaseGuideReservation(current, guide.guideId, guide.task),
-    table,
-  ));
 
   next.customers = (state.customers || []).map(customer => {
     let updated = customer;
@@ -213,22 +199,6 @@ export function moveFixtures(state, requestedMoves) {
       updated = requeueCheckoutCustomer(updated);
     }
 
-    const cancelledGuide = cancelledGuides.find(guide => {
-      const customerIds = guide.task.customerIds
-        || (guide.task.customerId ? [guide.task.customerId] : []);
-      return customerIds.includes(updated.id)
-        && updated.state === 'guided'
-        && updated.guideStaffId === guide.guideId;
-    });
-    if (cancelledGuide) {
-      updated = cancelNavigation({
-        ...updated,
-        state: 'waiting',
-        guideStaffId: null,
-        tableId: null,
-        chairId: null,
-      });
-    }
     return updated;
   });
 
@@ -271,5 +241,11 @@ export function moveFixtures(state, requestedMoves) {
     return item;
   });
 
-  return normaliseServiceItemOwnership(reconcileFixtureResidencies(state, next, createNavigationWorkspace(next)));
+  // Invalidate only the gate whose own door moved; an unrelated door edit must
+  // leave the active crossing gate intact so reassessment stays per-door.
+  if (next.queueAdmissionGate != null && movedDoorIds.has(next.queueAdmissionGate.doorId)) {
+    next.queueAdmissionGate = null;
+  }
+  const residencies = reconcileFixtureResidencies(state, next, createNavigationWorkspace(next));
+  return normaliseServiceItemOwnership(reconcileSelfSeatingState(residencies));
 }
