@@ -1,8 +1,7 @@
 import { getQueueProjectedMembers } from './customerQueue.js';
-import {
-  minimumTrajectoryDistance,
-  resolveCharacterMovementBatchWithDiagnostics,
-} from './movement.js';
+import { advanceCharacterMovementBatch } from './movement';
+import { createMovementMetrics, summariseMovementMetrics } from './movementMetrics';
+import { nonTimingSummary, recordStressTick } from './navigation/stressDiagnostics';
 import { getQueueAdmissionGateStatus } from './queueAdmission.js';
 import {
   getStaffMovementEntries,
@@ -52,7 +51,6 @@ export function buildCustomerQueueStressState() {
       morale: 80,
       x: 860,
       y: 360,
-      path: [],
       task: null,
       carryingServiceItemId: null,
     }],
@@ -138,7 +136,7 @@ function assertLogicalQueueRecords(state) {
   for (const party of state.queue || []) {
     for (const member of party.members || []) {
       if (Number.isFinite(member.x) || Number.isFinite(member.y)
-        || Object.hasOwn(member, 'path') || Object.hasOwn(member, 'pathGoal')) {
+        || Object.hasOwn(member, 'navigationGoal')) {
         throw new Error(`Queued customer ${member.id} became a movement or route actor`);
       }
     }
@@ -161,11 +159,6 @@ function minimumMaterialisationSpacing(state, materialisedIds) {
   return minimum;
 }
 
-function entriesIgnorePair(left, right) {
-  return (left.ignoredIds || []).some(id => String(id) === String(right.character.id))
-    || (right.ignoredIds || []).some(id => String(id) === String(left.character.id));
-}
-
 function resetAfterCompletion(state, partyId) {
   return {
     ...state,
@@ -176,12 +169,9 @@ function resetAfterCompletion(state, partyId) {
           ...worker,
           x: 860,
           y: 360,
-          path: [],
+          navigationGoal: null,
           task: null,
           activityPhase: 'stationed',
-          stalledFor: 0,
-          minimumSpacing: 16,
-          usingStaticFallback: false,
         }
       : worker),
     tables: state.tables.map(table => {
@@ -192,7 +182,12 @@ function resetAfterCompletion(state, partyId) {
   };
 }
 
-export function runCustomerQueueStressScenario({ cycles, movementDt }) {
+export function buildCustomerQueueNonTimingProjection(result) {
+  const { timings: _timings, summary, ...projection } = result;
+  return { ...projection, summary: nonTimingSummary(summary) };
+}
+
+export function runCustomerQueueStressScenario({ cycles, movementDt, metrics = createMovementMetrics() }) {
   if (!Number.isInteger(cycles) || cycles < 1) {
     throw new Error('Customer queue stress cycles must be a positive integer');
   }
@@ -213,7 +208,8 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
   let minimumSpacing = Infinity;
   let allCoordinatesFinite = true;
   const gateOwnerPartyIds = new Set();
-  const tickMilliseconds = [];
+  const timings = { ticks: [], batches: [], planner: [], executor: [] };
+  const tickRecords = [];
 
   const observeGateOwners = currentState => {
     const ownerPartyIds = getValidatedGateOwnerPartyIds(currentState);
@@ -243,27 +239,25 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
       throw new Error(`Queued customers entered movement planning: ${queuedEntries.join(', ')}`);
     }
 
-    const { moved, trajectories } = resolveCharacterMovementBatchWithDiagnostics(
+    const before = { batch: metrics.batchMilliseconds, planner: metrics.plannerMilliseconds, executor: metrics.executorMilliseconds };
+    const batch = advanceCharacterMovementBatch(
       state,
       entries,
       movementDt,
+      metrics,
     );
-    for (let left = 0; left < entries.length; left += 1) {
-      for (let right = left + 1; right < entries.length; right += 1) {
-        if (entriesIgnorePair(entries[left], entries[right])) continue;
-        minimumSpacing = Math.min(minimumSpacing, minimumTrajectoryDistance(
-          trajectories.get(entries[left].character.id),
-          trajectories.get(entries[right].character.id),
-        ));
-      }
-    }
+    const record = recordStressTick(state, entries, batch, movementDt, metrics);
+    tickRecords.push(record);
+    minimumSpacing = Math.min(minimumSpacing, record.minimumSweptSpacing, record.minimumEndpointSpacing);
+    const { moved, statuses } = batch;
     state = {
       ...state,
+      movementCoordinator: batch.coordinator,
       staff: state.staff.map(actor => moved.get(actor.id) || actor),
       customers: state.customers.map(actor => moved.get(actor.id) || actor),
     };
     const customerIdsBeforeResolution = new Set(state.customers.map(customer => customer.id));
-    state = resolveStaffAfterMovement(state, movementDt);
+    state = resolveStaffAfterMovement(state, movementDt, statuses);
     const materialisedIds = new Set(state.customers
       .filter(customer => !customerIdsBeforeResolution.has(customer.id))
       .map(customer => customer.id));
@@ -296,18 +290,25 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
       ticksForCurrentParty = 0;
     }
 
-    tickMilliseconds.push(elapsedNow() - tickStartedAt);
+    timings.batches.push(metrics.batchMilliseconds - before.batch);
+    timings.planner.push(metrics.plannerMilliseconds - before.planner);
+    timings.executor.push(metrics.executorMilliseconds - before.executor);
+    timings.ticks.push(elapsedNow() - tickStartedAt);
     if (ticksForCurrentParty >= MAX_TICKS_PER_PARTY) {
       const partyId = state.queueAdmissionGate?.partyId
         || state.staff.find(worker => worker.task?.type === 'guide_customer')?.task?.partyId
         || state.queue[0]?.partyId
         || 'unknown';
-      throw new Error(`Customer queue stress party ${partyId} did not complete within 5,000 ticks`);
+      const error = new Error(`Customer queue stress party ${partyId} did not complete within 5,000 ticks`);
+      error.evidence = { completedPartyIds, ticks, minimumSpacing,
+        summary: summariseMovementMetrics(metrics), lastTick: record };
+      throw error;
     }
   }
 
   return {
     cycles,
+    navigationVersion: state.movementCoordinator.version,
     ticks,
     completedPartyIds,
     throughput: completedPartyIds.length / ticks,
@@ -320,6 +321,13 @@ export function runCustomerQueueStressScenario({ cycles, movementDt }) {
     replacementPartyIds,
     allCoordinatesFinite,
     movementEntryIds,
-    tickMilliseconds,
+    timings,
+    tickRecords,
+    summary: summariseMovementMetrics(metrics),
+    maxExpansionsPerTick: Math.max(...tickRecords.map(tick => tick.expansionsThisTick)),
+    maximumActorQuantum: tickRecords.reduce((maximum, tick) => Math.max(maximum, ...tick.actorQuanta), 0),
+    maximumGroupQuantum: tickRecords.reduce((maximum, tick) => Math.max(maximum, ...tick.groupQuanta), 0),
+    allMovementScheduled: tickRecords.every(tick => tick.allMovementScheduled),
+    allWithinSpeedBudget: tickRecords.every(tick => tick.allWithinSpeedBudget),
   };
 }

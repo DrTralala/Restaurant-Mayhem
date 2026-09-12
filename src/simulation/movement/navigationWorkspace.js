@@ -21,18 +21,26 @@ function blockRect(blocked, rect) {
   }
 }
 
-export function buildBlockedCells(state, metrics = null) {
-  if (metrics) metrics.blockedCellBuilds += 1;
-  const blocked = new Set();
-  for (const table of state.tables || []) blockRect(blocked, { x: table.x, y: table.y, w: 40, h: 40 });
-  for (const chair of state.chairs || []) blockRect(blocked, { x: chair.x, y: chair.y, w: 20, h: 20 });
-  for (const station of state.kitchenStations || []) blockRect(blocked, { x: station.x, y: station.y, w: 40, h: 40 });
+export function navigationFixtureRectangles(state) {
+  const rectangles = [];
+  const add = (kind, fixture, w, h) => rectangles.push({
+    kind, id: fixture.id, x: fixture.x, y: fixture.y, w, h,
+  });
+  for (const table of state.tables || []) add('table', table, 40, 40);
+  for (const chair of state.chairs || []) add('chair', chair, 20, 20);
+  for (const station of state.kitchenStations || []) add('kitchen', station, 40, 40);
   for (const service of state.serviceTables || []) {
     const dimensions = getPlaceableDimensions('serviceTable', service.rotation);
-    blockRect(blocked, { x: service.x, y: service.y, w: dimensions.width, h: dimensions.height });
+    add('service', service, dimensions.width, dimensions.height);
   }
-  for (const cashier of state.cashierStations || []) blockRect(blocked, cashier);
-  for (const station of state.washStations || []) blockRect(blocked, { x: station.x, y: station.y, w: station.w || 40, h: station.h || 40 });
+  for (const cashier of state.cashierStations || []) add('cashier', cashier, cashier.w, cashier.h);
+  for (const station of state.washStations || []) add('wash', station, station.w || 40, station.h || 40);
+  return rectangles;
+}
+
+export function buildBlockedCells(state, metrics = null) {
+  const blocked = new Set();
+  for (const rect of navigationFixtureRectangles(state)) blockRect(blocked, rect);
   const world = getRestaurantWorld(state.restaurant || {});
   blockRect(blocked, { x: world.doorX, y: world.kitchenY, w: 6, h: world.floorH });
   const wallCellX = worldToCell({ x: world.doorX, y: 0 }).x;
@@ -42,13 +50,6 @@ export function buildBlockedCells(state, metrics = null) {
     for (let y = firstDoorCell; y <= lastDoorCell; y += 1) blocked.delete(cellKey({ x: wallCellX, y }));
   }
   return blocked;
-}
-
-export function buildOccupiedCharacterCells(characters, excludedIds = []) {
-  const excluded = new Set(excludedIds);
-  return new Set((characters || [])
-    .filter(character => !excluded.has(character.id) && Number.isFinite(character.x) && Number.isFinite(character.y))
-    .map(character => cellKey(worldToCell(character))));
 }
 
 export function isInsideWorld(state, cell) {
@@ -92,15 +93,29 @@ export function isNavigationWorkspaceForState(workspace, state) {
 export function createNavigationWorkspace(state, metrics = null) {
   const world = getRestaurantWorld(state?.restaurant || {});
   const blocked = buildBlockedCells(state, metrics);
+  const bounds = Object.freeze({
+    left: world.floorX,
+    right: world.queueX + world.queueW,
+    top: world.kitchenY,
+    bottom: world.diningY + world.areaH + 50,
+  });
+  const blockedCellKeys = Object.freeze([...blocked].sort());
   return Object.freeze({
     state,
-    bounds: Object.freeze({
-      left: world.floorX,
-      right: world.queueX + world.queueW,
-      top: world.kitchenY,
-      bottom: world.diningY + world.areaH + 50,
-    }),
+    bounds,
     blockedCells: readOnlyBlockedLookup(blocked),
+    blockedCellKeys,
+    topologyFingerprint: JSON.stringify([
+      bounds.left,
+      bounds.right,
+      bounds.top,
+      bounds.bottom,
+      blockedCellKeys,
+      navigationFixtureRectangles(state).map(rect => JSON.stringify(rect)).sort(),
+      (state.chairs || []).map(chair => JSON.stringify([
+        chair.id, chair.tableId, chair.rotation ?? 0,
+      ])).sort(),
+    ]),
   });
 }
 
@@ -134,30 +149,6 @@ export function isSafeWorldSegment(state, start, end, workspace = null) {
   const bounds = resolveNavigationBounds(state, workspace);
   return isSafeWorldAxis(start.x, end.x, bounds.left, bounds.right)
     && isSafeWorldAxis(start.y, end.y, bounds.top, bounds.bottom);
-}
-
-export function furthestWorldSegmentEndpoint(state, start, end, workspace = null) {
-  if (!state || isSafeWorldSegment(state, start, end, workspace)) return end;
-  const bounds = resolveNavigationBounds(state, workspace);
-  let ratio = 1;
-  for (const [coordinate, minimum, maximum] of [
-    ['x', bounds.left, bounds.right],
-    ['y', bounds.top, bounds.bottom],
-  ]) {
-    const origin = start[coordinate];
-    const delta = end[coordinate] - origin;
-    if ((origin < minimum && delta <= 0) || (origin > maximum && delta >= 0)) return start;
-    if (delta > 0 && origin + delta > maximum) {
-      ratio = Math.min(ratio, (maximum - origin) / delta);
-    } else if (delta < 0 && origin + delta < minimum) {
-      ratio = Math.min(ratio, (minimum - origin) / delta);
-    }
-  }
-  if (ratio <= 0) return start;
-  return {
-    x: start.x + (end.x - start.x) * ratio,
-    y: start.y + (end.y - start.y) * ratio,
-  };
 }
 
 export function isSafeSegment(state, start, end, { workspace = null, metrics = null } = {}) {

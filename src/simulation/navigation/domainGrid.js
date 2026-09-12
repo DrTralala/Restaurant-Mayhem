@@ -1,0 +1,136 @@
+import { createGrid } from './grid';
+import { cellToWorld, worldToCell } from '../movement/navigationWorkspace';
+import { getDoorPosition, getDoors } from '../world';
+import { recordSeatResidency } from '../movement/seatedDeparture';
+
+const finite = p => p && Number.isFinite(p.x) && Number.isFinite(p.y);
+const same = (a, b) => finite(a) && finite(b) && a.x === b.x && a.y === b.y;
+const point = p => ({ x: p.x, y: p.y });
+const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+function freezeResidency(record) {
+  return Object.freeze({ ...record, position: Object.freeze(point(record.position)),
+    connector: record.connector ? Object.freeze({ ...record.connector,
+      from: Object.freeze(point(record.connector.from)), to: Object.freeze(point(record.connector.to)) }) : null });
+}
+
+function fractionOnSegment(p, from, to) {
+  if (!finite(p) || !finite(from) || !finite(to)) return null;
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const squared = dx * dx + dy * dy;
+  if (!squared) return same(p, from) ? 0 : null;
+  const fraction = ((p.x - from.x) * dx + (p.y - from.y) * dy) / squared;
+  // Geometric reconstruction tolerance, not a reduction of collision clearance.
+  if (fraction < 0 || fraction > 1 || Math.hypot(p.x - from.x - fraction * dx,
+    p.y - from.y - fraction * dy) > 1e-9) return null;
+  return fraction;
+}
+
+function exitGrid(state, actor, base) {
+  if (actor.state !== 'leaving' || actor.exitPhase !== 'fading' || !finite(actor.navigationGoal)) return null;
+  const door = getDoors(state).find(item => item.id === actor.exitDoorId);
+  if (!door) return null;
+  const origin = getDoorPosition(state, door).outside;
+  const goal = actor.navigationGoal;
+  if (goal.x <= origin.x || Math.abs(distance(origin, goal) - 120) > 1e-8
+    || fractionOnSegment(actor, origin, goal) === null) return null;
+  const edgeFraction = Math.min(1, (base.bounds.right - origin.x) / (goal.x - origin.x));
+  const edge = { x: origin.x + (goal.x - origin.x) * edgeFraction,
+    y: origin.y + (goal.y - origin.y) * edgeFraction };
+  if (edgeFraction < 0 || !base.segmentClear(origin, edge)) return null;
+  const isOpen = p => fractionOnSegment(p, origin, goal) !== null;
+  return Object.freeze({ ...base, signature: `${base.signature}:exit:${actor.id}:${JSON.stringify([origin, goal])}`,
+    isOpen, segmentClear: (a, b) => isOpen(a) && isOpen(b)
+      && fractionOnSegment(b, origin, goal) >= fractionOnSegment(a, origin, goal),
+    neighbours: p => isOpen(p) && !same(p, goal) ? [point(goal)] : [],
+    connectors: () => [],
+  });
+}
+
+export function createActorGrid(state, actor, base = createGrid(state)) {
+  const matches = (state.customers || []).filter(customer => String(customer.id) === String(actor.id));
+  if (matches.length !== 1 || !same(matches[0], actor)) return base;
+  const exit = exitGrid(state, actor, base);
+  if (exit) return exit;
+  const departing = ['checkout_moving', 'checkout_queued', 'leaving'].includes(actor.state);
+  const rejected = departing && actor.seatResidency && actor.seatResidency.phase !== 'clear'
+    ? Object.freeze({ ...base, residencyRevoked: true }) : base;
+  if (base.isOpen(actor) || !departing) return rejected;
+  const chairs = (state.chairs || []).filter(chair => chair.id === actor.chairId && chair.tableId === actor.tableId);
+  const tables = (state.tables || []).filter(table => table.id === actor.tableId);
+  if (chairs.length !== 1 || tables.length !== 1) return rejected;
+  const chair = chairs[0], table = tables[0];
+  const origin = { x: chair.x + 10, y: chair.y + 10 };
+  const record = actor.seatResidency || (same(actor, origin) ? recordSeatResidency(actor, chair, table).seatResidency : null);
+  if (!record || !['seated', 'departing'].includes(record.phase) || record.actorId !== String(actor.id)
+    || !Number.isSafeInteger(record.generation) || record.generation <= 0
+    || (actor.seatResidency && record.generation !== actor.seatingGeneration)
+    || record.partyId !== (actor.partyId == null ? null : String(actor.partyId))
+    || !same(record.position, actor) || !same(record.origin, origin) || !same(record.chair, chair)
+    || record.chair.id !== chair.id || record.chair.tableId !== table.id
+    || (record.chair.rotation ?? 0) !== (chair.rotation ?? 0) || !same(record.table, table)
+    || record.table.id !== table.id) return rejected;
+  const cleared = createGrid({ ...state, chairs: state.chairs.filter(item => item !== chair) });
+  if (!cleared.isOpen(origin) || !cleared.isOpen(actor)) return rejected;
+  const cell = worldToCell(origin);
+  let ports = [];
+  for (const dy of [-1, 0, 1]) for (const dx of [-1, 0, 1]) {
+    if (!dx && !dy) continue;
+    const port = cellToWorld({ x: cell.x + dx, y: cell.y + dy });
+    if (base.isOpen(port) && cleared.segmentClear(origin, port)) ports.push(port);
+  }
+  if (record.phase === 'departing' && record.connector) {
+    const connector = record.connector;
+    if (!same(connector.from, origin) || !ports.some(port => same(port, connector.to))
+      || fractionOnSegment(actor, origin, connector.to) === null) return rejected;
+    ports = ports.filter(port => same(port, connector.to));
+  } else if (!same(actor, origin)) return rejected;
+  // Offset chairs occupy more than the centre's raster cell. Authorise only the
+  // chair's own footprint along the retained connector, never other fixtures.
+  const onDeparture = p => !base.isOpen(p) && cleared.isOpen(p)
+    && ports.some(port => fractionOnSegment(p, actor, port) !== null);
+  const segmentClear = (from, to) => {
+    if (base.isOpen(from)) return base.segmentClear(from, to);
+    return finite(from) && finite(to) && onDeparture(from)
+      && ports.some(port => {
+        const a = fractionOnSegment(from, actor, port), b = fractionOnSegment(to, actor, port);
+        return a !== null && b !== null && b >= a && cleared.segmentClear(from, to);
+      });
+  };
+  return Object.freeze({ ...base,
+    signature: `${base.signature}:seat:${actor.id}:${record.generation}:${JSON.stringify(ports)}`,
+    departure: { origin, ports, record, base },
+    isOpen: p => Boolean(finite(p) && (base.isOpen(p) || onDeparture(p))),
+    segmentClear,
+    neighbours: p => base.isOpen(p) ? base.neighbours(p) : ports.filter(port => segmentClear(p, port)),
+  });
+}
+
+export function commitActorPosition(actor, grid, position, actions) {
+  const moved = { ...actor, ...position };
+  if (grid.residencyRevoked) {
+    moved.seatResidency = Object.freeze({ schema: 1, actorId: String(actor.id),
+      partyId: actor.partyId == null ? null : String(actor.partyId),
+      generation: Number.isSafeInteger(actor.seatingGeneration) ? actor.seatingGeneration : 0, phase: 'revoked' });
+    return moved;
+  }
+  const departure = grid.departure;
+  if (!departure) {
+    if (actor.seatResidency?.phase === 'clear') moved.seatResidency = freezeResidency({ ...actor.seatResidency, position });
+    return moved;
+  }
+  moved.seatingGeneration = departure.record.generation;
+  moved.seatResidency = freezeResidency(departure.record);
+  if (departure.base.isOpen(position)) {
+    moved.seatResidency = freezeResidency({ ...departure.record, phase: 'clear', position, connector: null });
+  } else if (!same(position, actor)) {
+    const firstMove = actions.find(action => !same(action.from, action.to));
+    const port = departure.ports.find(candidate => firstMove
+      && fractionOnSegment(firstMove.to, actor, candidate) !== null);
+    if (!port) throw new Error('Missing committed seat departure connector');
+    moved.seatResidency = freezeResidency({ ...departure.record, phase: 'departing', position,
+      connector: { from: point(departure.origin), to: point(port),
+        fraction: fractionOnSegment(position, departure.origin, port) } });
+  }
+  return moved;
+}

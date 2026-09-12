@@ -1,22 +1,6 @@
-/** Compatibility façade for the decomposed movement kernel. */
+/** Public façade for bounded, reservation-based navigation. */
 export {
-  clearMovementRecoveryMetadata,
-  ensureStaffRuntime,
-  hasArrived,
-  moveCharacterAlongPath,
-  moveCharacterTowards,
-  moveCharacterWithRecovery,
-  moveStaffAlongPath,
-  planCharacterPath,
-} from './movement/pathMotion';
-export {
-  buildTimeParameterizedTrajectory,
-  coincidentStartTrajectoriesSeparateSafely,
-  minimumSweptDistance,
-  minimumTrajectoryDistance,
-} from './movement/trajectory';
-export {
-  resolveCharacterMovementBatch,
-  resolveCharacterMovementBatchWithDiagnostics,
-} from './movement/batchResolver';
-export { solveLocalConflictWithMovementMetrics } from './localConflict/solver';
+  advanceCharacterMovementBatch,
+  createMovementCoordinator,
+} from './navigation/coordinator';
+export { getCharacterMovementStatus } from './movement/status';

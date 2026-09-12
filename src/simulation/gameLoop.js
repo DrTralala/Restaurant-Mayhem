@@ -10,7 +10,7 @@ import {
   prepareStaffForMovement,
   resolveStaffAfterMovement,
 } from './staff';
-import { resolveCharacterMovementBatch } from './movement';
+import { advanceCharacterMovementBatch } from './movement';
 import { updateDirt } from './dirt';
 import { processKitchen } from './kitchen';
 import { updateAutomaticDishwashers } from './dishwashing';
@@ -27,28 +27,42 @@ import { advanceConsumption } from './consumption';
  */
 export function mergeMovementEntries(customerEntries, staffEntries) {
   const byId = new Map();
+  const sourceById = new Map();
+  const shouldReplace = (existing, candidate, source, existingSource) => {
+    if (candidate.provenance === 'guide') {
+      if (existing.provenance !== 'guide') return true;
+      return source === 'staff' && existingSource !== 'staff';
+    }
+    return candidate.provenance !== 'guide'
+      && existing.provenance !== 'guide'
+      && Number(candidate.speed) > 0
+      && !(Number(existing.speed) > 0);
+  };
+  const add = (entry, source) => {
+    if (entry?.character?.id == null) return;
+    const id = String(entry.character.id);
+    const existing = byId.get(id);
+    if (!existing || shouldReplace(existing, entry, source, sourceById.get(id))) {
+      byId.set(id, entry);
+      sourceById.set(id, source);
+    }
+  };
   for (const entry of customerEntries) {
-    if (entry?.character?.id == null) continue;
-    byId.set(entry.character.id, entry);
+    add(entry, 'customer');
   }
   for (const entry of staffEntries) {
-    if (entry?.character?.id == null) continue;
-    const existing = byId.get(entry.character.id);
-    if (!existing) {
-      byId.set(entry.character.id, entry);
-    } else if (entry.provenance === 'guide') {
-      byId.set(entry.character.id, entry);
-    }
+    add(entry, 'staff');
   }
   return [...byId.values()];
 }
 
 /** Replace matching actors in both `customers` and `staff` without changing array order. */
 function commitWorldCharacters(state, moved) {
+  const movedFor = id => moved.get(id) || moved.get(String(id));
   return {
     ...state,
-    customers: (state.customers || []).map(character => moved.get(character.id) || character),
-    staff: (state.staff || []).map(character => moved.get(character.id) || character),
+    customers: (state.customers || []).map(character => movedFor(character.id) || character),
+    staff: (state.staff || []).map(character => movedFor(character.id) || character),
   };
 }
 
@@ -70,18 +84,13 @@ export function runTick(state, timing) {
     getCustomerMovementEntries(s, movementDt),
     getStaffMovementEntries(s),
   );
-  const moved = resolveCharacterMovementBatch(s, entries, movementDt);
-  const fadingMovementIds = new Set(entries
-    .filter(entry => entry.character.state === 'leaving' && entry.character.exitPhase === 'fading')
-    .filter(entry => {
-      const movedCharacter = moved.get(entry.character.id);
-      return movedCharacter
-        && (movedCharacter.x !== entry.character.x || movedCharacter.y !== entry.character.y);
-    })
-    .map(entry => entry.character.id));
-  s = commitWorldCharacters(s, moved);
-  s = resolveCustomersAfterMovement(s, movementDt, fadingMovementIds);
-  s = resolveStaffAfterMovement(s, gameDt);
+  const batch = advanceCharacterMovementBatch(s, entries, movementDt);
+  s = {
+    ...commitWorldCharacters(s, batch.moved),
+    movementCoordinator: batch.coordinator,
+  };
+  s = resolveCustomersAfterMovement(s, movementDt, batch.statuses);
+  s = resolveStaffAfterMovement(s, gameDt, batch.statuses);
 
   s = processKitchen(s);
   s = updateAutomaticDishwashers(s);

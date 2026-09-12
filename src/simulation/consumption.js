@@ -1,6 +1,6 @@
 import { ACTIVITY_DURATIONS, getRemainingFraction } from './activity';
 import { enterCheckout, isCheckoutState } from './checkout';
-import { clearMovementRecoveryMetadata } from './movement';
+import { clearNavigationGoal } from './movement/navigationGoal';
 import { getPartyKey } from './partyReviews';
 
 const DIRTY_STATES = new Set([
@@ -146,20 +146,18 @@ function completeServiceItem(item, gameTime) {
 }
 
 function beginUnaffordableDeparture(customer) {
-  return clearMovementRecoveryMetadata({
-    ...customer,
+  return {
+    ...clearNavigationGoal(customer),
     state: 'leaving',
     departureReason: 'menu_unaffordable',
     exitPhase: 'to_door',
     exitDoorId: null,
     exitFadeProgress: 0,
     exitHeading: null,
-    path: [],
-    stalledFor: 0,
     cashierStationId: null,
     checkoutPosition: null,
     paymentReady: false,
-  });
+  };
 }
 
 export function advanceConsumption(state) {

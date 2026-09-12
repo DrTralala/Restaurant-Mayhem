@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildBlockedCells, findAdjacentOpenCell, findPath, findPathWithDynamicFallback, worldToCell } from './pathfinding';
+import { buildBlockedCells, findAdjacentOpenCell, findPath, worldToCell } from './pathfinding';
 import * as pathfindingFacade from './pathfinding';
 import { createNavigationWorkspace } from './movement/navigationWorkspace';
-import { createMovementMetrics } from './movementMetrics';
 import { GRID_SIZE } from './world';
 
 const state = {
@@ -99,19 +98,38 @@ describe('pathfinding', () => {
     expect(path.some(cell => blocked.has(`${cell.x},${cell.y}`))).toBe(false);
   });
 
-  it('routes around temporarily occupied character cells', () => {
+  it('returns the direct static lattice path between open cells', () => {
     const openState = {
       restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [],
     };
-    const path = findPath(
+    expect(findPath(openState, { x: 5, y: 5 }, { x: 10, y: 5 })).toEqual([
+      { x: 6, y: 5 }, { x: 7, y: 5 }, { x: 8, y: 5 }, { x: 9, y: 5 }, { x: 10, y: 5 },
+    ]);
+  });
+
+  it('rejects any dynamic occupancy option on the static-only path finder', () => {
+    const openState = {
+      restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [],
+    };
+    expect(() => findPath(
       openState,
       worldToCell({ x: 100, y: 300 }),
       worldToCell({ x: 200, y: 300 }),
       { occupiedCells: new Set(['7,15']) },
-    );
+    )).toThrow(/static path options/i);
+  });
 
-    expect(path).not.toContainEqual({ x: 7, y: 15 });
-    expect(path.length).toBeGreaterThan(5);
+  it('does not invent a route through furniture when the static target is enclosed', () => {
+    const unreachable = {
+      restaurant: { expansionLevel: 1 }, tables: [],
+      chairs: [
+        { id: 'cw', x: 280, y: 300 }, { id: 'ce', x: 320, y: 300 },
+        { id: 'cn', x: 300, y: 280 }, { id: 'cs', x: 300, y: 320 },
+      ], kitchenStations: [], serviceTables: [],
+    };
+    const goal = worldToCell({ x: 300, y: 300 });
+    const start = worldToCell({ x: 100, y: 300 });
+    expect(findPath(unreachable, start, goal)).toEqual([]);
   });
 
   it('allows crossing the outside wall only through a door opening', () => {
@@ -129,95 +147,43 @@ describe('pathfinding', () => {
     expect(crossing.y * GRID_SIZE).toBeLessThan(380);
   });
 
-  it('allows an occupied goal while avoiding other occupied cells', () => {
-    const open = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [] };
-    const goal = worldToCell({ x: 200, y: 300 });
-    const path = findPath(open, worldToCell({ x: 100, y: 300 }), goal, {
-      occupiedCells: new Set(['7,15', `${goal.x},${goal.y}`]),
-      allowOccupiedGoal: true,
-    });
-
-    expect(path.at(-1)).toEqual(goal);
-    expect(path).not.toContainEqual({ x: 7, y: 15 });
-  });
-
-  it('falls back to a static route when characters close the dynamic route', () => {
-    const corridor = {
-      restaurant: { expansionLevel: 1 }, tables: [], kitchenStations: [], serviceTables: [],
-      chairs: Array.from({ length: 20 }, (_, index) => ({ id: `wall-${index}`, x: 100 + index * 20, y: 280 }))
-        .concat(Array.from({ length: 20 }, (_, index) => ({ id: `wall-b-${index}`, x: 100 + index * 20, y: 320 }))),
-    };
-    const result = findPathWithDynamicFallback(
-      corridor,
-      worldToCell({ x: 120, y: 300 }),
-      worldToCell({ x: 400, y: 300 }),
-      { occupiedCells: new Set(['10,15']) },
-    );
-
-    expect(result.usedStaticFallback).toBe(false);
-    expect(result.path.length).toBeGreaterThan(0);
-  });
-
-  it('does not invent a route through furniture when the static target is enclosed', () => {
-    const unreachable = {
-      restaurant: { expansionLevel: 1 }, tables: [],
-      chairs: [
-        { id: 'cw', x: 280, y: 300 }, { id: 'ce', x: 320, y: 300 },
-        { id: 'cn', x: 300, y: 280 }, { id: 'cs', x: 300, y: 320 },
-      ], kitchenStations: [], serviceTables: [],
-    };
-    const goal = worldToCell({ x: 300, y: 300 });
-    const start = worldToCell({ x: 100, y: 300 });
-    const result = findPathWithDynamicFallback(unreachable, start, goal, { occupiedCells: new Set() });
-
-    expect(result).toEqual({ path: [], usedStaticFallback: false });
-  });
-
   it('preserves the complete pathfinding API and function arities', () => {
     expect(Object.keys(pathfindingFacade).sort()).toEqual([
       'buildBlockedCells',
-      'buildOccupiedCharacterCells',
       'cellKey',
       'cellToWorld',
       'findAdjacentOpenCell',
       'findAdjacentOpenCells',
       'findPath',
-      'findPathWithDynamicFallback',
       'isInsideWorld',
       'worldToCell',
     ]);
     expect(Object.fromEntries(Object.entries(pathfindingFacade)
       .map(([name, implementation]) => [name, implementation.length]))).toEqual({
       buildBlockedCells: 1,
-      buildOccupiedCharacterCells: 1,
       cellKey: 1,
       cellToWorld: 1,
       findAdjacentOpenCell: 2,
       findAdjacentOpenCells: 2,
       findPath: 3,
-      findPathWithDynamicFallback: 3,
       isInsideWorld: 2,
       worldToCell: 1,
     });
   });
 
   it('reuses one optional workspace across path searches', () => {
-    const metrics = createMovementMetrics();
-    const workspace = createNavigationWorkspace(state, metrics);
+    const workspace = createNavigationWorkspace(state);
     const start = worldToCell({ x: 100, y: 300 });
     const goal = worldToCell({ x: 300, y: 300 });
 
-    const first = findPath(state, start, goal, { workspace, metrics });
-    const second = findPath(state, start, goal, { workspace, metrics });
+    const first = findPath(state, start, goal, { workspace });
+    const second = findPath(state, start, goal, { workspace });
     expect(second).toEqual(first);
-    expect(metrics.blockedCellBuilds).toBe(1);
   });
 
   it('falls back from a malformed optional workspace', () => {
-    const metrics = createMovementMetrics();
     const path = findPath(state, worldToCell({ x: 100, y: 300 }),
-      worldToCell({ x: 300, y: 300 }), { workspace: {}, metrics });
+      worldToCell({ x: 300, y: 300 }), { workspace: {} });
     expect(path.length).toBeGreaterThan(0);
-    expect(metrics.blockedCellBuilds).toBe(1);
   });
 });

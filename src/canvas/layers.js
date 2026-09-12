@@ -10,6 +10,7 @@ import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/d
 import { getQueueDisplayLayout } from '../simulation/customerQueue';
 import { getCustomerConsumptionRemainingFraction } from '../simulation/consumption';
 import { getPlaceableDimensions } from '../data/placeables';
+import { getCharacterMovementStatus } from '../simulation/movement';
 
 function drawVerticalProgress(ctx, x, y, remaining) {
   if (!Number.isFinite(remaining)) return;
@@ -19,8 +20,10 @@ function drawVerticalProgress(ctx, x, y, remaining) {
   ctx.fillStyle = '#ffd400'; ctx.fillRect(x + 1, y + height - filled, 1, filled); ctx.restore();
 }
 
-function staffProgress(state, staff) {
-  if (!staff.task || staff.path?.length) return null;
+function staffProgress(state, staff, movement) {
+  const travellingToTask = staff.navigationGoal
+    && movement.plan !== 'arrived';
+  if (!staff.task || travellingToTask) return null;
   let duration = { take_order: ACTIVITY_DURATIONS.takeOrder, take_payment: ACTIVITY_DURATIONS.takePayment,
     clean_table: ACTIVITY_DURATIONS.wipeFloor, clean_floor: ACTIVITY_DURATIONS.wipeFloor,
     wash_item: ACTIVITY_DURATIONS.manualWash }[staff.task.type];
@@ -429,6 +432,8 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
 
   const renderedStaff = [];
   for (const [index, s] of state.staff.entries()) {
+    const movement = getCharacterMovementStatus(state, s.id);
+    const walking = movement.motion === 'traversing';
     const hasCoords = Number.isFinite(s.x) && Number.isFinite(s.y);
     const pos = hasCoords
       ? { x: s.x, y: s.y }
@@ -438,12 +443,13 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
     const palette = getCharacterPalette(s);
     drawStickFigure(ctx, x, y, palette.figure, {
       id: s.id,
-      walking: Boolean(s.path?.length),
-      cleaning: ['clean_table', 'clean_floor', 'wash_item'].includes(s.task?.type) && !s.path?.length,
+      walking,
+      cleaning: ['clean_table', 'clean_floor', 'wash_item'].includes(s.task?.type)
+        && s.activityPhase === 'working' && !walking,
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
     });
-    drawVerticalProgress(ctx, x + 14, y - 7, staffProgress(state, s));
+    drawVerticalProgress(ctx, x + 14, y - 7, staffProgress(state, s, movement));
 
     ctx.fillStyle = palette.staffName;
     ctx.font = '8px monospace';
@@ -474,6 +480,8 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
   ctx.scale(camera.zoom, camera.zoom);
 
   for (const c of state.customers) {
+    const movement = getCharacterMovementStatus(state, c.id);
+    const walking = movement.motion === 'traversing';
     let cx, cy;
     let seatedGeometry = null;
     const seated = ['seated', 'ordering', 'eating', 'waiting_for_items'].includes(c.state);
@@ -505,15 +513,14 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       seated,
       scale: seated ? 0.7 : 1,
       rotation: 0,
-      walking: c.state === 'leaving'
-        ? !renderOptions.reducedMotion
-        : c.state === 'guided' && Boolean(c.path?.length),
+      walking: ['guided', 'leaving'].includes(c.state) && walking,
       id: c.id,
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
     });
     if (deciding) drawMenu(ctx, seatedGeometry.menu);
-    const consuming = c.state === 'eating' && !c.path?.length;
+    const consuming = c.state === 'eating'
+      && (!c.navigationGoal || movement.plan === 'arrived');
     drawVerticalProgress(ctx, cx + 14, cy - 7, consuming
       ? getCustomerConsumptionRemainingFraction(
         c,

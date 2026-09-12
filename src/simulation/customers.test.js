@@ -1,16 +1,17 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
-  getExitHeading,
-  getQueueSafeExitMovement,
   getCustomerMovementEntries,
+  getExitHeading,
+  getQueueSafeExitGoal,
   prepareCustomersForMovement,
   resolveCustomersAfterMovement,
   spawnCustomers,
   updateCustomers,
 } from './customers';
-import { buildBlockedCells, worldToCell } from './pathfinding';
-import { getQueueProjectedMembers } from './customerQueue';
+import { getQueuePartyCount, getQueueProjectedMembers, getQueueVisibleMembers, reconcileQueueSlots } from './customerQueue';
 import { UPGRADES } from '../data/upgrades';
+import { createInitialState } from '../state/initialState';
+import { hydrateState, loadState, saveState } from '../state/persistence';
 
 const baseState = {
   restaurant: { reputation: 3.0, gameTime: 12 * 3600, openHour: 10, closeHour: 22, totalServed: 0 },
@@ -25,18 +26,6 @@ const baseState = {
   serviceItems: [],
   completedCustomers: [],
 };
-
-function minimumPointToSegmentDistance(point, start, end) {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const divisor = dx * dx + dy * dy;
-  const ratio = divisor === 0 ? 0 : Math.max(0, Math.min(1,
-    ((point.x - start.x) * dx + (point.y - start.y) * dy) / divisor));
-  return Math.hypot(
-    point.x - (start.x + dx * ratio),
-    point.y - (start.y + dy * ratio),
-  );
-}
 
 describe('spawnCustomers', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -131,9 +120,7 @@ describe('spawnCustomers', () => {
       tables: baseState.tables.map(t => ({ ...t, status: 'occupied' })),
     };
     let result = state;
-    for (let i = 0; i < 100; i++) {
-      result = spawnCustomers(result);
-    }
+    for (let i = 0; i < 100; i += 1) result = spawnCustomers(result);
     expect(result.queue.length).toBeGreaterThan(0);
     expect(result.queue[0].members[0].state).toBe('queued');
   });
@@ -181,8 +168,7 @@ describe('spawnCustomers', () => {
       .mockReturnValueOnce(0.7)
       .mockReturnValueOnce(0);
     const result = spawnCustomers(state, 60);
-    const archetypes = ['regular', 'foodie', 'rusher', 'influencer'];
-    expect(archetypes).toContain(result.queue[0].members[0].archetype);
+    expect(['regular', 'foodie', 'rusher', 'influencer']).toContain(result.queue[0].members[0].archetype);
   });
 
   it('assigns a gender to spawned customers', () => {
@@ -219,15 +205,15 @@ describe('spawnCustomers', () => {
 
   it('assigns independent spending profiles to members of one party', () => {
     vi.spyOn(Math, 'random')
-      .mockReturnValueOnce(0)        // spawn
-      .mockReturnValueOnce(0.5)      // couple
-      .mockReturnValueOnce(0)        // regular archetype
-      .mockReturnValueOnce(0)        // member a gender
-      .mockReturnValueOnce(0)        // member a tier
-      .mockReturnValueOnce(0)        // member a budget
-      .mockReturnValueOnce(0)        // member b gender
-      .mockReturnValueOnce(0.999999) // member b tier
-      .mockReturnValueOnce(0.999999);// member b budget
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.5)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.999999)
+      .mockReturnValueOnce(0.999999);
 
     const result = spawnCustomers(baseState, 60);
     const members = result.queue[0].members;
@@ -330,222 +316,461 @@ describe('spawnCustomers', () => {
   });
 });
 
-describe('updateCustomers', () => {
-  it('prepares patience changes without moving customer coordinates', () => {
+function movementState(overrides = {}) {
+  return {
+    ...baseState,
+    doors: [{ id: 'door1', y: 340 }],
+    chairs: [],
+    kitchenStations: [],
+    serviceTables: [],
+    cashierStations: [],
+    ...overrides,
+  };
+}
+
+function status(plan, motion = 'holding') {
+  return { plan, motion };
+}
+
+describe('customer goal preparation and movement descriptors', () => {
+  it('prepares checkout and door goals without changing coordinates', () => {
+    const checkout = {
+      id: 'checkout', state: 'paying', x: 400, y: 300,
+      paymentQueuedAt: 10, patience: 100,
+    };
+    const leaving = {
+      id: 'leaving', state: 'leaving', exitPhase: 'to_door',
+      exitDoorId: 'door1', x: 500, y: 300, patience: 100,
+    };
+    const prepared = prepareCustomersForMovement(movementState({
+      staff: [{ id: 'cashier', role: 'waiter' }],
+      cashierStations: [{ id: 'register', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier' }],
+      customers: [checkout, leaving],
+    }), 0);
+
+    expect(prepared.customers[0]).toMatchObject({
+      state: 'checkout_moving', navigationGoal: { x: 840, y: 180 },
+    });
+    expect(prepared.customers[1]).toMatchObject({
+      state: 'leaving', exitDoorId: 'door1', navigationGoal: { x: 993, y: 360 },
+    });
+    expect(prepared.customers.map(customer => ({ x: customer.x, y: customer.y })))
+      .toEqual([{ x: 400, y: 300 }, { x: 500, y: 300 }]);
+  });
+
+  it('retains a selected door goal across repeated preparation', () => {
+    const customer = {
+      id: 'leaving', state: 'leaving', exitPhase: 'to_door', x: 500, y: 300,
+      patience: 100,
+    };
+    const first = prepareCustomersForMovement(movementState({ customers: [customer] }), 0);
+    const goal = first.customers[0].navigationGoal;
+    const second = prepareCustomersForMovement(first, 0);
+
+    expect(second.customers[0].navigationGoal).toBe(goal);
+    expect(second.customers[0]).toMatchObject({ exitDoorId: 'door1', navigationGoal: { x: 993, y: 360 } });
+  });
+
+  it('emits every finite active customer and synthetic queue blockers without routes', () => {
+    const state = movementState({
+      queue: [{ partyId: 'p1', members: [{ id: 'queued', partyId: 'p1', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'p1', x: 973, y: 390, slot: 0 }],
+      customers: [
+        { id: 'idle', state: 'eating', x: 300, y: 300 },
+        { id: 'missing-position', state: 'eating', x: Number.NaN, y: 300 },
+      ],
+    });
+
+    const entries = getCustomerMovementEntries(state, 1);
+    const projected = getQueueProjectedMembers(state, state.queue)[0];
+    const idle = entries.find(entry => entry.character.id === 'idle');
+    const queued = entries.find(entry => entry.character.id === 'queued');
+
+    expect(entries).toHaveLength(2);
+    expect(idle).toMatchObject({ speed: 0, terminalPolicy: 'hold', queueRank: null });
+    expect(queued).toMatchObject({
+      speed: 0, provenance: 'queue', character: { id: 'queued', x: projected.x, y: projected.y },
+    });
+  });
+
+  it('admits one non-fading customer per door while leaving independent doors concurrent', () => {
     const state = {
       ...baseState,
-      customers: [{ id: 'c1', state: 'waiting', patience: 10, happiness: 50, x: 400, y: 300, path: [] }],
+      restaurant: { ...baseState.restaurant, expansionLevel: 1 },
+      doors: [{ id: 'door1', y: 340 }, { id: 'door2', y: 180 }],
+      customers: [
+        {
+          id: 'door1-first', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+          x: 860, y: 280, navigationGoal: { x: 993, y: 360 },
+        },
+        {
+          id: 'door1-second', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+          x: 860, y: 440, navigationGoal: { x: 993, y: 360 },
+        },
+        {
+          id: 'door2-only', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door2',
+          x: 860, y: 200, navigationGoal: { x: 993, y: 200 },
+        },
+      ],
     };
+
+    const entries = getCustomerMovementEntries(state, 1);
+
+    expect(entries.find(entry => entry.character.id === 'door1-first')).toMatchObject({ speed: 55 });
+    expect(entries.find(entry => entry.character.id === 'door1-second')).toMatchObject({ speed: 0 });
+    expect(entries.find(entry => entry.character.id === 'door2-only')).toMatchObject({ speed: 55 });
+    expect(entries.find(entry => entry.character.id === 'door1-second').character.navigationGoal)
+      .toEqual({ x: 993, y: 360 });
+  });
+
+  it('does not commit synthetic queue blockers into the customer collection', () => {
+    const state = movementState({
+      queue: [{ partyId: 'p1', members: [{ id: 'queued', partyId: 'p1', state: 'queued' }] }],
+      customers: [],
+    });
+
+    const result = updateCustomers(state, { gameDt: 0, movementDt: 0 });
+
+    expect(result.customers).toEqual([]);
+    expect(result.queue).toHaveLength(1);
+    expect(result.movementCoordinator.requests.get('queued').speed).toBe(0);
+    expect(result.movementCoordinator.plans.get('queued').every(action => action.from.x === action.to.x && action.from.y === action.to.y)).toBe(true);
+  });
+
+  it('describes checkout, door, fading, and guided goals with domain priorities', () => {
+    const state = movementState({
+      staff: [{
+        id: 'guide', role: 'waiter', x: 700, y: 300,
+        task: { type: 'guide_customer', customerIds: ['guided'], tableId: 't1' },
+      }],
+      customers: [
+        {
+          id: 'checkout', state: 'checkout_moving', checkoutQueueIndex: 1, cashierStationId: 'register',
+          checkoutPosition: { x: 840, y: 200 }, navigationGoal: { x: 840, y: 200 },
+          x: 400, y: 300,
+        },
+        {
+          id: 'door', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+          navigationGoal: { x: 993, y: 360 }, x: 500, y: 300,
+        },
+        {
+          id: 'fading', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
+          navigationGoal: { x: 1113, y: 360 }, x: 993, y: 360,
+        },
+        {
+          id: 'guided', state: 'guided', guideStaffId: 'guide', entryDoorId: 'door1',
+          navigationGoal: { x: 700, y: 300 }, x: 600, y: 300,
+        },
+      ],
+    });
+
+    const entries = getCustomerMovementEntries(state, 1);
+
+    expect(entries.find(entry => entry.character.id === 'checkout')).toMatchObject({
+      speed: 62, queueRank: 1, terminalPolicy: 'hold',
+      doorFlow: { doorId: null, direction: 'none' },
+    });
+    expect(entries.find(entry => entry.character.id === 'door')).toMatchObject({
+      speed: 55, terminalPolicy: 'hold', doorFlow: { doorId: 'door1', direction: 'egress' },
+    });
+    expect(entries.find(entry => entry.character.id === 'fading')).toMatchObject({
+      speed: 30, terminalPolicy: 'release', doorFlow: { doorId: 'door1', direction: 'egress' },
+    });
+    expect(entries.find(entry => entry.character.id === 'guided')).toMatchObject({
+      speed: 62, provenance: 'guide', doorFlow: { doorId: 'door1', direction: 'ingress' },
+      ignoredIds: ['guide', 'guided'],
+    });
+    expect(entries.find(entry => entry.character.id === 'checkout').provenance).toBe('customer');
+  });
+
+  it('retains the deterministic customer-specific base exit heading', () => {
+    const first = getExitHeading('c1');
+    const repeated = getExitHeading('c1');
+
+    expect(repeated).toEqual(first);
+    expect([-35, 0, 35]).toContain(first.angleDegrees);
+    expect(first.x).toBeGreaterThan(0);
+  });
+
+  it('advances a goal-bearing customer through the public cooperative batch and persists its coordinator', () => {
+    let state = movementState({
+      staff: [{ id: 'cashier', role: 'waiter', x: 840, y: 100 }],
+      cashierStations: [{ id: 'register', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier' }],
+      customers: [{
+        id: 'c1', state: 'checkout_moving', cashierStationId: 'register',
+        paymentQueuedAt: 10, x: 400, y: 300,
+      }],
+    });
+
+    for (let tick = 0; tick < 20; tick += 1) {
+      state = updateCustomers(state, { gameDt: 0, movementDt: 1 });
+    }
+
+    expect(state.movementCoordinator).toBeDefined();
+    expect(state.customers[0]).toMatchObject({
+      checkoutPosition: { x: 840, y: 180 }, paymentReady: true,
+    });
+    expect(Math.hypot(state.customers[0].x - 840, state.customers[0].y - 180)).toBeLessThanOrEqual(2);
+  });
+
+  it('retains finite staff blockers while the customer wrapper advances one persistent batch', () => {
+    const state = movementState({
+      staff: [{
+        id: 'staff-blocker', role: 'waiter', x: 300, y: 300,
+        navigationGoal: { x: 360, y: 300 }, task: null,
+      }],
+      customers: [{
+        id: 'customer', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
+        x: 500, y: 300, navigationGoal: { x: 620, y: 300 },
+      }],
+    });
+
+    const result = updateCustomers(state, { gameDt: 0, movementDt: 1 });
+
+    expect(result.staff[0]).toMatchObject({
+      id: 'staff-blocker', x: 300, y: 300, navigationGoal: { x: 360, y: 300 },
+    });
+    expect(result.movementCoordinator.requests.get('staff-blocker').speed).toBe(0);
+    expect(result.movementCoordinator.requests.has('customer')).toBe(true);
+  });
+});
+
+describe('stable fading goals', () => {
+  it.each([
+    [1, 390, 35],
+    [2, 390, -35],
+    [3, 420, 60],
+    [4, 420, -60],
+    [5, 450, 60],
+  ])('evaluates exit candidates in deterministic order for %s projected members', (memberCount, y, expectedAngle) => {
+    const state = movementState({
+      queue: [{
+        partyId: 'p1',
+        members: Array.from({ length: memberCount }, (_, index) => ({
+          id: `queued-${index}`, state: 'queued',
+        })),
+      }],
+      queueSlots: Array.from({ length: memberCount }, (_, index) => ({
+        memberId: `queued-${index}`,
+        partyId: 'p1',
+        x: 973,
+        y: 390 + index * 30,
+        slot: index,
+      })),
+    });
+    const customer = { id: 'c2', state: 'leaving', x: 933, y };
+    const goal = getQueueSafeExitGoal(state, customer);
+    const angle = Math.round(Math.atan2(goal.y - customer.y, goal.x - customer.x) * 180 / Math.PI);
+
+    expect(angle).toBe(expectedAngle);
+    expect(Math.hypot(goal.x - customer.x, goal.y - customer.y)).toBeCloseTo(120);
+  });
+
+  it('chooses the first clear candidate and returns a full 120 px goal', () => {
+    const state = movementState({ customers: [] });
+    const customer = { id: 'c2', state: 'leaving', x: 993, y: 360 };
+
+    const goal = getQueueSafeExitGoal(state, customer);
+
+    expect(goal).toEqual({ x: 1113, y: 360 });
+    expect(Math.hypot(goal.x - customer.x, goal.y - customer.y)).toBe(120);
+  });
+
+  it('uses preferred-sign 35 degree alternatives after a blocked direct candidate', () => {
+    const state = movementState({
+      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'p1', x: 973, y: 390, slot: 0 }],
+    });
+    const customer = { id: 'c2', state: 'leaving', x: 933, y: 390 };
+    const goal = getQueueSafeExitGoal(state, customer);
+    const angle = Math.round(Math.atan2(goal.y - customer.y, goal.x - customer.x) * 180 / Math.PI);
+
+    expect(angle).toBe(35);
+    expect(Math.hypot(goal.x - customer.x, goal.y - customer.y)).toBeCloseTo(120);
+  });
+
+  it('falls back to the first deterministic heading while retaining the full goal when every prefix is zero', () => {
+    const state = movementState({
+      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'p1', x: 973, y: 390, slot: 0 }],
+    });
+    const customer = { id: 'c1', state: 'leaving', x: 973, y: 390 };
+
+    const goal = getQueueSafeExitGoal(state, customer);
+
+    expect(goal).toEqual({ x: 1093, y: 390 });
+    expect(Math.hypot(goal.x - customer.x, goal.y - customer.y)).toBe(120);
+  });
+
+  it('starts fading only after an arrived door status and creates one stable terminal goal', () => {
+    const atDoor = movementState({
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+        x: 993, y: 360, navigationGoal: { x: 993, y: 360 },
+      }],
+    });
+
+    const faded = resolveCustomersAfterMovement(atDoor, 0, new Map([
+      ['c1', status('arrived')],
+    ]));
+    const customer = faded.customers[0];
+
+    expect(customer).toMatchObject({ exitPhase: 'fading', exitFadeProgress: 0 });
+    expect(Math.hypot(
+      customer.navigationGoal.x - customer.x,
+      customer.navigationGoal.y - customer.y,
+    )).toBeCloseTo(120);
+    const repeated = resolveCustomersAfterMovement(faded, 0, new Map([
+      ['c1', status('planning')],
+    ]));
+    expect(repeated.customers[0].navigationGoal).toBe(customer.navigationGoal);
+  });
+
+  it('does not increase fade progress while the planner is waiting', () => {
+    const state = movementState({
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'fading', x: 993, y: 360,
+        navigationGoal: { x: 1113, y: 360 }, exitFadeProgress: 0,
+      }],
+    });
+
+    const waiting = resolveCustomersAfterMovement(state, 10, new Map([
+      ['c1', status('planning')],
+    ]));
+
+    expect(waiting.customers[0]).toMatchObject({ exitFadeProgress: 0, x: 993, y: 360 });
+  });
+
+  it('derives partial fade progress from actual committed distance', () => {
+    const state = movementState({
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'fading', x: 1023, y: 360,
+        navigationGoal: { x: 1113, y: 360 }, exitFadeProgress: 0,
+      }],
+    });
+
+    const partial = resolveCustomersAfterMovement(state, 99, new Map([
+      ['c1', status('scheduled', 'traversing')],
+    ]));
+
+    expect(partial.customers[0].exitFadeProgress).toBe(0.25);
+  });
+
+  it('commits fading travel against the stable terminal goal rather than a frame-sized target', () => {
+    let state = movementState({
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
+        x: 993, y: 360, navigationGoal: { x: 1113, y: 360 }, exitFadeProgress: 0,
+      }],
+    });
+
+    state = updateCustomers(state, { gameDt: 0, movementDt: 1 });
+    expect(state.customers[0]).toMatchObject({ x: 1023, exitFadeProgress: 0.25 });
+    state = updateCustomers(state, { gameDt: 0, movementDt: 1 });
+    expect(state.customers[0].x).toBeGreaterThan(993);
+    expect(state.customers[0].exitFadeProgress).toBeCloseTo((state.customers[0].x - 993) / 120);
+  });
+
+  it('removes a fading customer only at terminal arrival', () => {
+    const state = movementState({
+      customers: [{
+        id: 'c1', state: 'leaving', exitPhase: 'fading', x: 1113, y: 360,
+        navigationGoal: { x: 1113, y: 360 }, exitFadeProgress: 0.99,
+      }],
+    });
+
+    const completed = resolveCustomersAfterMovement(state, 0, new Map([
+      ['c1', status('arrived')],
+    ]));
+
+    expect(completed.customers).toEqual([]);
+  });
+
+  it('retains stale fade progress when the stable terminal goal is missing or malformed', () => {
+    const states = [
+      movementState({ customers: [{
+        id: 'missing', state: 'leaving', exitPhase: 'fading',
+        x: 1113, y: 360, exitFadeProgress: 1,
+      }] }),
+      movementState({ customers: [{
+        id: 'malformed', state: 'leaving', exitPhase: 'fading',
+        x: 1113, y: 360, navigationGoal: { x: Number.NaN, y: 360 }, exitFadeProgress: 1,
+      }] }),
+      movementState({ customers: [{
+        id: 'stale', state: 'leaving', exitPhase: 'fading',
+        x: 1113, y: 360, navigationGoal: { x: 1200, y: 360 }, exitFadeProgress: 1,
+      }] }),
+    ];
+
+    for (const state of states) {
+      const [customer] = state.customers;
+      const result = resolveCustomersAfterMovement(state, 0, new Map([
+        [customer.id, status('arrived')],
+      ]));
+      expect(result.customers).toHaveLength(1);
+      if (customer.id === 'stale') {
+        expect(result.customers[0].exitFadeProgress).toBeLessThan(1);
+      } else {
+        expect(result.customers[0].exitFadeProgress).toBe(1);
+      }
+    }
+  });
+
+  it('retains a finite-goal fade at progress one while the planner is still waiting', () => {
+    const state = movementState({
+      customers: [{
+        id: 'waiting', state: 'leaving', exitPhase: 'fading',
+        x: 1113, y: 360, navigationGoal: { x: 1113, y: 360 }, exitFadeProgress: 1,
+      }],
+    });
+
+    const result = resolveCustomersAfterMovement(state, 0, new Map([
+      ['waiting', status('planning')],
+    ]));
+
+    expect(result.customers).toHaveLength(1);
+    expect(result.customers[0].exitFadeProgress).toBe(1);
+  });
+});
+
+describe('customer lifecycle', () => {
+  it('prepares patience changes without moving customer coordinates', () => {
+    const state = movementState({
+      customers: [{ id: 'c1', state: 'waiting', patience: 10, happiness: 50, x: 400, y: 300 }],
+    });
 
     const prepared = prepareCustomersForMovement(state, 2);
 
     expect(prepared.customers[0]).toMatchObject({ patience: 8, x: 400, y: 300 });
   });
 
-  it('prepares a paying route without moving customer coordinates', () => {
-    const state = {
-      ...baseState,
-      chairs: [], kitchenStations: [], serviceTables: [],
-      staff: [{ id: 'cashier', role: 'waiter' }],
-      cashierStations: [{
-        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
-      }],
-      customers: [{ id: 'c1', state: 'paying', x: 400, y: 300, patience: 100, paymentQueuedAt: 10 }],
+  it('sets leaving state and reduces happiness when patience runs out', () => {
+    const customer = {
+      id: 'c1', archetype: 'regular', patience: 5, happiness: 80,
+      state: 'waiting', dishId: null, tableId: 't1', tipAmount: 0,
+      seatTime: null, orderTime: null, eatTime: null,
     };
 
-    const prepared = prepareCustomersForMovement(state, 1);
+    const result = updateCustomers({ ...baseState, customers: [customer] }, { gameDt: 10, movementDt: 0 });
 
-    expect(prepared.customers[0]).toMatchObject({ x: 400, y: 300, checkoutPosition: { x: 840, y: 180 } });
-    expect(prepared.customers[0].path.length).toBeGreaterThan(0);
+    expect(result.customers[0]).toMatchObject({ patience: 0, state: 'leaving' });
+    expect(result.customers[0].navigationGoal).toEqual({ x: 993, y: 360 });
+    expect(result.customers[0].happiness).toBeLessThan(80);
   });
 
-  it('prepares customer routes without moving customer coordinates', () => {
-    const stateWithLeavingCustomer = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 900, y: 280, path: [], patience: 10, happiness: 50,
-      }],
-    };
-    const prepared = prepareCustomersForMovement(stateWithLeavingCustomer, 1);
-    expect(prepared.customers[0]).toMatchObject({ x: 900, y: 280 });
-    expect(prepared.customers[0].path.length).toBeGreaterThan(0);
-  });
+  it('makes the whole party leave and lowers reputation once per abandoning party', () => {
+    const customers = [
+      { id: 'c1', partyId: 'p1', state: 'waiting', patience: 1, happiness: 80 },
+      { id: 'c2', partyId: 'p1', state: 'ordering', patience: 100, happiness: 80 },
+    ];
 
-  it('starts exit fading only in post-movement resolution', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 993, y: 360, path: [], patience: 10, happiness: 50,
-      }],
-    };
-    expect(resolveCustomersAfterMovement(state, 1).customers[0].exitPhase).toBe('fading');
-  });
+    const abandoned = updateCustomers({ ...baseState, customers }, 2);
+    const updatedAgain = updateCustomers(abandoned, 2);
 
-  it('removes watchdog metadata when a leaver reaches the fading phase', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      customers: [{
-        id: 'leaver', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 993, y: 360, path: [],
-        stuckWatchdog: {
-          state: 'leaving', goalKey: 'leaving:49,18:993,360',
-          x: 993, y: 360, noProgressFor: 9,
-        },
-      }],
-    };
-
-    const result = resolveCustomersAfterMovement(state, 1);
-
-    expect(result.customers[0].exitPhase).toBe('fading');
-    expect(result.customers[0].stuckWatchdog).toBeUndefined();
-  });
-
-  it('does not advance or remove a customer that starts fading after arrival', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 993, y: 360, path: [], patience: 10, happiness: 50,
-      }],
-    };
-
-    const result = updateCustomers(state, { gameDt: 0, movementDt: 10 });
-
-    expect(result.customers).toHaveLength(1);
-    expect(result.customers[0]).toMatchObject({ exitPhase: 'fading', exitFadeProgress: 0 });
-  });
-
-  it('does not advance fading progress when its displacement is rejected', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      staff: [{ id: 'staff-blocker', role: 'waiter', x: 990, y: 360, path: [] }],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
-        exitHeading: { angleDegrees: 0, x: 1, y: 0 }, exitFadeProgress: 0.5,
-        x: 980, y: 360, path: [], patience: 10, happiness: 50,
-      }],
-    };
-
-    const result = updateCustomers(state, { gameDt: 0, movementDt: 1 });
-
-    expect(result.customers[0]).toMatchObject({ x: 980, y: 360, exitFadeProgress: 0.5 });
-  });
-
-  it('requires explicit movement evidence to advance an already-fading customer', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
-        exitHeading: { angleDegrees: 0, x: 1, y: 0 }, exitFadeProgress: 0.5,
-        x: 980, y: 360, path: [], patience: 10, happiness: 50,
-      }],
-    };
-
-    const result = resolveCustomersAfterMovement(state, 1);
-
-    expect(result.customers[0]).toMatchObject({ x: 980, y: 360, exitFadeProgress: 0.5 });
-  });
-
-  it('stops at the furthest safe prefix before stationary compatibility blockers', () => {
-    const moving = {
-      id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-      x: 960, y: 360, path: [{ x: 49, y: 18 }], pathGoal: { x: 49, y: 18 },
-      patience: 10, happiness: 50,
-    };
-    const baseMovementState = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-    };
-
-    const staffBlocked = updateCustomers({
-      ...baseMovementState,
-      staff: [{ id: 'staff-blocker', role: 'waiter', x: 980, y: 360, path: [] }],
-      customers: [moving],
-    }, 1);
-    const customerBlocked = updateCustomers({
-      ...baseMovementState,
-      customers: [moving, { id: 'stationary', state: 'eating', x: 980, y: 360, path: [] }],
-    }, 1);
-
-    expect(staffBlocked.customers[0].x).toBeCloseTo(964, 5);
-    expect(customerBlocked.customers[0].x).toBeCloseTo(964, 5);
-    expect(staffBlocked.customers[0]).toMatchObject({ y: 360, exitPhase: 'to_door' });
-    expect(customerBlocked.customers[0]).toMatchObject({ y: 360, exitPhase: 'to_door' });
-  });
-
-  it('describes the exact outside-door continuation after the final cell route', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 960, y: 360, path: [{ x: 49, y: 18 }], pathGoal: { x: 49, y: 18 },
-        patience: 10, happiness: 50,
-      }],
-    };
-
-    const [entry] = getCustomerMovementEntries(state, 1);
-
-    expect(entry).toMatchObject({
-      targetAfterPath: { x: 993, y: 360 },
-      ignoredIds: [],
-    });
-  });
-
-  it.each([
-    ['missing guide', [], 'missing'],
-    ['null guide task', [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [], task: null }], 'guide'],
-    ['non-guide task', [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [], task: { type: 'clean_table', tableId: 't1' } }], 'guide'],
-    ['excluded party member', [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [],
-      task: { type: 'guide_customer', customerIds: ['other-party'], tableId: 't1' } }], 'guide'],
-  ])('does not emit customer movement for a stale guided customer with a %s', (_name, staff, guideStaffId) => {
-    const entries = getCustomerMovementEntries({
-      ...baseState,
-      staff,
-      customers: [{
-        id: 'party-1', state: 'guided', guideStaffId, x: 80, y: 120,
-        path: [{ x: 7, y: 6 }],
-      }],
-    }, 1);
-
-    expect(entries).toEqual([]);
-  });
-
-  it.each([
-    ['plural', { customerIds: ['party-1', 'party-2'] }],
-    ['legacy singular', { customerId: 'party-1' }],
-  ])('emits mutually ignored guide movement for a genuine %s party', (_name, partyFields) => {
-    const state = {
-      ...baseState,
-      staff: [{ id: 'guide', role: 'waiter', x: 100, y: 100, path: [{ x: 8, y: 5 }],
-        task: { type: 'guide_customer', ...partyFields, tableId: 't1' } }],
-      customers: [
-        { id: 'party-1', state: 'guided', guideStaffId: 'guide', x: 80, y: 120, path: [{ x: 7, y: 6 }] },
-        ...('customerIds' in partyFields
-          ? [{ id: 'party-2', state: 'guided', guideStaffId: 'guide', x: 60, y: 140, path: [{ x: 6, y: 7 }] }]
-          : []),
-      ],
-    };
-
-    const entries = getCustomerMovementEntries(state, 1);
-
-    expect(entries.find(entry => entry.character.id === 'party-1')).toMatchObject({
-      speed: 62,
-      ignoredIds: ['guide', ...('customerIds' in partyFields ? partyFields.customerIds : [partyFields.customerId])],
-      provenance: 'guide',
-    });
+    expect(abandoned.restaurant.reputation).toBe(2.9);
+    expect(abandoned.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
+    expect(abandoned.customers.every(customer => customer.reputationApplied)).toBe(true);
+    expect(updatedAgain.restaurant.reputation).toBe(2.9);
   });
 
   it('sends outside queued parties away without a reputation penalty when closed', () => {
@@ -554,7 +779,7 @@ describe('updateCustomers', () => {
       { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
     ];
     const state = {
-      ...baseState,
+      ...movementState(),
       restaurant: { ...baseState.restaurant, gameTime: 22 * 3600 },
       queue,
     };
@@ -565,375 +790,33 @@ describe('updateCustomers', () => {
     expect(result.customers).toHaveLength(2);
     expect(result.customers.every(customer => customer.state === 'leaving')).toBe(true);
     expect(result.customers.every(customer => customer.reputationApplied)).toBe(true);
-    expect(result.customers.every(customer => customer.closedAt === 22 * 3600)).toBe(true);
     expect(result.restaurant.reputation).toBe(3);
   });
 
-  it('continues serving admitted customers after closing', () => {
-    const customer = { id: 'c1', state: 'eating', patience: 100, happiness: 80 };
-    const state = {
-      ...baseState,
-      restaurant: { ...baseState.restaurant, gameTime: 22 * 3600 },
-      customers: [customer],
-    };
-
-    const result = updateCustomers(state, { gameDt: 60, movementDt: 0 });
-
-    expect(result.customers).toEqual([customer]);
-  });
-
-  it('derives one stable outward heading from each customer ID', () => {
-    const first = getExitHeading('c1');
-    const repeated = getExitHeading('c1');
-
-    expect(repeated).toEqual(first);
-    expect([-35, 0, 35]).toContain(first.angleDegrees);
-    expect(first.x).toBeGreaterThan(0);
-  });
-
-  it('tries direct outward fading movement before a safe ID-derived angle', () => {
+  it('marks the dining table dirty when the final customer leaves for checkout or departure', () => {
     const customer = {
-      id: 'c2', state: 'leaving', exitPhase: 'fading',
-      x: 900, y: 300, exitFadeProgress: 0, path: [],
+      id: 'c1', state: 'checkout_queued', tableId: 't1', patience: 100, happiness: 80,
     };
+    const tables = baseState.tables.map(table => table.id === 't1'
+      ? { ...table, status: 'occupied' }
+      : table);
 
-    const movement = getQueueSafeExitMovement(baseState, customer, 1);
+    const result = prepareCustomersForMovement({ ...baseState, customers: [customer], tables }, 0);
 
-    expect(getExitHeading('c2').angleDegrees).toBe(35);
-    expect(movement).toEqual({
-      heading: { angleDegrees: 0, x: 1, y: 0 },
-      target: { x: 1020, y: 300 },
-    });
+    expect(result.tables.find(table => table.id === 't1').status).toBe('dirty');
   });
+});
 
-  it('uses customer identity only to order equal-magnitude fading alternatives', () => {
-    const state = {
-      ...baseState,
-      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued' }] }],
-    };
-    const customer = id => ({
-      id, state: 'leaving', exitPhase: 'fading',
-      x: 933, y: 390, exitFadeProgress: 0, path: [],
-    });
-
-    const positiveFirst = getQueueSafeExitMovement(state, customer('c2'), 1);
-    const negativeFirst = getQueueSafeExitMovement(state, customer('c3'), 1);
-
-    expect(positiveFirst.heading.angleDegrees).toBe(35);
-    expect(negativeFirst.heading.angleDegrees).toBe(-35);
-  });
-
-  it('uses queue-safe fading departure geometry for projected exterior queue members', () => {
-    const state = {
-      ...baseState,
-      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued', patience: 100, happiness: 80 }] }],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'fading',
-        x: 933, y: 390, exitFadeProgress: 0, path: [],
-        patience: 0, happiness: 50,
-      }],
-    };
-    const fadingCustomer = state.customers[0];
-    const projected = getQueueProjectedMembers(state, state.queue);
-    const movement = getQueueSafeExitMovement(state, fadingCustomer, 1);
-
-    expect(getExitHeading(fadingCustomer.id).angleDegrees).toBe(0);
-    expect(movement).not.toBeNull();
-    expect(movement.heading.angleDegrees).not.toBe(getExitHeading(fadingCustomer.id).angleDegrees);
-    for (const queued of projected) {
-      expect(minimumPointToSegmentDistance(queued, fadingCustomer, movement.target))
-        .toBeGreaterThanOrEqual(16 - 1e-6);
-    }
-  });
-
-  it('fades a queue-safe departure away over four seconds', () => {
-    let state = {
-      ...baseState,
-      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued', patience: 100, happiness: 80 }] }],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'fading',
-        x: 933, y: 390, exitFadeProgress: 0, path: [],
-        patience: 0, happiness: 50,
-      }],
-    };
-    const projected = getQueueProjectedMembers(state, state.queue);
-
-    for (let tick = 0; tick < 4; tick += 1) {
-      const fadingCustomer = state.customers[0];
-      const movement = getQueueSafeExitMovement(state, fadingCustomer, 1);
-      const [entry] = getCustomerMovementEntries(state, 1);
-      expect(movement).not.toBeNull();
-      expect(entry).toMatchObject({ target: movement.target, character: { exitHeading: movement.heading } });
-      for (const queued of projected) {
-        expect(minimumPointToSegmentDistance(queued, fadingCustomer, movement.target))
-          .toBeGreaterThanOrEqual(16 - 1e-6);
-      }
-      state = updateCustomers(state, { gameDt: 0, movementDt: 1 });
-    }
-
-    expect(state.customers).toEqual([]);
-  });
-
-  it('keeps queue-safe fading progress still while every candidate is blocked', () => {
-    const blockedState = {
-      ...baseState,
-      queue: [{ partyId: 'p1', members: [{ id: 'queued', state: 'queued', patience: 100, happiness: 80 }] }],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'fading',
-        x: 973, y: 390, exitFadeProgress: 0, path: [],
-        patience: 0, happiness: 50,
-      }],
-    };
-
-    expect(getQueueSafeExitMovement(blockedState, blockedState.customers[0], 1)).toBeNull();
-    const blockedEntries = getCustomerMovementEntries(blockedState, 1);
-    const blocked = updateCustomers(blockedState, { gameDt: 0, movementDt: 1 });
-
-    expect(blockedEntries).toEqual([]);
-    expect(blocked.customers[0]).toMatchObject({ x: 973, y: 390, exitFadeProgress: 0 });
-
-    const unblocked = updateCustomers({ ...blocked, queue: [] }, { gameDt: 0, movementDt: 1 });
-    expect(getQueueSafeExitMovement({ ...blocked, queue: [] }, blocked.customers[0], 1)).not.toBeNull();
-    expect(unblocked.customers[0].x).not.toBe(973);
-    expect(unblocked.customers[0].exitFadeProgress).toBeCloseTo(0.25);
-  });
-
-  it('passes the outside door point, moves outward, and fades over four seconds', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      customers: [{
-        id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 993, y: 360, path: [], patience: 0, happiness: 50,
-      }],
-    };
-
-    const started = updateCustomers(state, 0);
-    const startX = started.customers[0].x;
-    const halfway = updateCustomers(started, 2);
-    const completed = updateCustomers(halfway, 2);
-
-    expect(started.customers[0]).toMatchObject({ exitPhase: 'fading', exitFadeProgress: 0 });
-    expect(halfway.customers[0].x).toBeGreaterThan(startX);
-    expect(halfway.customers[0].exitFadeProgress).toBeCloseTo(0.5);
-    expect(completed.customers).toEqual([]);
-  });
-
-  it('does not fade a pathless customer outside the two-pixel tolerance', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      customers: [{ id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 940, y: 350, path: [], patience: 0, happiness: 50 }],
-    };
-
-    expect(updateCustomers(state, 0).customers[0].exitPhase).toBe('to_door');
-  });
-
-  it('uses only the remaining frame budget for exact outside completion', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      customers: [{ id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 975, y: 360, path: [], patience: 0, happiness: 50 }],
-    };
-    const result = updateCustomers(state, 0.5);
-    const customer = result.customers[0];
-    expect(Math.hypot(customer.x - 975, customer.y - 360)).toBeLessThanOrEqual(55 * 0.5 + 1e-6);
-    expect(buildBlockedCells(result).has(`${worldToCell(customer).x},${worldToCell(customer).y}`)).toBe(false);
-    expect(customer).toMatchObject({ x: 993, exitPhase: 'fading', exitFadeProgress: 0 });
-  });
-
-  it('keeps near-door waypoint traversal within a tiny whole-update budget', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      customers: [{ id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 980.5, y: 360, path: [{ x: 49, y: 18 }], pathGoal: { x: 49, y: 18 },
-        patience: 0, happiness: 50 }],
-    };
-    const dt = 0.001;
-    const result = updateCustomers(state, dt);
-    const customer = result.customers[0];
-
-    expect(Math.hypot(customer.x - 980.5, customer.y - 360)).toBeLessThanOrEqual(55 * dt + 1e-6);
-    expect(buildBlockedCells(result).has(`${worldToCell(customer).x},${worldToCell(customer).y}`)).toBe(false);
-    expect(customer.exitPhase).toBe('to_door');
-  });
-
-  it('does not directly move through an intervening hard obstacle when the static route fails', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      tables: [{ id: 'hard-block', x: 980, y: 360, status: 'occupied' }],
-      customers: [{ id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 940, y: 360, path: [], patience: 0, happiness: 50 }],
-    };
-    const result = updateCustomers(state, 1);
-    const customer = result.customers[0];
-    expect(customer.exitPhase).toBe('to_door');
-    expect(Math.hypot(customer.x - 940, customer.y - 360)).toBeLessThanOrEqual(55 + 1e-6);
-    expect(buildBlockedCells(result).has(`${worldToCell(customer).x},${worldToCell(customer).y}`)).toBe(false);
-    expect(customer).toMatchObject({ x: 940, y: 360 });
-    expect(Math.hypot(customer.x - 993, customer.y - 360)).toBeGreaterThan(2);
-  });
-
-  it('completes same-cell exact outside movement over multiple updates instead of deadlocking', () => {
-    let state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      customers: [{ id: 'c1', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-        x: 981, y: 360, path: [], patience: 0, happiness: 50 }],
-    };
-    const outside = { x: 993, y: 360 };
-    const dt = 0.1;
-    let updates = 0;
-    for (let update = 0; update < 10 && state.customers[0]?.exitPhase !== 'fading'; update += 1) {
-      const before = state.customers[0];
-      const previousDistance = Math.hypot(before.x - outside.x, before.y - outside.y);
-      state = updateCustomers(state, dt);
-      updates += 1;
-      const after = state.customers[0];
-      expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeLessThanOrEqual(55 * dt + 1e-6);
-      const crossedSteps = Math.max(1, Math.ceil(Math.hypot(after.x - before.x, after.y - before.y)));
-      for (let step = 0; step <= crossedSteps; step += 1) {
-        const ratio = step / crossedSteps;
-        const crossed = {
-          x: before.x + (after.x - before.x) * ratio,
-          y: before.y + (after.y - before.y) * ratio,
-        };
-        const cell = worldToCell(crossed);
-        expect(buildBlockedCells(state).has(`${cell.x},${cell.y}`)).toBe(false);
-      }
-      if (after.exitPhase !== 'fading') {
-        expect(Math.hypot(after.x - outside.x, after.y - outside.y)).toBeLessThan(previousDistance);
-      }
-    }
-    expect(state.customers[0].exitPhase).toBe('fading');
-    expect(updates).toBeGreaterThanOrEqual(2);
-  });
-
-  it('moves a congested checkout queue towards both positions over ten ticks without furniture collisions', () => {
-    let state = {
-      ...baseState,
-      chairs: [], kitchenStations: [], serviceTables: [],
-      tables: [{ id: 'blocker', x: 600, y: 260, status: 'occupied' }],
-      staff: [{ id: 'cashier', role: 'waiter' }],
-      cashierStations: [{
-        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
-      }],
-      customers: [
-        { id: 'c1', state: 'paying', x: 400, y: 300, patience: 100, paymentQueuedAt: 10 },
-        { id: 'c2', state: 'paying', x: 420, y: 300, patience: 100, paymentQueuedAt: 20 },
-      ],
-    };
-    const goals = [{ x: 840, y: 180 }, { x: 840, y: 200 }];
-    const initial = new Map(state.customers.map((customer, index) => [customer.id,
-      Math.hypot(customer.x - goals[index].x, customer.y - goals[index].y)]));
-    const histories = new Map(state.customers.map(customer => [customer.id, []]));
-    for (let tick = 0; tick < 10; tick += 1) {
-      state = updateCustomers(state, 1);
-      state.customers.forEach(customer => histories.get(customer.id).push({ x: customer.x, y: customer.y }));
-    }
-    expect(histories.get('c1')).toHaveLength(10);
-    expect(histories.get('c2')).toHaveLength(10);
-    state.customers.forEach(customer => {
-      const goal = goals[customer.id === 'c1' ? 0 : 1];
-      expect(Math.hypot(customer.x - goal.x, customer.y - goal.y)).toBeLessThan(initial.get(customer.id));
-      histories.get(customer.id).forEach(position => {
-        expect(buildBlockedCells(state).has(`${worldToCell(position).x},${worldToCell(position).y}`)).toBe(false);
-      });
-      expect(buildBlockedCells(state).has(`${worldToCell(customer).x},${worldToCell(customer).y}`)).toBe(false);
-    });
-  });
-
-  it('moves two congested departures around a staff blocker and removes them after fading', () => {
-    const buildDepartureState = (withBlocker) => ({
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      tables: [{ id: 'blocker', x: 500, y: 260, status: 'occupied' }],
-      staff: withBlocker ? [{ id: 'staff-blocker', role: 'waiter', x: 999, y: 280, path: [] }] : [],
-      customers: [
-        { id: 'c1', state: 'leaving', x: 900, y: 280, exitPhase: 'to_door', exitDoorId: 'door1', path: [], patience: 0, happiness: 50 },
-        { id: 'c2', state: 'leaving', x: 900, y: 440, exitPhase: 'to_door', exitDoorId: 'door1', path: [], patience: 0, happiness: 50 },
-      ],
-    });
-    const blockerCell = worldToCell({ x: 999, y: 280 });
-    const routeKeys = route => route.map(cell => `${cell.x},${cell.y}`);
-
-    const blockedFirst = updateCustomers(buildDepartureState(true), 0);
-    const unblockedFirst = updateCustomers(buildDepartureState(false), 0);
-    const blockedRoute = blockedFirst.customers.find(customer => customer.id === 'c1').path;
-    const unblockedRoute = unblockedFirst.customers.find(customer => customer.id === 'c1').path;
-    expect(blockedRoute.length).toBeGreaterThan(0);
-    expect(unblockedRoute.length).toBeGreaterThan(0);
-    const goalCell = unblockedRoute[unblockedRoute.length - 1];
-    expect(blockerCell).not.toEqual(goalCell);
-    expect(unblockedRoute.some(cell => cell.x === blockerCell.x && cell.y === blockerCell.y)).toBe(true);
-    expect(blockedRoute.some(cell => cell.x === blockerCell.x && cell.y === blockerCell.y)).toBe(false);
-    expect(routeKeys(blockedRoute)).not.toEqual(routeKeys(unblockedRoute));
-    const unblockedKeys = new Set(routeKeys(unblockedRoute));
-    expect(blockedRoute.some(cell => !unblockedKeys.has(`${cell.x},${cell.y}`))).toBe(true);
-
-    let state = buildDepartureState(true);
-    const outside = { x: 993, y: 360 };
-    const initial = new Map(state.customers.map(customer => [customer.id, Math.hypot(customer.x - outside.x, customer.y - outside.y)]));
-    const recorded = new Map(state.customers.map(customer => [customer.id, []]));
-    for (let tick = 0; tick < 10; tick += 1) {
-      state = updateCustomers(state, 1);
-      state.customers.forEach(customer => {
-        recorded.get(customer.id).push({ x: customer.x, y: customer.y, exitPhase: customer.exitPhase });
-        expect(buildBlockedCells(state).has(`${worldToCell(customer).x},${worldToCell(customer).y}`)).toBe(false);
-      });
-    }
-    expect(recorded.get('c1')).toHaveLength(10);
-    expect(recorded.get('c2')).toHaveLength(10);
-    for (const id of ['c1', 'c2']) {
-      const toDoorRecords = recorded.get(id).filter(record => record.exitPhase === 'to_door');
-      expect(toDoorRecords.length).toBeGreaterThan(0);
-      const lastToDoor = toDoorRecords[toDoorRecords.length - 1];
-      expect(Math.hypot(lastToDoor.x - outside.x, lastToDoor.y - outside.y)).toBeLessThan(initial.get(id));
-    }
-    expect(state.customers.map(customer => customer.id).sort()).toEqual(['c1', 'c2']);
-    for (const id of ['c1', 'c2']) {
-      const customer = state.customers.find(candidate => candidate.id === id);
-      expect(customer.exitPhase).toBe('fading');
-      expect(customer.exitFadeProgress).toBeGreaterThan(0);
-    }
-    for (let tick = 0; tick < 4; tick += 1) state = updateCustomers(state, 1);
-    expect(state.customers).toEqual([]);
-  });
-
-  it('does not count fading customers as door traffic or indoor blockers', () => {
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }, { id: 'door2', y: 420 }],
-      customers: [
-        { id: 'old', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1', exitFadeProgress: 0.5, x: 960, y: 360 },
-        { id: 'new', state: 'leaving', exitPhase: 'to_door', x: 400, y: 340, path: [] },
-      ],
-    };
-
-    const result = updateCustomers(state, 0);
-
-    expect(result.customers.find(customer => customer.id === 'new').exitDoorId).toBe('door1');
-  });
-
+describe('restored baseline customer gameplay', () => {
   it('reduces patience over time', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'waiting', dishId: null, tableId: 't1', tipAmount: 0,
       seatTime: null, orderTime: null, eatTime: null,
     };
-    const state = { ...baseState, customers: [customer] };
-    const result = updateCustomers(state, 2);
+
+    const result = updateCustomers({ ...baseState, customers: [customer] }, 2);
+
     expect(result.customers[0].patience).toBe(98);
   });
 
@@ -943,22 +826,23 @@ describe('updateCustomers', () => {
       state: 'waiting_for_items', dishId: 'd1', drinkId: 'water', tableId: 't1', tipAmount: 0,
       seatTime: 1, orderTime: 2, eatTime: null,
     };
-    const state = { ...baseState, customers: [customer] };
 
-    const result = updateCustomers(state, 2);
+    const result = updateCustomers({ ...baseState, customers: [customer] }, 2);
 
     expect(result.customers[0].patience).toBe(99.5);
   });
 
-  it('moves customer from arriving to waiting', () => {
+  it('moves an arriving customer to waiting without assigning movement intent', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 100, happiness: 80,
       state: 'arriving', dishId: null, tableId: 't1', tipAmount: 0,
       seatTime: null, orderTime: null, eatTime: null,
     };
-    const state = { ...baseState, customers: [customer] };
-    const result = updateCustomers(state, 1);
+
+    const result = updateCustomers({ ...baseState, customers: [customer] }, 1);
+
     expect(result.customers[0].state).toBe('waiting');
+    expect(result.customers[0]).not.toHaveProperty('navigationGoal');
   });
 
   it('moves paying customers into a single-file checkout queue', () => {
@@ -977,9 +861,15 @@ describe('updateCustomers', () => {
 
     const result = updateCustomers(state, 0);
 
-    expect(result.customers[0].checkoutPosition).toEqual({ x: 840, y: 180 });
-    expect(result.customers[1].checkoutPosition).toEqual({ x: 840, y: 200 });
-    expect(result.customers.every(customer => customer.path.length > 0)).toBe(true);
+    expect(result.customers.map(customer => customer.state)).toEqual([
+      'checkout_moving', 'checkout_moving',
+    ]);
+    expect(result.customers.map(customer => customer.checkoutPosition)).toEqual([
+      { x: 840, y: 180 }, { x: 840, y: 200 },
+    ]);
+    expect(result.customers.map(customer => customer.navigationGoal)).toEqual([
+      { x: 840, y: 180 }, { x: 840, y: 200 },
+    ]);
   });
 
   it('assigns paying customers to the staffed station instead of station zero', () => {
@@ -1000,19 +890,16 @@ describe('updateCustomers', () => {
     const result = updateCustomers(state, 0);
 
     expect(result.customers.map(customer => customer.cashierStationId)).toEqual(['cashier2', 'cashier2']);
-    expect(result.customers[0].checkoutPosition).toEqual({ x: 440, y: 360 });
-    expect(result.customers[1].checkoutPosition).toEqual({ x: 440, y: 380 });
-    expect(result.customers.every(customer => customer.path.length > 0)).toBe(true);
+    expect(result.customers.map(customer => customer.checkoutPosition)).toEqual([
+      { x: 440, y: 360 }, { x: 440, y: 380 },
+    ]);
   });
 
   it('distributes unassigned paying customers across the shortest staffed queues', () => {
     const state = {
       ...baseState,
       chairs: [], kitchenStations: [], serviceTables: [],
-      staff: [
-        { id: 'w1', role: 'waiter' },
-        { id: 'w2', role: 'waiter' },
-      ],
+      staff: [{ id: 'w1', role: 'waiter' }, { id: 'w2', role: 'waiter' }],
       cashierStations: [
         { id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'w1' },
         { id: 'cashier2', x: 600, y: 300, w: 80, h: 40, assignedStaffId: 'w2' },
@@ -1045,75 +932,47 @@ describe('updateCustomers', () => {
         { id: 'stale', state: 'paying', x: 700, y: 300, patience: 100, paymentQueuedAt: 20, cashierStationId: 'abandoned' },
       ],
     }, 0);
+
     expect(result.customers.find(customer => customer.id === 'stale')).toMatchObject({
       cashierStationId: 'short', checkoutPosition: { x: 440, y: 360 },
     });
   });
 
-  it('sets leaving state and reduces happiness when patience runs out', () => {
-    const customer = {
-      id: 'c1', archetype: 'regular', patience: 5, happiness: 80,
-      state: 'waiting', dishId: null, tableId: 't1', tipAmount: 0,
-      seatTime: null, orderTime: null, eatTime: null,
-    };
-    const state = { ...baseState, customers: [customer] };
-    const result = updateCustomers(state, 10);
-    expect(result.customers[0].patience).toBe(0);
-    expect(result.customers[0].state).toBe('leaving');
-    expect(result.customers[0].happiness).toBeLessThan(80);
-  });
-
-  it('clears recovery metadata when patience abandonment starts departure', () => {
-    const result = updateCustomers({ ...baseState, doors: [{ id: 'door1', y: 340 }], customers: [{ id: 'c1', state: 'waiting', patience: 1, happiness: 80,
-      x: 993, y: 360, path: [{ x: 1, y: 1 }], pathGoal: { x: 3, y: 3 }, usingStaticFallback: true, minimumSpacing: 6,
-      localConflictTarget: { x: 2, y: 2 }, headOnRecovery: true, recoveredHeadOnDetourTarget: { x: 4, y: 4 } }] }, 2);
-    expect(result.customers[0]).toMatchObject({ state: 'leaving' });
-    expect(result.customers[0]).not.toHaveProperty('pathGoal');
-    expect(result.customers[0]).not.toHaveProperty('usingStaticFallback');
-    expect(result.customers[0]).not.toHaveProperty('minimumSpacing');
-    expect(result.customers[0]).not.toHaveProperty('localConflictTarget');
-    expect(result.customers[0]).not.toHaveProperty('headOnRecovery');
-    expect(result.customers[0]).not.toHaveProperty('recoveredHeadOnDetourTarget');
-  });
-
-  it('clears entryDoorId in the customer phase when patience abandonment cancels guidance', () => {
+  it('clears entry-door intent when patience abandonment cancels guidance', () => {
     const customer = {
       id: 'c1', state: 'waiting', patience: 1, happiness: 80,
-      entryDoorId: 'door1', x: 400, y: 300, path: [],
+      entryDoorId: 'door1', x: 400, y: 300,
     };
-    const state = {
-      ...baseState,
-      doors: [{ id: 'door1', y: 340 }],
-      chairs: [], kitchenStations: [], serviceTables: [], cashierStations: [],
-      customers: [customer],
-    };
-
-    const result = prepareCustomersForMovement(state, 2);
+    const result = prepareCustomersForMovement(movementState({
+      customers: [customer], doors: [{ id: 'door1', y: 340 }],
+    }), 2);
 
     expect(result.customers[0]).toMatchObject({ state: 'leaving', exitPhase: 'to_door' });
     expect(result.customers[0]).not.toHaveProperty('entryDoorId');
     expect(customer).toHaveProperty('entryDoorId', 'door1');
   });
 
-  it('keeps leaving customers visible while they walk towards an exit', () => {
+  it('keeps leaving customers visible while they move towards an exit', () => {
     const customer = {
       id: 'c1', archetype: 'regular', patience: 0, happiness: 50,
       state: 'leaving', dishId: null, tableId: 't1', tipAmount: 0,
       seatTime: null, orderTime: null, eatTime: null,
     };
     const state = {
-      ...baseState,
-      customers: [customer],
-      tables: baseState.tables.map(t => t.id === 't1' ? { ...t, status: 'occupied' } : t),
+      ...movementState({ customers: [customer] }),
+      tables: baseState.tables.map(table => table.id === 't1' ? { ...table, status: 'occupied' } : table),
     };
+
     const result = updateCustomers(state, 1);
+
     expect(result.customers).toHaveLength(1);
-    expect(result.customers[0]).toMatchObject({ state: 'leaving', exitDoorId: 'door1' });
-    expect(result.customers[0].path.length).toBeGreaterThan(0);
-    expect(result.tables.find(t => t.id === 't1').status).toBe('dirty');
+    expect(result.customers[0]).toMatchObject({
+      state: 'leaving', exitDoorId: 'door1', navigationGoal: { x: 993, y: 360 },
+    });
+    expect(result.tables.find(table => table.id === 't1').status).toBe('dirty');
   });
 
-  it('does not auto-seat queued customer when table frees (waiter controls seating)', () => {
+  it('does not auto-seat a queued customer when a table frees', () => {
     const leavingCustomer = {
       id: 'c2', archetype: 'regular', patience: 0, happiness: 50,
       state: 'leaving', dishId: null, tableId: 't1', tipAmount: 0,
@@ -1124,46 +983,44 @@ describe('updateCustomers', () => {
       state: 'queued', dishId: null, tableId: null, tipAmount: 0,
       seatTime: null, orderTime: null, eatTime: null,
     };
-    const state = {
-      ...baseState,
-      customers: [leavingCustomer],
-      queue: [{ partyId: 'q1', members: [queuedCustomer] }],
-      tables: baseState.tables.map(t => t.id === 't1' ? { ...t, status: 'occupied' } : t),
-    };
-    const result = updateCustomers(state, 1);
-    expect(result.customers.length).toBe(1);
-    expect(result.queue.length).toBe(1);
-    expect(result.tables.find(t => t.id === 't1').status).toBe('dirty');
+    const result = updateCustomers({
+      ...movementState({
+        customers: [leavingCustomer],
+        queue: [{ partyId: 'q1', members: [queuedCustomer] }],
+      }),
+      tables: baseState.tables.map(table => table.id === 't1' ? { ...table, status: 'occupied' } : table),
+    }, 1);
+
+    expect(result.customers).toHaveLength(1);
+    expect(result.queue).toHaveLength(1);
+    expect(result.tables.find(table => table.id === 't1').status).toBe('dirty');
   });
 
   it('uses separate doors for simultaneous departures when available', () => {
-    const customers = [
-      { id: 'c1', state: 'leaving', x: 400, y: 300, patience: 0, happiness: 80 },
-      { id: 'c2', state: 'leaving', x: 420, y: 300, patience: 0, happiness: 80 },
-    ];
-    const state = {
-      ...baseState,
-      customers,
+    const result = prepareCustomersForMovement(movementState({
+      customers: [
+        { id: 'c1', state: 'leaving', x: 400, y: 300, patience: 0, happiness: 80 },
+        { id: 'c2', state: 'leaving', x: 420, y: 300, patience: 0, happiness: 80 },
+      ],
       doors: [{ id: 'door1', y: 300 }, { id: 'door2', y: 420 }],
-      chairs: [], kitchenStations: [], serviceTables: [],
-    };
+    }), 0);
 
-    const result = updateCustomers(state, 0);
-
-    expect(new Set(result.customers.map(customer => customer.exitDoorId))).toEqual(new Set(['door1', 'door2']));
+    expect(new Set(result.customers.map(customer => customer.exitDoorId)))
+      .toEqual(new Set(['door1', 'door2']));
   });
 
-  it('removes queue customer when patience runs out', () => {
+  it('moves a queued customer to leaving when queue patience runs out', () => {
     const queuedCustomer = {
       id: 'q1', archetype: 'rusher', patience: 5, happiness: 80,
       state: 'queued', dishId: null, tableId: null, tipAmount: 0,
       seatTime: null, orderTime: null, eatTime: null,
     };
-    const state = { ...baseState, queue: [{ partyId: 'q1', members: [queuedCustomer] }] };
-    const result = updateCustomers(state, 10);
-    expect(result.queue.length).toBe(0);
-    // Dead queue mbr becomes a leaving customer (reputation loss)
-    expect(result.customers.length).toBe(1);
+    const result = updateCustomers({
+      ...baseState, queue: [{ partyId: 'q1', members: [queuedCustomer] }],
+    }, 10);
+
+    expect(result.queue).toHaveLength(0);
+    expect(result.customers).toHaveLength(1);
     expect(result.customers[0].state).toBe('leaving');
   });
 
@@ -1172,8 +1029,7 @@ describe('updateCustomers', () => {
       partyId: `p${index}`,
       members: [{
         id: `q${index}`, partyId: `p${index}`, state: 'queued',
-        patience: 100, patienceMax: 100,
-        queuePatience: 100, queuePatienceMax: 100,
+        patience: 100, patienceMax: 100, queuePatience: 100, queuePatienceMax: 100,
         happiness: 80,
       }],
     }));
@@ -1183,36 +1039,35 @@ describe('updateCustomers', () => {
     expect(result.queue[0].members[0]).toMatchObject({ patience: 100, queuePatience: 97 });
   });
 
-  it('does not reduce patience while a customer is eating', () => {
-    const customer = { id: 'c1', state: 'eating', patience: 100, happiness: 80 };
-
-    const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+  it('does not reduce patience while an admitted customer is eating', () => {
+    const result = updateCustomers({
+      ...baseState, customers: [{ id: 'c1', state: 'eating', patience: 100, happiness: 80 }],
+    }, 10);
 
     expect(result.customers[0].patience).toBe(100);
   });
 
   it.each(['guided', 'ordering', 'eating'])('does not reduce patience while a customer is %s', stateName => {
-    const customer = { id: 'c1', state: stateName, patience: 100, happiness: 80 };
-
-    const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+    const result = updateCustomers({
+      ...baseState, customers: [{ id: 'c1', state: stateName, patience: 100, happiness: 80 }],
+    }, 10);
 
     expect(result.customers[0].patience).toBe(100);
   });
 
   it.each(['checkout_queued', 'checkout_moving', 'checkout_processing'])
     ('preserves patience while a customer is %s', stateName => {
-      const customer = { id: 'c1', state: stateName, patience: 100, happiness: 80 };
-
-      const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+      const result = updateCustomers({
+        ...baseState,
+        customers: [{ id: 'c1', state: stateName, patience: 100, happiness: 80 }],
+      }, 10);
 
       expect(result.customers[0].patience).toBe(100);
     });
 
   it.each(['checkout_queued', 'checkout_moving', 'checkout_processing'])
     ('releases the dining table when its final customer is %s', stateName => {
-      const customer = {
-        id: 'c1', state: stateName, tableId: 't1', patience: 100, happiness: 80,
-      };
+      const customer = { id: 'c1', state: stateName, tableId: 't1', patience: 100, happiness: 80 };
       const tables = baseState.tables.map(table => table.id === 't1'
         ? { ...table, status: 'occupied' }
         : table);
@@ -1223,18 +1078,13 @@ describe('updateCustomers', () => {
     });
 
   it.each(['occupied', 'reserved'])
-    ('marks an in-use %s table dirty and clears its reservation owner', status => {
-      const customer = {
-        id: 'payer', state: 'checkout_queued', tableId: 't1',
-        patience: 100, happiness: 80, x: 400, y: 300,
-      };
+    ('marks an in-use %s table dirty and clears its reservation owner', tableStatus => {
+      const customer = { id: 'payer', state: 'checkout_queued', tableId: 't1', patience: 100, happiness: 80, x: 400, y: 300 };
       const tables = baseState.tables.map(table => table.id === 't1'
-        ? { ...table, status, reservationOwnerStaffId: 'guide' }
+        ? { ...table, status: tableStatus, reservationOwnerStaffId: 'guide' }
         : table);
 
-      const result = prepareCustomersForMovement({
-        ...baseState, customers: [customer], tables,
-      }, 0);
+      const result = prepareCustomersForMovement({ ...baseState, customers: [customer], tables }, 0);
       const table = result.tables.find(candidate => candidate.id === 't1');
 
       expect(table.status).toBe('dirty');
@@ -1245,8 +1095,7 @@ describe('updateCustomers', () => {
   it.each(['checkout_queued', 'checkout_moving', 'checkout_processing', 'leaving'])
     ('does not re-dirty an empty table for a former customer in %s', stateName => {
       const customer = {
-        id: 'former', state: stateName, tableId: 't1',
-        patience: 100, happiness: 80, x: 400, y: 300,
+        id: 'former', state: stateName, tableId: 't1', patience: 100, happiness: 80, x: 400, y: 300,
         ...(stateName === 'leaving' ? { exitPhase: 'to_door' } : {}),
       };
       let current = {
@@ -1279,12 +1128,10 @@ describe('updateCustomers', () => {
   });
 
   it('normalises legacy paying without consuming checkout patience', () => {
-    const customer = {
-      id: 'c1', state: 'paying', patience: 100, happiness: 80,
-      paymentQueuedAt: 20, x: 400, y: 300,
-    };
-
-    const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+    const result = updateCustomers({
+      ...baseState,
+      customers: [{ id: 'c1', state: 'paying', patience: 100, happiness: 80, paymentQueuedAt: 20, x: 400, y: 300 }],
+    }, 10);
 
     expect(result.customers[0]).toMatchObject({
       state: 'checkout_queued', patience: 100, paymentQueuedAt: 20,
@@ -1292,31 +1139,21 @@ describe('updateCustomers', () => {
   });
 
   it('does not reduce patience while a waiter actively takes the customer order', () => {
-    const customer = {
-      id: 'c1', state: 'seated', patience: 1, happiness: 80,
-      tableId: 't1', dishId: null, drinkId: null,
-    };
-    const staff = [{
-      id: 'w1', role: 'waiter',
-      task: { type: 'take_order', customerId: 'c1', startedAt: 0 },
-    }];
-
-    const result = prepareCustomersForMovement({ ...baseState, customers: [customer], staff }, 1);
+    const result = prepareCustomersForMovement({
+      ...baseState,
+      customers: [{ id: 'c1', state: 'seated', patience: 1, happiness: 80, tableId: 't1', dishId: null, drinkId: null }],
+      staff: [{ id: 'w1', role: 'waiter', task: { type: 'take_order', customerId: 'c1', startedAt: 0 } }],
+    }, 1);
 
     expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1 });
   });
 
   it('continues half-rate seated patience loss when the active order targets another customer', () => {
-    const customer = {
-      id: 'c1', state: 'seated', patience: 2, happiness: 80,
-      tableId: 't1', dishId: null, drinkId: null,
-    };
-    const staff = [{
-      id: 'w1', role: 'waiter',
-      task: { type: 'take_order', customerId: 'c2', startedAt: 0 },
-    }];
-
-    const result = prepareCustomersForMovement({ ...baseState, customers: [customer], staff }, 1);
+    const result = prepareCustomersForMovement({
+      ...baseState,
+      customers: [{ id: 'c1', state: 'seated', patience: 2, happiness: 80, tableId: 't1', dishId: null, drinkId: null }],
+      staff: [{ id: 'w1', role: 'waiter', task: { type: 'take_order', customerId: 'c2', startedAt: 0 } }],
+    }, 1);
 
     expect(result.customers[0]).toMatchObject({ state: 'seated', patience: 1.5 });
   });
@@ -1325,67 +1162,48 @@ describe('updateCustomers', () => {
     ['waiting', 90],
     ['seated', 95],
   ])('uses the phase-specific patience rate while a customer is %s', (stateName, expectedPatience) => {
-    const customer = { id: 'c1', state: stateName, patience: 100, happiness: 80 };
-
-    const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+    const result = updateCustomers({
+      ...baseState, customers: [{ id: 'c1', state: stateName, patience: 100, happiness: 80 }],
+    }, 10);
 
     expect(result.customers[0].patience).toBe(expectedPatience);
   });
 
   it('reduces patience at quarter speed while awaiting ordered items', () => {
-    const customer = { id: 'c1', state: 'waiting_for_items', patience: 100, happiness: 80 };
-
-    const result = updateCustomers({ ...baseState, customers: [customer] }, 10);
+    const result = updateCustomers({
+      ...baseState, customers: [{ id: 'c1', state: 'waiting_for_items', patience: 100, happiness: 80 }],
+    }, 10);
 
     expect(result.customers[0].patience).toBe(97.5);
   });
 
   it('uses game time for patience independently of movement time', () => {
-    const customer = { id: 'c1', state: 'waiting', patience: 100, happiness: 80 };
-
-    const result = updateCustomers(
-      { ...baseState, customers: [customer] },
-      { gameDt: 60, movementDt: 0 },
-    );
+    const result = updateCustomers({
+      ...baseState, customers: [{ id: 'c1', state: 'waiting', patience: 100, happiness: 80 }],
+    }, { gameDt: 60, movementDt: 0 });
 
     expect(result.customers[0].patience).toBe(40);
   });
 
-  it('makes the whole party leave and lowers reputation once per abandoning party', () => {
-    const customers = [
-      { id: 'c1', partyId: 'p1', state: 'waiting', patience: 1, happiness: 80 },
-      { id: 'c2', partyId: 'p1', state: 'ordering', patience: 100, happiness: 80 },
-    ];
+  it('continues serving admitted customers after closing', () => {
+    const customer = { id: 'c1', state: 'eating', patience: 100, happiness: 80 };
+    const result = updateCustomers({
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 22 * 3600 },
+      customers: [customer],
+    }, { gameDt: 60, movementDt: 0 });
 
-    const abandoned = updateCustomers({ ...baseState, customers }, 2);
-    const updatedAgain = updateCustomers(abandoned, 2);
-
-    expect(abandoned.restaurant.reputation).toBe(2.9);
-    expect(abandoned.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
-    expect(abandoned.customers.every(customer => customer.reputationApplied)).toBe(true);
-    expect(updatedAgain.restaurant.reputation).toBe(2.9);
+    expect(result.customers).toEqual([customer]);
   });
 
   it('cancels only the pending review for a party abandoning from seated patience', () => {
     const customers = [
-      {
-        id: 'c1', partyId: 'p1', state: 'seated', tableId: 't1',
-        patience: 1, happiness: 80,
-      },
-      {
-        id: 'c2', partyId: 'p1', state: 'ordering', tableId: 't1',
-        patience: 100, happiness: 80,
-      },
+      { id: 'c1', partyId: 'p1', state: 'seated', tableId: 't1', patience: 1, happiness: 80 },
+      { id: 'c2', partyId: 'p1', state: 'ordering', tableId: 't1', patience: 100, happiness: 80 },
     ];
     const pendingPartyReviews = [
-      {
-        partyId: 'p1', memberIds: ['c1', 'c2'], orderedMemberIds: ['c2'],
-        unaffordableMemberIds: [], paidReviews: [],
-      },
-      {
-        partyId: 'p2', memberIds: ['other'], orderedMemberIds: [],
-        unaffordableMemberIds: ['other'], paidReviews: [],
-      },
+      { partyId: 'p1', memberIds: ['c1', 'c2'], orderedMemberIds: ['c2'], unaffordableMemberIds: [], paidReviews: [] },
+      { partyId: 'p2', memberIds: ['other'], orderedMemberIds: [], unaffordableMemberIds: ['other'], paidReviews: [] },
     ];
 
     const result = updateCustomers({ ...baseState, customers, pendingPartyReviews }, 2);
@@ -1397,14 +1215,8 @@ describe('updateCustomers', () => {
 
   it('does not remove a checkout-committed member when their party abandons', () => {
     const customers = [
-      {
-        id: 'waiting', partyId: 'p1', state: 'waiting_for_items',
-        patience: 0.5, happiness: 80,
-      },
-      {
-        id: 'payer', partyId: 'p1', state: 'checkout_queued',
-        patience: 1, happiness: 80, paymentQueuedAt: 20,
-      },
+      { id: 'waiting', partyId: 'p1', state: 'waiting_for_items', patience: 0.5, happiness: 80 },
+      { id: 'payer', partyId: 'p1', state: 'checkout_queued', patience: 1, happiness: 80, paymentQueuedAt: 20 },
     ];
 
     const result = updateCustomers({ ...baseState, customers }, 2);
@@ -1417,23 +1229,25 @@ describe('updateCustomers', () => {
   });
 
   it('penalises separate abandoning parties independently', () => {
-    const customers = [
-      { id: 'c1', partyId: 'p1', state: 'waiting', patience: 1, happiness: 80 },
-      { id: 'c2', partyId: 'p2', state: 'waiting_for_items', patience: 0.5, happiness: 80 },
-    ];
-
-    const result = updateCustomers({ ...baseState, customers }, 2);
+    const result = updateCustomers({
+      ...baseState,
+      customers: [
+        { id: 'c1', partyId: 'p1', state: 'waiting', patience: 1, happiness: 80 },
+        { id: 'c2', partyId: 'p2', state: 'waiting_for_items', patience: 0.5, happiness: 80 },
+      ],
+    }, 2);
 
     expect(result.restaurant.reputation).toBe(2.8);
   });
 
   it('removes an entire queued party with one reputation penalty', () => {
-    const queue = [{ partyId: 'p1', members: [
-      { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
-      { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
-    ] }];
-
-    const result = updateCustomers({ ...baseState, queue }, 2);
+    const result = updateCustomers({
+      ...baseState,
+      queue: [{ partyId: 'p1', members: [
+        { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
+        { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
+      ] }],
+    }, 2);
 
     expect(result.queue).toHaveLength(0);
     expect(result.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
@@ -1441,85 +1255,680 @@ describe('updateCustomers', () => {
   });
 
   it('abandons a complete party record once with projected leaving positions', () => {
-    const queue = [{ partyId: 'p1', members: [
-      { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
-      { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
-    ] }];
-    const result = prepareCustomersForMovement({ ...baseState, queue }, 2);
+    const result = prepareCustomersForMovement({
+      ...baseState,
+      queue: [{ partyId: 'p1', members: [
+        { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
+        { id: 'q2', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
+      ] }],
+    }, 2);
+
     expect(result.queue).toEqual([]);
     expect(result.customers.map(customer => customer.state)).toEqual(['leaving', 'leaving']);
     expect(result.customers.every(customer => Number.isFinite(customer.x) && Number.isFinite(customer.y))).toBe(true);
     expect(result.restaurant.reputation).toBe(2.9);
   });
 
-  it('spawn never assigns tableId or adds directly to customers', () => {
-    const state = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 } };
-    let result = state;
-    for (let i = 0; i < 200; i++) {
-      result = spawnCustomers(result);
-    }
-    expect(result.customers.length).toBe(0);
-    for (const party of result.queue) {
-      for (const member of party.members) expect(member.tableId).toBeNull();
-    }
+  it('does not count a fading customer as door traffic for a new departure', () => {
+    const result = prepareCustomersForMovement(movementState({
+      doors: [{ id: 'door1', y: 340 }, { id: 'door2', y: 420 }],
+      customers: [
+        { id: 'old', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1', exitFadeProgress: 0.5, x: 960, y: 360 },
+        { id: 'new', state: 'leaving', x: 400, y: 340 },
+      ],
+    }), 0);
+
+    expect(result.customers.find(customer => customer.id === 'new').exitDoorId).toBe('door1');
+  });
+
+  it('never places spawned customers directly at a table', () => {
+    let state = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 } };
+    for (let index = 0; index < 200; index += 1) state = spawnCustomers(state);
+
+    expect(state.customers).toHaveLength(0);
+    expect(state.queue.flatMap(party => party.members).every(customer => customer.tableId === null)).toBe(true);
   });
 });
 
-describe('customer oscillation recovery integration', () => {
-  const guidedState = customer => ({
-    ...baseState,
-    tables: [],
-    chairs: [{ id: 'fixed-blocker', x: 120, y: 100 }],
-    kitchenStations: [], serviceTables: [], cashierStations: [],
-    staff: [{
-      id: 'guide', role: 'waiter',
-      task: { type: 'guide_customer', customerIds: [customer.id], tableId: 'target' },
-    }],
-    customers: [{
-      patience: 100,
-      happiness: 80,
-      guideStaffId: 'guide',
-      ...customer,
-    }],
-  });
+describe('queue overflow stages hidden departures with full identity conservation', () => {
+  afterEach(() => vi.restoreAllMocks());
 
-  it('runs oscillation recovery after committed customer movement', () => {
-    const stateWithSeededReversal = guidedState({
-      id: 'oscillating', state: 'guided', x: 100.62, y: 100,
-      path: [{ x: 5, y: 5 }, { x: 10, y: 5 }], pathGoal: { x: 10, y: 5 },
-      oscillationRecovery: {
-        state: 'guided',
-        goalKey: 'guided:10,5:200,100',
-        previousCell: { x: 6, y: 5 },
-        previousPosition: { x: 120, y: 100 },
-        corridorCells: ['5,5', '6,5'],
-        edges: ['5,5>6,5', '6,5>5,5'],
-        pendingMovementFor: 0,
-        oscillatingFor: 5,
-        bestGoalDistance: 80,
-      },
+  function overflowParties(partyCount, queuePatience = 100) {
+    return Array.from({ length: partyCount }, (_, partyIndex) => ({
+      partyId: `overflow-party-${partyIndex + 1}`,
+      members: Array.from({ length: 4 }, (_, memberIndex) => ({
+        id: `overflow-${partyIndex + 1}-${memberIndex + 1}`,
+        partyId: `overflow-party-${partyIndex + 1}`,
+        partySize: 4,
+        partyType: 'group',
+        state: 'queued',
+        patience: 100,
+        happiness: 80,
+        dishId: null,
+        drinkId: null,
+        tableId: null,
+        chairId: null,
+        queuePatience,
+        queuePatienceMax: 100,
+      })),
+    }));
+  }
+
+  function pairwiseSpacing(actors) {
+    let minimum = Infinity;
+    for (let left = 0; left < actors.length; left += 1) {
+      for (let right = left + 1; right < actors.length; right += 1) {
+        minimum = Math.min(minimum, Math.hypot(
+          actors[left].x - actors[right].x,
+          actors[left].y - actors[right].y,
+        ));
+      }
+    }
+    return minimum;
+  }
+
+  it('emits only visible queue blockers and keeps a leaving customer moving through the standalone wrapper', () => {
+    const state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      staff: [
+        { id: 's1', role: 'waiter', x: 100, y: 100 },
+        { id: 's2', role: 'waiter', x: 840, y: 100 },
+      ],
+      customers: [{
+        id: 'leaver', state: 'leaving', exitPhase: 'to_door', x: 400, y: 300,
+        patience: 100, tableId: null,
+      }],
+      queue: overflowParties(8),
     });
 
-    const result = updateCustomers(stateWithSeededReversal, { gameDt: 0, movementDt: 0.01 });
-    const recovered = result.customers.find(customer => customer.id === 'oscillating');
+    // The pipeline's ownership reconciliation grants the FIFO visible leases
+    // before any movement batch; mirror it so the projection is comparable.
+    const reconciledState = { ...state, queueSlots: reconcileQueueSlots(state, []) };
+    const visibleIds = new Set(
+      getQueueVisibleMembers(reconciledState, reconciledState.queue).map(member => member.id),
+    );
+    expect(visibleIds.size).toBe(9);
+    expect(getQueueProjectedMembers(reconciledState, reconciledState.queue).length).toBe(32);
 
-    expect({ x: recovered.x, y: recovered.y }).not.toEqual({ x: 100, y: 100 });
-    expect(recovered.oscillationRecovery).toBeUndefined();
-    expect(recovered.stuckWatchdog).toBeUndefined();
+    let current = reconciledState;
+    const leaverPositions = [];
+    for (let tick = 0; tick < 5; tick += 1) {
+      current = updateCustomers(current, { gameDt: 0, movementDt: 0.1 });
+      const coordinator = current.movementCoordinator;
+      expect(coordinator.diagnostics.invariantFailure).toBeUndefined();
+      const queueMemberIds = new Set(current.queue.flatMap(party => party.members).map(member => member.id));
+      const stationaryQueueIds = [...coordinator.requests]
+        .filter(([id, request]) => request.speed === 0 && queueMemberIds.has(id)).map(([id]) => id);
+      expect(new Set(stationaryQueueIds)).toEqual(visibleIds);
+      const liveActors = [
+        ...(current.customers || []),
+        ...(current.staff || []),
+        ...getQueueVisibleMembers(current, current.queue),
+      ].filter(actor => Number.isFinite(actor.x) && Number.isFinite(actor.y));
+      expect(pairwiseSpacing(liveActors)).toBeGreaterThanOrEqual(16);
+      const leaver = current.customers.find(customer => customer.id === 'leaver');
+      expect(leaver).toBeDefined();
+      leaverPositions.push({ x: leaver.x, y: leaver.y });
+    }
+    const first = leaverPositions[0];
+    expect(leaverPositions.some(position => Math.hypot(
+      position.x - first.x, position.y - first.y,
+    ) > 1e-9)).toBe(true);
   });
 
-  it('does not relocate a motionless customer after ten seconds', () => {
-    const motionlessGuidedState = guidedState({
-      id: 'motionless', state: 'guided', x: 100, y: 100,
-      path: [{ x: 6, y: 5 }, { x: 10, y: 5 }], pathGoal: { x: 10, y: 5 },
-      stuckWatchdog: {
-        state: 'guided', goalKey: 'guided:10,5:200,100',
-        x: 100, y: 100, noProgressFor: 0,
-      },
+  it('emits only the canonical leased queue IDs as blockers, never hidden overflow copies', () => {
+    const state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue: overflowParties(8),
+    });
+    const reconciledState = { ...state, queueSlots: reconcileQueueSlots(state, []) };
+    const canonical = getQueueVisibleMembers(reconciledState, reconciledState.queue);
+    const entries = getCustomerMovementEntries(reconciledState, 1)
+      .filter(entry => entry.provenance === 'queue');
+    expect(entries.map(entry => entry.character.id))
+      .toEqual(canonical.map(member => member.id));
+    // Every overflow (unplaced) member stays out of movement entirely.
+    const queuedIds = new Set(
+      reconciledState.queue.flatMap(party => party.members).map(member => member.id),
+    );
+    const blockedIds = new Set(entries.map(entry => entry.character.id));
+    for (const id of queuedIds) {
+      expect(blockedIds.has(id) === canonical.some(member => member.id === id)).toBe(true);
+    }
+  });
+
+  it('stages an overflowing abandonment until every seeded member physically departs', () => {
+    const seedIds = overflowParties(8, 0).flatMap(party => party.members).map(member => member.id);
+    let state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue: overflowParties(8, 0),
+    });
+    const seenCustomerIds = new Set();
+    let stagedNonEmpty = false;
+    let reputationAfterDecision = null;
+    let ticks = 0;
+    for (; ticks < 6000; ticks += 1) {
+      state = updateCustomers(state, { gameDt: 0, movementDt: 0.5 });
+      expect(state.movementCoordinator.diagnostics.invariantFailure).toBeUndefined();
+      for (const customer of state.customers) seenCustomerIds.add(String(customer.id));
+      if (ticks === 0) {
+        if ((state.queueDepartures || []).length > 0) stagedNonEmpty = true;
+        // Accounting is applied once, at the decision tick: eight abandoning
+        // parties lower reputation by 8 x 0.1 and never again.
+        reputationAfterDecision = state.restaurant.reputation;
+        expect(reputationAfterDecision).toBe(3 - 8 * 0.1);
+      } else {
+        expect(state.restaurant.reputation).toBe(reputationAfterDecision);
+      }
+      if (state.customers.length === 0 && state.queue.length === 0
+        && (state.queueDepartures || []).length === 0) break;
+    }
+    expect(stagedNonEmpty).toBe(true);
+    expect(ticks).toBeLessThan(6000);
+    expect(seenCustomerIds.size).toBe(32);
+    for (const id of seedIds) expect(seenCustomerIds.has(String(id))).toBe(true);
+  });
+
+  it('stages an overflowing closure until every seeded member physically departs', () => {
+    const seedIds = overflowParties(8).flatMap(party => party.members).map(member => member.id);
+    let state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 22 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue: overflowParties(8),
+    });
+    const seenCustomerIds = new Set();
+    let stagedNonEmpty = false;
+    let ticks = 0;
+    for (; ticks < 6000; ticks += 1) {
+      state = updateCustomers(state, { gameDt: 0, movementDt: 0.5 });
+      expect(state.movementCoordinator.diagnostics.invariantFailure).toBeUndefined();
+      for (const customer of state.customers) seenCustomerIds.add(String(customer.id));
+      if (ticks === 0 && (state.queueDepartures || []).length > 0) stagedNonEmpty = true;
+      if (state.customers.length === 0 && state.queue.length === 0
+        && (state.queueDepartures || []).length === 0) break;
+    }
+    expect(stagedNonEmpty).toBe(true);
+    expect(ticks).toBeLessThan(6000);
+    expect(seenCustomerIds.size).toBe(32);
+    for (const id of seedIds) expect(seenCustomerIds.has(String(id))).toBe(true);
+  });
+
+  it('stages departures across later ticks with strict handoff spacing', () => {
+    let state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue: overflowParties(8, 0),
+    });
+    const firstTickIds = new Set();
+    let newLeaverAfterFirstTick = false;
+    let ticks = 0;
+    for (; ticks < 6000; ticks += 1) {
+      state = updateCustomers(state, { gameDt: 0, movementDt: 0.5 });
+      expect(state.movementCoordinator.diagnostics.invariantFailure).toBeUndefined();
+      const liveCustomers = state.customers.filter(customer =>
+        Number.isFinite(customer.x) && Number.isFinite(customer.y));
+      expect(pairwiseSpacing(liveCustomers)).toBeGreaterThanOrEqual(16);
+      const positionKeys = liveCustomers.map(customer => `${customer.x},${customer.y}`);
+      expect(new Set(positionKeys).size).toBe(positionKeys.length);
+      if (ticks === 0) {
+        for (const customer of state.customers) firstTickIds.add(String(customer.id));
+      } else if (!newLeaverAfterFirstTick) {
+        newLeaverAfterFirstTick = state.customers.some(customer =>
+          !firstTickIds.has(String(customer.id)));
+      }
+      if (state.customers.length === 0 && state.queue.length === 0
+        && (state.queueDepartures || []).length === 0) break;
+    }
+    expect(newLeaverAfterFirstTick).toBe(true);
+    expect(ticks).toBeLessThan(6000);
+  });
+
+  it('keeps pending departures out of queue capacity, guide admission and future spawn identity', () => {
+    const state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue: overflowParties(8, 0),
+    });
+    const decided = prepareCustomersForMovement(state, 0);
+    const pending = decided.queueDepartures || [];
+    expect(pending.length).toBeGreaterThan(0);
+    // Pending records are not part of the queue, so they cannot be selected for
+    // guide admission and do not occupy the eight-party spawn capacity.
+    const queuedMemberIds = new Set(decided.queue.flatMap(party => party.members).map(member => String(member.id)));
+    expect(pending.every(record => !queuedMemberIds.has(String(record.id)))).toBe(true);
+    const pendingIds = new Set(pending.map(record => String(record.id)));
+    expect(decided.queue.flatMap(party => party.members).some(member =>
+      pendingIds.has(String(member.id)))).toBe(false);
+    expect(getQueuePartyCount(decided.queue)).toBeLessThan(8);
+
+    // New arrivals may spawn while pending records still exist, and must not
+    // reuse a pending member's identity or party.
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const spawned = spawnCustomers({ ...decided, restaurant: { ...decided.restaurant, gameTime: 12 * 3600 } }, 1);
+    expect(spawned.queue.flatMap(party => party.members).length).toBeGreaterThan(0);
+    const newIds = new Set(spawned.queue.flatMap(party => party.members).map(member => String(member.id)));
+    for (const id of pendingIds) expect(newIds.has(id)).toBe(false);
+    const newPartyIds = new Set(spawned.queue.map(party => String(party.partyId)));
+    for (const record of pending) expect(newPartyIds.has(String(record.partyId))).toBe(false);
+  });
+
+  it('persists staged pending departures through a v6 save and reload and still departs everyone', async () => {
+    const seedIds = overflowParties(8, 0).flatMap(party => party.members).map(member => member.id);
+    const fresh = createInitialState();
+    let state = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 12 * 3600 },
+      queue: overflowParties(8, 0),
+      customers: [],
+      serviceItems: [],
+      staff: [],
+    };
+    state = updateCustomers(state, { gameDt: 0, movementDt: 0.5 });
+    const pending = state.queueDepartures || [];
+    expect(pending.length).toBeGreaterThan(0);
+    for (const record of pending) {
+      expect(record).toHaveProperty('id');
+      expect(record).toHaveProperty('partyId');
+      expect(record.departureReason).toBe('abandoned');
+      expect(seedIds.map(String)).toContain(String(record.id));
+    }
+    const queuedIds = new Set(state.queue.flatMap(party => party.members).map(member => String(member.id)));
+    expect(pending.every(record => !queuedIds.has(String(record.id)))).toBe(true);
+
+    saveState(state);
+    const saved = loadState();
+    expect(saved).not.toHaveProperty('movementCoordinator');
+    let restored = hydrateState(saved, createInitialState());
+    expect((restored.queueDepartures || []).map(record => String(record.id)).sort())
+      .toEqual(pending.map(record => String(record.id)).sort());
+
+    const seenCustomerIds = new Set([...restored.customers].map(customer => String(customer.id)));
+    for (let tick = 0; tick < 6000; tick += 1) {
+      restored = updateCustomers(restored, { gameDt: 0, movementDt: 0.5 });
+      expect(restored.movementCoordinator.diagnostics.invariantFailure).toBeUndefined();
+      for (const customer of restored.customers) seenCustomerIds.add(String(customer.id));
+      if (restored.customers.length === 0 && restored.queue.length === 0
+        && (restored.queueDepartures || []).length === 0) break;
+    }
+    for (const id of seedIds) expect(seenCustomerIds.has(String(id))).toBe(true);
+  });
+});
+
+describe('queue-slot lease ownership through conversion and staged departure', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function ownedParties(partyCount, queuePatience = 100) {
+    return Array.from({ length: partyCount }, (_, partyIndex) => ({
+      partyId: `lease-party-${partyIndex + 1}`,
+      members: Array.from({ length: 4 }, (_, memberIndex) => ({
+        id: `lease-${partyIndex + 1}-${memberIndex + 1}`,
+        partyId: `lease-party-${partyIndex + 1}`,
+        partySize: 4,
+        partyType: 'group',
+        state: 'queued',
+        patience: 100,
+        happiness: 80,
+        dishId: null,
+        drinkId: null,
+        tableId: null,
+        chairId: null,
+        queuePatience,
+        queuePatienceMax: 100,
+      })),
+    }));
+  }
+
+  function queuePoint(slot) {
+    return { x: 973, y: 390 + slot * 30 };
+  }
+
+  function memberAt(members, partyIndex, memberIndex) {
+    return members.find(member => member.partyId === `lease-party-${partyIndex + 1}`
+      && member.id === `lease-${partyIndex + 1}-${memberIndex + 1}`);
+  }
+
+  function queueSlotsFor(parties, partyCounts) {
+    const members = parties.flatMap(party => party.members);
+    const records = [];
+    let slot = 0;
+    partyCounts.forEach((memberCount, partyIndex) => {
+      for (let memberIndex = 0; memberIndex < memberCount; memberIndex += 1) {
+        const member = memberAt(members, partyIndex, memberIndex);
+        const point = queuePoint(slot);
+        records.push({ memberId: member.id, partyId: member.partyId, x: point.x, y: point.y, slot });
+        slot += 1;
+      }
+    });
+    return records;
+  }
+
+  it('converts abandoning leased members at their exact stored points and retains departure ownership until each leaver clears', () => {
+    const parties = ownedParties(3).map((party, index) => index === 0
+      ? { ...party, members: party.members.map(member => ({ ...member, queuePatience: 0 })) }
+      : party);
+    const queueSlots = queueSlotsFor(parties, [4, 4, 0]);
+    const state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue: parties,
+      queueSlots,
+      customers: [],
     });
 
-    const result = updateCustomers(motionlessGuidedState, { gameDt: 0, movementDt: 10.1 });
+    const decided = prepareCustomersForMovement(state, 0);
+    const leavers = decided.customers.filter(customer => customer.partyId === 'lease-party-1');
+    expect(leavers).toHaveLength(4);
+    expect(leavers.map(customer => ({ x: customer.x, y: customer.y }))).toEqual([
+      { x: 973, y: 390 }, { x: 973, y: 420 }, { x: 973, y: 450 }, { x: 973, y: 480 },
+    ]);
+    expect(decided.queue.map(party => party.partyId)).toEqual(['lease-party-2', 'lease-party-3']);
+    // Reconcile also filled the only free current candidate (slot 8) with the
+    // first hidden FIFO member before the conversion ran.
+    expect(decided.queueSlots.slice(0, 8)).toEqual(queueSlots);
+    expect(decided.queueSlots[8]).toMatchObject({ memberId: 'lease-3-1', x: 973, y: 630, slot: 8 });
 
-    expect(result.customers[0]).toMatchObject({ x: 100, y: 100 });
+    let current = decided;
+    let ticks = 0;
+    for (; ticks < 2000; ticks += 1) {
+      current = updateCustomers(current, { gameDt: 0, movementDt: 0.5 });
+      expect(current.movementCoordinator.diagnostics.invariantFailure).toBeUndefined();
+      const actors = [
+        ...current.customers,
+        ...(current.staff || []),
+        ...getQueueVisibleMembers(current, current.queue),
+      ].filter(actor => actor?.id != null && Number.isFinite(actor.x) && Number.isFinite(actor.y));
+      let minimum = Infinity;
+      for (let left = 0; left < actors.length; left += 1) {
+        for (let right = left + 1; right < actors.length; right += 1) {
+          minimum = Math.min(minimum, Math.hypot(
+            actors[left].x - actors[right].x,
+            actors[left].y - actors[right].y,
+          ));
+        }
+      }
+      expect(minimum).toBeGreaterThanOrEqual(16);
+      for (const member of getQueueVisibleMembers(current, current.queue)) {
+        if (member.partyId !== 'lease-party-2') continue;
+        const original = queueSlots.find(record => record.memberId === member.id);
+        expect({ x: member.x, y: member.y }).toEqual({ x: original.x, y: original.y });
+      }
+      if (current.customers.every(customer => customer.partyId !== 'lease-party-1')) break;
+    }
+    expect(ticks).toBeLessThan(2000);
+    // FIFO hidden members claimed the freed front origins only after the
+    // release predicate: party 3's remaining members stand at the first free
+    // candidates while the earlier granted member keeps its rear slot.
+    const finalParty3 = getQueueVisibleMembers(current, current.queue)
+      .filter(member => member.partyId === 'lease-party-3');
+    expect(finalParty3.map(member => member.y).sort()).toEqual([390, 420, 450, 630]);
+  });
+
+  it('converts closed leased members at their stored points and keeps hidden members ordered pending', () => {
+    const parties = ownedParties(3);
+    const queueSlots = queueSlotsFor(parties, [4, 4, 0]);
+    const state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 22 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue: parties,
+      queueSlots,
+      customers: [],
+    });
+
+    const decided = prepareCustomersForMovement(state, 0);
+    const closedLeavers = decided.customers.filter(customer => customer.partyId === 'lease-party-1');
+    expect(closedLeavers).toHaveLength(4);
+    expect(closedLeavers.map(customer => ({ x: customer.x, y: customer.y }))).toEqual([
+      { x: 973, y: 390 }, { x: 973, y: 420 }, { x: 973, y: 450 }, { x: 973, y: 480 },
+    ]);
+    expect(closedLeavers.every(customer => customer.closedAt === 22 * 3600)).toBe(true);
+    // Reconcile granted the free slot 8 to lease-3-1 before closure converted
+    // every leased member, so nine members leave now and three stay pending.
+    expect(decided.customers.filter(customer => customer.state === 'leaving')).toHaveLength(9);
+    const pending = decided.queueDepartures || [];
+    expect(pending).toHaveLength(3);
+    expect(pending.map(record => record.id)).toEqual([
+      'lease-3-2', 'lease-3-3', 'lease-3-4',
+    ]);
+    expect(pending.every(record => record.departureReason === 'closed')).toBe(true);
+    expect(decided.queueSlots.slice(0, 8)).toEqual(queueSlots);
+    expect(decided.queueSlots[8]).toMatchObject({ memberId: 'lease-3-1', x: 973, y: 630, slot: 8 });
+  });
+
+  it('gives a queued claim priority over staged materialisation at a single free candidate', () => {
+    const members = ownedParties(1, 100)[0].members;
+    const queue = [{
+      partyId: 'lease-party-1',
+      members: [
+        ...members,
+        ...Array.from({ length: 5 }, (_, memberIndex) => ({
+          id: `lease-9-${memberIndex + 1}`,
+          partyId: 'lease-party-1',
+          partySize: 4,
+          state: 'queued',
+          patience: 100,
+          happiness: 80,
+          dishId: null,
+          drinkId: null,
+          tableId: null,
+          chairId: null,
+          queuePatience: 100,
+          queuePatienceMax: 100,
+        })),
+      ],
+    }];
+    const allMembers = queue[0].members;
+    const queueSlots = allMembers.slice(0, 8).map((member, slot) => ({
+      memberId: member.id,
+      partyId: member.partyId,
+      x: 973,
+      y: 390 + slot * 30,
+      slot,
+    }));
+    const pendingRecord = {
+      ...allMembers[0],
+      id: 'pending-oldest',
+      departureReason: 'abandoned',
+    };
+    const state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue,
+      queueSlots,
+      queueDepartures: [pendingRecord],
+      customers: [],
+    });
+
+    const result = prepareCustomersForMovement(state, 0);
+    const ninthLease = result.queueSlots.find(record => record.x === 973 && record.y === 630);
+    expect(ninthLease.memberId).toBe('lease-9-5');
+    expect((result.queueDepartures || []).map(record => record.id)).toEqual(['pending-oldest']);
+    expect(result.queueDepartures[0]).toMatchObject(pendingRecord);
+    expect(result.customers).toHaveLength(0);
+  });
+
+  it('materialises the oldest pending record with a retained departure lease and stays blocked until clear', () => {
+    const members = ownedParties(1, 100)[0].members;
+    const queue = [{
+      partyId: 'lease-party-1',
+      members: [
+        ...members,
+        ...Array.from({ length: 4 }, (_, memberIndex) => ({
+          id: `lease-9-${memberIndex + 1}`,
+          partyId: 'lease-party-1',
+          partySize: 4,
+          state: 'queued',
+          patience: 100,
+          happiness: 80,
+          dishId: null,
+          drinkId: null,
+          tableId: null,
+          chairId: null,
+          queuePatience: 100,
+          queuePatienceMax: 100,
+        })),
+      ],
+    }];
+    // Eight members stand at slots 0..7; slot 8 is the only free candidate.
+    const queueSlots = queue[0].members.slice(0, 8).map((member, slot) => ({
+      memberId: member.id,
+      partyId: member.partyId,
+      x: 973,
+      y: 390 + slot * 30,
+      slot,
+    }));
+    const pendingOldest = {
+      ...queue[0].members[0],
+      id: 'pending-oldest',
+      departureReason: 'abandoned',
+    };
+    const pendingNext = {
+      ...queue[0].members[0],
+      id: 'pending-next',
+      departureReason: 'abandoned',
+    };
+    const state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue,
+      queueSlots,
+      queueDepartures: [pendingOldest, pendingNext],
+      customers: [],
+    });
+
+    const first = prepareCustomersForMovement(state, 0);
+    expect((first.queueDepartures || []).map(record => record.id)).toEqual(['pending-next']);
+    const staged = first.customers.find(customer => customer.id === 'pending-oldest');
+    expect(staged).toMatchObject({ state: 'leaving', x: 973, y: 630 });
+    const stagedLease = first.queueSlots.find(record => record.memberId === 'pending-oldest');
+    expect(stagedLease).toEqual({
+      memberId: 'pending-oldest', partyId: 'lease-party-1', x: 973, y: 630, slot: 8,
+    });
+    expect(new Set(first.queue.flatMap(party => party.members).map(member => member.id)))
+      .not.toContain('pending-oldest');
+    expect(new Set(first.customers.map(customer => customer.id))).not.toContain('pending-next');
+
+    // While the staged leaver is still within 16 px of its origin the lease is
+    // retained and no later record materialises over it.
+    const second = prepareCustomersForMovement(first, 0);
+    expect(second.queueSlots.find(record => record.memberId === 'pending-oldest')).toEqual(stagedLease);
+    expect((second.queueDepartures || []).map(record => record.id)).toEqual(['pending-next']);
+    expect(second.customers.filter(customer => customer.id === 'pending-oldest')).toHaveLength(1);
+
+    // Once the leaver clears its origin, the lease releases and the next
+    // oldest pending record may take the candidate.
+    const cleared = {
+      ...second,
+      customers: second.customers.map(customer => customer.id === 'pending-oldest'
+        ? { ...customer, x: 973, y: 660 }
+        : customer),
+    };
+    const third = prepareCustomersForMovement(cleared, 0);
+    expect(third.queueSlots.some(record => record.memberId === 'pending-oldest')).toBe(false);
+    expect(third.queueDepartures).toHaveLength(0);
+    expect(third.customers.some(customer => customer.id === 'pending-next'
+      && customer.state === 'leaving' && customer.x === 973 && customer.y === 630)).toBe(true);
+    expect(third.queueSlots.find(record => record.memberId === 'pending-next'))
+      .toEqual({ memberId: 'pending-next', partyId: 'lease-party-1', x: 973, y: 630, slot: 8 });
+  });
+});
+
+describe('all-32 queue departure completion with clean lease accounting', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('departs every member once with one reputation decision and no leftover lease or pending record', () => {
+    const seedIds = Array.from({ length: 8 }, (_, partyIndex) => Array.from({ length: 4 },
+      (_, memberIndex) => `complete-${partyIndex + 1}-${memberIndex + 1}`)).flat();
+    const queue = Array.from({ length: 8 }, (_, partyIndex) => ({
+      partyId: `complete-party-${partyIndex + 1}`,
+      members: Array.from({ length: 4 }, (_, memberIndex) => ({
+        id: `complete-${partyIndex + 1}-${memberIndex + 1}`,
+        partyId: `complete-party-${partyIndex + 1}`,
+        partySize: 4,
+        state: 'queued',
+        patience: 100,
+        happiness: 80,
+        dishId: null,
+        drinkId: null,
+        tableId: null,
+        chairId: null,
+        queuePatience: 0,
+        queuePatienceMax: 100,
+      })),
+    }));
+    let state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue,
+      customers: [],
+    });
+    const seenCustomerIds = new Set();
+    let reputationAfterDecision = null;
+    let ticks = 0;
+    for (; ticks < 6000; ticks += 1) {
+      state = updateCustomers(state, { gameDt: 0, movementDt: 0.5 });
+      expect(state.movementCoordinator.diagnostics.invariantFailure).toBeUndefined();
+      for (const customer of state.customers) seenCustomerIds.add(String(customer.id));
+      if (ticks === 0) reputationAfterDecision = state.restaurant.reputation;
+      else expect(state.restaurant.reputation).toBe(reputationAfterDecision);
+      const actors = [
+        ...state.customers,
+        ...(state.staff || []),
+        ...getQueueVisibleMembers(state, state.queue),
+      ].filter(actor => actor?.id != null && Number.isFinite(actor.x) && Number.isFinite(actor.y));
+      let minimum = Infinity;
+      for (let left = 0; left < actors.length; left += 1) {
+        for (let right = left + 1; right < actors.length; right += 1) {
+          minimum = Math.min(minimum, Math.hypot(
+            actors[left].x - actors[right].x,
+            actors[left].y - actors[right].y,
+          ));
+        }
+      }
+      expect(minimum).toBeGreaterThanOrEqual(16);
+      if (state.customers.length === 0 && state.queue.length === 0
+        && (state.queueDepartures || []).length === 0 && (state.queueSlots || []).length === 0) break;
+    }
+    expect(ticks).toBeLessThan(6000);
+    expect(reputationAfterDecision).toBe(3 - 8 * 0.1);
+    expect(seenCustomerIds.size).toBe(32);
+    for (const id of seedIds) expect(seenCustomerIds.has(String(id))).toBe(true);
+    expect(state.queueSlots).toEqual([]);
+    expect(state.queueDepartures).toEqual([]);
+  });
+});
+
+describe('runtime queue-slot reconciliation stays fail-closed without relocating a physical member', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('keeps the unsafe diagnostic and the exact lease across ticks instead of relocating the member', () => {
+    const state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 12 * 3600, expansionLevel: 1 },
+      doors: [{ id: 'door1', y: 340 }],
+      queue: [{
+        partyId: 'p',
+        members: [{
+          id: 'q', partyId: 'p', partySize: 1, state: 'queued', patience: 100,
+          happiness: 80, dishId: null, drinkId: null, tableId: null, chairId: null,
+          queuePatience: 100, queuePatienceMax: 100,
+        }],
+      }],
+      queueSlots: [{ memberId: 'q', partyId: 'p', x: 973, y: 390, slot: 0 }],
+      customers: [],
+      staff: [{ id: 'cook', role: 'cook', x: 973, y: 400 }],
+    });
+    const originalSlots = state.queueSlots;
+
+    let current = state;
+    for (let tick = 0; tick < 2; tick += 1) {
+      current = updateCustomers(current, { gameDt: 0, movementDt: 0.1 });
+      expect(current.movementCoordinator.diagnostics.invariantFailure).toBe('unsafeInitialState');
+      expect(current.queueSlots).toEqual(originalSlots);
+      const visible = getQueueVisibleMembers(current, current.queue);
+      expect(visible).toHaveLength(1);
+      expect(visible[0]).toMatchObject({ id: 'q', x: 973, y: 390 });
+    }
   });
 });

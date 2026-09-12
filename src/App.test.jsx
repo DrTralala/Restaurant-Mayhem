@@ -11,6 +11,7 @@ vi.mock('./state/GameContext', () => ({
   GameProvider: ({ children }) => children,
   useGameState: () => gameState,
   useDispatch: () => dispatch,
+  useGameGeneration: () => 0,
 }));
 vi.mock('./state/persistence', () => ({
   hydrateState: vi.fn(),

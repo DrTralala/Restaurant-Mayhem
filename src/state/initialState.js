@@ -1,6 +1,8 @@
 import { EQUIPMENT } from '../data/equipment';
 import { UPGRADES } from '../data/upgrades';
 import { MILESTONES } from '../data/milestones';
+import { createMovementCoordinator } from '../simulation/navigation/coordinator';
+import { SAVE_VERSION } from './saveVersion';
 
 export function createInitialState() {
   return {
@@ -51,6 +53,8 @@ export function createInitialState() {
     floorDirt: [],
     washStations: [{ id: 'wash1', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],
     queue: [],              // customers waiting outside for a free table
+    queueSlots: [],         // durable exact-position queue leases { memberId, partyId, x, y, slot? }
+    queueDepartures: [],    // ordered pending-departure records for hidden overflow members
     queueAdmissionGate: null,
     serviceItems: [],
     serviceTables: [
@@ -134,6 +138,7 @@ export function createInitialState() {
     notifications: [],
     speed: 1,
     paused: false,
-    version: 5,
+    version: SAVE_VERSION,
+    movementCoordinator: createMovementCoordinator(),
   };
 }

@@ -584,12 +584,22 @@ function gameReducer(state, action) {
   }
 }
 
+const GameGenerationContext = createContext(0);
+
+function reduceGameSession(session, action) {
+  const state = gameReducer(session.state, action);
+  if (action.type === 'LOAD_STATE') return { state, generation: session.generation + 1 };
+  return state === session.state ? session : { ...session, state };
+}
+
 export function GameProvider({ children }) {
-  const [state, dispatch] = useReducer(gameReducer, null, () => {
+  const [{ state, generation }, dispatch] = useReducer(reduceGameSession, null, () => {
     const saved = loadState();
     const fresh = createInitialState();
-    if (saved && saved.version === fresh.version) return hydrateState(saved, fresh);
-    return fresh;
+    return {
+      state: saved && saved.version === fresh.version ? hydrateState(saved, fresh) : fresh,
+      generation: 0,
+    };
   });
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -609,7 +619,9 @@ export function GameProvider({ children }) {
   return (
     <GameContext.Provider value={state}>
       <DispatchContext.Provider value={dispatch}>
-        {children}
+        <GameGenerationContext.Provider value={generation}>
+          {children}
+        </GameGenerationContext.Provider>
       </DispatchContext.Provider>
     </GameContext.Provider>
   );
@@ -621,4 +633,8 @@ export function useGameState() {
 
 export function useDispatch() {
   return useContext(DispatchContext);
+}
+
+export function useGameGeneration() {
+  return useContext(GameGenerationContext);
 }

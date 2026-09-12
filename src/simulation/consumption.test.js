@@ -333,8 +333,8 @@ describe('party checkout synchronisation', () => {
         },
         {
           id: 'non-payer', partyId: 'mixed', state: 'waiting_for_party',
-          menuOutcome: 'unaffordable', tableId: 't1', path: [{ x: 1, y: 1 }],
-          pathGoal: { x: 2, y: 2 }, usingStaticFallback: true, paymentReady: true,
+          menuOutcome: 'unaffordable', tableId: 't1',
+          navigationGoal: { x: 2, y: 2 }, paymentReady: true,
         },
       ],
       serviceItems: [{
@@ -350,12 +350,11 @@ describe('party checkout synchronisation', () => {
     const nonPayer = result.customers.find(customer => customer.id === 'non-payer');
     expect(nonPayer).toMatchObject({
       state: 'leaving', departureReason: 'menu_unaffordable', exitPhase: 'to_door',
-      exitDoorId: null, exitFadeProgress: 0, exitHeading: null, path: [], stalledFor: 0,
+      exitDoorId: null, exitFadeProgress: 0, exitHeading: null,
       cashierStationId: null, checkoutPosition: null, paymentReady: false,
     });
     expect(nonPayer.paymentQueuedAt).toBeUndefined();
-    expect(nonPayer).not.toHaveProperty('pathGoal');
-    expect(nonPayer).not.toHaveProperty('usingStaticFallback');
+    expect(nonPayer).not.toHaveProperty('navigationGoal');
   });
 
   it('keeps immediate individual checkout for an all-legacy party', () => {

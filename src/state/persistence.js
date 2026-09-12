@@ -5,9 +5,13 @@ import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { normaliseOperatingHour } from '../simulation/clock';
 import { normaliseConsumptionState } from '../simulation/consumption';
 import { isCheckoutState } from '../simulation/checkout';
-import { normaliseCustomerQueue } from '../simulation/customerQueue';
+import { normaliseCustomerQueue, normaliseQueueDepartures, normaliseQueueSlots, reconcileQueueSlots } from '../simulation/customerQueue';
 import { normaliseTableReservationOwners } from '../simulation/guidance';
-import { clearMovementRecoveryMetadata } from '../simulation/movement';
+import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
+import { createMovementCoordinator } from '../simulation/navigation/coordinator';
+import { SAVE_VERSION } from './saveVersion';
+import { normaliseDoorAdmissions } from './doorAdmissions';
+import { hydrateMovementResidencies, movementSaveSnapshot, validateSavedNavigationGeometry } from './movementPersistence';
 import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
 import {
   normalisePartyReviewHistory,
@@ -16,7 +20,7 @@ import {
 
 export function saveState(state) {
   try {
-    const serialized = JSON.stringify(state);
+    const serialized = JSON.stringify(movementSaveSnapshot(state));
     localStorage.setItem(SAVE_KEY, serialized);
   } catch (e) {
     console.warn('Failed to save state:', e);
@@ -27,7 +31,10 @@ export function loadState() {
   try {
     const serialized = localStorage.getItem(SAVE_KEY);
     if (!serialized) return null;
-    return JSON.parse(serialized);
+    const saved = JSON.parse(serialized);
+    if (saved?.version !== SAVE_VERSION) return null;
+    validateSavedNavigationGeometry(saved);
+    return saved;
   } catch (e) {
     console.warn('Failed to load state:', e);
     return null;
@@ -47,7 +54,7 @@ function uniqueCompletedCustomerVisits(value) {
 
 function finishCompletedCheckout(customer, completedCustomerIds) {
   if (!completedCustomerIds.has(customer.id) || !isCheckoutState(customer)) return customer;
-  return clearMovementRecoveryMetadata({
+  return clearNavigationGoal({
     ...customer,
     state: 'leaving',
     departureReason: 'served',
@@ -55,8 +62,6 @@ function finishCompletedCheckout(customer, completedCustomerIds) {
     exitDoorId: null,
     exitFadeProgress: 0,
     exitHeading: null,
-    path: [],
-    stalledFor: 0,
     cashierStationId: null,
     checkoutPosition: null,
     paymentReady: false,
@@ -64,6 +69,11 @@ function finishCompletedCheckout(customer, completedCustomerIds) {
 }
 
 export function hydrateState(saved, fresh) {
+  // Partial domain fixtures may omit a version; imported saves are version-gated
+  // by loadState/Settings before reaching this normalisation boundary.
+  if (saved.version != null && saved.version !== SAVE_VERSION) {
+    throw new Error('Saved game is incompatible with the current navigation version');
+  }
   const staff = (saved.staff || fresh.staff || []).map(character => ({
     ...character,
     gender: inferGender(character),
@@ -75,6 +85,9 @@ export function hydrateState(saved, fresh) {
       gender: inferGender(character),
     })),
   }));
+  const queueDepartures = normaliseQueueDepartures(
+    saved.queueDepartures ?? fresh.queueDepartures ?? [],
+  );
   const completedCustomers = uniqueCompletedCustomerVisits(
     saved.completedCustomers || fresh.completedCustomers || [],
   );
@@ -98,6 +111,7 @@ export function hydrateState(saved, fresh) {
         gender: inferGender(character),
       }), completedCustomerIds)),
     queue,
+    queueDepartures,
     queueAdmissionGate: saved.queueAdmissionGate ?? fresh.queueAdmissionGate ?? null,
     pendingPartyReviews,
     partyReviewHistory,
@@ -163,5 +177,24 @@ export function hydrateState(saved, fresh) {
     });
   }
 
-  return hydrated;
+  // Durable queue-slot leases: structural validation of the saved records, then
+  // the same idempotent ownership reconciliation used per tick. Missing leases
+  // seed from [] and backfill legal current candidates in logical FIFO order.
+  // Malformed records never supply a coordinate and never
+  // create an overlapping claim; every logical queue member remains represented
+  // (leased or unplaced) rather than dropped.
+  const seedQueueSlots = normaliseQueueSlots(
+    saved.queueSlots ?? fresh.queueSlots ?? [],
+    hydrated,
+  );
+  hydrated.queueSlots = reconcileQueueSlots(
+    { ...hydrated, queueSlots: seedQueueSlots },
+    seedQueueSlots,
+  );
+
+  return {
+    ...hydrateMovementResidencies(normaliseDoorAdmissions(hydrated)),
+    version: fresh.version,
+    movementCoordinator: createMovementCoordinator(),
+  };
 }

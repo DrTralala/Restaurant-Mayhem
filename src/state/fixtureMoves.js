@@ -5,30 +5,24 @@ import {
   normaliseServiceItemOwnership,
 } from '../simulation/serviceItems';
 import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout';
+import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
+import { createNavigationWorkspace } from '../simulation/movement/navigationWorkspace';
+import { reconcileFixtureResidencies } from '../simulation/movement/seatedDeparture';
 
-const MOVEMENT_RECOVERY_FIELDS = [
-  'pathGoal',
-  'usingStaticFallback',
-  'minimumSpacing',
-  'localConflictTarget',
-  'headOnRecovery',
-  'recoveredHeadOnDetourTarget',
-];
 const PHYSICALLY_SEATED_CUSTOMER_STATES = new Set([
   'seated',
   'ordering',
   'waiting_for_items',
+  'waiting_for_party',
   'eating',
 ]);
 
-function clearPath(actor) {
-  const cleared = { ...actor, path: [], stalledFor: 0 };
-  for (const field of MOVEMENT_RECOVERY_FIELDS) delete cleared[field];
-  return cleared;
+function cancelNavigation(actor) {
+  return clearNavigationGoal(actor);
 }
 
 function cancelTask(worker) {
-  return clearPath({ ...worker, task: null });
+  return cancelNavigation({ ...worker, task: null });
 }
 
 function expandFixtureMoves(state, requestedMoves) {
@@ -190,7 +184,7 @@ export function moveFixtures(state, requestedMoves) {
     }
     if (affectedTask) return cancelTask(worker);
     return doorMoved || (worker.task == null && movedCashierStaffIds.has(worker.id))
-      ? clearPath(worker)
+      ? cancelNavigation(worker)
       : worker;
   });
 
@@ -204,13 +198,13 @@ export function moveFixtures(state, requestedMoves) {
     const delta = chairDeltas.get(customer.chairId);
     if (delta && PHYSICALLY_SEATED_CUSTOMER_STATES.has(customer.state)
       && customer.tableId === delta.tableId) {
-      updated = clearPath({
+      updated = cancelNavigation({
         ...updated,
         ...(Number.isFinite(customer.x) ? { x: customer.x + delta.x } : {}),
         ...(Number.isFinite(customer.y) ? { y: customer.y + delta.y } : {}),
       });
     } else if (doorMoved) {
-      updated = clearPath(updated);
+      updated = cancelNavigation(updated);
     }
 
     if (isCheckoutState(updated)
@@ -227,7 +221,7 @@ export function moveFixtures(state, requestedMoves) {
         && updated.guideStaffId === guide.guideId;
     });
     if (cancelledGuide) {
-      updated = clearPath({
+      updated = cancelNavigation({
         ...updated,
         state: 'waiting',
         guideStaffId: null,
@@ -277,5 +271,5 @@ export function moveFixtures(state, requestedMoves) {
     return item;
   });
 
-  return normaliseServiceItemOwnership(next);
+  return normaliseServiceItemOwnership(reconcileFixtureResidencies(state, next, createNavigationWorkspace(next)));
 }

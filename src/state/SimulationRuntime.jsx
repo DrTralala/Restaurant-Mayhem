@@ -1,10 +1,15 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { advanceFixedStep } from '../simulation/fixedStep';
 import { runTick } from '../simulation/gameLoop';
 import { interpolateSimulationState } from '../canvas/interpolation';
-import { useDispatch, useGameState } from './GameContext';
+import { useDispatch, useGameGeneration, useGameState } from './GameContext';
 
 const RenderStateContext = createContext(null);
+const RuntimeFaultContext = createContext({ fault: null, reportFault: () => {} });
+
+export function useRuntimeFault() {
+  return useContext(RuntimeFaultContext);
+}
 
 export function useRenderState() {
   return useContext(RenderStateContext) || useGameState();
@@ -13,14 +18,34 @@ export function useRenderState() {
 export default function SimulationRuntime({ children }) {
   const state = useGameState();
   const dispatch = useDispatch();
+  const generation = useGameGeneration();
   const canonicalRef = useRef(state);
   const previousRef = useRef(state);
   const accumulatorRef = useRef(0);
   const lastTimestampRef = useRef(null);
   const lastRuntimeStateRef = useRef(null);
   const [renderState, setRenderState] = useState(state);
+  const faultRef = useRef(null);
+  const [fault, setFault] = useState(null);
 
-  useEffect(() => {
+  const reportFault = useCallback((error, phase) => {
+    if (faultRef.current) return;
+    const detail = { phase, gameTime: canonicalRef.current.restaurant?.gameTime,
+      speed: canonicalRef.current.speed };
+    faultRef.current = detail;
+    setFault(detail);
+    // Keep the original Error (including its stack), not the entire game/save.
+    console.error('Restaurant runtime stopped', detail, error);
+  }, []);
+  const faultContext = useMemo(() => ({ fault, reportFault }), [fault, reportFault]);
+
+  useLayoutEffect(() => {
+    faultRef.current = null;
+    setFault(null);
+    lastRuntimeStateRef.current = null;
+  }, [generation]);
+
+  useLayoutEffect(() => {
     canonicalRef.current = state;
     if (state !== lastRuntimeStateRef.current) {
       previousRef.current = state;
@@ -28,35 +53,57 @@ export default function SimulationRuntime({ children }) {
       lastTimestampRef.current = null;
       setRenderState(state);
     }
-  }, [state]);
+  }, [state, generation]);
 
   useEffect(() => {
     let frameId;
     const frame = timestamp => {
-      const previousTimestamp = lastTimestampRef.current;
-      lastTimestampRef.current = timestamp;
-      const elapsedSeconds = previousTimestamp == null ? 0 : (timestamp - previousTimestamp) / 1000;
-      const result = advanceFixedStep({
-        state: canonicalRef.current,
-        previousState: previousRef.current,
-        accumulator: accumulatorRef.current,
-        elapsedSeconds,
-      }, runTick);
+      let phase = 'simulation';
+      try {
+        if (faultRef.current) return;
+        const previousTimestamp = lastTimestampRef.current;
+        lastTimestampRef.current = timestamp;
+        const elapsedSeconds = previousTimestamp == null ? 0 : (timestamp - previousTimestamp) / 1000;
+        const result = advanceFixedStep({
+          state: canonicalRef.current,
+          previousState: previousRef.current,
+          accumulator: accumulatorRef.current,
+          elapsedSeconds,
+        }, runTick, { now: () => performance.now(), maxWorkMs: 8 });
 
-      canonicalRef.current = result.state;
-      previousRef.current = result.previousState;
-      accumulatorRef.current = result.accumulator;
-      if (result.steps > 0) {
-        lastRuntimeStateRef.current = result.state;
-        dispatch({ type: 'TICK', nextState: result.state });
+        phase = 'interpolation';
+        const interpolated = interpolateSimulationState(result.previousState, result.state, result.alpha);
+
+        canonicalRef.current = result.state;
+        previousRef.current = result.previousState;
+        accumulatorRef.current = result.accumulator;
+        if (result.steps > 0) {
+          lastRuntimeStateRef.current = result.state;
+          dispatch({ type: 'TICK', nextState: result.state });
+        }
+        setRenderState(interpolated);
+      } catch (error) {
+        reportFault(error, phase);
+      } finally {
+        frameId = requestAnimationFrame(frame);
       }
-      setRenderState(interpolateSimulationState(result.previousState, result.state, result.alpha));
-      frameId = requestAnimationFrame(frame);
     };
 
     frameId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(frameId);
-  }, [dispatch]);
+  }, [dispatch, reportFault]);
 
-  return <RenderStateContext.Provider value={renderState}>{children}</RenderStateContext.Provider>;
+  return <RuntimeFaultContext.Provider value={faultContext}>
+    <RenderStateContext.Provider value={renderState}>
+      {children}
+      {fault && <div role="alert" style={{
+        position: 'fixed', bottom: 60, left: '50%', transform: 'translateX(-50%)',
+        zIndex: 200, maxWidth: '90vw', padding: '12px 20px', borderRadius: 8,
+        background: '#8b2525', color: '#fff', fontFamily: 'monospace',
+      }}>
+        Gameplay stopped after a {fault.phase} error. Open Settings to start a New Game
+        {' '}or load a saved game. Error details are in the browser console.
+      </div>}
+    </RenderStateContext.Provider>
+  </RuntimeFaultContext.Provider>;
 }

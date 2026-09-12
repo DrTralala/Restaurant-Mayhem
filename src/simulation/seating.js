@@ -1,5 +1,6 @@
 import { buildBlockedCells, cellKey, cellToWorld, findPath, worldToCell } from './pathfinding';
 import { getRestaurantWorld } from './world';
+import { canClaimDestination } from './navigation/destinations';
 
 const CHAIR_RADIUS = 10;
 const APPROACH_DIRECTIONS = [
@@ -90,7 +91,8 @@ export function buildChairApproachAssignments(state, customerIds, chairIds) {
       .map(direction => ({ x: chairCell.x + direction.x, y: chairCell.y + direction.y }))
       .filter(candidate => isRestaurantInteriorCell(currentState, candidate)
         && !blocked.has(cellKey(candidate))
-        && !usedApproachCells.has(cellKey(candidate)))
+        && !usedApproachCells.has(cellKey(candidate))
+        && canClaimDestination(currentState, customer, cellToWorld(candidate)))
       .sort((left, right) => compareApproachCells(left, right, customerCell));
 
     const approachCell = candidates.find(candidate => sameCell(customerCell, candidate)

@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
-import { useRenderState } from '../state/SimulationRuntime';
+import { useRenderState, useRuntimeFault } from '../state/SimulationRuntime';
 import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } from './camera';
 import { loadSprites } from './sprites';
 import { drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer, drawSelectionLayer } from './layers';
@@ -242,6 +242,7 @@ export default function RestaurantCanvas({
   const reducedMotionRef = useRef(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
   const state = useGameState();
   const simulationRenderState = useRenderState();
+  const { fault, reportFault } = useRuntimeFault();
   const dispatch = useDispatch();
   const [placement, setPlacement] = useState(null);
   const placementRef = useRef(null);
@@ -303,25 +304,19 @@ export default function RestaurantCanvas({
     canvas.style.width = canvas.clientWidth + 'px';
     canvas.style.height = canvas.clientHeight + 'px';
 
-    try {
-      const renderState = moveRef.current
-        ? applyMovePreview(simulationRenderState, state, moveRef.current)
-        : simulationRenderState;
+    const renderState = moveRef.current
+      ? applyMovePreview(simulationRenderState, state, moveRef.current)
+      : simulationRenderState;
 
-      drawFloorLayer(ctx, renderState, camera, sprites);
-      drawFurnitureLayer(ctx, renderState, camera, sprites);
-      if (placement) drawPlacementPreview(ctx, state, camera, placement);
-      const characterRenderOptions = { timeMs, reducedMotion: reducedMotionRef.current };
-      drawStaffLayer(ctx, renderState, camera, characterRenderOptions);
-      drawCustomerLayer(ctx, renderState, camera, characterRenderOptions);
-      drawQueueLayer(ctx, renderState, camera, characterRenderOptions);
-      drawSelectionLayer(ctx, renderState, camera, selectedItems);
-      drawOverlayLayer(ctx, renderState, camera, sprites, tooltipRef.current);
-    } catch (err) {
-      ctx.fillStyle = '#a33';
-      ctx.font = '14px monospace';
-      ctx.fillText('Render error: ' + err.message, 20, 40);
-    }
+    drawFloorLayer(ctx, renderState, camera, sprites);
+    drawFurnitureLayer(ctx, renderState, camera, sprites);
+    if (placement) drawPlacementPreview(ctx, state, camera, placement);
+    const characterRenderOptions = { timeMs, reducedMotion: reducedMotionRef.current };
+    drawStaffLayer(ctx, renderState, camera, characterRenderOptions);
+    drawCustomerLayer(ctx, renderState, camera, characterRenderOptions);
+    drawQueueLayer(ctx, renderState, camera, characterRenderOptions);
+    drawSelectionLayer(ctx, renderState, camera, selectedItems);
+    drawOverlayLayer(ctx, renderState, camera, sprites, tooltipRef.current);
   }, [state, simulationRenderState, selectedItems, placement]);
 
   useEffect(() => {
@@ -371,12 +366,19 @@ export default function RestaurantCanvas({
   }, [managementOpen]);
 
   useEffect(() => {
+    let failed = Boolean(fault);
     let animId = requestAnimationFrame(function loop(timeMs) {
-      draw(timeMs);
-      animId = requestAnimationFrame(loop);
+      try {
+        if (!failed) draw(timeMs);
+      } catch (error) {
+        failed = true;
+        reportFault(error, 'drawing');
+      } finally {
+        animId = requestAnimationFrame(loop);
+      }
     });
     return () => cancelAnimationFrame(animId);
-  }, [draw]);
+  }, [draw, fault, reportFault]);
 
   // R key to rotate during move or placement
   useEffect(() => {

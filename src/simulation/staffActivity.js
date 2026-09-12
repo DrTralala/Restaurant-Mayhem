@@ -1,12 +1,14 @@
 import {
-  buildBlockedCells,
-  buildOccupiedCharacterCells,
-  cellKey,
+  cellToWorld,
   findPath,
   isInsideWorld,
   worldToCell,
 } from './pathfinding';
 import { getAssignedCashierStation } from './cashiers';
+import { getCharacterMovementStatus } from './movement';
+import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoal';
+import { getCashierWorkPosition } from './world';
+import { canClaimDestination } from './navigation/destinations';
 
 export const STAFF_ACTIVITY_PHASES = Object.freeze([
   'idle_waiting', 'idle_roaming', 'task_assigned', 'working', 'stationed',
@@ -32,6 +34,17 @@ function canRoam(state, worker) {
     && !getAssignedCashierStation(state.cashierStations, worker.id);
 }
 
+function cashierStationGoal(state, worker) {
+  const station = getAssignedCashierStation(state.cashierStations, worker.id);
+  return station ? getCashierWorkPosition(station) : null;
+}
+
+function atPoint(worker, point) {
+  return point
+    && Number.isFinite(worker.x) && Number.isFinite(worker.y)
+    && Math.hypot(worker.x - point.x, worker.y - point.y) <= 2;
+}
+
 export function markTaskAssigned(worker) {
   return { ...worker, activityPhase: 'task_assigned', idleUntil: null };
 }
@@ -43,15 +56,20 @@ export function markWorking(worker) {
 export function settleTasklessActivity(state, worker) {
   if (worker.task || worker.carryingServiceItemId) return markTaskAssigned(worker);
   if (!canRoam(state, worker)) {
-    return { ...worker, activityPhase: 'stationed', idleUntil: null };
+    const stationGoal = cashierStationGoal(state, worker);
+    if (stationGoal && !atPoint(worker, stationGoal)) {
+      return setNavigationGoal(
+        { ...worker, activityPhase: 'stationed', idleUntil: null },
+        stationGoal,
+      );
+    }
+    return clearNavigationGoal({ ...worker, activityPhase: 'stationed', idleUntil: null });
   }
-  if (worker.activityPhase === 'idle_roaming' && worker.path?.length) return worker;
-  return {
+  return clearNavigationGoal({
     ...worker,
     activityPhase: 'idle_waiting',
     idleUntil: state.restaurant.gameTime + idleDelay(worker),
-    path: [],
-  };
+  });
 }
 
 export function getStaffMovementSpeed(worker) {
@@ -65,13 +83,24 @@ export function prepareStaffActivity(state, worker) {
   }
   if (worker.carryingServiceItemId) return markTaskAssigned(worker);
   if (!canRoam(state, worker)) {
-    return { ...worker, activityPhase: 'stationed', idleUntil: null };
-  }
-  if (!worker.activityPhase && worker.path?.length) {
-    return worker;
+    const stationGoal = cashierStationGoal(state, worker);
+    if (stationGoal && !atPoint(worker, stationGoal)) {
+      return setNavigationGoal(
+        { ...worker, activityPhase: 'stationed', idleUntil: null },
+        stationGoal,
+      );
+    }
+    return clearNavigationGoal({ ...worker, activityPhase: 'stationed', idleUntil: null });
   }
   if (worker.activityPhase === 'idle_roaming') {
-    return worker.path?.length ? worker : settleTasklessActivity(state, worker);
+    if (!canClaimDestination(state, worker, worker.navigationGoal)) {
+      return settleTasklessActivity(state, worker);
+    }
+    const status = getCharacterMovementStatus(state, worker.id);
+    if (['planning', 'scheduled'].includes(status.plan)
+      && Number.isFinite(worker.navigationGoal?.x)
+      && Number.isFinite(worker.navigationGoal?.y)) return worker;
+    return settleTasklessActivity(state, worker);
   }
   if (worker.activityPhase !== 'idle_waiting' || !Number.isFinite(worker.idleUntil)) {
     return settleTasklessActivity(state, worker);
@@ -79,18 +108,13 @@ export function prepareStaffActivity(state, worker) {
   if (state.restaurant.gameTime < worker.idleUntil) return worker;
 
   const start = worldToCell(worker);
-  const blocked = buildBlockedCells(state);
-  const occupiedCells = buildOccupiedCharacterCells(
-    [...(state.staff || []), ...(state.customers || [])],
-    [worker.id],
-  );
   const candidates = [];
   for (let dy = -3; dy <= 3; dy += 1) {
     for (let dx = -3; dx <= 3; dx += 1) {
       const distance = Math.abs(dx) + Math.abs(dy);
       const candidate = { x: start.x + dx, y: start.y + dy };
       if (distance < 1 || distance > 3 || !isInsideWorld(state, candidate)
-        || blocked.has(cellKey(candidate)) || occupiedCells.has(cellKey(candidate))) continue;
+        || !findPath(state, start, candidate).length) continue;
       candidates.push(candidate);
     }
   }
@@ -100,20 +124,17 @@ export function prepareStaffActivity(state, worker) {
     : 0;
   const ordered = [...candidates.slice(offset), ...candidates.slice(0, offset)];
   for (const candidate of ordered) {
-    const path = findPath(state, start, candidate, { occupiedCells });
-    if (!path.length) continue;
-    return {
+    if (!canClaimDestination(state, worker, cellToWorld(candidate))) continue;
+    return setNavigationGoal({
       ...worker,
       activityPhase: 'idle_roaming',
       idleUntil: null,
       roamSequence: (worker.roamSequence || 0) + 1,
-      path,
-    };
+    }, cellToWorld(candidate));
   }
   return settleTasklessActivity(state, {
     ...worker,
     activityPhase: null,
     roamSequence: (worker.roamSequence || 0) + 1,
-    path: [],
   });
 }

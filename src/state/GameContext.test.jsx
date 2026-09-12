@@ -1,8 +1,9 @@
 import { act, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GameProvider, useDispatch, useGameState } from './GameContext';
 import { createInitialState } from './initialState';
 import { getRestaurantWorld } from '../simulation/world';
+import SettingsMenu from '../components/SettingsMenu';
 
 function StaffNameHarness() {
   const state = useGameState();
@@ -109,14 +110,58 @@ describe('GameProvider operating-hours actions', () => {
 describe('GameProvider staff actions', () => {
   beforeEach(() => localStorage.clear());
 
-  it('uses fresh version-5 state when a version-4 save exists', () => {
-    const saved = { ...createInitialState(), version: 4, restaurant: { funds: 999 } };
+  it('starts fresh rather than installing a local save with invalid fixture geometry', () => {
+    const saved = createInitialState();
+    saved.restaurant.funds = 999;
+    saved.cashierStations[0].w = -1;
+    const serialized = JSON.stringify(saved);
+    localStorage.setItem('restaurant-sim-save', serialized);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      render(<GameProvider><ItemHarness /></GameProvider>);
+      expect(screen.getByTestId('funds')).toHaveTextContent('600');
+      expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('shows repository geometry rejection without replacing the current game', async () => {
+    const saved = createInitialState();
+    saved.restaurant.funds = 999;
+    saved.cashierStations[0].w = -1;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true, json: async () => ({ state: saved, filename: 'invalid.json' }),
+    });
+    const current = {};
+    try {
+      render(<GameProvider><ReducerHarness current={current} /><SettingsMenu isOpen /></GameProvider>);
+      const before = current.state;
+      await act(async () => screen.getByRole('button', { name: 'Load Game' }).click());
+      expect(screen.getByRole('status')).toHaveTextContent('Invalid saved navigation geometry');
+      expect(current.state).toBe(before);
+      expect(current.state.restaurant.funds).toBe(600);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('hydrates the current version without runtime state', () => {
+    const game = renderReducer({ version: createInitialState().version, restaurant: { funds: 999 },
+      movementCoordinator: { requests: { counterfeit: true } } });
+    expect(game.state.version).toBe(createInitialState().version);
+    expect(game.state.restaurant.funds).toBe(999);
+    expect(game.state.movementCoordinator.requests).toEqual(new Map());
+  });
+
+  it.each([4, 5, 6])('ignores old version %s saves and starts fresh without deleting the saved JSON', version => {
+    const saved = { ...createInitialState(), version, restaurant: { funds: 999 } };
     localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
 
     render(<GameProvider><ItemHarness /></GameProvider>);
 
     expect(screen.getByTestId('funds')).toHaveTextContent('600');
-    expect(JSON.parse(localStorage.getItem('restaurant-sim-save')).version).toBe(4);
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(JSON.stringify(saved));
   });
 
   it('renames only the selected staff member', () => {

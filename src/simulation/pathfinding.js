@@ -1,17 +1,17 @@
 import { GRID_SIZE } from './world';
 import {
   buildBlockedCells,
-  buildOccupiedCharacterCells,
   cellKey,
   cellToWorld,
   isInsideWorld,
   worldToCell,
 } from './movement/navigationWorkspace';
 import { resolveNavigationWorkspace } from './movement/navigationWorkspace';
+import { createGrid } from './navigation/grid';
+import { findRoute } from './navigation/router';
 
 export {
   buildBlockedCells,
-  buildOccupiedCharacterCells,
   cellKey,
   cellToWorld,
   isInsideWorld,
@@ -22,52 +22,36 @@ function isOpen(state, blocked, cell) {
   return isInsideWorld(state, cell) && !blocked.has(cellKey(cell));
 }
 
-export function findPath(state, start, goal, {
-  occupiedCells = null,
-  allowOccupiedGoal = false,
-  workspace = null,
-  metrics = null,
-} = {}) {
-  const navigation = resolveNavigationWorkspace(state, workspace, metrics);
-  const blocked = navigation.blockedCells;
-  const queue = [start];
-  const cameFrom = new Map([[cellKey(start), null]]);
-  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+// Door arrays survive ordinary ticks but are replaced by fresh/hydrated games.
+// Weak ownership releases old games; each owner retains only one topology and
+// a bounded set of routes. No state, graph or actor-specific authority is cached.
+const routeCaches = new WeakMap();
+const MAX_CACHED_ROUTES = 128;
 
-  while (queue.length) {
-    const current = queue.shift();
-    if (cellKey(current) === cellKey(goal)) break;
-    for (const [dx, dy] of dirs) {
-      const next = { x: current.x + dx, y: current.y + dy };
-      const key = cellKey(next);
-      const occupied = occupiedCells?.has(key) && !(allowOccupiedGoal && key === cellKey(goal));
-      if (cameFrom.has(key) || !isOpen(state, blocked, next) || occupied) continue;
-      cameFrom.set(key, current);
-      queue.push(next);
-    }
+export function findPath(state, startCell, goalCell, options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)
+    || Object.keys(options).some(key => key !== 'workspace' && key !== 'metrics')) {
+    throw new Error('findPath accepts only static path options: workspace and metrics');
   }
-
-  if (!cameFrom.has(cellKey(goal))) return [];
-  const path = [];
-  let current = goal;
-  while (current) {
-    path.unshift(current);
-    current = cameFrom.get(cellKey(current));
+  const workspace = resolveNavigationWorkspace(state, options.workspace || null, options.metrics || null);
+  const owner = Array.isArray(state.doors) ? state.doors : state;
+  let cache = routeCaches.get(owner);
+  if (!cache || cache.topology !== workspace.topologyFingerprint) {
+    cache = { topology: workspace.topologyFingerprint, routes: new Map() };
+    routeCaches.set(owner, cache);
   }
-  return path.slice(1);
-}
-
-export function findPathWithDynamicFallback(state, start, goal, {
-  occupiedCells = null,
-  workspace = null,
-  metrics = null,
-} = {}) {
-  const path = findPath(state, start, goal, {
-    occupiedCells, allowOccupiedGoal: true, workspace, metrics,
-  });
-  if (path.length) return { path, usedStaticFallback: false };
-  const staticPath = findPath(state, start, goal, { workspace, metrics });
-  return { path: staticPath, usedStaticFallback: staticPath.length > 0 };
+  const key = `${cellKey(startCell)}->${cellKey(goalCell)}`;
+  if (cache.routes.has(key)) {
+    const route = cache.routes.get(key);
+    cache.routes.delete(key);
+    cache.routes.set(key, route);
+    return route.map(cell => ({ ...cell }));
+  }
+  const result = findRoute(createGrid(state, workspace), cellToWorld(startCell), cellToWorld(goalCell));
+  const route = result.status === 'found' ? result.points.map(worldToCell) : [];
+  cache.routes.set(key, route);
+  if (cache.routes.size > MAX_CACHED_ROUTES) cache.routes.delete(cache.routes.keys().next().value);
+  return route.map(cell => ({ ...cell }));
 }
 
 export function findAdjacentOpenCells(state, rect, fromCell = null, { workspace = null, metrics = null } = {}) {

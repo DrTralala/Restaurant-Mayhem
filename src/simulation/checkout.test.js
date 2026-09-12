@@ -6,6 +6,7 @@ import {
   prepareCheckoutCustomers,
   requeueCheckoutCustomer,
 } from './checkout';
+import { getCharacterMovementStatus } from './movement';
 
 const state = {
   restaurant: { gameTime: 100, expansionLevel: 1 },
@@ -26,11 +27,11 @@ describe('checkout state', () => {
   it('enters queued checkout once and preserves order and position data', () => {
     const entered = enterCheckout({
       id: 'c1', state: 'eating', x: 210, y: 190, dishId: 'toast', drinkId: 'water',
-      tableId: 't1', chairId: 'ch1', path: [{ x: 1, y: 1 }],
+      tableId: 't1', chairId: 'ch1', navigationGoal: { x: 20, y: 40 },
     }, 100);
 
     expect(entered).toMatchObject({
-      state: 'checkout_queued', paymentQueuedAt: 100, path: [], paymentReady: false,
+      state: 'checkout_queued', paymentQueuedAt: 100, paymentReady: false,
       x: 210, y: 190, dishId: 'toast', drinkId: 'water', tableId: 't1', chairId: 'ch1',
     });
     expect(enterCheckout(entered, 200).paymentQueuedAt).toBe(100);
@@ -58,20 +59,20 @@ describe('checkout state', () => {
     expect(requeueCheckoutCustomer({
       id: 'c1', state: 'checkout_processing', paymentQueuedAt: 50,
       cashierStationId: 'gone', checkoutPosition: { x: 1, y: 2 }, paymentReady: true,
-      path: [{ x: 3, y: 4 }], pathGoal: { x: 3, y: 4 },
+      navigationGoal: { x: 3, y: 4 },
     })).toMatchObject({
       state: 'checkout_queued', paymentQueuedAt: 50, cashierStationId: null,
-      checkoutPosition: null, paymentReady: false, path: [],
+      checkoutPosition: null, paymentReady: false,
     });
   });
 
-  it('routes legacy and queued customers to the shortest staffed queue', () => {
+  it('assigns exact goals to legacy and queued customers in the shortest staffed queue', () => {
     const customers = [
       {
         id: 'first', state: 'checkout_moving', cashierStationId: 'register',
         paymentQueuedAt: 10, x: 840, y: 180,
       },
-      { id: 'legacy', state: 'paying', paymentQueuedAt: 20, x: 400, y: 300, path: [] },
+      { id: 'legacy', state: 'paying', paymentQueuedAt: 20, x: 400, y: 300 },
     ];
 
     const result = prepareCheckoutCustomers({ ...state, customers }, customers);
@@ -82,8 +83,10 @@ describe('checkout state', () => {
     expect(result[0]).toMatchObject({
       cashierStationId: 'register', paymentReady: true, checkoutPosition: { x: 840, y: 180 },
     });
-    expect(result[1]).toMatchObject({ cashierStationId: 'register', paymentReady: false });
-    expect(result[1].path.length).toBeGreaterThan(0);
+    expect(result[1]).toMatchObject({
+      cashierStationId: 'register', paymentReady: false,
+      navigationGoal: { x: 840, y: 200 },
+    });
   });
 
   it('waits queued when no cashier station is staffed', () => {
@@ -94,7 +97,7 @@ describe('checkout state', () => {
     const result = prepareCheckoutCustomers({ ...state, staff: [], customers }, customers);
 
     expect(result[0]).toMatchObject({
-      state: 'checkout_queued', cashierStationId: null, path: [],
+      state: 'checkout_queued', cashierStationId: null,
     });
   });
 
@@ -117,12 +120,12 @@ describe('checkout state', () => {
     const processing = {
       id: 'processing', state: 'checkout_processing', paymentQueuedAt: 10,
       cashierStationId: 'register', checkoutPosition: { x: 840, y: 180 },
-      paymentReady: false, x: 840, y: 180, path: [],
+      paymentReady: false, x: 840, y: 180,
     };
     const moving = {
       id: 'moving', state: 'checkout_moving', paymentQueuedAt: 20,
       cashierStationId: 'register', checkoutPosition: null,
-      paymentReady: false, x: 840, y: 200, path: [],
+      paymentReady: false, x: 840, y: 200,
     };
     const state = {
       ...baseState,
@@ -138,7 +141,7 @@ describe('checkout state', () => {
     expect(result[0]).toEqual(processing);
     expect(result[1]).toMatchObject({
       state: 'checkout_moving', checkoutPosition: { x: 840, y: 200 },
-      paymentReady: false, path: [],
+      paymentReady: false, navigationGoal: { x: 840, y: 200 },
     });
   });
 
@@ -146,15 +149,15 @@ describe('checkout state', () => {
     const processing = {
       id: 'processing', state: 'checkout_processing', paymentQueuedAt: 1,
       cashierStationId: 'register', checkoutPosition: { x: 840, y: 180 },
-      paymentReady: false, x: 840, y: 180, path: [],
+      paymentReady: false, x: 840, y: 180,
     };
     const laterById = {
       id: 'z-mover', state: 'checkout_moving', paymentQueuedAt: 20,
-      cashierStationId: 'register', paymentReady: false, x: 840, y: 220, path: [],
+      cashierStationId: 'register', paymentReady: false, x: 840, y: 220,
     };
     const earlierById = {
       id: 'a-mover', state: 'checkout_moving', paymentQueuedAt: 20,
-      cashierStationId: 'register', paymentReady: false, x: 840, y: 200, path: [],
+      cashierStationId: 'register', paymentReady: false, x: 840, y: 200,
     };
     const state = {
       ...baseState,
@@ -184,12 +187,12 @@ describe('checkout state', () => {
     const processing = {
       id: 'processing', state: 'checkout_processing', paymentQueuedAt: 1,
       cashierStationId: 'register', checkoutPosition: { x: 840, y: 180 },
-      paymentReady: false, x: 840, y: 180, path: [],
+      paymentReady: false, x: 840, y: 180,
     };
     const queued = {
       id: 'queued', state: 'checkout_queued', paymentQueuedAt: 2,
       cashierStationId: null, checkoutPosition: null, paymentReady: false,
-      x: 500, y: 200, path: [],
+      x: 500, y: 200,
     };
     const state = {
       ...baseState,
@@ -216,12 +219,12 @@ describe('checkout state', () => {
     const stale = {
       id: 'stale', state: 'checkout_processing', paymentQueuedAt: 1,
       cashierStationId: 'register', checkoutPosition: { x: 840, y: 180 },
-      paymentReady: false, x: 840, y: 180, path: [],
+      paymentReady: false, x: 840, y: 180,
     };
     const moving = {
       id: 'moving', state: 'checkout_moving', paymentQueuedAt: 2,
       cashierStationId: 'register', paymentReady: false,
-      x: 840, y: 180, path: [],
+      x: 840, y: 180,
     };
     const state = { ...baseState, customers: [stale, moving] };
 
@@ -234,6 +237,120 @@ describe('checkout state', () => {
     expect(result[1]).toMatchObject({
       state: 'checkout_moving', checkoutPosition: { x: 840, y: 180 },
       paymentReady: true,
+    });
+  });
+
+  it('retains an unchanged checkout goal object', () => {
+    const goal = { x: 840, y: 180 };
+    const customer = {
+      id: 'c1', state: 'checkout_moving', cashierStationId: 'register',
+      paymentQueuedAt: 10, paymentReady: false, x: 400, y: 300,
+      navigationGoal: goal,
+    };
+
+    const [prepared] = prepareCheckoutCustomers({ ...baseState, customers: [customer] }, [customer]);
+
+    expect(prepared.navigationGoal).toBe(goal);
+    expect(prepared).toMatchObject({ checkoutPosition: goal, paymentReady: false });
+  });
+
+  it('creates one new goal when a processing customer shifts the queue index', () => {
+    const oldGoal = { x: 840, y: 180 };
+    const processing = {
+      id: 'processing', state: 'checkout_processing', paymentQueuedAt: 10,
+      cashierStationId: 'register', checkoutPosition: oldGoal,
+      paymentReady: false, x: 840, y: 180,
+    };
+    const moving = {
+      id: 'moving', state: 'checkout_moving', paymentQueuedAt: 20,
+      cashierStationId: 'register', paymentReady: false, x: 400, y: 300,
+      navigationGoal: oldGoal,
+    };
+    const checkoutState = {
+      ...baseState,
+      staff: [{
+        ...baseState.staff[0],
+        task: { type: 'take_payment', customerId: 'processing', stationId: 'register' },
+      }],
+      customers: [processing, moving],
+    };
+
+    const result = prepareCheckoutCustomers(checkoutState, checkoutState.customers);
+
+    expect(result[1]).toMatchObject({ checkoutPosition: { x: 840, y: 200 }, navigationGoal: { x: 840, y: 200 } });
+    expect(result[1].navigationGoal).not.toBe(oldGoal);
+  });
+
+  it('does not inherit an arrived status from a stale checkout goal', () => {
+    const staleGoal = { x: 840, y: 180 };
+    const processing = {
+      id: 'processing', state: 'checkout_processing', cashierStationId: 'register',
+      paymentQueuedAt: 10, x: 840, y: 180,
+    };
+    const actor = {
+      id: 'moving', state: 'checkout_moving', cashierStationId: 'register',
+      paymentQueuedAt: 20, x: 800, y: 200, navigationGoal: { x: 840, y: 200 },
+    };
+    const stateWithStaleStatus = {
+      ...baseState,
+      staff: [{
+        ...baseState.staff[0],
+        task: { type: 'take_payment', customerId: 'processing', stationId: 'register' },
+      }],
+      customers: [processing, actor],
+      movementCoordinator: {
+        requests: new Map([['moving', { id: 'moving', goal: staleGoal }]]),
+        statuses: new Map([['moving', { plan: 'arrived', motion: 'holding' }]]),
+      },
+    };
+
+    expect(getCharacterMovementStatus(stateWithStaleStatus, 'moving')).toEqual({
+      plan: 'planning', motion: 'holding',
+    });
+    expect(prepareCheckoutCustomers(stateWithStaleStatus, stateWithStaleStatus.customers)
+      .find(customer => customer.id === 'moving').paymentReady)
+      .toBe(false);
+  });
+
+  it('makes payment ready only for rank zero after an arrived status', () => {
+    const rankZero = {
+      id: 'rank-zero', state: 'checkout_moving', cashierStationId: 'register',
+      paymentQueuedAt: 10, x: 840, y: 180,
+    };
+    const rankOne = {
+      id: 'rank-one', state: 'checkout_moving', cashierStationId: 'register',
+      paymentQueuedAt: 20, x: 840, y: 200,
+    };
+    const checkoutState = {
+      ...baseState,
+      customers: [rankZero, rankOne],
+    };
+
+    const prepared = prepareCheckoutCustomers(checkoutState, checkoutState.customers);
+
+    expect(prepared.find(customer => customer.id === 'rank-zero').paymentReady).toBe(true);
+    expect(prepared.find(customer => customer.id === 'rank-one').paymentReady).toBe(false);
+
+    const waiting = prepareCheckoutCustomers({
+      ...checkoutState,
+      customers: [{ ...rankZero, x: 400, y: 300 }],
+    }, [{ ...rankZero, x: 400, y: 300 }]);
+    expect(waiting[0].paymentReady).toBe(false);
+  });
+
+  it('assigns a destination even when the current actor cell is blocked', () => {
+    const customer = {
+      id: 'blocked', state: 'checkout_moving', cashierStationId: 'register',
+      paymentQueuedAt: 10, x: 400, y: 300,
+    };
+    const result = prepareCheckoutCustomers({
+      ...baseState,
+      tables: [{ id: 'blocker', x: 400, y: 300, status: 'occupied' }],
+      customers: [customer],
+    }, [customer]);
+
+    expect(result[0]).toMatchObject({
+      state: 'checkout_moving', navigationGoal: { x: 840, y: 180 },
     });
   });
 });

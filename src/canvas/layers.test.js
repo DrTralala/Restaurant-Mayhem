@@ -69,6 +69,16 @@ function recordCtx(extraCanvas = {}) {
   };
 }
 
+function withMovementStatuses(state, records) {
+  const requests = new Map();
+  const statuses = new Map();
+  for (const [id, record] of Object.entries(records)) {
+    if (record.goal) requests.set(id, { id, goal: record.goal });
+    statuses.set(id, record.status);
+  }
+  return { ...state, movementCoordinator: { requests, statuses } };
+}
+
 describe('drawFloorLayer', () => {
   it('uses the restaurant backdrop outside the fitted world instead of black', () => {
     const fills = [];
@@ -256,38 +266,71 @@ describe('drawFurnitureLayer', () => {
     drawCustomerLayer(ctx, { restaurant: { gameTime: 240 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }],
       customers: [{ id: 'c', state: 'eating', tableId: 't', chairId: 'ch', consumptionStartedAt: 0, consumptionDuration: 180 }],
       serviceItems: [{ id: 'dish', customerId: 'c', kind: 'dish', state: 'delivered', consumptionStartedAt: 0 }] }, { x: 0, y: 0, zoom: 1 });
-    drawStaffLayer(ctx, { restaurant: { gameTime: 30 }, serviceItems: [], dishes: [], kitchenStations: [], equipment: [],
+    const staffState = withMovementStatuses({ restaurant: { gameTime: 30 }, serviceItems: [], dishes: [], kitchenStations: [], equipment: [],
       staff: [
-        { id: 'o', name: 'O', role: 'waiter', x: 200, y: 200, task: { type: 'take_order', startedAt: 0 }, path: [] },
-        { id: 'p', name: 'P', role: 'waiter', x: 240, y: 200, task: { type: 'take_payment', startedAt: 0 }, path: [] },
-        { id: 't', name: 'T', role: 'waiter', x: 280, y: 200, task: { type: 'clean_table', cleaningStartedAt: 0 }, path: [] },
-        { id: 'w', name: 'W', role: 'janitor', x: 320, y: 200, task: { type: 'clean_floor', cleaningStartedAt: 0 }, path: [] },
-        { id: 'x', name: 'X', role: 'janitor', x: 360, y: 200, task: { type: 'wash_item', washingStartedAt: 0 }, path: [{ x: 1, y: 1 }] },
-        { id: 'i', name: 'I', role: 'janitor', x: 400, y: 200, task: { type: 'wash_item', washingStartedAt: null }, path: [] },
-      ] }, { x: 0, y: 0, zoom: 1 });
+        { id: 'o', name: 'O', role: 'waiter', x: 200, y: 200, task: { type: 'take_order', startedAt: 0 } },
+        { id: 'p', name: 'P', role: 'waiter', x: 240, y: 200, task: { type: 'take_payment', startedAt: 0 } },
+        { id: 't', name: 'T', role: 'waiter', x: 280, y: 200, task: { type: 'clean_table', cleaningStartedAt: 0 }, activityPhase: 'working' },
+        { id: 'w', name: 'W', role: 'janitor', x: 320, y: 200, task: { type: 'clean_floor', cleaningStartedAt: 0 }, activityPhase: 'working' },
+        { id: 'x', name: 'X', role: 'janitor', x: 360, y: 200, navigationGoal: { x: 420, y: 200 }, task: { type: 'wash_item', washingStartedAt: 0 } },
+        { id: 'i', name: 'I', role: 'janitor', x: 400, y: 200, task: { type: 'wash_item', washingStartedAt: null } },
+      ] }, {
+      x: { goal: { x: 420, y: 200 }, status: { plan: 'scheduled', motion: 'holding' } },
+    });
+    drawStaffLayer(ctx, staffState, { x: 0, y: 0, zoom: 1 });
     const progressFills = ctx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14);
     expect(progressFills).toHaveLength(5);
     expect(progressFills.map(fill => fill.h)).toEqual(expect.arrayContaining([7, 7, 7, 10.5, 10.5]));
   });
 
-  it('suppresses consumption progress for a moving eating customer with valid timestamps', () => {
-    const moving = recordCtx();
-    drawCustomerLayer(moving, { restaurant: { gameTime: 90 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }], customers: [
-      { id: 'moving', state: 'eating', tableId: 't', chairId: 'ch', path: [{ x: 5, y: 5 }], consumptionStartedAt: 0, consumptionDuration: 180 },
-    ], serviceItems: [
-      { id: 'dish', customerId: 'moving', kind: 'dish', state: 'delivered', consumptionStartedAt: 0 },
-    ] }, { x: 0, y: 0, zoom: 1 });
-    expect(moving._calls.arcs).toHaveLength(1);
-    expect(moving._calls.arcs[0]).toMatchObject({ x: 100, y: 95 });
-    expect(moving._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14)).toHaveLength(0);
+  it('uses eating and arrival state rather than route emptiness for consumption progress', () => {
+    const goal = { x: 300, y: 300 };
+    const base = {
+      restaurant: { gameTime: 90 },
+      tables: [{ id: 't', x: 80, y: 80 }],
+      chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }],
+      serviceItems: [{ id: 'dish', kind: 'dish', state: 'delivered', consumptionStartedAt: 0 }],
+    };
+    const enRoute = withMovementStatuses({
+      ...base,
+      customers: [{
+        id: 'en-route', state: 'eating', tableId: 't', chairId: 'ch',
+        navigationGoal: goal,
+      }],
+      serviceItems: [{ ...base.serviceItems[0], customerId: 'en-route' }],
+    }, {
+      'en-route': { goal, status: { plan: 'scheduled', motion: 'traversing' } },
+    });
+    const arrived = withMovementStatuses({
+      ...base,
+      customers: [{
+        id: 'arrived', state: 'eating', tableId: 't', chairId: 'ch',
+        navigationGoal: goal,
+      }],
+      serviceItems: [{ ...base.serviceItems[0], customerId: 'arrived' }],
+    }, {
+      arrived: { goal, status: { plan: 'arrived', motion: 'holding' } },
+    });
+    const cleared = {
+      ...base,
+      customers: [{ id: 'cleared', state: 'eating', tableId: 't', chairId: 'ch' }],
+      serviceItems: [{ ...base.serviceItems[0], customerId: 'cleared' }],
+    };
+    const enRouteCtx = recordCtx();
+    const arrivedCtx = recordCtx();
+    const clearedCtx = recordCtx();
 
-    const stationary = recordCtx();
-    drawCustomerLayer(stationary, { restaurant: { gameTime: 90 }, tables: [{ id: 't', x: 80, y: 80 }], chairs: [{ id: 'ch', tableId: 't', x: 90, y: 90 }], customers: [
-      { id: 'stationary', state: 'eating', tableId: 't', chairId: 'ch', path: [], consumptionStartedAt: 0, consumptionDuration: 180 },
-    ], serviceItems: [
-      { id: 'dish', customerId: 'stationary', kind: 'dish', state: 'delivered', consumptionStartedAt: 0 },
-    ] }, { x: 0, y: 0, zoom: 1 });
-    expect(stationary._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14)).toHaveLength(1);
+    drawCustomerLayer(enRouteCtx, enRoute, { x: 0, y: 0, zoom: 1 });
+    drawCustomerLayer(arrivedCtx, arrived, { x: 0, y: 0, zoom: 1 });
+    drawCustomerLayer(clearedCtx, cleared, { x: 0, y: 0, zoom: 1 });
+
+    expect(enRouteCtx._calls.arcs).toHaveLength(1);
+    expect(enRouteCtx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14))
+      .toHaveLength(0);
+    expect(arrivedCtx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14))
+      .toHaveLength(1);
+    expect(clearedCtx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14))
+      .toHaveLength(1);
   });
 
   it('uses canonical drink, recipe/equipment, and manual wash durations', () => {
@@ -302,9 +345,9 @@ describe('drawFurnitureLayer', () => {
       kitchenStations: [{ id: 'k1', equipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 2 }],
       staff: [
-        { id: 'd', name: 'D', role: 'waiter', x: 100, y: 100, path: [], task: { type: 'prepare_drink', serviceItemId: 'drink' } },
-        { id: 'f', name: 'F', role: 'cook', x: 200, y: 100, path: [], task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } },
-        { id: 'm', name: 'M', role: 'janitor', x: 300, y: 100, path: [], task: { type: 'wash_item', washingStartedAt: 0 } },
+        { id: 'd', name: 'D', role: 'waiter', x: 100, y: 100, task: { type: 'prepare_drink', serviceItemId: 'drink' } },
+        { id: 'f', name: 'F', role: 'cook', x: 200, y: 100, task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } },
+        { id: 'm', name: 'M', role: 'janitor', x: 300, y: 100, task: { type: 'wash_item', washingStartedAt: 0 } },
       ],
     }, { x: 0, y: 0, zoom: 1 });
     const fills = ctx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14);
@@ -458,7 +501,7 @@ describe('drawFurnitureLayer', () => {
       queue: [], tables: [], chairs: [], floorDirt: [], washStations: [], serviceTables: [{ id: 'st1', x: 200, y: 100 }],
       dishes: [{ id: 'dish', prepTime: 60, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }], kitchenStations: [station],
-      staff: [{ id: 'cook', name: 'Cook', role: 'cook', morale: 80, x: 80, y: 120, path: [],
+      staff: [{ id: 'cook', name: 'Cook', role: 'cook', morale: 80, x: 80, y: 120,
         task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } }],
       serviceItems: [{ id: 'food', kind: 'dish', menuItemId: 'dish', customerId: 'customer', state: 'ordered' }],
     };
@@ -561,12 +604,20 @@ describe('drawStaffLayer', () => {
     expect(ctx._calls.texts.find(call => call.text === 'Sofia').colour).toBe('#ffadd0');
   });
 
-  it('changes the limb pose while walking and keeps idle staff still', () => {
-    const moving = {
-      staff: [{ id: 's1', name: 'Marco', gender: 'male', role: 'cook', x: 150, y: 200, morale: 80, path: [{ x: 1, y: 1 }] }],
+  it('changes the limb pose while traversing and keeps a held nonempty goal still', () => {
+    const goal = { x: 350, y: 200 };
+    const moving = withMovementStatuses({
+      staff: [{ id: 's1', name: 'Marco', gender: 'male', role: 'cook', x: 150, y: 200, morale: 80, navigationGoal: goal }],
       restaurant: { expansionLevel: 1 },
-    };
-    const idle = { ...moving, staff: [{ ...moving.staff[0], path: [] }] };
+    }, {
+      s1: { goal, status: { plan: 'scheduled', motion: 'traversing' } },
+    });
+    const idle = withMovementStatuses({
+      ...moving,
+      staff: [{ ...moving.staff[0] }],
+    }, {
+      s1: { goal, status: { plan: 'scheduled', motion: 'holding' } },
+    });
     const movingStart = recordCtx();
     const movingLater = recordCtx();
     const idleStart = recordCtx();
@@ -665,7 +716,7 @@ describe('drawStaffLayer', () => {
     const state = {
       staff: [{
         id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80,
-        path: [], task: { type: 'clean_table', tableId: 't1' },
+        activityPhase: 'working', task: { type: 'clean_table', tableId: 't1' },
       }],
       restaurant: { expansionLevel: 1 },
     };
@@ -685,6 +736,83 @@ describe('drawStaffLayer', () => {
     expect(start._calls.lines.slice(3, 5)).toEqual(later._calls.lines.slice(3, 5));
     expect(reducedStart._calls.lines).toEqual(reducedLater._calls.lines);
     expect(reducedStart._calls.rects).toEqual(reducedLater._calls.rects);
+  });
+
+  it('cleans only while a cleaning task is working and movement is holding', () => {
+    const goal = { x: 340, y: 300 };
+    const baseStaff = {
+      id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80,
+      activityPhase: 'working', task: { type: 'clean_table', tableId: 't1' },
+    };
+    const working = {
+      staff: [baseStaff], restaurant: { expansionLevel: 1 },
+    };
+    const assigned = {
+      staff: [{ ...baseStaff, activityPhase: 'task_assigned' }], restaurant: { expansionLevel: 1 },
+    };
+    const traversing = withMovementStatuses({
+      staff: [{ ...baseStaff, navigationGoal: goal }], restaurant: { expansionLevel: 1 },
+    }, {
+      s1: { goal, status: { plan: 'scheduled', motion: 'traversing' } },
+    });
+    const workingCtx = recordCtx();
+    const assignedCtx = recordCtx();
+    const traversingCtx = recordCtx();
+
+    drawStaffLayer(workingCtx, working, camera, { timeMs: 0 });
+    drawStaffLayer(assignedCtx, assigned, camera, { timeMs: 0 });
+    drawStaffLayer(traversingCtx, traversing, camera, { timeMs: 0 });
+
+    expect(workingCtx._calls.strokes).toContainEqual({ colour: '#f3e6bd' });
+    expect(assignedCtx._calls.strokes).not.toContainEqual({ colour: '#f3e6bd' });
+    expect(traversingCtx._calls.strokes).not.toContainEqual({ colour: '#f3e6bd' });
+  });
+
+  it.each(['planning', 'scheduled'])('suppresses work progress while a goal is %s', plan => {
+    const goal = { x: 340, y: 300 };
+    const state = withMovementStatuses({
+      staff: [{
+        id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80,
+        navigationGoal: goal, task: { type: 'take_order', startedAt: 0 },
+      }],
+      restaurant: { expansionLevel: 1, gameTime: 30 },
+    }, {
+      s1: { goal, status: { plan, motion: 'holding' } },
+    });
+    const ctx = recordCtx();
+
+    drawStaffLayer(ctx, state, camera);
+
+    expect(ctx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14))
+      .toHaveLength(0);
+  });
+
+  it('restores work progress after arrival, including a cleared goal', () => {
+    const goal = { x: 340, y: 300 };
+    const staff = {
+      id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80,
+      task: { type: 'take_order', startedAt: 0 },
+    };
+    const arrived = withMovementStatuses({
+      staff: [{ ...staff, navigationGoal: goal }],
+      restaurant: { expansionLevel: 1, gameTime: 30 },
+    }, {
+      s1: { goal, status: { plan: 'arrived', motion: 'holding' } },
+    });
+    const cleared = {
+      staff: [staff],
+      restaurant: { expansionLevel: 1, gameTime: 30 },
+    };
+    const arrivedCtx = recordCtx();
+    const clearedCtx = recordCtx();
+
+    drawStaffLayer(arrivedCtx, arrived, camera);
+    drawStaffLayer(clearedCtx, cleared, camera);
+
+    expect(arrivedCtx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14))
+      .toHaveLength(1);
+    expect(clearedCtx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14))
+      .toHaveLength(1);
   });
 
   it('shows the carried dish emoji when carryingServiceItemId is set', () => {
@@ -714,8 +842,8 @@ describe('drawStaffLayer', () => {
   it('does not leak fading alpha between customers and preserves reduced-motion coordinates', () => {
     const state = {
       customers: [
-        { id: 'fade', state: 'leaving', exitPhase: 'fading', exitFadeProgress: 0.4, x: 500, y: 300, path: [] },
-        { id: 'solid', state: 'guided', x: 700, y: 350, path: [] },
+        { id: 'fade', state: 'leaving', exitPhase: 'fading', exitFadeProgress: 0.4, x: 500, y: 300 },
+        { id: 'solid', state: 'guided', x: 700, y: 350 },
       ], tables: [], chairs: [], restaurant: {},
     };
     const ctx = recordCtx();
@@ -731,7 +859,7 @@ describe('drawStaffLayer', () => {
 
   it('suppresses fading limb animation in reduced motion at every time', () => {
     const state = {
-      customers: [{ id: 'fade', state: 'leaving', exitPhase: 'fading', exitFadeProgress: 0.4, x: 500, y: 300, path: [] }],
+      customers: [{ id: 'fade', state: 'leaving', exitPhase: 'fading', exitFadeProgress: 0.4, x: 500, y: 300 }],
       tables: [], chairs: [], restaurant: {},
     };
     const first = recordCtx();
@@ -785,7 +913,7 @@ describe('drawCustomerLayer', () => {
     ['ordering', { state: 'ordering', dishId: 'dish' }, { x: 110, y: 105 }],
     ['eating', { state: 'eating', dishId: 'dish' }, { x: 110, y: 105 }],
     ['waiting_for_items', { state: 'waiting_for_items', dishId: 'dish' }, { x: 110, y: 105 }],
-    ['moving', { state: 'guided', path: [{ x: 801, y: 401 }] }, { x: 800, y: 400 }],
+    ['moving', { state: 'guided' }, { x: 800, y: 400 }],
     ['paying', { state: 'paying' }, { x: 800, y: 400 }],
   ])('uses chair geometry only for seated visual states: %s', (_label, customer, expected) => {
     const ctx = recordCtx();
@@ -808,6 +936,34 @@ describe('drawCustomerLayer', () => {
     expect(ctx._calls.arcs.length).toBe(1);
     expect(ctx._calls.arcs[0].x).toBe(850);
     expect(ctx._calls.arcs[0].y).toBe(370);
+  });
+
+  it('animates a guided customer only while public movement status is traversing', () => {
+    const goal = { x: 950, y: 370 };
+    const traversing = withMovementStatuses({
+      customers: [{ id: 'c1', state: 'guided', x: 850, y: 370, navigationGoal: goal }],
+      tables: [], restaurant: {},
+    }, {
+      c1: { goal, status: { plan: 'scheduled', motion: 'traversing' } },
+    });
+    const holding = withMovementStatuses({
+      customers: [{ id: 'c1', state: 'guided', x: 850, y: 370, navigationGoal: goal }],
+      tables: [], restaurant: {},
+    }, {
+      c1: { goal, status: { plan: 'scheduled', motion: 'holding' } },
+    });
+    const traversingStart = recordCtx();
+    const traversingLater = recordCtx();
+    const holdingStart = recordCtx();
+    const holdingLater = recordCtx();
+
+    drawCustomerLayer(traversingStart, traversing, camera, { timeMs: 0 });
+    drawCustomerLayer(traversingLater, traversing, camera, { timeMs: 200 });
+    drawCustomerLayer(holdingStart, holding, camera, { timeMs: 0 });
+    drawCustomerLayer(holdingLater, holding, camera, { timeMs: 200 });
+
+    expect(traversingStart._calls.lines).not.toEqual(traversingLater._calls.lines);
+    expect(holdingStart._calls.lines).toEqual(holdingLater._calls.lines);
   });
 
   it('renders seated customer on their assigned chair instead of the table', () => {
@@ -940,18 +1096,43 @@ describe('drawCustomerLayer', () => {
     expect(ctx._calls.arcs[0].y).toBe(370);
   });
 
-  it('animates customers who are walking towards an exit', () => {
-    const state = {
-      customers: [{ id: 'c1', gender: 'male', state: 'leaving', x: 500, y: 300, path: [{ x: 30, y: 15 }] }],
+  it('animates a fading customer only while movement status is traversing', () => {
+    const goal = { x: 620, y: 300 };
+    const holding = withMovementStatuses({
+      customers: [{
+        id: 'c1', gender: 'male', state: 'leaving', exitPhase: 'fading',
+        exitFadeProgress: 0.2, x: 500, y: 300, navigationGoal: goal,
+      }],
       tables: [], chairs: [], restaurant: {},
-    };
+    }, {
+      c1: { goal, status: { plan: 'scheduled', motion: 'holding' } },
+    });
+    const traversing = withMovementStatuses({
+      customers: [{
+        id: 'c1', gender: 'male', state: 'leaving', exitPhase: 'fading',
+        exitFadeProgress: 0.2, x: 500, y: 300, navigationGoal: goal,
+      }],
+      tables: [], chairs: [], restaurant: {},
+    }, {
+      c1: { goal, status: { plan: 'scheduled', motion: 'traversing' } },
+    });
     const start = recordCtx();
     const later = recordCtx();
+    const movingStart = recordCtx();
+    const movingLater = recordCtx();
+    const reducedStart = recordCtx();
+    const reducedLater = recordCtx();
 
-    drawCustomerLayer(start, state, camera, { timeMs: 0, reducedMotion: false });
-    drawCustomerLayer(later, state, camera, { timeMs: 200, reducedMotion: false });
+    drawCustomerLayer(start, holding, camera, { timeMs: 0, reducedMotion: false });
+    drawCustomerLayer(later, holding, camera, { timeMs: 200, reducedMotion: false });
+    drawCustomerLayer(movingStart, traversing, camera, { timeMs: 0, reducedMotion: false });
+    drawCustomerLayer(movingLater, traversing, camera, { timeMs: 200, reducedMotion: false });
+    drawCustomerLayer(reducedStart, traversing, camera, { timeMs: 0, reducedMotion: true });
+    drawCustomerLayer(reducedLater, traversing, camera, { timeMs: 200, reducedMotion: true });
 
-    expect(start._calls.lines).not.toEqual(later._calls.lines);
+    expect(start._calls.lines).toEqual(later._calls.lines);
+    expect(movingStart._calls.lines).not.toEqual(movingLater._calls.lines);
+    expect(reducedStart._calls.lines).toEqual(reducedLater._calls.lines);
   });
 
   it('renders paying customers at their checkout position instead of their chair', () => {
@@ -980,15 +1161,26 @@ describe('drawCustomerLayer', () => {
 });
 
 describe('drawQueueLayer', () => {
-  it('renders a straight downward customer line and counts customers hidden below it', () => {
-    const state = {
-      queue: Array.from({ length: 9 }, (_, partyIndex) => ({
+  it('renders the exact leased customer positions and counts members hidden without a lease', () => {
+    const members = Array.from({ length: 9 }, (_, partyIndex) =>
+      Array.from({ length: 4 }, (_, memberIndex) => ({
+        id: `p${partyIndex}-m${memberIndex}`,
         partyId: `p${partyIndex}`,
-        members: Array.from({ length: 4 }, (_, memberIndex) => ({
-          id: `p${partyIndex}-m${memberIndex}`,
-          partyId: `p${partyIndex}`,
-          gender: memberIndex % 2 ? 'female' : 'male',
-        })),
+        gender: memberIndex % 2 ? 'female' : 'male',
+      })));
+    const state = {
+      queue: members.map((partyMembers, partyIndex) => ({
+        partyId: `p${partyIndex}`,
+        members: partyMembers,
+      })),
+      // The FIFO front of the queue owns exact level-1 leases (the first nine
+      // logical members); the remaining members are hidden logical records.
+      queueSlots: members.flat().slice(0, 9).map((member, index) => ({
+        memberId: member.id,
+        partyId: member.partyId,
+        x: 973,
+        y: 390 + index * 30,
+        slot: index,
       })),
       restaurant: { expansionLevel: 1 },
     };

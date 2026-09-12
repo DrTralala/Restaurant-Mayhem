@@ -11,6 +11,7 @@ const frames = [];
 vi.mock('./GameContext', () => ({
   useGameState: () => gameState,
   useDispatch: () => dispatch,
+  useGameGeneration: () => 0,
 }));
 
 vi.mock('../simulation/gameLoop', () => ({

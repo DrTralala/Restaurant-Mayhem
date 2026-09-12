@@ -15,6 +15,7 @@ vi.mock('../state/GameContext', () => ({
 
 vi.mock('../state/SimulationRuntime', () => ({
   useRenderState: vi.fn(),
+  useRuntimeFault: () => ({ fault: null, reportFault: () => {} }),
 }));
 
 vi.mock('./camera', () => ({

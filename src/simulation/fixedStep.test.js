@@ -54,6 +54,47 @@ describe('advanceFixedStep', () => {
     expect(result.steps).toBe(MAX_CATCH_UP_STEPS);
     expect(result.accumulator).toBeLessThan(FIXED_STEP_SECONDS);
   });
+
+  it.each([1, 2, 4])('yields after an expensive tick at %sx without changing tick timing', speed => {
+    let clock = 0;
+    const runStep = vi.fn(current => {
+      clock += 20;
+      return { ...current, count: current.count + 1 };
+    });
+    let frame = { state: { ...state, speed }, accumulator: 0, elapsedSeconds: 0.25 };
+    for (let index = 0; index < 10; index += 1) {
+      frame = advanceFixedStep({ ...frame, elapsedSeconds: 0.25 }, runStep,
+        { now: () => clock, maxWorkMs: 8 });
+      expect(frame.steps).toBe(1);
+      expect(frame.accumulator).toBeGreaterThanOrEqual(0);
+      expect(frame.accumulator).toBeLessThan(FIXED_STEP_SECONDS);
+      expect(frame.alpha).toBeGreaterThanOrEqual(0);
+      expect(frame.alpha).toBeLessThan(1);
+    }
+    expect(frame.state.count).toBe(10);
+    expect(runStep.mock.calls[0][1]).toEqual({ movementDt: speed / 30, gameDt: speed * 2 });
+  });
+
+  it('allows cheap catch-up ticks until the work budget is reached', () => {
+    let clock = 0;
+    const result = advanceFixedStep({ state, elapsedSeconds: 0.25 }, current => {
+      clock += 2;
+      return { ...current, count: current.count + 1 };
+    }, { now: () => clock, maxWorkMs: 8 });
+    expect(result.steps).toBe(4);
+    expect(result.accumulator).toBeLessThan(FIXED_STEP_SECONDS);
+  });
+
+  it('does not sample work time or run ticks while paused', () => {
+    const now = vi.fn();
+    const runStep = vi.fn();
+    const result = advanceFixedStep({ state: { ...state, paused: true }, elapsedSeconds: 0.25 },
+      runStep, { now, maxWorkMs: 8 });
+    expect(result.steps).toBe(0);
+    expect(result.accumulator).toBe(0);
+    expect(now).not.toHaveBeenCalled();
+    expect(runStep).not.toHaveBeenCalled();
+  });
 });
 
 it.each([[1, 1], [2, 2], [4, 4], [3, 1], [NaN, 1]])(

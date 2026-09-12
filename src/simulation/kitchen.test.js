@@ -123,7 +123,7 @@ describe('processKitchen', () => {
       upgrades: [{ level: 1, effects: { type: 'globalSpeed', value: 0.1 } }],
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       staff: [{
-        id: 'cook1', role: 'cook', path: [],
+        id: 'cook1', role: 'cook',
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
       }],
     };
@@ -261,6 +261,31 @@ describe('processKitchen', () => {
     });
 
     expect(result.serviceItems[0].state).toBe('to_clean');
+  });
+
+  it('clears an invalid cook preparation task without stamping route state', () => {
+    const state = {
+      ...baseState,
+      restaurant: { gameTime: 50 },
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'delivered',
+      }],
+      dishes: [{ id: 'd1', prepTime: 60 }],
+      kitchenStations: [{ id: 'k1' }],
+      staff: [{
+        id: 'cook1', role: 'cook',
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
+      }],
+    };
+
+    const result = processKitchen(state);
+
+    expect(result.staff[0]).toMatchObject({ id: 'cook1', role: 'cook', task: null });
+    for (const field of ['path', 'pathGoal', 'stalledFor', 'usingStaticFallback',
+      'minimumSpacing', 'localConflictTarget', 'headOnRecovery',
+      'recoveredHeadOnDetourTarget']) {
+      expect(result.staff[0]).not.toHaveProperty(field);
+    }
   });
 
   it('does not alter drink progression', () => {

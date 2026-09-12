@@ -1,5 +1,5 @@
-import { clearMovementRecoveryMetadata, planCharacterPath } from './movement';
-import { worldToCell } from './pathfinding';
+import { getCharacterMovementStatus } from './movement';
+import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoal';
 import { getCashierCustomerPosition } from './world';
 
 export const CHECKOUT_PHASES = Object.freeze([
@@ -14,15 +14,13 @@ export function isCheckoutState(value) {
 }
 
 export function requeueCheckoutCustomer(customer) {
-  return clearMovementRecoveryMetadata({
-    ...customer,
+  return {
+    ...clearNavigationGoal(customer),
     state: 'checkout_queued',
     cashierStationId: null,
     checkoutPosition: null,
     paymentReady: false,
-    path: [],
-    stalledFor: 0,
-  });
+  };
 }
 
 export function enterCheckout(customer, gameTime) {
@@ -124,44 +122,32 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
       });
   }
 
-  return prepared.map(customer => {
+  const withGoals = prepared.map(customer => {
     if (customer.state !== 'checkout_moving') return customer;
     const checkoutPosition = positions.get(customer.id);
     if (!checkoutPosition) return requeueCheckoutCustomer(customer);
     const current = Number.isFinite(customer.x) && Number.isFinite(customer.y)
       ? customer
-      : { ...customer, x: checkoutPosition.x - 80, y: checkoutPosition.y + 80 };
-    const goal = worldToCell(checkoutPosition);
-    const arrived = Math.hypot(
-      current.x - checkoutPosition.x,
-      current.y - checkoutPosition.y,
-    ) <= 2;
-    if (arrived) {
-      return {
-        ...current,
-        checkoutPosition,
-        paymentReady: queueIndexes.get(customer.id) === 0,
-        path: [],
-        pathGoal: undefined,
-        stalledFor: 0,
-      };
-    }
-    const needsPlan = !current.path?.length || !current.pathGoal
-      || current.pathGoal.x !== goal.x || current.pathGoal.y !== goal.y;
-    if (!needsPlan) return { ...current, checkoutPosition, paymentReady: false };
+      : {
+          ...customer,
+          x: checkoutPosition.x - 80,
+          y: checkoutPosition.y + 80,
+        };
+    const withGoal = setNavigationGoal(current, checkoutPosition);
     return {
-      ...planCharacterPath(
-        { ...state, customers: prepared },
-        current,
-        { world: checkoutPosition },
-        [
-          ...(state.staff || []),
-          ...prepared.filter(candidate =>
-            candidate.id !== current.id && candidate.exitPhase !== 'fading'),
-        ],
-      ),
+      ...withGoal,
       checkoutPosition,
       paymentReady: false,
+    };
+  });
+
+  const statusState = { ...state, customers: withGoals };
+  return withGoals.map(customer => {
+    if (customer.state !== 'checkout_moving') return customer;
+    const status = getCharacterMovementStatus(statusState, customer.id);
+    return {
+      ...customer,
+      paymentReady: queueIndexes.get(customer.id) === 0 && status.plan === 'arrived',
     };
   });
 }

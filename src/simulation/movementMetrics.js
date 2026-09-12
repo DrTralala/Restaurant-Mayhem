@@ -1,137 +1,61 @@
-const executablePrefixProfiles = new WeakMap();
-
-export function setExecutablePrefixProfile(metrics, {
-  mode = 'cached',
-  countWork = true,
-} = {}) {
-  if (mode !== 'cached' && mode !== 'legacy') {
-    throw new Error(`Unknown executable-prefix profile mode: ${mode}`);
-  }
-  executablePrefixProfiles.set(metrics, { mode, countWork });
-  return metrics;
-}
-
-export function getExecutablePrefixProfile(metrics) {
-  return executablePrefixProfiles.get(metrics) || null;
-}
-
-const movementResourceStrategies = new WeakMap();
-
-export function setMovementResourceStrategy(metrics, strategy) {
-  if (strategy !== 'baseline' && strategy !== 'optimised') {
-    throw new Error(`Unknown movement resource strategy: ${strategy}`);
-  }
-  movementResourceStrategies.set(metrics, strategy);
-  return metrics;
-}
-
-export function getMovementResourceStrategy(metrics) {
-  return movementResourceStrategies.get(metrics) || 'optimised';
-}
+const metricKeys = [
+  'batches',
+  'plannerExpansions',
+  'episodes',
+  'schedulesInstalled',
+  'schedulesReused',
+  'fastPassAttempts',
+  'fastPassSuccesses',
+  'exactPassSuccesses',
+  'groupsCreated',
+  'groupsMerged',
+  'preparedMemberReuses',
+  'lowLevelNodesExpanded',
+  'highLevelNodesExpanded',
+  'safeIntervalSuccessors',
+  'continuousConflicts',
+  'reverseCacheBuilds',
+  'reverseCacheHits',
+  'pendingTicks',
+  'peakPlannerFrontier',
+  // User-approved telemetry amendment: maximum per-group retained SIPP/CBS
+  // node-record count at batch boundaries, not reachable Map/Set entries.
+  // Includes stale heap and active CBS nodes; excludes geometry/cache/payloads.
+  'peakRetainedNodes',
+  'peakGroupSize',
+  'invalidationsGoal',
+  'invalidationsSpeed',
+  'invalidationsExemptions',
+  'invalidationsParticipants',
+  'invalidationsPosition',
+  'invalidationsStationary',
+  'invalidationsTopology',
+  'invalidationsExecution',
+  'unreachable',
+  'unschedulable',
+  'invariantFailures',
+  'installedSubtractions',
+  'staticGridBuilds',
+  'staticGridReuses',
+  'installedValidationBuilds',
+  'installedValidationReuses',
+  'batchMilliseconds',
+  'plannerMilliseconds',
+  'executorMilliseconds',
+];
 
 export function createMovementMetrics() {
-  return {
-    batches: 0,
-    batchMilliseconds: 0,
-    pairBuildMilliseconds: 0,
-    localConflictMilliseconds: 0,
-    localConflictPreparationMilliseconds: 0,
-    localConflictSolverMilliseconds: 0,
-    localConflictCandidateMilliseconds: 0,
-    localConflictSafetyMilliseconds: 0,
-    localConflictFallbackMilliseconds: 0,
-    localConflictResidualMilliseconds: 0,
-    solverInitialPlanningMilliseconds: 0,
-    solverNodeBuildMilliseconds: 0,
-    solverFrontierOrderingMilliseconds: 0,
-    solverReplanningMilliseconds: 0,
-    solverAgedFallbackMilliseconds: 0,
-    solverResidualMilliseconds: 0,
-    safePrefixMilliseconds: 0,
-    dynamicRepathMilliseconds: 0,
-    staticRepathMilliseconds: 0,
-    residualBatchMilliseconds: 0,
-    pairChecks: 0,
-    conflictPairs: 0,
-    conflictBatches: 0,
-    components: 0,
-    maxComponentSize: 0,
-    solverCalls: 0,
-    solverPbs: 0,
-    solverAgedFallback: 0,
-    solverNull: 0,
-    solverNodePops: 0,
-    localConflictAttempts: 0,
-    localConflictProgressAccepts: 0,
-    localConflictSafetyFallbacks: 0,
-    blockedCellBuilds: 0,
-    spaceTimePlanCalls: 0,
-    spaceTimeExpandedStates: 0,
-    spaceTimeSuccessorNodesCreated: 0,
-    plannerCellDescriptorsCreated: 0,
-    routeDistanceCalculations: 0,
-    routeDistanceCacheHits: 0,
-    peakPlannerFrontier: 0,
-    solverExecutablePrefixScores: 0,
-    solverExecutablePrefixNodeVisits: 0,
-    solverNodesBuilt: 0,
-    solverBranchesGenerated: 0,
-    safePrefixProbes: 0,
-    dynamicRepaths: 0,
-    staticRepaths: 0,
-  };
+  return Object.fromEntries(metricKeys.map(key => [key, 0]));
 }
 
 export function summariseMovementMetrics(metrics) {
-  return {
+  const summary = {
     batches: metrics.batches,
     batchMilliseconds: metrics.batchMilliseconds,
     averageBatchMilliseconds: metrics.batchMilliseconds / Math.max(1, metrics.batches),
-    pairBuildMilliseconds: metrics.pairBuildMilliseconds,
-    localConflictMilliseconds: metrics.localConflictMilliseconds,
-    localConflictPreparationMilliseconds: metrics.localConflictPreparationMilliseconds,
-    localConflictSolverMilliseconds: metrics.localConflictSolverMilliseconds,
-    localConflictCandidateMilliseconds: metrics.localConflictCandidateMilliseconds,
-    localConflictSafetyMilliseconds: metrics.localConflictSafetyMilliseconds,
-    localConflictFallbackMilliseconds: metrics.localConflictFallbackMilliseconds,
-    localConflictResidualMilliseconds: metrics.localConflictResidualMilliseconds,
-    solverInitialPlanningMilliseconds: metrics.solverInitialPlanningMilliseconds,
-    solverNodeBuildMilliseconds: metrics.solverNodeBuildMilliseconds,
-    solverFrontierOrderingMilliseconds: metrics.solverFrontierOrderingMilliseconds,
-    solverReplanningMilliseconds: metrics.solverReplanningMilliseconds,
-    solverAgedFallbackMilliseconds: metrics.solverAgedFallbackMilliseconds,
-    solverResidualMilliseconds: metrics.solverResidualMilliseconds,
-    safePrefixMilliseconds: metrics.safePrefixMilliseconds,
-    dynamicRepathMilliseconds: metrics.dynamicRepathMilliseconds,
-    staticRepathMilliseconds: metrics.staticRepathMilliseconds,
-    residualBatchMilliseconds: metrics.residualBatchMilliseconds,
-    pairChecks: metrics.pairChecks,
-    conflictPairs: metrics.conflictPairs,
-    conflictBatches: metrics.conflictBatches,
-    components: metrics.components,
-    maxComponentSize: metrics.maxComponentSize,
-    solverCalls: metrics.solverCalls,
-    solverPbs: metrics.solverPbs,
-    solverAgedFallback: metrics.solverAgedFallback,
-    solverNull: metrics.solverNull,
-    solverNodePops: metrics.solverNodePops,
-    localConflictAttempts: metrics.localConflictAttempts,
-    localConflictProgressAccepts: metrics.localConflictProgressAccepts,
-    localConflictSafetyFallbacks: metrics.localConflictSafetyFallbacks,
-    blockedCellBuilds: metrics.blockedCellBuilds,
-    spaceTimePlanCalls: metrics.spaceTimePlanCalls,
-    spaceTimeExpandedStates: metrics.spaceTimeExpandedStates,
-    spaceTimeSuccessorNodesCreated: metrics.spaceTimeSuccessorNodesCreated,
-    plannerCellDescriptorsCreated: metrics.plannerCellDescriptorsCreated,
-    routeDistanceCalculations: metrics.routeDistanceCalculations,
-    routeDistanceCacheHits: metrics.routeDistanceCacheHits,
-    peakPlannerFrontier: metrics.peakPlannerFrontier,
-    solverExecutablePrefixScores: metrics.solverExecutablePrefixScores,
-    solverExecutablePrefixNodeVisits: metrics.solverExecutablePrefixNodeVisits,
-    solverNodesBuilt: metrics.solverNodesBuilt,
-    solverBranchesGenerated: metrics.solverBranchesGenerated,
-    safePrefixProbes: metrics.safePrefixProbes,
-    dynamicRepaths: metrics.dynamicRepaths,
-    staticRepaths: metrics.staticRepaths,
   };
+  for (const key of metricKeys.slice(1, -3)) summary[key] = metrics[key];
+  summary.plannerMilliseconds = metrics.plannerMilliseconds;
+  summary.executorMilliseconds = metrics.executorMilliseconds;
+  return summary;
 }

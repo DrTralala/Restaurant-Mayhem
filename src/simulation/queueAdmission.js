@@ -1,13 +1,14 @@
 import {
   buildBlockedCells,
-  buildOccupiedCharacterCells,
   cellToWorld,
-  findPathWithDynamicFallback,
+  findPath,
   isInsideWorld,
   worldToCell,
 } from './pathfinding';
 import { getDoorPosition, getRestaurantWorld } from './world';
 import { getCustomerPatience } from './balance';
+import { clearNavigationGoal } from './movement/navigationGoal';
+import { getQueueVisibleMembers } from './customerQueue';
 
 const QUEUE_ADMISSION_SPACING = 16;
 
@@ -25,10 +26,6 @@ function sameOrderedIds(left, right) {
     && Array.isArray(right)
     && left.length === right.length
     && left.every((id, index) => id === right[index]);
-}
-
-function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
-  return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
 }
 
 function getQueueAdmissionCandidates(state, door) {
@@ -64,48 +61,53 @@ function getQueueAdmissionCandidates(state, door) {
     || left.x - right.x);
 }
 
+function hasStaticConnection(state, from, to) {
+  const start = worldToCell(from);
+  const goal = worldToCell(to);
+  return (start.x === goal.x && start.y === goal.y)
+    || findPath(state, start, goal).length > 0;
+}
+
 export function planQueuePartyAdmission(state, {
   party,
   door,
   guide,
-  guidePath,
+  guideGoal,
   tableId,
 }) {
-  if (!party?.members?.length || !door || !guide || !tableId) return null;
+  if (!party?.members?.length || !door || !guide || !tableId
+    || !Number.isFinite(guideGoal?.x) || !Number.isFinite(guideGoal?.y)) return null;
+  const { inside, outside } = getDoorPosition(state, door);
+  // Reserve the crossing, not the departing customer's entire journey to it.
+  // A distant exit request must not starve incoming parties while tables are free.
   const activeEgress = (state.customers || []).some(customer =>
     customer.state === 'leaving'
       && customer.exitPhase !== 'fading'
-      && customer.exitDoorId === door.id);
+      && customer.exitDoorId === door.id
+      && Math.hypot(customer.x - Math.max(inside.x, Math.min(outside.x, customer.x)),
+        customer.y - outside.y) < QUEUE_ADMISSION_SPACING);
   if (activeEgress) return null;
   const staff = state.staff || [];
   const customers = state.customers || [];
-  const partyIds = party.members.map(member => member.id);
-  const occupiedPositions = [...staff, ...customers]
-    .filter(actor => Number.isFinite(actor.x) && Number.isFinite(actor.y));
+  const occupiedPositions = [
+    ...staff,
+    ...customers,
+    ...getQueueVisibleMembers(state, state.queue),
+  ].filter(actor => Number.isFinite(actor.x) && Number.isFinite(actor.y));
   const admittedCustomers = [];
+
+  if (!hasStaticConnection(state, guide, guideGoal)) return null;
 
   for (const customer of party.members) {
     const candidate = getQueueAdmissionCandidates(state, door).find(point =>
       occupiedPositions.every(actor =>
         Math.hypot(point.x - actor.x, point.y - actor.y) >= QUEUE_ADMISSION_SPACING));
     if (!candidate) return null;
-    const routeToGuide = findPathWithDynamicFallback(
-      state,
-      worldToCell(candidate),
-      worldToCell(guide),
-      {
-        occupiedCells: occupiedCharacterCells(
-          staff,
-          [...customers, ...admittedCustomers],
-          guide.id,
-          partyIds,
-        ),
-      },
-    ).path;
-    if (!routeToGuide.length) return null;
+    if (!hasStaticConnection(state, candidate, guide)) return null;
     const patienceMax = getPatienceMax(customer);
-    const admitted = {
-      ...customer,
+    const customerFields = { ...customer };
+    const admitted = clearNavigationGoal({
+      ...customerFields,
       patience: patienceMax,
       patienceMax,
       queuePatience: Number.isFinite(customer.queuePatience)
@@ -121,8 +123,7 @@ export function planQueuePartyAdmission(state, {
       x: candidate.x,
       y: candidate.y,
       tableId,
-      path: [...routeToGuide, ...guidePath],
-    };
+    });
     admittedCustomers.push(admitted);
     occupiedPositions.push(admitted);
   }

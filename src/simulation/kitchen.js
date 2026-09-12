@@ -77,7 +77,7 @@ export function processKitchen(state) {
       && item.stationId === worker.task.stationId
       && canProgressDish({ ...state, customers, serviceItems }, item);
     const validPreparation = validOrderedTask || validActiveTask;
-    return validPreparation ? worker : { ...worker, task: null, path: [] };
+    return validPreparation ? worker : { ...worker, task: null };
   });
   const result = { ...state, customers, serviceItems, staff };
   return result;

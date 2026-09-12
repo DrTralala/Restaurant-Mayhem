@@ -1,6 +1,9 @@
-import { buildOccupiedCharacterCells, cellToWorld, findAdjacentOpenCells, findPath, findPathWithDynamicFallback, isInsideWorld, worldToCell } from './pathfinding';
-import { clearMovementRecoveryMetadata, ensureStaffRuntime, hasArrived, planCharacterPath, resolveCharacterMovementBatch } from './movement';
-import { getCashierCustomerPosition, getCashierWorkPosition, getDoorPosition, getDoors, getRestaurantWorld } from './world';
+import { cellToWorld, findAdjacentOpenCells, findPath, isInsideWorld, worldToCell } from './pathfinding';
+import { advanceCharacterMovementBatch, getCharacterMovementStatus } from './movement';
+import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoal';
+import { recordSeatResidency } from './movement/seatedDeparture';
+import { chooseFollowerGoal, validFollowerGoal } from './navigation/following';
+import { GRID_SIZE, getCashierCustomerPosition, getCashierWorkPosition, getDefaultStaffPosition, getDoorPosition, getDoors, getRestaurantWorld } from './world';
 import { clampReputation, getTipRate, getUpgradeEffect } from './balance';
 import { getAssignedCashierStation } from './cashiers';
 import { getDrink, getResolvedDrink } from '../data/drinks';
@@ -34,7 +37,7 @@ import {
   prepareStaffActivity,
   settleTasklessActivity,
 } from './staffActivity';
-import { findOldestCompatibleQueueParty } from './customerQueue';
+import { findOldestCompatibleQueueParty, getQueueVisibleMembers } from './customerQueue';
 import { getQueueAdmissionGateStatus, planQueuePartyAdmission } from './queueAdmission';
 import {
   getPartyKey,
@@ -44,8 +47,13 @@ import {
 } from './partyReviews';
 import { getOrderSnapshotSubtotal } from './menuEconomy';
 
-function occupiedCharacterCells(staff, customers, excludeId, ignoredIds = []) {
-  return buildOccupiedCharacterCells([...staff, ...customers], [excludeId, ...ignoredIds]);
+export function ensureStaffRuntime(staff, state) {
+  return (staff || []).map((worker, index) => {
+    const position = Number.isFinite(worker.x) && Number.isFinite(worker.y)
+      ? { x: worker.x, y: worker.y }
+      : getDefaultStaffPosition(worker.role, index, state, worker.id);
+    return { ...worker, ...position, task: worker.task || null };
+  });
 }
 
 const CHARACTER_START_SPACING = 16;
@@ -119,15 +127,31 @@ function getServiceTableRect(serviceTable) {
   };
 }
 
+function isStaffDestinationAvailable(state, point, staff) {
+  return (state.staff || []).every(worker => {
+    if (worker.id === staff.id || (!worker.task && !worker.navigationGoal)) return true;
+    const destination = worker.navigationGoal || worker;
+    return !Number.isFinite(destination.x) || !Number.isFinite(destination.y)
+      || Math.hypot(point.x - destination.x, point.y - destination.y) >= CHARACTER_START_SPACING;
+  });
+}
+
 function targetForRect(state, rect, staff) {
   const start = worldToCell(staff);
-  const occupiedCells = occupiedCharacterCells(state.staff || [], state.customers || [], staff.id);
   const candidates = findAdjacentOpenCells(state, rect, start);
   for (const target of candidates) {
-    const path = findPathWithDynamicFallback(state, start, target, { occupiedCells }).path;
-    if (path.length) return path;
+    const goal = target.x === start.x && target.y === start.y
+      ? { x: staff.x, y: staff.y } : cellToWorld(target);
+    if (!isStaffDestinationAvailable(state, goal, staff)) continue;
+    const staticRoute = findPath(state, start, target);
+    if (staticRoute.length || (target.x === start.x && target.y === start.y)) {
+      return {
+        goal,
+        distance: staticRoute.length * GRID_SIZE,
+      };
+    }
   }
-  return [];
+  return null;
 }
 
 function getAvailableChairs(tableId, customers = [], activeGuideTasks = [], chairs = []) {
@@ -138,9 +162,16 @@ function getAvailableChairs(tableId, customers = [], activeGuideTasks = [], chai
     .filter(task => task.tableId === tableId)
     .flatMap(task => task.reservedChairIds || task.chairIds || []));
 
-  return chairs.filter(chair => chair.tableId === tableId
-    && !occupiedChairIds.has(chair.id)
-    && !reservedChairIds.has(chair.id));
+  return chairs.filter(chair => {
+    const centre = getChairCentre(chair);
+    return chair.tableId === tableId && centre
+      && !occupiedChairIds.has(chair.id)
+      && !reservedChairIds.has(chair.id)
+      // Leaving is a lifecycle state, not proof that the chair is physically clear.
+      && customers.every(customer => customer.state !== 'leaving'
+        || !Number.isFinite(customer.x) || !Number.isFinite(customer.y)
+        || Math.hypot(customer.x - centre.x, customer.y - centre.y) >= CHARACTER_START_SPACING);
+  });
 }
 
 function getActiveGuideTasks(staff, excludeStaffId = null) {
@@ -163,8 +194,8 @@ function findReachableTable(state, tables, staff, partySize = 1, activeGuideTask
     );
     const chairCount = (state.chairs || []).filter(chair => chair.tableId === table.id).length;
     if ((table.seats || chairCount) < partySize || distinctChairs.length < partySize) continue;
-    const path = targetForTable(state, table, staff);
-    if (path.length) return { table, path, chairs: distinctChairs.slice(0, partySize) };
+    const target = targetForTable(state, table, staff);
+    if (target) return { table, target, chairs: distinctChairs.slice(0, partySize) };
   }
   return null;
 }
@@ -185,15 +216,13 @@ function withoutEntryDoorId(customer) {
 }
 
 function leavingFields(customer) {
-  return clearMovementRecoveryMetadata({
+  return clearNavigationGoal({
     ...withoutEntryDoorId(customer),
     state: 'leaving',
     exitPhase: 'to_door',
     exitDoorId: null,
     exitFadeProgress: 0,
     exitHeading: null,
-    path: [],
-    stalledFor: 0,
     checkoutPosition: null,
     cashierStationId: null,
     paymentReady: false,
@@ -216,7 +245,7 @@ function hasMatchingQueueAdmissionTask(worker, gate) {
 function cancelGuideTask({ staff, customers, queue, tables, serviceItems }) {
   const ids = taskCustomerIds(staff.task);
   return {
-    staff: { ...staff, task: null, path: [] },
+    staff: clearNavigationGoal({ ...staff, task: null }),
     serviceItems,
     queue,
     tables: tables.map(table => table.id === staff.task.tableId
@@ -228,24 +257,6 @@ function cancelGuideTask({ staff, customers, queue, tables, serviceItems }) {
       ? leavingFields({ ...customer, tableId: null, guideStaffId: null, chairId: null })
       : customer),
   };
-}
-
-function getStaticApproachPath(state, customer, assignment, ignoredIds = []) {
-  if (Math.hypot(
-    customer.x - assignment.approachPoint.x,
-    customer.y - assignment.approachPoint.y,
-  ) <= 2) return [];
-  const start = worldToCell(customer);
-  const occupiedCells = occupiedCharacterCells(
-    state.staff || [],
-    state.customers || [],
-    customer.id,
-    ignoredIds,
-  );
-  if (start.x === assignment.approachCell.x && start.y === assignment.approachCell.y) {
-    return occupiedCells.has(`${start.x},${start.y}`) ? [] : [{ ...assignment.approachCell }];
-  }
-  return findPath(state, start, assignment.approachCell, { occupiedCells });
 }
 
 function hasGenuineGuideParty(customers, ids, staff) {
@@ -260,12 +271,25 @@ function hasGenuineGuideParty(customers, ids, staff) {
 
 function targetForRectOrCurrent(state, rect, staff) {
   const current = worldToCell(staff);
-  const alreadyAdjacent = findAdjacentOpenCells(state, rect, current)
-    .some(candidate => candidate.x === current.x && candidate.y === current.y);
-  if (alreadyAdjacent) return [];
+  const candidates = findAdjacentOpenCells(state, rect, current);
+  const isInsideTarget = staff.x >= rect.x && staff.x <= rect.x + rect.w
+    && staff.y >= rect.y && staff.y <= rect.y + rect.h;
+  if ((isInsideTarget || candidates.some(candidate => candidate.x === current.x && candidate.y === current.y))
+    && isStaffDestinationAvailable(state, staff, staff)) {
+    return { goal: { x: staff.x, y: staff.y }, distance: 0 };
+  }
+  return targetForRect(state, rect, staff);
+}
 
-  const path = targetForRect(state, rect, staff);
-  return path.length ? path : null;
+function targetForPoint(state, point, staff) {
+  const start = worldToCell(staff);
+  const target = worldToCell(point);
+  const staticRoute = findPath(state, start, target);
+  if (!staticRoute.length && (target.x !== start.x || target.y !== start.y)) return null;
+  return {
+    goal: cellToWorld(target),
+    distance: staticRoute.length * GRID_SIZE,
+  };
 }
 
 function washDuration(station) {
@@ -303,12 +327,12 @@ function selectWashStation(state, staff, serviceItems, allStaff) {
     .filter(station => hasWashStationCapacity(occupancyState, station))
     .map(station => ({
       station,
-      path: targetForRectOrCurrent(state, station, staff),
+      target: targetForRectOrCurrent(state, station, staff),
       workload: projectedWashWorkload(state, station, staff, serviceItems, allStaff),
     }))
-    .filter(candidate => candidate.path !== null)
+    .filter(candidate => candidate.target !== null)
     .sort((left, right) => left.workload - right.workload
-      || left.path.length - right.path.length
+      || left.target.distance - right.target.distance
       || String(left.station.id).localeCompare(String(right.station.id)))[0] || null;
 }
 
@@ -350,13 +374,16 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       .filter(candidate => !claimedDirtIds?.has(candidate.id))
       .map(candidate => ({
         dirt: candidate,
-        path: targetForRectOrCurrent(state, { x: candidate.x - 6, y: candidate.y - 6, w: 12, h: 12 }, staff),
+        target: targetForRectOrCurrent(state, { x: candidate.x - 6, y: candidate.y - 6, w: 12, h: 12 }, staff),
       }))
-      .filter(candidate => candidate.path)
-      .sort((a, b) => a.path.length - b.path.length)[0];
+      .filter(candidate => candidate.target)
+      .sort((a, b) => a.target.distance - b.target.distance)[0];
     if (dirt) {
       return {
-        staff: { ...staff, path: dirt.path, task: { type: 'clean_floor', dirtId: dirt.dirt.id } },
+        staff: setNavigationGoal(
+          { ...staff, task: { type: 'clean_floor', dirtId: dirt.dirt.id } },
+          dirt.target.goal,
+        ),
         claimedDirtId: dirt.dirt.id,
       };
     }
@@ -379,14 +406,17 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
         .filter(station => !serviceItems.some(candidate => candidate.state === 'washing'
           && candidate.washStationId === station.id)
           && !activeWashStations.has(station.id))
-        .map(station => ({ station, path: targetForRectOrCurrent(state, station, staff) }))
-        .filter(candidate => candidate.path !== null)
-        .sort((left, right) => left.path.length - right.path.length
+        .map(station => ({ station, target: targetForRectOrCurrent(state, station, staff) }))
+        .filter(candidate => candidate.target !== null)
+        .sort((left, right) => left.target.distance - right.target.distance
           || String(left.station.id).localeCompare(String(right.station.id)))[0];
       if (stationChoice) {
-        const { station, path } = stationChoice;
+        const { station, target } = stationChoice;
         return {
-          staff: { ...staff, path, task: { type: 'wash_item', serviceItemId: washItem.id, washStationId: station.id } },
+          staff: setNavigationGoal(
+            { ...staff, task: { type: 'wash_item', serviceItemId: washItem.id, washStationId: station.id } },
+            target.goal,
+          ),
           serviceItems: washItem.washStationId == null
             ? serviceItems.map(item => item === washItem ? { ...item, washStationId: station.id } : item)
             : serviceItems,
@@ -404,16 +434,14 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       .sort((a, b) => (a.paymentQueuedAt ?? 0) - (b.paymentQueuedAt ?? 0));
     const payingCustomer = paying.find(customer => customer.cashierStationId === cashierStation.id)
       || paying.find(customer => customer.cashierStationId == null);
-    const workCell = worldToCell(getCashierWorkPosition(cashierStation));
-    const staffCell = worldToCell(staff);
-    const occupiedCells = occupiedCharacterCells(state.staff || [], state.customers || [], staff.id);
-    const path = findPath(state, staffCell, workCell, { occupiedCells });
-    const workPointAvailable = !occupiedCells.has(`${workCell.x},${workCell.y}`);
-    const canReachWorkPoint = path.length || (staffCell.x === workCell.x && staffCell.y === workCell.y);
+    const target = targetForPoint(state, getCashierWorkPosition(cashierStation), staff);
 
-    if (payingCustomer && workPointAvailable && canReachWorkPoint) {
+    if (payingCustomer && target) {
       return {
-        staff: { ...staff, path, task: { type: 'take_payment', customerId: payingCustomer.id, stationId: cashierStation.id } },
+        staff: setNavigationGoal(
+          { ...staff, task: { type: 'take_payment', customerId: payingCustomer.id, stationId: cashierStation.id } },
+          target.goal,
+        ),
         customers: payingCustomer.cashierStationId == null
           ? customers.map(customer => customer.id === payingCustomer.id
             ? { ...customer, cashierStationId: cashierStation.id }
@@ -423,9 +451,9 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       };
     }
 
-    return {
-      staff: { ...staff, path: canReachWorkPoint ? path : [] },
-    };
+    return target?.distance > 0
+      ? { staff: setNavigationGoal(staff, target.goal) }
+      : { staff: clearNavigationGoal(staff) };
   }
 
   if (staff.role === 'waiter') {
@@ -435,7 +463,10 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
         const stationChoice = selectWashStation(state, staff, serviceItems, allStaff);
         if (stationChoice) {
           return {
-            staff: { ...staff, path: stationChoice.path, task: { type: 'deliver_dirty_item', serviceItemId: item.id, washStationId: stationChoice.station.id } },
+            staff: setNavigationGoal(
+              { ...staff, task: { type: 'deliver_dirty_item', serviceItemId: item.id, washStationId: stationChoice.station.id } },
+              stationChoice.target.goal,
+            ),
             claimedServiceItemId: item.id,
           };
         }
@@ -443,8 +474,8 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       }
       const customer = item && customers.find(candidate => candidate.id === item.customerId);
       const table = item && tables.find(candidate => candidate.id === item.tableId);
-      const path = table ? targetForTable(state, table, staff) : [];
-      const canReachTable = table && (path.length || Math.hypot(staff.x - table.x, staff.y - table.y) <= 40);
+      const target = table ? targetForTable(state, table, staff) : null;
+      const canReachTable = table && target;
       if (item?.state === 'carried'
         && customer
         && customer.state !== 'leaving'
@@ -452,11 +483,10 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
         && customer?.tableId === item.tableId
         && canReachTable) {
         return {
-          staff: {
-            ...staff,
-            path,
-            task: { type: 'deliver_service_item', serviceItemId: item.id, customerId: item.customerId },
-          },
+          staff: setNavigationGoal(
+            { ...staff, task: { type: 'deliver_service_item', serviceItemId: item.id, customerId: item.customerId } },
+            target.goal,
+          ),
         };
       }
 
@@ -474,22 +504,24 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
     });
     if (readyServiceItem) {
       const serviceTable = (state.serviceTables || []).find(table => table.id === readyServiceItem.serviceTableId);
-      const path = targetForRectOrCurrent(
+      const target = targetForRectOrCurrent(
         state,
         getServiceTableRect(serviceTable),
         staff,
       );
-      if (path) {
+      if (target) {
         return {
-          staff: {
-            ...staff,
-            path,
-            task: {
-              type: 'pickup_service_item',
-              serviceItemId: readyServiceItem.id,
-              serviceTableId: readyServiceItem.serviceTableId,
+          staff: setNavigationGoal(
+            {
+              ...staff,
+              task: {
+                type: 'pickup_service_item',
+                serviceItemId: readyServiceItem.id,
+                serviceTableId: readyServiceItem.serviceTableId,
+              },
             },
-          },
+            target.goal,
+          ),
           claimedServiceItemId: readyServiceItem.id,
         };
       }
@@ -507,25 +539,27 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       const serviceTable = slot
         ? (state.serviceTables || []).find(table => table.id === slot.serviceTableId)
         : null;
-      const path = serviceTable
+      const target = serviceTable
         ? targetForRectOrCurrent(
           state,
           getServiceTableRect(serviceTable),
           staff,
         )
         : null;
-      if (slot && path) {
+      if (slot && target) {
         return {
-          staff: {
-            ...staff,
-            path,
-            task: {
-              type: 'prepare_drink',
-              serviceItemId: pendingDrink.id,
-              serviceTableId: slot.serviceTableId,
-              serviceSlotIndex: slot.serviceSlotIndex,
+          staff: setNavigationGoal(
+            {
+              ...staff,
+              task: {
+                type: 'prepare_drink',
+                serviceItemId: pendingDrink.id,
+                serviceTableId: slot.serviceTableId,
+                serviceSlotIndex: slot.serviceSlotIndex,
+              },
             },
-          },
+            target.goal,
+          ),
           serviceItems: serviceItems.map(item => item.id === pendingDrink.id
             ? {
               ...item,
@@ -547,10 +581,13 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       .sort((a, b) => (a.dirtyAt ?? 0) - (b.dirtyAt ?? 0))[0] : null;
     if (dirtyItem) {
       const table = tables.find(candidate => candidate.id === dirtyItem.tableId);
-      const path = table ? targetForRectOrCurrent(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff) : null;
-      if (path !== null) {
+      const target = table ? targetForRectOrCurrent(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff) : null;
+      if (target !== null) {
         return {
-          staff: { ...staff, path, task: { type: 'collect_dirty_item', serviceItemId: dirtyItem.id, tableId: dirtyItem.tableId } },
+          staff: setNavigationGoal(
+            { ...staff, task: { type: 'collect_dirty_item', serviceItemId: dirtyItem.id, tableId: dirtyItem.tableId } },
+            target.goal,
+          ),
           claimedServiceItemId: dirtyItem.id,
         };
       }
@@ -561,9 +598,15 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       || state.unlockedDrinkIds?.some(drinkId => getDrink(drinkId));
     if (orderingCustomer && hasOrderableItem) {
       const table = tables.find(t => t.id === orderingCustomer.tableId);
-      const path = table ? targetForTable(state, table, staff) : [];
-      if (path.length || (table && Math.hypot(staff.x - table.x, staff.y - table.y) <= 40)) {
-        return { staff: { ...staff, path, task: { type: 'take_order', customerId: orderingCustomer.id } }, claimedCustomerId: orderingCustomer.id };
+      const target = table ? targetForTable(state, table, staff) : null;
+      if (target) {
+        return {
+          staff: setNavigationGoal(
+            { ...staff, task: { type: 'take_order', customerId: orderingCustomer.id } },
+            target.goal,
+          ),
+          claimedCustomerId: orderingCustomer.id,
+        };
       }
     }
 
@@ -583,23 +626,25 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
         getActiveGuideTasks(state.staff),
       );
       if (reachable) {
-        const { table, path, chairs } = reachable;
+        const { table, target, chairs } = reachable;
         const partyIds = party.map(c => c.id);
         return {
-          staff: {
-            ...staff,
-            path,
-            task: {
-              type: 'guide_customer',
-              customerId: waiting.id,
-              customerIds: partyIds,
-              partyId: waiting.partyId,
-              tableId: table.id,
-              chairIds: chairs.map(chair => chair.id),
-              stage: 'follow_guide',
-              approaches: [],
+          staff: setNavigationGoal(
+            {
+              ...staff,
+              task: {
+                type: 'guide_customer',
+                customerId: waiting.id,
+                customerIds: partyIds,
+                partyId: waiting.partyId,
+                tableId: table.id,
+                chairIds: chairs.map(chair => chair.id),
+                stage: 'follow_guide',
+                approaches: [],
+              },
             },
-          },
+            target.goal,
+          ),
           customers: customers.map(c => party.some(member => member.id === c.id)
             ? { ...c, state: 'guided', guideStaffId: staff.id, chairId: null }
             : c),
@@ -622,35 +667,39 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
         return reachable != null;
       });
       if (party && reachable) {
-        const { table, path, chairs } = reachable;
+        const { table, target, chairs } = reachable;
         const doors = [...getDoors(state)].sort((left, right) =>
           Math.abs(left.y - staff.y) - Math.abs(right.y - staff.y)
             || String(left.id).localeCompare(String(right.id)));
         const planned = doors
           .map(door => planQueuePartyAdmission(
             { ...state, staff: allStaff || state.staff || [], customers },
-            { party, door, guide: staff, guidePath: path, tableId: table.id },
+            { party, door, guide: staff, guideGoal: target.goal, tableId: table.id },
           ))
           .find(Boolean) || null;
         if (planned) {
           const partyIds = party.members.map(customer => customer.id);
           return {
-            staff: {
-              ...staff,
-              path,
-              task: {
-                type: 'guide_customer',
-                customerId: party.members[0].id,
-                customerIds: partyIds,
-                partyId: party.partyId,
-                tableId: table.id,
-                chairIds: chairs.map(chair => chair.id),
-                stage: 'follow_guide',
-                approaches: [],
+            staff: setNavigationGoal(
+              {
+                ...staff,
+                task: {
+                  type: 'guide_customer',
+                  customerId: party.members[0].id,
+                  customerIds: partyIds,
+                  partyId: party.partyId,
+                  tableId: table.id,
+                  chairIds: chairs.map(chair => chair.id),
+                  stage: 'follow_guide',
+                  approaches: [],
+                },
               },
-            },
+              target.goal,
+            ),
             customers: [...customers, ...planned.admittedCustomers],
             queue: queue.filter(record => record.partyId !== party.partyId),
+            queueSlots: (state.queueSlots || []).filter(record =>
+              String(record?.partyId) !== String(party.partyId)),
             tables: tables.map(t => t.id === table.id ? reserveTableForGuide(t, staff.id) : t),
             queueAdmissionGate: planned.gate,
             claimedCustomerIds: partyIds,
@@ -663,10 +712,13 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       && isTableReadyForCleaning(t.id, customers, serviceItems)
       && (!claimedTableIds || !claimedTableIds.has(t.id)));
     if (dirty) {
-      const path = targetForTableOrCurrent(state, dirty, staff);
-      if (path !== null) {
+      const target = targetForTableOrCurrent(state, dirty, staff);
+      if (target !== null) {
         return {
-          staff: { ...staff, path, task: { type: 'clean_table', tableId: dirty.id } },
+          staff: setNavigationGoal(
+            { ...staff, task: { type: 'clean_table', tableId: dirty.id } },
+            target.goal,
+          ),
           claimedTableId: dirty.id,
         };
       }
@@ -676,14 +728,17 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       && (!claimedServiceItemIds || !claimedServiceItemIds.has(item.id))
       && Number.isFinite(item.x) && Number.isFinite(item.y));
     if (dirtyServiceItem) {
-      const path = targetForRectOrCurrent(
+      const target = targetForRectOrCurrent(
         state,
         { x: dirtyServiceItem.x - 10, y: dirtyServiceItem.y - 10, w: 20, h: 20 },
         staff,
       );
-      if (path) {
+      if (target) {
         return {
-          staff: { ...staff, path, task: { type: 'clean_service_item', serviceItemId: dirtyServiceItem.id } },
+          staff: setNavigationGoal(
+            { ...staff, task: { type: 'clean_service_item', serviceItemId: dirtyServiceItem.id } },
+            target.goal,
+          ),
           claimedServiceItemId: dirtyServiceItem.id,
         };
       }
@@ -715,14 +770,13 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
           || !requiredEquipmentOwned
           || (dish.requiredEquipmentId && station.equipmentId !== dish.requiredEquipmentId)
           || occupiedStationIds.has(station.id)) continue;
-        const path = targetForRect(state, { x: station.x, y: station.y, w: 40, h: 40 }, staff);
-        if (path.length) {
+        const target = targetForRect(state, { x: station.x, y: station.y, w: 40, h: 40 }, staff);
+        if (target) {
           return {
-            staff: {
-              ...staff,
-              path,
-              task: { type: 'prepare_dish', serviceItemId: pending.id, stationId: station.id },
-            },
+            staff: setNavigationGoal(
+              { ...staff, task: { type: 'prepare_dish', serviceItemId: pending.id, stationId: station.id } },
+              target.goal,
+            ),
           };
         }
       }
@@ -732,20 +786,50 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
   return null;
 }
 
+function getMovementStatus(state, statuses, id) {
+  if (statuses instanceof Map) {
+    return statuses.get(id) ?? statuses.get(String(id)) ?? getCharacterMovementStatus(state, id);
+  }
+  return getCharacterMovementStatus(state, id);
+}
+
+function canDeliverServiceItem(staff, item, customer, table) {
+  return Boolean(customer
+    && customer.state !== 'leaving'
+    && item?.state === 'carried'
+    && staff.carryingServiceItemId === item.id
+    && item.customerId === customer.id
+    && staff.task.serviceItemId === item.id
+    && staff.task.customerId === item.customerId
+    && item.tableId === customer.tableId
+    && table?.id === item.tableId);
+}
+
+function hasObsoleteCustomerTask(staff, customers, tables, serviceItems) {
+  const customer = customers.find(candidate => candidate.id === staff.task?.customerId);
+  if (staff.task?.type === 'take_order') return !customer || customer.state !== 'seated';
+  if (staff.task?.type === 'deliver_service_item') {
+    const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
+    const table = tables.find(candidate => candidate.id === item?.tableId);
+    return !canDeliverServiceItem(staff, item, customer, table);
+  }
+  return false;
+}
+
 function resolveTask({
   state, staff, customers, queue, tables, serviceItems,
-  pendingPartyReviews, partyReviewHistory, restaurant,
+  pendingPartyReviews, partyReviewHistory, restaurant, statuses,
 }) {
-  const completedStaff = { ...staff, task: null };
+  const completedStaff = clearNavigationGoal({ ...staff, task: null });
 
   if (staff.task.type === 'take_order') {
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
     if (!customer || customer.state !== 'seated') return { staff: completedStaff, customers, queue, tables, serviceItems };
     if (staff.task.startedAt == null) {
-      return { staff: { ...staff, path: [], task: { ...staff.task, startedAt: state.restaurant.gameTime } }, queue, tables, serviceItems, customers };
+      return { staff: clearNavigationGoal({ ...staff, task: { ...staff.task, startedAt: state.restaurant.gameTime } }), queue, tables, serviceItems, customers };
     }
     if (state.restaurant.gameTime - staff.task.startedAt < ACTIVITY_DURATIONS.takeOrder) {
-      return { staff: { ...staff, path: [] }, queue, tables, serviceItems, customers };
+      return { staff: clearNavigationGoal(staff), queue, tables, serviceItems, customers };
     }
     const ordered = createCustomerOrder(
       { ...state, serviceItems },
@@ -818,20 +902,21 @@ function resolveTask({
     const validStation = station?.assignedStaffId === staff.id && customer.cashierStationId === station.id;
     if (!validPhase || !validStation) {
       return {
-        staff: { ...completedStaff, path: [] },
+        staff: completedStaff,
         customers: customers.map(candidate => candidate.id === customer.id && validPhase
           ? requeueCheckoutCustomer(candidate)
           : candidate),
         queue, tables, serviceItems,
       };
     }
+    const cashierArrived = station
+      && Math.hypot(staff.x - getCashierWorkPosition(station).x, staff.y - getCashierWorkPosition(station).y) <= 2;
     const customerPosition = station ? getCashierCustomerPosition(station, 0) : null;
-    const cashierArrived = station && Math.hypot(staff.x - getCashierWorkPosition(station).x, staff.y - getCashierWorkPosition(station).y) <= 2;
     const customerArrived = customerPosition && Math.hypot(customer.x - customerPosition.x, customer.y - customerPosition.y) <= 2;
     const readyToStart = customer.state === 'checkout_moving' && customer.paymentReady;
     if (!cashierArrived || !customerArrived || (staff.task.startedAt == null && !readyToStart)) {
       return {
-        staff: { ...completedStaff, path: [] },
+        staff: completedStaff,
         customers: customers.map(candidate => candidate.id === customer.id
           ? requeueCheckoutCustomer(candidate)
           : candidate),
@@ -840,15 +925,15 @@ function resolveTask({
     }
     if (staff.task.startedAt == null) {
       return {
-        staff: { ...staff, path: [], task: { ...staff.task, startedAt: state.restaurant.gameTime } },
+        staff: clearNavigationGoal({ ...staff, task: { ...staff.task, startedAt: state.restaurant.gameTime } }),
         customers: customers.map(candidate => candidate.id === customer.id
-          ? { ...candidate, state: 'checkout_processing', paymentReady: false, path: [] }
+          ? { ...candidate, state: 'checkout_processing', paymentReady: false }
           : candidate),
         queue, tables, serviceItems,
       };
     }
     if (state.restaurant.gameTime - staff.task.startedAt < ACTIVITY_DURATIONS.takePayment) {
-      return { staff: { ...staff, path: [] }, customers, queue, tables, serviceItems };
+      return { staff: clearNavigationGoal(staff), customers, queue, tables, serviceItems };
     }
     const legacyDishPrice = (state.dishes || []).find(candidate => candidate.id === customer.dishId)?.price || 0;
     const legacyDrinkPrice = getResolvedDrink(state, customer.drinkId)?.price || 0;
@@ -930,22 +1015,22 @@ function resolveTask({
   if (staff.task.type === 'clean_table') {
     const table = tables.find(candidate => candidate.id === staff.task.tableId);
     if (!table || table.status !== 'dirty') {
-      return { staff: { ...completedStaff, path: [] }, queue, customers, serviceItems, tables };
+      return { staff: completedStaff, queue, customers, serviceItems, tables };
     }
     if (!isTableReadyForCleaning(staff.task.tableId, customers, serviceItems)) {
-      return { staff: { ...completedStaff, path: [] }, queue, customers, serviceItems, tables };
+      return { staff: completedStaff, queue, customers, serviceItems, tables };
     }
     if (staff.task.cleaningStartedAt == null) {
       return {
-        staff: { ...staff, path: [], task: { ...staff.task, cleaningStartedAt: state.restaurant.gameTime } },
+        staff: clearNavigationGoal({ ...staff, task: { ...staff.task, cleaningStartedAt: state.restaurant.gameTime } }),
         tables, customers, queue, serviceItems,
       };
     }
     if (state.restaurant.gameTime - staff.task.cleaningStartedAt < ACTIVITY_DURATIONS.wipeFloor) {
-      return { staff: { ...staff, path: [] }, queue, customers, serviceItems, tables };
+      return { staff: clearNavigationGoal(staff), queue, customers, serviceItems, tables };
     }
     return {
-      staff: { ...completedStaff, path: [] }, queue, customers, serviceItems,
+      staff: completedStaff, queue, customers, serviceItems,
       tables: tables.map(t => t.id === staff.task.tableId
         ? releaseTableReservation(t, 'empty') : t),
     };
@@ -953,18 +1038,18 @@ function resolveTask({
 
   if (staff.task.type === 'clean_floor') {
     const dirt = (state.floorDirt || []).find(candidate => candidate.id === staff.task.dirtId);
-    if (!dirt) return { staff: { ...completedStaff, path: [] }, queue, customers, tables, serviceItems, floorDirt: state.floorDirt || [] };
+    if (!dirt) return { staff: completedStaff, queue, customers, tables, serviceItems, floorDirt: state.floorDirt || [] };
     if (staff.task.cleaningStartedAt == null) {
       return {
-        staff: { ...staff, path: [], task: { ...staff.task, cleaningStartedAt: state.restaurant.gameTime } },
+        staff: clearNavigationGoal({ ...staff, task: { ...staff.task, cleaningStartedAt: state.restaurant.gameTime } }),
         queue, customers, tables, serviceItems, floorDirt: state.floorDirt || [],
       };
     }
     if (state.restaurant.gameTime - staff.task.cleaningStartedAt < ACTIVITY_DURATIONS.wipeFloor) {
-      return { staff: { ...staff, path: [] }, queue, customers, tables, serviceItems, floorDirt: state.floorDirt || [] };
+      return { staff: clearNavigationGoal(staff), queue, customers, tables, serviceItems, floorDirt: state.floorDirt || [] };
     }
     return {
-      staff: { ...completedStaff, path: [] }, queue, customers, tables, serviceItems,
+      staff: completedStaff, queue, customers, tables, serviceItems,
       floorDirt: (state.floorDirt || []).filter(candidate => candidate.id !== dirt.id),
     };
   }
@@ -1010,34 +1095,24 @@ function resolveTask({
       if (!approaches) {
         return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
       }
-
-      const approachesByCustomerId = new Map(approaches
-        .map(assignment => [assignment.customerId, assignment]));
-      let failed = false;
-      const approachingCustomers = customers.map(customer => {
-        const assignment = approachesByCustomerId.get(customer.id);
-        if (!assignment) return customer;
-        const path = getStaticApproachPath(
-          { ...state, customers, tables, serviceItems },
-          customer,
-          assignment,
-          [staff.id, ...ids],
-        );
-        const atApproach = Math.hypot(
-          customer.x - assignment.approachPoint.x,
-          customer.y - assignment.approachPoint.y,
-        ) <= 2;
-        if (!atApproach && path.length === 0) failed = true;
-        return { ...customer, state: 'guided', path };
-      });
-      if (failed) {
+      if (!validateChairApproachAssignments(
+        { ...state, customers, tables, serviceItems }, ids, chairIds, approaches, table.id,
+      )) {
         return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
       }
 
+      const approachesByCustomerId = new Map(approaches
+        .map(assignment => [assignment.customerId, assignment]));
+      const approachingCustomers = customers.map(customer => {
+        const assignment = approachesByCustomerId.get(customer.id);
+        return assignment
+          ? setNavigationGoal({ ...customer, state: 'guided' }, assignment.approachPoint)
+          : customer;
+      });
+
       return {
         staff: {
-          ...staff,
-          path: [],
+          ...clearNavigationGoal(staff),
           task: { ...staff.task, chairIds, stage: 'approach_chairs', approaches },
         },
         customers: approachingCustomers,
@@ -1059,43 +1134,19 @@ function resolveTask({
     }
 
     const customersById = new Map(customers.map(customer => [customer.id, customer]));
-    let failed = false;
-    let replanned = false;
-    const replannedCustomers = customers.map(customer => {
-      const assignment = approaches.find(candidate => candidate.customerId === customer.id);
-      if (!assignment || customer.path?.length) return customer;
-      if (Math.hypot(
-        customer.x - assignment.approachPoint.x,
-        customer.y - assignment.approachPoint.y,
-      ) <= 2) return customer;
-      const path = getStaticApproachPath(
-        { ...state, customers, tables, serviceItems },
-        customer,
-        assignment,
-        [staff.id, ...ids],
-      );
-      if (!path.length) failed = true;
-      else replanned = true;
-      return { ...customer, path };
-    });
-    if (failed) {
-      return cancelGuideTask({ staff, customers, queue, tables, serviceItems });
-    }
-    if (replanned) {
-      return { staff: { ...staff, path: [] }, customers: replannedCustomers, queue, tables, serviceItems };
-    }
-
     const allAtApproaches = staff.task.approaches.every(assignment => {
       const customer = customersById.get(assignment.customerId);
       return customer
-        && (!customer.path || customer.path.length === 0)
+        && Number.isFinite(customer.x)
+        && Number.isFinite(customer.y)
         && Math.hypot(
           customer.x - assignment.approachPoint.x,
           customer.y - assignment.approachPoint.y,
-        ) <= 2;
+        ) <= 2
+        && getMovementStatus(state, statuses, customer.id).plan === 'arrived';
     });
     if (!allAtApproaches) {
-      return { staff: { ...staff, path: [] }, customers, queue, tables, serviceItems };
+      return { staff: clearNavigationGoal(staff), customers, queue, tables, serviceItems };
     }
 
     const seatTime = state.restaurant.gameTime;
@@ -1111,14 +1162,14 @@ function resolveTask({
         const chair = chairByCustomerId.get(customer.id);
         if (!chair) return customer;
         const centre = getChairCentre(chair);
-        return clearMovementRecoveryMetadata({
+        return clearNavigationGoal({
           ...customer,
           state: 'seated',
           tableId: table.id,
           chairId: chair.id,
           guideStaffId: null,
+          ...recordSeatResidency(customer, chair, table),
           seatTime,
-          path: [],
           x: centre.x,
           y: centre.y,
         });
@@ -1186,17 +1237,17 @@ function resolveTask({
       };
     }
 
-    const deliveryPath = targetForRectOrCurrent(state, getServiceTableRect(serviceTable), staff);
-    if (deliveryPath === null) {
-      return { staff: { ...staff, path: [] }, queue, tables, customers, serviceItems };
+    const target = targetForRectOrCurrent(state, getServiceTableRect(serviceTable), staff);
+    if (target === null) {
+      return { staff: clearNavigationGoal(staff), queue, tables, customers, serviceItems };
     }
-    if (deliveryPath.length) {
-      return { staff: { ...staff, path: deliveryPath }, queue, tables, customers, serviceItems };
+    if (target.distance > 0) {
+      return { staff: setNavigationGoal(staff, target.goal), queue, tables, customers, serviceItems };
     }
 
     const position = getServiceSlotPosition(serviceTable, item.serviceSlotIndex);
     return {
-      staff: { ...completedStaff, carryingServiceItemId: null, path: [] },
+      staff: { ...completedStaff, carryingServiceItemId: null },
       queue, tables, customers,
       serviceItems: serviceItems.map(candidate => candidate.id === item.id
         ? { ...candidate, state: 'on_service', assignedStaffId: null, ...position }
@@ -1210,19 +1261,29 @@ function resolveTask({
     if (!item || item.state !== 'dirty_at_table' || !table || staff.carryingServiceItemId != null) {
       return { staff: { ...completedStaff, carryingServiceItemId: null }, queue, tables, customers, serviceItems };
     }
-    const pickupPath = targetForRectOrCurrent(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff);
-    if (pickupPath === null) {
-      return { staff: { ...completedStaff, path: [], carryingServiceItemId: null }, queue, tables, customers, serviceItems };
+    const target = targetForRectOrCurrent(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff);
+    if (target === null) {
+      return { staff: { ...completedStaff, carryingServiceItemId: null }, queue, tables, customers, serviceItems };
     }
-    if (pickupPath.length) {
-      return { staff: { ...staff, path: pickupPath }, queue, tables, customers, serviceItems };
+    if (target.distance > 0) {
+      return { staff: setNavigationGoal(staff, target.goal), queue, tables, customers, serviceItems };
     }
     const carriedItems = serviceItems.map(candidate => candidate.id === item.id
       ? { ...candidate, state: 'carried_dirty' } : candidate);
     const stationChoice = selectWashStation(state, staff, carriedItems, state.staff);
+    const nextStaff = {
+      ...staff,
+      task: stationChoice
+        ? { type: 'deliver_dirty_item', serviceItemId: item.id, washStationId: stationChoice.station.id }
+        : null,
+      carryingServiceItemId: item.id,
+    };
     return {
-      staff: { ...staff, task: stationChoice ? { type: 'deliver_dirty_item', serviceItemId: item.id, washStationId: stationChoice.station.id } : null,
-        carryingServiceItemId: item.id, path: stationChoice?.path || [] },
+      staff: stationChoice
+        ? stationChoice.target.distance > 0
+          ? setNavigationGoal(nextStaff, stationChoice.target.goal)
+          : clearNavigationGoal(nextStaff)
+        : clearNavigationGoal(nextStaff),
       queue, customers,
       tables,
       serviceItems: carriedItems,
@@ -1236,23 +1297,23 @@ function resolveTask({
       return { staff: { ...completedStaff, carryingServiceItemId: null }, queue, tables, customers, serviceItems };
     }
     if (!station) {
-      return { staff: { ...completedStaff, path: [], carryingServiceItemId: item.id }, queue, tables, customers, serviceItems };
+      return { staff: { ...completedStaff, carryingServiceItemId: item.id }, queue, tables, customers, serviceItems };
     }
-    const deliveryPath = targetForRectOrCurrent(state, station, staff);
-    if (deliveryPath === null) {
-      return { staff: { ...completedStaff, path: [], carryingServiceItemId: item.id }, queue, tables, customers, serviceItems };
+    const target = targetForRectOrCurrent(state, station, staff);
+    if (target === null) {
+      return { staff: { ...completedStaff, carryingServiceItemId: item.id }, queue, tables, customers, serviceItems };
     }
-    if (deliveryPath.length) {
-      return { staff: { ...staff, path: deliveryPath }, queue, tables, customers, serviceItems };
+    if (target.distance > 0) {
+      return { staff: setNavigationGoal(staff, target.goal), queue, tables, customers, serviceItems };
     }
     if (!hasWashStationCapacity(state, station, { excludeServiceItemId: item.id })) {
       return {
-        staff: { ...completedStaff, path: [], carryingServiceItemId: item.id },
+        staff: { ...completedStaff, carryingServiceItemId: item.id },
         queue, tables, customers, serviceItems,
       };
     }
     return {
-      staff: { ...completedStaff, carryingServiceItemId: null, path: [] }, queue, tables, customers,
+      staff: { ...completedStaff, carryingServiceItemId: null }, queue, tables, customers,
       serviceItems: serviceItems.map(candidate => candidate.id === item.id
         ? { ...candidate, state: 'queued_for_wash', washStationId: station.id, washQueuedAt: state.restaurant.gameTime } : candidate),
     };
@@ -1262,17 +1323,17 @@ function resolveTask({
     const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
     const station = (state.washStations || []).find(candidate => candidate.id === staff.task.washStationId && candidate.type === 'manual');
     if (!item || !['queued_for_wash', 'washing'].includes(item.state) || item.washStationId !== station?.id) {
-      return { staff: { ...completedStaff, path: [] }, queue, tables, customers, serviceItems };
+      return { staff: completedStaff, queue, tables, customers, serviceItems };
     }
     if (staff.task.washingStartedAt == null) {
       const itemIndex = serviceItems.indexOf(item);
-      return { staff: { ...staff, path: [], task: { ...staff.task, washingStartedAt: state.restaurant.gameTime } }, queue, tables, customers, serviceItems: serviceItems.map((candidate, index) => index === itemIndex ? { ...candidate, state: 'washing', washStartedAt: state.restaurant.gameTime } : candidate) };
+      return { staff: clearNavigationGoal({ ...staff, task: { ...staff.task, washingStartedAt: state.restaurant.gameTime } }), queue, tables, customers, serviceItems: serviceItems.map((candidate, index) => index === itemIndex ? { ...candidate, state: 'washing', washStartedAt: state.restaurant.gameTime } : candidate) };
     }
     if (state.restaurant.gameTime - staff.task.washingStartedAt < ACTIVITY_DURATIONS.manualWash) {
-      return { staff: { ...staff, path: [] }, queue, tables, customers, serviceItems };
+      return { staff: clearNavigationGoal(staff), queue, tables, customers, serviceItems };
     }
     const itemIndex = serviceItems.indexOf(item);
-    return { staff: { ...completedStaff, path: [] }, queue, tables, customers, serviceItems: serviceItems.filter((_candidate, index) => index !== itemIndex) };
+    return { staff: completedStaff, queue, tables, customers, serviceItems: serviceItems.filter((_candidate, index) => index !== itemIndex) };
   }
 
   if (staff.task.type === 'deliver_service_item') {
@@ -1280,24 +1341,14 @@ function resolveTask({
     const item = serviceItems[itemIndex];
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
     const table = tables.find(candidate => candidate.id === item?.tableId);
-    const canDeliver = customer
-      && customer.state !== 'leaving'
-      && item?.state === 'carried'
-      && staff.carryingServiceItemId === item.id
-      && item.customerId === customer.id
-      && staff.task.serviceItemId === item.id
-      && staff.task.customerId === item.customerId
-      && item.tableId === customer.tableId
-      && table?.id === item.tableId;
-    if (!canDeliver) {
+    if (!canDeliverServiceItem(staff, item, customer, table)) {
       const ownsTaskItem = staff.carryingServiceItemId === staff.task.serviceItemId;
       const anotherWorkerOwnsTaskItem = (state.staff || []).some(candidate =>
         candidate.id !== staff.id && candidate.carryingServiceItemId === staff.task.serviceItemId
       );
       return {
         staff: {
-          ...staff,
-          task: null,
+          ...completedStaff,
           carryingServiceItemId: ownsTaskItem ? null : staff.carryingServiceItemId,
         },
         customers, queue, tables,
@@ -1336,7 +1387,7 @@ function resolveTask({
       ? startCustomerConsumption(deliveredCustomer, deliveredServiceItems, state.restaurant.gameTime)
       : null;
     return {
-      staff: { ...staff, task: null, carryingServiceItemId: null },
+      staff: { ...completedStaff, carryingServiceItemId: null },
       queue, tables, serviceItems: started?.serviceItems ?? deliveredServiceItems,
       customers: customers.map(candidate => candidate.id === customer.id
         ? started?.customer ?? deliveredCustomer
@@ -1371,7 +1422,7 @@ function resolveTask({
 
     if (!validReservation) {
       return {
-        staff: { ...completedStaff, path: [] },
+        staff: completedStaff,
         customers, queue, tables,
         serviceItems: item?.assignedStaffId === staff.id
           ? clearDrinkReservation(serviceItems, staff.task.serviceItemId)
@@ -1381,7 +1432,7 @@ function resolveTask({
 
     if (item.state === 'ordered') {
       return {
-        staff: { ...staff, path: [] },
+        staff: clearNavigationGoal(staff),
         customers, queue, tables,
         serviceItems: serviceItems.map(candidate => candidate.id === item.id
           ? {
@@ -1396,14 +1447,14 @@ function resolveTask({
     const elapsed = state.restaurant.gameTime - item.preparationStartedAt;
     if (!Number.isFinite(item.preparationStartedAt) || elapsed < ACTIVITY_DURATIONS.prepareDrink) {
       return {
-        staff: { ...staff, path: [] },
+        staff: clearNavigationGoal(staff),
         customers, queue, tables, serviceItems,
       };
     }
 
     const position = getServiceSlotPosition(serviceTable, item.serviceSlotIndex);
     return {
-      staff: { ...completedStaff, path: [] },
+      staff: completedStaff,
       customers, queue, tables,
       serviceItems: serviceItems.map(candidate => candidate.id === item.id
         ? {
@@ -1451,24 +1502,26 @@ function resolveTask({
       const serviceTable = slot
         ? (state.serviceTables || []).find(candidate => candidate.id === slot.serviceTableId)
         : null;
-      const path = serviceTable
+      const target = serviceTable
         ? targetForRectOrCurrent(state, getServiceTableRect(serviceTable), staff)
         : null;
-      if (!slot || !serviceTable || path === null) {
-        return { staff: { ...staff, path: [] }, queue, tables, customers, serviceItems };
+      if (!slot || !serviceTable || target === null) {
+        return { staff: clearNavigationGoal(staff), queue, tables, customers, serviceItems };
       }
       return {
-        staff: {
-          ...staff,
-          path,
-          carryingServiceItemId: item.id,
-          task: {
-            type: 'place_dish_on_service',
-            serviceItemId: item.id,
-            serviceTableId: slot.serviceTableId,
-            serviceSlotIndex: slot.serviceSlotIndex,
+        staff: setNavigationGoal(
+          {
+            ...staff,
+            carryingServiceItemId: item.id,
+            task: {
+              type: 'place_dish_on_service',
+              serviceItemId: item.id,
+              serviceTableId: slot.serviceTableId,
+              serviceSlotIndex: slot.serviceSlotIndex,
+            },
           },
-        },
+          target.goal,
+        ),
         queue, tables, customers,
         serviceItems: serviceItems.map(candidate => candidate.id === item.id
           ? {
@@ -1499,7 +1552,7 @@ function resolveTask({
       return { staff: completedStaff, queue, tables, customers, serviceItems };
     }
     return {
-      staff: { ...staff, path: [] }, queue, tables, customers,
+      staff: clearNavigationGoal(staff), queue, tables, customers,
       serviceItems: serviceItems.map(candidate => item.state === 'ordered' && candidate.id === item.id
         ? {
           ...candidate,
@@ -1556,7 +1609,7 @@ export function prepareStaffForMovement(state, gameDt) {
       ? releaseTableReservation(table, 'empty')
       : table);
     staff = staff.map(worker => hasMatchingQueueAdmissionTask(worker, queueAdmissionGate)
-      ? { ...worker, task: null, path: [] }
+      ? clearNavigationGoal({ ...worker, task: null })
       : worker);
     customers = customers.map(customer => {
       if (!gateMemberIds.has(customer.id)) return customer;
@@ -1565,7 +1618,16 @@ export function prepareStaffForMovement(state, gameDt) {
     });
   }
   const activityState = { ...state, staff, customers, tables, serviceItems };
-  staff = staff.map(worker => prepareStaffActivity(activityState, worker));
+  // Each optional destination sees claims accepted earlier in this tick. Use
+  // stable IDs rather than array order, without changing the returned staff order.
+  const activityOrder = staff.map((_, index) => index).sort((left, right) => {
+    const a = String(staff[left].id);
+    const b = String(staff[right].id);
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  for (const index of activityOrder) {
+    staff[index] = prepareStaffActivity(activityState, staff[index]);
+  }
   const staleTaskServiceItemIds = staff
     .filter(worker => worker.task?.type === 'prepare_drink')
     .map(worker => worker.task.serviceItemId)
@@ -1601,7 +1663,7 @@ export function prepareStaffForMovement(state, gameDt) {
     && !serviceItems.some(item => item.id === worker.task.serviceItemId
       && item.assignedStaffId === worker.id
       && hasValidDrinkReservation({ ...state, staff }, item))
-    ? { ...worker, task: null, path: [] } : worker);
+    ? clearNavigationGoal({ ...worker, task: null }) : worker);
 
   // Cancel tasks whose customer disappeared while being guided. Without this,
   // the guiding staff reaches the destination and creates a permanently occupied table.
@@ -1632,16 +1694,39 @@ export function prepareStaffForMovement(state, gameDt) {
       });
       staff[i] = settleTasklessActivity(
         { ...state, restaurant, staff, customers, tables, serviceItems },
-        { ...current, task: null, path: [] },
+        clearNavigationGoal({ ...current, task: null }),
       );
     }
+  }
+
+  // A hold-at-goal planner cannot solve two staff tasks ending at the same
+  // service point. Repair old assignments as well as avoiding new duplicates.
+  for (let i = 0; i < staff.length; i += 1) {
+    const worker = staff[i];
+    if (!['take_order', 'deliver_service_item'].includes(worker.task?.type)
+      || !worker.navigationGoal
+      || hasObsoleteCustomerTask(worker, customers, tables, serviceItems)) continue;
+    const currentState = { ...state, staff, customers, tables, serviceItems };
+    if (isStaffDestinationAvailable(currentState, worker.navigationGoal, worker)) continue;
+    const tableId = worker.task.type === 'take_order'
+      ? customers.find(customer => customer.id === worker.task.customerId)?.tableId
+      : serviceItems.find(item => item.id === worker.task.serviceItemId)?.tableId;
+    const table = tables.find(candidate => candidate.id === tableId);
+    const target = table && targetForTable(currentState, table, worker);
+    if (target) staff[i] = setNavigationGoal(worker, target.goal);
   }
 
   // Legacy waiting customers can enter guidance without world coordinates.
   // Materialise them only in this pre-batch phase at deterministic queue slots;
   // subsequent route planning and movement still go through shared descriptors.
-  const occupiedActors = [...staff, ...customers]
-    .filter(actor => Number.isFinite(actor.x) && Number.isFinite(actor.y));
+  // The vacancy check must respect the canonical standing queue leases: this
+  // writer runs after the queue claims, so a safe grant does not by itself
+  // protect the point against this later materialiser.
+  const occupiedActors = [
+    ...staff,
+    ...customers,
+    ...getQueueVisibleMembers(state, state.queue),
+  ].filter(actor => Number.isFinite(actor.x) && Number.isFinite(actor.y));
   customers = customers.map(customer => {
     if (Number.isFinite(customer.x) && Number.isFinite(customer.y)) return customer;
     const guideContext = getCustomerGuideContext({ ...state, staff, customers }, customer);
@@ -1653,26 +1738,35 @@ export function prepareStaffForMovement(state, gameDt) {
     return normalised;
   });
 
-  // Followers must have routes before the shared movement commit; planning here
-  // keeps the batch deterministic and prevents a follower from moving twice.
+  // Followers keep one formation waypoint episode until its public movement
+  // status reports arrival. A preceding actor's movement alone never changes
+  // the follower's exact goal.
   for (const s of staff) {
-    if (s.task?.type !== 'guide_customer' || hasArrived(s)) continue;
+    if (s.task?.type !== 'guide_customer'
+      || (s.task.stage || 'follow_guide') !== 'follow_guide') continue;
+    const currentState = { ...state, restaurant, staff, customers, tables, serviceItems };
+    if (getMovementStatus(currentState, null, s.id).plan === 'arrived') continue;
     const ids = taskCustomerIds(s.task);
-    customers = customers.map((customer, index, allCustomers) => {
-      const guideContext = getCustomerGuideContext({ ...state, staff, customers }, customer);
-      if (!guideContext || guideContext.guide.id !== s.id || customer.path?.length) return customer;
+    for (const customerId of ids) {
+      const index = customers.findIndex(customer => customer.id === customerId);
+      if (index < 0) continue;
+      const customer = customers[index];
+      const customerState = { ...state, restaurant, staff, customers, tables, serviceItems };
+      const guideContext = getCustomerGuideContext(customerState, customer);
+      if (!guideContext || guideContext.guide.id !== s.id) continue;
+      const status = getMovementStatus(customerState, null, customer.id);
+      const hasGoal = Number.isFinite(customer.navigationGoal?.x)
+        && Number.isFinite(customer.navigationGoal?.y);
+      if (hasGoal && !['arrived', 'unreachable'].includes(status.plan)
+        && validFollowerGoal(customerState, customer)) continue;
       const memberIndex = Math.max(0, ids.indexOf(customer.id));
       const preceding = memberIndex > 0
-        ? allCustomers.find(candidate => candidate.id === ids[memberIndex - 1])
+        ? customers.find(candidate => candidate.id === ids[memberIndex - 1])
         : s;
-      return planCharacterPath(
-        { ...state, staff, customers, tables, serviceItems },
-        customer,
-        { world: { x: preceding.x - 12, y: preceding.y + 12 } },
-        [...staff, ...allCustomers.filter((_, candidateIndex) => candidateIndex !== index)],
-        [s.id, ...ids],
-      );
-    });
+      if (!Number.isFinite(preceding?.x) || !Number.isFinite(preceding?.y)) continue;
+      const goal = chooseFollowerGoal(customerState, customer, preceding);
+      customers[index] = goal ? setNavigationGoal(customer, goal) : clearNavigationGoal(customer);
+    }
   }
 
   return {
@@ -1685,48 +1779,103 @@ export function prepareStaffForMovement(state, gameDt) {
 
 export function getStaffMovementEntries(state) {
   const entries = [];
-  const movingIds = new Set();
+  const goalFor = character => Number.isFinite(character.navigationGoal?.x)
+    && Number.isFinite(character.navigationGoal?.y)
+    ? { x: character.navigationGoal.x, y: character.navigationGoal.y }
+    : null;
+  const queueRankFor = customer => {
+    if (Number.isInteger(customer.checkoutQueueIndex) && customer.checkoutQueueIndex >= 0) {
+      return customer.checkoutQueueIndex;
+    }
+    const station = (state.cashierStations || [])
+      .find(candidate => candidate.id === customer.cashierStationId);
+    const position = customer.checkoutPosition;
+    if (!station || !Number.isFinite(position?.x) || !Number.isFinite(position?.y)) return null;
+    const rank = (position.y - station.y - station.h - 20) / 20;
+    return Number.isInteger(rank) && rank >= 0 ? rank : null;
+  };
+  const customerFields = (customer, guideContext) => {
+    const isLeaving = customer.state === 'leaving';
+    const isFading = isLeaving && customer.exitPhase === 'fading';
+    const isCheckout = customer.state === 'checkout_moving';
+    const isGuided = Boolean(guideContext);
+    const doorId = customer.exitDoorId ?? customer.entryDoorId ?? null;
+    return {
+      doorFlow: {
+        doorId: isLeaving || isGuided ? doorId : null,
+        direction: isLeaving ? 'egress' : isGuided ? 'ingress' : 'none',
+      },
+      queueRank: isCheckout ? queueRankFor(customer) : null,
+      terminalPolicy: isFading ? 'release' : 'hold',
+    };
+  };
   for (const staff of state.staff || []) {
     if (!Number.isFinite(staff.x) || !Number.isFinite(staff.y)) continue;
     const ids = getGuidePartyContext(state, staff)?.ignoredIds || [];
-    if (staff.path?.length) {
-      const movementRecovery = Boolean(staff.headOnRecovery
-        || (staff.usingStaticFallback && (staff.stalledFor || 0) >= 2));
-      entries.push({
-        character: staff,
-        speed: getStaffMovementSpeed(staff),
-        ignoredIds: ids,
-        ...(movementRecovery ? { headOnDetourEligible: true } : {}),
-      });
-      movingIds.add(staff.id);
-    }
+    const target = goalFor(staff);
+    entries.push({
+      character: staff,
+      speed: target ? getStaffMovementSpeed(staff) : 0,
+      ignoredIds: ids,
+      doorFlow: { doorId: null, direction: 'none' },
+      queueRank: null,
+      terminalPolicy: 'hold',
+      ...(target ? { target } : {}),
+    });
   }
   for (const customer of state.customers || []) {
     if (!Number.isFinite(customer.x) || !Number.isFinite(customer.y)) continue;
     const guideContext = getCustomerGuideContext(state, customer);
-    if (guideContext && customer.path?.length) {
-      entries.push({
-        character: customer,
-        speed: 62,
-        ignoredIds: guideContext.ignoredIds,
-        provenance: 'guide',
-      });
-      movingIds.add(customer.id);
-    }
-  }
-  for (const character of [...(state.staff || []), ...(state.customers || [])]) {
-    if (!Number.isFinite(character.x) || !Number.isFinite(character.y) || movingIds.has(character.id)) continue;
-    entries.push({ character, speed: 0, ignoredIds: [] });
+    const target = goalFor(customer);
+    entries.push({
+      character: customer,
+      speed: target && guideContext ? 62 : 0,
+      ignoredIds: guideContext?.ignoredIds || [],
+      ...customerFields(customer, guideContext),
+      ...(target && guideContext ? { target } : {}),
+      ...(guideContext ? { provenance: 'guide' } : {}),
+    });
   }
   return entries;
 }
 
-export function resolveStaffAfterMovement(state, gameDt) {
+function getStaffBatchEntries(state) {
+  const entriesById = new Map();
+  const add = entry => {
+    if (entry?.character?.id == null) return;
+    const id = String(entry.character.id);
+    const existing = entriesById.get(id);
+    if (!existing
+      || (entry.provenance === 'guide' && existing.provenance !== 'guide')
+      || (entry.provenance !== 'guide' && existing.provenance !== 'guide'
+        && Number(entry.speed) > 0 && !(Number(existing.speed) > 0))) {
+      entriesById.set(id, entry);
+    }
+  };
+
+  for (const entry of getStaffMovementEntries(state)) add(entry);
+  for (const character of getQueueVisibleMembers(state, state.queue)) {
+    if (character?.id == null || !Number.isFinite(character.x) || !Number.isFinite(character.y)) continue;
+    add({
+      character: clearNavigationGoal(character),
+      speed: 0,
+      ignoredIds: [],
+      doorFlow: { doorId: null, direction: 'none' },
+      queueRank: null,
+      terminalPolicy: 'hold',
+      provenance: 'queue',
+    });
+  }
+  return [...entriesById.values()];
+}
+
+export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
   let {
     staff, customers, queue, serviceItems, completedCustomers,
     pendingPartyReviews, partyReviewHistory, floorDirt, restaurant,
   } = state;
   let queueAdmissionGate = state.queueAdmissionGate ?? null;
+  let queueSlots = Array.isArray(state.queueSlots) ? state.queueSlots : [];
   let tables = normaliseTableReservationOwners(state.tables, staff);
   const claimedCustomerIds = new Set();
   const claimedServiceItemIds = new Set();
@@ -1744,13 +1893,17 @@ export function resolveStaffAfterMovement(state, gameDt) {
 
   for (let i = 0; i < staff.length; i += 1) {
     const s = staff[i];
+    const status = getMovementStatus(state, statuses, s.id);
 
-    if (s.task && !hasArrived(s)) {
+    // Cancellation cannot depend on reaching a destination which may itself be
+    // blocked forever. Valid work still requires certified arrival below.
+    if (s.task && status.plan !== 'arrived'
+      && !hasObsoleteCustomerTask(s, customers, tables, serviceItems)) {
       staff[i] = markTaskAssigned(s);
       continue;
     }
 
-    if (s.task && hasArrived(s)) {
+    if (s.task) {
       const resolved = resolveTask({
         state: {
           ...state, restaurant, staff, customers, queue, tables, serviceItems,
@@ -1758,7 +1911,7 @@ export function resolveStaffAfterMovement(state, gameDt) {
           queueAdmissionGate,
         },
         staff: s, customers, queue, tables, serviceItems,
-        pendingPartyReviews, partyReviewHistory, restaurant,
+        pendingPartyReviews, partyReviewHistory, restaurant, statuses,
       });
       if (resolved.customers) customers = resolved.customers;
       if (resolved.queue) queue = resolved.queue;
@@ -1772,10 +1925,15 @@ export function resolveStaffAfterMovement(state, gameDt) {
       if (Object.hasOwn(resolved, 'queueAdmissionGate')) {
         queueAdmissionGate = resolved.queueAdmissionGate;
       }
+      const resolvedStaffState = {
+        ...state,
+        staff: staff.map((worker, index) => index === i ? resolved.staff : worker),
+      };
+      const resolvedStatus = getCharacterMovementStatus(resolvedStaffState, resolved.staff.id);
       staff[i] = resolved.staff.task
-        ? resolved.staff.path?.length
-          ? markTaskAssigned(resolved.staff)
-          : markWorking(resolved.staff)
+        ? resolvedStatus.plan === 'arrived'
+          ? markWorking(clearNavigationGoal(resolved.staff))
+          : markTaskAssigned(resolved.staff)
         : settleTasklessActivity(
           {
             ...state, restaurant, staff, customers, tables, serviceItems,
@@ -1813,6 +1971,7 @@ export function resolveStaffAfterMovement(state, gameDt) {
         );
       if (result.customers) customers = result.customers;
       if (result.queue) queue = result.queue;
+      if (result.queueSlots) queueSlots = result.queueSlots;
       if (result.tables) tables = result.tables;
       if (result.serviceItems) serviceItems = result.serviceItems;
       if (Object.hasOwn(result, 'queueAdmissionGate')) {
@@ -1847,6 +2006,7 @@ export function resolveStaffAfterMovement(state, gameDt) {
     partyReviewHistory,
     floorDirt,
     queueAdmissionGate,
+    queueSlots,
   };
   return result;
 }
@@ -1855,14 +2015,21 @@ export function updateStaff(state, timing) {
   const gameDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.gameDt) || 0);
   const movementDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.movementDt) || 0);
   const prepared = prepareStaffForMovement(state, gameDt);
-  const movementEntries = getStaffMovementEntries(prepared);
-  const moved = resolveCharacterMovementBatch(prepared, movementEntries, movementDt);
+  const movementEntries = getStaffBatchEntries(prepared);
+  const batch = advanceCharacterMovementBatch(prepared, movementEntries, movementDt);
+  const guideCustomerIds = new Set(movementEntries
+    .filter(entry => entry.provenance === 'guide' && Number(entry.speed) > 0)
+    .map(entry => String(entry.character.id)));
+  const movedFor = id => batch.moved.get(id) || batch.moved.get(String(id));
   const committed = {
     ...prepared,
-    staff: prepared.staff.map(character => moved.get(character.id) || character),
-    customers: prepared.customers.map(character => moved.get(character.id) || character),
+    staff: prepared.staff.map(character => movedFor(character.id) || character),
+    customers: prepared.customers.map(character => guideCustomerIds.has(String(character.id))
+      ? movedFor(character.id) || character
+      : character),
+    movementCoordinator: batch.coordinator,
   };
-  return resolveStaffAfterMovement(committed, gameDt);
+  return resolveStaffAfterMovement(committed, gameDt, batch.statuses);
 }
 function getCustomerReviewScore(customer, fallback) {
   const queueScore = Number.isFinite(customer.queuePatience)

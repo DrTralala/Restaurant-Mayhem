@@ -1,14 +1,21 @@
 import { getRushHourMultiplier, isRestaurantOpen } from './clock';
-import { buildBlockedCells, worldToCell } from './pathfinding';
-import { clearMovementRecoveryMetadata, planCharacterPath, resolveCharacterMovementBatch } from './movement';
+import { advanceCharacterMovementBatch, getCharacterMovementStatus } from './movement';
+import {
+  clearNavigationGoal,
+  isAtNavigationGoal,
+  sameNavigationGoal,
+  setNavigationGoal,
+} from './movement/navigationGoal';
 import { getCustomerGuideContext, markTableDirtyIfInUse } from './guidance';
 import { getDoorPosition, getDoors } from './world';
-import { recoverOscillatingCustomers } from './customerOscillationRecovery';
 import { isCheckoutState, prepareCheckoutCustomers } from './checkout';
 import {
   QUEUE_PARTY_CAPACITY,
-  getQueueProjectedMembers,
+  getQueueFreeBandSlots,
+  getQueueVisibleMembers,
+  hasRuntimeLeaseConflict,
   normaliseCustomerQueue,
+  reconcileQueueSlots,
 } from './customerQueue';
 import {
   ABANDONMENT_REPUTATION_PENALTY,
@@ -33,6 +40,7 @@ export function getExitHeading(customerId) {
 
 const EXIT_QUEUE_CLEARANCE = 16;
 const EXIT_GEOMETRY_EPSILON = 1e-9;
+const EXIT_DISTANCE = 120;
 
 function isFinitePoint(point) {
   return Number.isFinite(point?.x) && Number.isFinite(point?.y);
@@ -83,16 +91,10 @@ function longestQueueSafePrefix(start, heading, maximumDistance, projectedMember
   return Math.max(0, prefix);
 }
 
-export function getQueueSafeExitMovement(state, customer, movementDt) {
+function getQueueSafeExitChoice(state, customer) {
   if (!isFinitePoint(customer)) return null;
 
-  const exitFadeProgress = Number.isFinite(customer.exitFadeProgress)
-    ? Math.min(1, Math.max(0, customer.exitFadeProgress))
-    : 0;
-  const remainingDistance = 30 * 4 * (1 - exitFadeProgress);
-  if (remainingDistance <= EXIT_GEOMETRY_EPSILON) return null;
-
-  const projectedMembers = getQueueProjectedMembers(state, state.queue).filter(isFinitePoint);
+  const projectedMembers = getQueueVisibleMembers(state, state.queue).filter(isFinitePoint);
   const stableHeading = getExitHeading(customer.id);
   const preferredSign = stableHeading.angleDegrees > 0 ? 1 : -1;
   const angleCandidates = [
@@ -108,15 +110,15 @@ export function getQueueSafeExitMovement(state, customer, movementDt) {
       ? stableHeading
       : getHeadingForAngle(angleDegrees);
     const target = {
-      x: customer.x + heading.x * remainingDistance,
-      y: customer.y + heading.y * remainingDistance,
+      x: customer.x + heading.x * EXIT_DISTANCE,
+      y: customer.y + heading.y * EXIT_DISTANCE,
     };
     if (isQueueClear(customer, target, projectedMembers)) {
-      return { heading, target };
+      return { heading, target, distance: EXIT_DISTANCE };
     }
   }
 
-  let longestPrefix = null;
+  let longestPrefix = { heading: null, distance: -Infinity };
   for (const angleDegrees of angleCandidates) {
     const heading = angleDegrees === stableHeading.angleDegrees
       ? stableHeading
@@ -124,48 +126,46 @@ export function getQueueSafeExitMovement(state, customer, movementDt) {
     const prefix = longestQueueSafePrefix(
       customer,
       heading,
-      remainingDistance,
+      EXIT_DISTANCE,
       projectedMembers,
     );
-    if (prefix <= EXIT_GEOMETRY_EPSILON
-      || longestPrefix && prefix <= longestPrefix.distance + EXIT_GEOMETRY_EPSILON) continue;
-    longestPrefix = { heading, distance: prefix };
+    if (prefix > longestPrefix.distance + EXIT_GEOMETRY_EPSILON) {
+      longestPrefix = { heading, distance: prefix };
+    }
   }
 
-  if (!longestPrefix) return null;
-  const movementBudget = 30 * Math.max(0, Number.isFinite(movementDt) ? movementDt : 0);
-  const distance = Math.min(longestPrefix.distance, movementBudget);
+  const heading = longestPrefix.heading || getHeadingForAngle(angleCandidates[0]);
   return {
-    heading: longestPrefix.heading,
+    heading,
     target: {
-      x: customer.x + longestPrefix.heading.x * distance,
-      y: customer.y + longestPrefix.heading.y * distance,
+      x: customer.x + heading.x * EXIT_DISTANCE,
+      y: customer.y + heading.y * EXIT_DISTANCE,
     },
+    distance: Math.max(0, longestPrefix.distance),
   };
 }
 
+export function getQueueSafeExitGoal(state, customer) {
+  return getQueueSafeExitChoice(state, customer)?.target || null;
+}
+
 function leavingFields(customer, overrides = {}) {
-  const { entryDoorId: _entryDoorId, ...withoutEntryDoor } = customer;
-  return clearMovementRecoveryMetadata({
+  const { entryDoorId: _entryDoorId, ...withoutEntryDoor } =
+    clearNavigationGoal(customer);
+  return {
     ...withoutEntryDoor,
     state: 'leaving',
     exitPhase: 'to_door',
     exitDoorId: null,
     exitFadeProgress: 0,
     exitHeading: null,
-    path: [],
-    stalledFor: 0,
     cashierStationId: null,
     checkoutPosition: null,
     paymentReady: false,
     ...overrides,
-  });
+  };
 }
 
-function isOpenCell(state, point) {
-  const cell = worldToCell(point);
-  return !buildBlockedCells(state).has(`${cell.x},${cell.y}`);
-}
 function numericIdSuffix(id, prefix) {
   const match = new RegExp(`^${prefix}(\\d+)$`).exec(String(id));
   return match ? Number(match[1]) : 0;
@@ -188,6 +188,7 @@ function getCustomerIdentityIds(state, queue) {
   return [
     ...(state.customers || []).map(customer => customer?.id),
     ...queue.flatMap(party => party.members.map(customer => customer?.id)),
+    ...(state.queueDepartures || []).map(record => record?.id),
     ...(state.completedCustomers || []).map(payment => payment?.customerId),
     ...(state.pendingPartyReviews || []).flatMap(record => [
       ...(record?.memberIds || []),
@@ -204,6 +205,7 @@ function getPartyIdentityIds(state, queue) {
       party?.partyId,
       ...party.members.map(customer => customer?.partyId),
     ]),
+    ...(state.queueDepartures || []).map(record => record?.partyId),
     ...(state.pendingPartyReviews || []).map(record => record?.partyId),
     ...(state.partyReviewHistory || []).map(record => record?.partyId),
   ];
@@ -324,31 +326,14 @@ function normaliseMovementDt(timing) {
 }
 
 function replaceCharacters(state, moved, key, committedIds = null) {
+  const movedFor = id => moved.get(id) || moved.get(String(id));
   return {
     ...state,
     [key]: (state[key] || []).map(character => {
       if (committedIds && !committedIds.has(character.id)) return character;
-      return moved.get(character.id) || character;
+      return movedFor(character.id) || character;
     }),
   };
-}
-
-function getCompatibilityMovementEntries(state, movementEntries) {
-  const entries = [];
-  const usedIds = new Set();
-  for (const entry of movementEntries) {
-    if (entry?.character?.id == null || usedIds.has(entry.character.id)) continue;
-    usedIds.add(entry.character.id);
-    entries.push(entry);
-  }
-
-  for (const character of [...(state.staff || []), ...(state.customers || [])]) {
-    if (character?.id == null || usedIds.has(character.id)
-      || !Number.isFinite(character.x) || !Number.isFinite(character.y)) continue;
-    usedIds.add(character.id);
-    entries.push({ character, speed: 0, ignoredIds: [] });
-  }
-  return entries;
 }
 
 function getExitDestination(state, customer) {
@@ -356,29 +341,113 @@ function getExitDestination(state, customer) {
   return door ? getDoorPosition(state, door).outside : null;
 }
 
-function isSameCell(left, right) {
-  const leftCell = worldToCell(left);
-  const rightCell = worldToCell(right);
-  return leftCell.x === rightCell.x && leftCell.y === rightCell.y;
+// Admit the oldest staged pending-departure records (hidden overflow members
+// whose party abandoned or the restaurant closed) to legally vacant visible
+// queue-band slots, as leaving customers. The pending records were converted
+// before any lease existed, so each materialised member is granted a new exact
+// departure lease at the candidate point it starts from; the lease is retained
+// (blocking regrants of that origin) until the live leaver is at least 16 px
+// clear. A slot is free only when no valid lease origin (standing or retained
+// departure), staff actor, customer actor or earlier grant in the same pass is
+// within 16 px of it. Records that cannot materialise yet stay ordered for a
+// later tick; a pending record and its lease never coexist.
+function materialiseQueueDepartures(state, queue, queueSlots) {
+  const pending = state.queueDepartures || [];
+  const customers = [...(state.customers || [])];
+  if (pending.length === 0) return { customers, queueDepartures: [], queueSlots };
+  // While the retained runtime origins are already unsafe no new physical claim
+  // is staged: compensating materialisation is blocked alongside new grants.
+  if (hasRuntimeLeaseConflict(state, queueSlots)) {
+    return { customers, queueDepartures: pending, queueSlots };
+  }
+  const working = [...queueSlots];
+  const remaining = [];
+  for (const record of pending) {
+    const freeSlots = getQueueFreeBandSlots(state, working);
+    if (freeSlots.length === 0) {
+      remaining.push(record);
+      continue;
+    }
+    const slot = freeSlots[0];
+    const { departureReason, closedAt, ...member } = record;
+    const overrides = departureReason === 'closed'
+      ? { tableId: null, reputationApplied: true, closedAt }
+      : {
+          patience: Math.max(0, member.patience ?? 0),
+          happiness: Math.max(0, (member.happiness ?? 0) - 30),
+          tableId: null,
+          reputationApplied: true,
+        };
+    customers.push(leavingFields({ ...member, x: slot.x, y: slot.y }, overrides));
+    const lease = {
+      memberId: record.id,
+      partyId: record.partyId,
+      x: slot.x,
+      y: slot.y,
+      slot: slot.slot,
+    };
+    working.push(lease);
+  }
+  return { customers, queueDepartures: remaining, queueSlots: working };
 }
 
 export function prepareCustomersForMovement(state, gameDt) {
   const customers = state.customers || [];
   const queue = normaliseCustomerQueue(state.queue || []);
-  const queuePositions = new Map(getQueueProjectedMembers(state, queue)
-    .map(customer => [customer.id, { x: customer.x, y: customer.y }]));
   const restaurantOpen = isRestaurantOpen(state);
-  const closedQueue = restaurantOpen ? [] : queue.flatMap(party =>
-    party.members.map(customer => leavingFields({
-      ...customer,
-      ...queuePositions.get(customer.id),
-    }, {
-      tableId: null,
-      reputationApplied: true,
-      closedAt: state.restaurant.gameTime,
-    })));
+
+  // 1. Reconcile exact queue-slot ownership: validate the seed records, retain
+  //    standing and uncleared departure leases, release only cleared/orphaned
+  //    records, then grant unleased queue members in logical FIFO order at any
+  //    current candidate that is physically free (any-free rule). A layout
+  //    change never rewrites a retained x/y. Queued claims precede the staged
+  //    departure pipeline.
+  const reconciledSlots = reconcileQueueSlots(state, state.queueSlots || []);
+
+  // 2. Staged materialisation of hidden pending-departure records into the
+  //    slots still free after the queue claims, oldest pending first. Each
+  //    materialised leaver obtains a retained exact departure lease.
+  const materialised = materialiseQueueDepartures(state, queue, reconciledSlots);
+  const queueSlots = materialised.queueSlots;
+  let queueDepartures = materialised.queueDepartures;
+  const customersWithStaged = materialised.customers;
+
+  // 3. Conversions use the canonical exact leases: abandoning/closing leased
+  //    members convert at their stored exact points and keep their lease
+  //    records as departure ownership; unleased members become ordered pending
+  //    departure records.
+  const queuePositions = new Map(getQueueVisibleMembers({ ...state, queueSlots }, queue)
+    .map(customer => [customer.id, { x: customer.x, y: customer.y }]));
+
+  // Only physically present (visible) queue members convert to leaving at their
+  // distinct slots now; hidden overflow members are retained as ordered
+  // pending-departure records below instead of being dissolved.
+  let closedQueue = [];
+  if (!restaurantOpen) {
+    closedQueue = [];
+    for (const party of queue) {
+      for (const customer of party.members) {
+        if (queuePositions.has(customer.id)) {
+          closedQueue.push(leavingFields({
+            ...customer,
+            ...queuePositions.get(customer.id),
+          }, {
+            tableId: null,
+            reputationApplied: true,
+            closedAt: state.restaurant.gameTime,
+          }));
+        } else {
+          queueDepartures.push({
+            ...customer,
+            departureReason: 'closed',
+            closedAt: state.restaurant.gameTime,
+          });
+        }
+      }
+    }
+  }
   let abandonmentCount = 0;
-  let updatedCustomers = [...customers, ...closedQueue].map(c => {
+  let updatedCustomers = [...customersWithStaged, ...closedQueue].map(c => {
     const waitingForService = isWaitingForService(c, state.staff);
     const newPatience = waitingForService
       ? Math.max(0, c.patience - gameDt * getPatienceFactor(c))
@@ -389,7 +458,12 @@ export function prepareCustomersForMovement(state, gameDt) {
       newState = 'waiting';
     }
 
-    return { ...c, patience: newPatience, state: newState };
+    const canMove = ['checkout_moving', 'leaving', 'guided'].includes(newState);
+    return {
+      ...(canMove ? c : clearNavigationGoal(c)),
+      patience: newPatience,
+      state: newState,
+    };
   });
 
   // Update queue: apply party pressure to patience, then remove those who run out.
@@ -420,6 +494,7 @@ export function prepareCustomersForMovement(state, gameDt) {
 
   if (abandoningParties.size > 0) {
     const allPartyMembers = [...updatedCustomers, ...updatedQueue.flatMap(party => party.members)];
+    // Accounting is applied once, at the decision tick, per abandoning party.
     abandonmentCount = [...abandoningParties].filter(key =>
       !allPartyMembers.some(customer => partyKey(customer) === key && customer.reputationApplied),
     ).length;
@@ -433,9 +508,12 @@ export function prepareCustomersForMovement(state, gameDt) {
         })
       : customer);
 
-    const abandoningQueue = updatedQueue.flatMap(party =>
-      abandoningParties.has(party.partyId)
-        ? party.members.map(customer => leavingFields({
+    const abandoningQueue = [];
+    updatedQueue = updatedQueue.filter(party => {
+      if (!abandoningParties.has(party.partyId)) return true;
+      for (const customer of party.members) {
+        if (queuePositions.has(customer.id)) {
+          abandoningQueue.push(leavingFields({
             ...customer,
             ...queuePositions.get(customer.id),
           }, {
@@ -443,9 +521,13 @@ export function prepareCustomersForMovement(state, gameDt) {
             happiness: Math.max(0, customer.happiness - 30),
             tableId: null,
             reputationApplied: true,
-          }))
-        : []);
-    updatedQueue = updatedQueue.filter(party => !abandoningParties.has(party.partyId));
+          }));
+        } else {
+          queueDepartures.push({ ...customer, departureReason: 'abandoned' });
+        }
+      }
+      return false;
+    });
     updatedCustomers = [...updatedCustomers, ...abandoningQueue];
   }
 
@@ -480,8 +562,8 @@ export function prepareCustomersForMovement(state, gameDt) {
     }
   }
 
-  updatedCustomers = updatedCustomers.map((customer, index, allCustomers) => {
-    if (customer.state !== 'leaving' || customer.exitPhase === 'fading') return customer;
+  updatedCustomers = updatedCustomers.map(customer => {
+    if (customer.state !== 'leaving') return customer;
     let leaving = customer;
     if (!Number.isFinite(leaving.x) || !Number.isFinite(leaving.y)) {
       const table = (state.tables || []).find(candidate => candidate.id === leaving.tableId);
@@ -501,22 +583,44 @@ export function prepareCustomersForMovement(state, gameDt) {
     }
     const destination = getExitDestination(state, leaving);
     if (!destination) return leaving;
-    if (!leaving.path?.length && Math.hypot(leaving.x - destination.x, leaving.y - destination.y) <= 2) {
+    if (leaving.exitPhase === 'fading') {
+      if (!isFinitePoint(leaving.navigationGoal)) {
+        const choice = getQueueSafeExitChoice(state, leaving);
+        if (!choice) return leaving;
+        leaving = { ...leaving, exitHeading: choice.heading };
+        return setNavigationGoal(leaving, choice.target);
+      }
       return leaving;
     }
-    const goal = worldToCell(destination);
-    if (!leaving.path?.length || !leaving.pathGoal
-      || leaving.pathGoal.x !== goal.x || leaving.pathGoal.y !== goal.y) {
-      leaving = planCharacterPath(state, leaving, { world: destination }, [
-        ...(state.staff || []),
-        ...allCustomers.filter(candidate => candidate.id !== leaving.id && candidate.exitPhase !== 'fading'),
-      ]);
-    }
-    return leaving;
+    return setNavigationGoal(leaving, destination);
   });
+
+  const doorAdmissions = updateDoorAdmissions(state.doorAdmissions, updatedCustomers);
+
+  // Door-gated leavers represent intentional door waiting without an active
+  // navigation goal: only the customer currently admitted to approach a door
+  // carries the door destination goal, so the public movement status never
+  // misreports a waiting leaver as unreachable. The preserved door intent is
+  // the explicit exitDoorId + to_door phase; the goal is re-created by the
+  // ordinary preparation pass as soon as the leaver is admitted.
+  if (activeDoorApproachCustomers(updatedCustomers).length > 0) {
+    const admittedDoorCustomers = admittedDoorApproachIds({
+      ...state,
+      customers: updatedCustomers,
+      ...(doorAdmissions ? { doorAdmissions } : {}),
+    });
+    updatedCustomers = updatedCustomers.map(customer => {
+      const waitingAtDoor = customer.state === 'leaving'
+        && customer.exitPhase !== 'fading'
+        && customer.exitDoorId != null
+        && !admittedDoorCustomers.has(String(customer.id));
+      return waitingAtDoor ? clearNavigationGoal(customer) : customer;
+    });
+  }
 
   return {
     ...state,
+    ...(doorAdmissions ? { doorAdmissions } : {}),
     restaurant: abandonmentCount > 0
       ? {
           ...state.restaurant,
@@ -526,6 +630,8 @@ export function prepareCustomersForMovement(state, gameDt) {
       : state.restaurant,
     customers: updatedCustomers,
     queue: updatedQueue,
+    queueDepartures,
+    queueSlots,
     tables: updatedTables,
     pendingPartyReviews: abandoningParties.size > 0
       ? cancelPendingPartyReviews(state.pendingPartyReviews, abandoningParties)
@@ -533,131 +639,238 @@ export function prepareCustomersForMovement(state, gameDt) {
   };
 }
 
-export function getCustomerMovementEntries(state, movementDt) {
-  return (state.customers || []).flatMap(character => {
-    if (character.state === 'leaving' && character.exitPhase === 'fading') {
-      const movement = getQueueSafeExitMovement(state, character, movementDt);
-      if (!movement) return [];
-      return [{
-        character: { ...character, exitHeading: movement.heading },
-        speed: 30,
-        target: movement.target,
-        consumePath: false,
-        ignoredIds: [],
-      }];
-    }
-
-    if (character.state === 'leaving' && character.exitPhase !== 'fading' && !character.path?.length) {
-      const destination = getExitDestination(state, character);
-      if (destination && Math.hypot(character.x - destination.x, character.y - destination.y) > 2
-        && isSameCell(character, destination) && isOpenCell(state, character)) {
-        return [{
-          character,
-          speed: 55,
-          target: destination,
-          consumePath: false,
-          ignoredIds: [],
-        }];
-      }
-    }
-
-    if (!character.path?.length
-      || !['checkout_moving', 'leaving', 'guided'].includes(character.state)) return [];
-    const guideContext = character.state === 'guided' ? getCustomerGuideContext(state, character) : null;
-    if (character.state === 'guided' && !guideContext) return [];
-    const entry = {
-      character,
-      speed: character.state === 'leaving' ? 55 : 62,
-      ignoredIds: guideContext?.ignoredIds || [],
-      ...(guideContext ? { provenance: 'guide' } : {}),
-    };
-    if (character.state === 'leaving' && character.exitPhase !== 'fading') {
-      const destination = getExitDestination(state, character);
-      const goal = destination && worldToCell(destination);
-      const routeGoal = character.pathGoal || character.path.at(-1);
-      if (destination && goal && routeGoal?.x === goal.x && routeGoal?.y === goal.y) {
-        return [{ ...entry, targetAfterPath: destination }];
-      }
-    }
-    return [entry];
-  });
+function getCheckoutQueueRank(state, customer) {
+  if (Number.isInteger(customer.checkoutQueueIndex) && customer.checkoutQueueIndex >= 0) {
+    return customer.checkoutQueueIndex;
+  }
+  const station = (state.cashierStations || [])
+    .find(candidate => candidate.id === customer.cashierStationId);
+  const position = customer.checkoutPosition;
+  if (!station || !isFinitePoint(position)) return null;
+  const rank = (position.y - station.y - station.h - 20) / 20;
+  return Number.isInteger(rank) && rank >= 0 ? rank : null;
 }
 
-/**
- * Resolve customer arrival and fade state after a committed movement batch.
- * `fadingMovementIds` is optional batch evidence: pass a Set of IDs whose
- * fading displacement was committed. Omitting it performs arrival transitions
- * and leaves existing fade progress unchanged.
- */
-export function resolveCustomersAfterMovement(state, movementDt, fadingMovementIds = null) {
-  const doorPositions = new Map(getDoors(state).map(door => [door.id, getDoorPosition(state, door)]));
-  const fadingAtMovementStart = fadingMovementIds || new Set();
+function activeDoorApproachCustomers(customers) {
+  return (customers || [])
+    .filter(customer => customer?.id != null && isFinitePoint(customer)
+      && customer.state === 'leaving' && customer.exitPhase !== 'fading'
+      && customer.exitDoorId != null)
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+}
+
+function updateDoorAdmissions(previous, customers) {
+  const active = activeDoorApproachCustomers(customers);
+  if (!previous && active.length === 0) return null;
+
+  const previousRequests = previous?.requests && typeof previous.requests === 'object'
+    ? previous.requests
+    : {};
+  let nextSequence = Number.isInteger(previous?.nextSequence) && previous.nextSequence > 0
+    ? previous.nextSequence
+    : 1;
+  const requests = {};
+
+  for (const customer of active) {
+    const id = String(customer.id);
+    const doorId = String(customer.exitDoorId);
+    const prior = previousRequests[id];
+    if (prior && String(prior.doorId) === doorId && Number.isInteger(prior.sequence)) {
+      requests[id] = { doorId, sequence: prior.sequence };
+      continue;
+    }
+    requests[id] = { doorId, sequence: nextSequence };
+    nextSequence += 1;
+  }
+
+  return { nextSequence, requests };
+}
+
+function admittedDoorApproachIds(state) {
+  const candidatesByDoor = new Map();
+  const requests = state.doorAdmissions?.requests || {};
+  for (const customer of activeDoorApproachCustomers(state.customers)) {
+    const doorId = String(customer.exitDoorId);
+    const record = requests[String(customer.id)];
+    const candidates = candidatesByDoor.get(doorId) || [];
+    candidates.push({
+      customer,
+      sequence: record && String(record.doorId) === doorId && Number.isInteger(record.sequence)
+        ? record.sequence
+        : Infinity,
+    });
+    candidatesByDoor.set(doorId, candidates);
+  }
+
+  const admittedCustomers = new Set();
+  for (const candidates of candidatesByDoor.values()) {
+    candidates.sort((left, right) => left.sequence - right.sequence
+      || String(left.customer.id).localeCompare(String(right.customer.id)));
+    const destination = getExitDestination(state, candidates[0].customer);
+    // FIFO cannot require its head to occupy a point already occupied by a
+    // gated leaver. Let that mouth occupant clear the shared approach first.
+    const occupying = destination && candidates.find(({ customer }) =>
+      Math.hypot(customer.x - destination.x, customer.y - destination.y) < 16);
+    admittedCustomers.add(String((occupying || candidates[0]).customer.id));
+  }
+  return admittedCustomers;
+}
+
+function descriptorForCustomer(state, character, admittedCustomers) {
+  const guideContext = character.state === 'guided'
+    ? getCustomerGuideContext(state, character)
+    : null;
+  const movingState = character.state === 'checkout_moving'
+    || character.state === 'leaving'
+    || character.state === 'guided' && guideContext;
+  const descriptorCharacter = movingState
+    ? character
+    : clearNavigationGoal(character);
+  const hasGoal = isFinitePoint(descriptorCharacter.navigationGoal);
+  const doorId = character.exitDoorId ?? character.entryDoorId ?? null;
+  const isLeaving = character.state === 'leaving';
+  const isFading = isLeaving && character.exitPhase === 'fading';
+  const isToDoor = isLeaving && !isFading;
+  const isCheckout = character.state === 'checkout_moving';
+  const isGuided = character.state === 'guided' && guideContext;
+  const doorApproachAdmitted = !isToDoor
+    || admittedCustomers.has(String(character.id));
+  const speed = !hasGoal ? 0
+    : isFading ? 30
+      : isToDoor ? doorApproachAdmitted ? 55 : 0
+        : isCheckout || isGuided ? 62
+          : 0;
+  const direction = isLeaving ? 'egress' : isGuided ? 'ingress' : 'none';
+  const descriptor = {
+    character: descriptorCharacter,
+    speed,
+    ignoredIds: guideContext?.ignoredIds || [],
+    doorFlow: { doorId: direction === 'none' ? null : doorId, direction },
+    queueRank: isCheckout ? getCheckoutQueueRank(state, character) : null,
+    terminalPolicy: isFading ? 'release' : 'hold',
+    provenance: guideContext ? 'guide' : 'customer',
+  };
+  return descriptor;
+}
+
+export function getCustomerMovementEntries(state, _movementDt) {
+  const admittedCustomers = admittedDoorApproachIds(state);
+  const active = (state.customers || [])
+    .filter(character => character?.id != null && isFinitePoint(character))
+    .map(character => descriptorForCustomer(state, character, admittedCustomers));
+  const queue = getQueueVisibleMembers(state, state.queue)
+    .filter(member => member?.id != null && isFinitePoint(member))
+    .map(character => ({
+      character: clearNavigationGoal(character),
+      speed: 0,
+      ignoredIds: [],
+      doorFlow: { doorId: null, direction: 'none' },
+      queueRank: null,
+      terminalPolicy: 'hold',
+      provenance: 'queue',
+    }));
+  return [...active, ...queue];
+}
+
+function suppliedMovementStatus(state, statuses, id) {
+  if (statuses instanceof Map) {
+    return statuses.get(id) ?? statuses.get(String(id)) ?? getCharacterMovementStatus(state, id);
+  }
+  return getCharacterMovementStatus(state, id);
+}
+
+function getCustomerBatchEntries(state, movementDt) {
+  const entriesById = new Map();
+  const add = entry => {
+    if (entry?.character?.id == null) return;
+    const id = String(entry.character.id);
+    const existing = entriesById.get(id);
+    if (!existing
+      || (entry.provenance === 'guide' && existing.provenance !== 'guide')
+      || (entry.provenance !== 'guide' && existing.provenance !== 'guide'
+        && Number(entry.speed) > 0 && !(Number(existing.speed) > 0))) {
+      entriesById.set(id, entry);
+    }
+  };
+  for (const entry of getCustomerMovementEntries(state, movementDt)) add(entry);
+  for (const character of state.staff || []) {
+    if (character?.id == null || !isFinitePoint(character)) continue;
+    add({
+      character,
+      speed: 0,
+      ignoredIds: [],
+      doorFlow: { doorId: null, direction: 'none' },
+      queueRank: null,
+      terminalPolicy: 'hold',
+    });
+  }
+  return [...entriesById.values()];
+}
+
+function startCustomerFading(state, customer) {
+  const choice = getQueueSafeExitChoice(state, customer);
+  if (!choice) return customer;
+  const fading = {
+    ...customer,
+    exitPhase: 'fading',
+    exitFadeProgress: 0,
+    exitHeading: choice.heading,
+  };
+  return setNavigationGoal(fading, choice.target);
+}
+
+function clampFadeProgress(distance) {
+  return Math.min(1, Math.max(0, 1 - distance / EXIT_DISTANCE));
+}
+
+export function resolveCustomersAfterMovement(state, _movementDt, statuses = new Map()) {
+  const doorPositions = new Map(getDoors(state)
+    .map(door => [door.id, getDoorPosition(state, door).outside]));
   let updatedCustomers = (state.customers || []).map(customer => {
     if (customer.state !== 'leaving' || customer.exitPhase === 'fading') return customer;
-    const destination = doorPositions.get(customer.exitDoorId)?.outside;
-    const destinationCell = destination && worldToCell(destination);
-    const routeGoal = customer.pathGoal || customer.path?.at(-1);
-    const committedAtDoor = !customer.path?.length || destinationCell
-      && routeGoal?.x === destinationCell.x && routeGoal?.y === destinationCell.y;
-    if (committedAtDoor && destination
-      && Math.hypot(customer.x - destination.x, customer.y - destination.y) <= 2) {
-      return {
-        ...customer,
-        exitPhase: 'fading',
-        exitFadeProgress: 0,
-        exitHeading: getExitHeading(customer.id),
-        path: [],
-        stalledFor: 0,
-      };
-    }
-    return customer;
+    const destination = doorPositions.get(customer.exitDoorId);
+    const status = suppliedMovementStatus(state, statuses, customer.id);
+    if (!destination || !sameNavigationGoal(customer.navigationGoal, destination)
+      || !isAtNavigationGoal(customer) || status.plan !== 'arrived') return customer;
+    return startCustomerFading(state, customer);
   });
 
-  const recoveredState = recoverOscillatingCustomers(
-    { ...state, customers: updatedCustomers },
-    movementDt,
-  );
-  updatedCustomers = recoveredState.customers;
-
   updatedCustomers = updatedCustomers.map(customer => {
-    if (customer.state !== 'leaving' || customer.exitPhase !== 'fading'
-      || !fadingAtMovementStart.has(customer.id)) return customer;
-    const heading = customer.exitHeading || getExitHeading(customer.id);
+    if (customer.state !== 'leaving' || customer.exitPhase !== 'fading') return customer;
+    if (!isFinitePoint(customer.navigationGoal)) return customer;
+    const distance = isFinitePoint(customer)
+      ? Math.hypot(customer.x - customer.navigationGoal.x, customer.y - customer.navigationGoal.y)
+      : Infinity;
+    const status = suppliedMovementStatus(state, statuses, customer.id);
+    const arrived = status.plan === 'arrived' && isAtNavigationGoal(customer);
     return {
       ...customer,
-      exitHeading: heading,
-      exitFadeProgress: Math.min(1, (customer.exitFadeProgress || 0) + movementDt / 4),
+      exitFadeProgress: arrived ? 1 : clampFadeProgress(distance),
     };
   });
 
   updatedCustomers = updatedCustomers.filter(customer => {
-    if (customer.state !== 'leaving') return true;
-    if (customer.exitPhase === 'fading') return customer.exitFadeProgress < 1;
-    if (customer.path?.length) return true;
-    const destination = doorPositions.get(customer.exitDoorId)?.outside;
-    return !destination || Math.hypot(customer.x - destination.x, customer.y - destination.y) > 2
-      || customer.exitPhase === 'to_door';
+    if (customer.state !== 'leaving' || customer.exitPhase !== 'fading') return true;
+    if (!isFinitePoint(customer.navigationGoal)) return true;
+    const status = suppliedMovementStatus(state, statuses, customer.id);
+    return !(status.plan === 'arrived' && isAtNavigationGoal(customer));
   });
 
-  return { ...recoveredState, customers: updatedCustomers };
+  return { ...state, customers: updatedCustomers };
 }
 
 export function updateCustomers(state, timing) {
   const gameDt = normaliseGameDt(timing);
   const movementDt = normaliseMovementDt(timing);
   const prepared = prepareCustomersForMovement(state, gameDt);
-  const movementEntries = getCustomerMovementEntries(prepared, movementDt);
-  const movingCustomerIds = new Set(movementEntries.map(entry => entry.character.id));
-  const entries = getCompatibilityMovementEntries(prepared, movementEntries);
-  const moved = resolveCharacterMovementBatch(prepared, entries, movementDt);
-  const committed = replaceCharacters(prepared, moved, 'customers', movingCustomerIds);
-  const fadingMovementIds = new Set(movementEntries
-    .filter(entry => entry.character.state === 'leaving' && entry.character.exitPhase === 'fading')
-    .filter(entry => {
-      const movedCharacter = moved.get(entry.character.id);
-      return movedCharacter
-        && (movedCharacter.x !== entry.character.x || movedCharacter.y !== entry.character.y);
-    })
-    .map(entry => entry.character.id));
-  return resolveCustomersAfterMovement(committed, movementDt, fadingMovementIds);
+  const entries = getCustomerBatchEntries(prepared, movementDt);
+  const result = advanceCharacterMovementBatch(prepared, entries, movementDt);
+  const finiteCustomerIds = new Set((prepared.customers || [])
+    .filter(customer => customer?.id != null && isFinitePoint(customer))
+    .map(customer => customer.id));
+  const committed = {
+    ...replaceCharacters(prepared, result.moved, 'customers', finiteCustomerIds),
+    movementCoordinator: result.coordinator,
+  };
+  return resolveCustomersAfterMovement(committed, movementDt, result.statuses);
 }

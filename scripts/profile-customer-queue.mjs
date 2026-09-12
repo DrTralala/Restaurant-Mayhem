@@ -1,83 +1,51 @@
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
-
-const WARMUP_RUNS = 1;
-const MEASURED_RUNS = 5;
-const CYCLES = 8;
-const MOVEMENT_DT = 0.1;
-
-function median(values) {
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = sorted.length / 2;
-  return sorted.length % 2 === 0
-    ? (sorted[middle - 1] + sorted[middle]) / 2
-    : sorted[Math.floor(middle)];
-}
-
-function percentile(values, ratio) {
-  const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.ceil(sorted.length * ratio) - 1];
-}
-
-function nonTimingProjection(result) {
-  const { tickMilliseconds: _tickMilliseconds, ...projection } = result;
-  return projection;
-}
+import { describeMilliseconds } from './profile-dense-queue.mjs';
 
 const server = await createServer({
-  logLevel: 'silent',
-  server: { middlewareMode: true },
+  root: fileURLToPath(new URL('../', import.meta.url)), configFile: false, logLevel: 'silent',
+  server: { middlewareMode: true, hmr: false, watch: null },
 });
-
 try {
-  const { runCustomerQueueStressScenario } = await server.ssrLoadModule(
+  const { runCustomerQueueStressScenario, buildCustomerQueueNonTimingProjection } = await server.ssrLoadModule(
     '/src/simulation/customerQueueStress.js',
   );
-  const run = () => runCustomerQueueStressScenario({
-    cycles: CYCLES,
-    movementDt: MOVEMENT_DT,
-  });
-
-  for (let warmup = 0; warmup < WARMUP_RUNS; warmup += 1) run();
-  const measuredRuns = Array.from({ length: MEASURED_RUNS }, run);
-  const expectedProjection = JSON.stringify(nonTimingProjection(measuredRuns[0]));
-  if (!measuredRuns.every(result =>
-    JSON.stringify(nonTimingProjection(result)) === expectedProjection)) {
-    throw new Error('Customer queue non-timing results changed between measured runs');
-  }
-
-  const representative = measuredRuns[0];
-  const completedParties = representative.completedPartyIds.length;
-  const accepted = completedParties === CYCLES
-    && new Set(representative.completedPartyIds).size === CYCLES
-    && representative.queuedMemberMovementEntries === 0
-    && representative.maximumGateOwners === 1
-    && JSON.stringify(representative.gateOwnerPartyIds)
-      === JSON.stringify(representative.completedPartyIds)
-    && representative.arrivalsResumed === true
-    && representative.replacementPartyIds.length === CYCLES
-    && new Set(representative.replacementPartyIds).size === CYCLES
-    && representative.minimumSpacing >= 16 - 1e-6
-    && representative.allCoordinatesFinite === true;
-  if (!accepted) {
-    throw new Error('Customer queue deterministic acceptance fields failed');
-  }
-
-  const allTickMilliseconds = measuredRuns.flatMap(result => result.tickMilliseconds);
+  const run = () => runCustomerQueueStressScenario({ cycles: 8, movementDt: 0.1 });
+  run(); // One warm-up, followed by five measured runs.
+  const runs = Array.from({ length: 5 }, run);
+  const projection = buildCustomerQueueNonTimingProjection(runs[0]);
+  const deterministic = runs.every(result => JSON.stringify(buildCustomerQueueNonTimingProjection(result))
+    === JSON.stringify(projection));
+  const workload = runs.every(result => result.completedPartyIds.length === 8
+    && new Set(result.completedPartyIds).size === 8 && result.queuedMemberMovementEntries === 0
+    && result.maximumGateOwners === 1 && result.maximumMovementActors === 5
+    && JSON.stringify(result.gateOwnerPartyIds) === JSON.stringify(result.completedPartyIds)
+    && result.arrivalsResumed === true && result.replacementPartyIds.length === 8
+    && new Set(result.replacementPartyIds).size === 8 && result.minimumSpacing >= 16
+    && result.allCoordinatesFinite === true && result.allMovementScheduled === true
+    && result.allWithinSpeedBudget === true && result.maxExpansionsPerTick <= 2048
+    && result.maximumGroupQuantum <= 256 && result.summary.invariantFailures === 0);
+  const representative = runs[0];
   console.log(JSON.stringify({
-    cycles: representative.cycles,
-    ticks: representative.ticks,
-    completedParties,
-    queuedMemberMovementEntries: representative.queuedMemberMovementEntries,
-    maximumGateOwners: representative.maximumGateOwners,
+    warmups: 1, runs: 5, cycles: representative.cycles,
+    completedParties: representative.completedPartyIds.length, ticks: representative.ticks,
+    arrivalsResumed: representative.arrivalsResumed, minimumSpacing: representative.minimumSpacing,
     maximumMovementActors: representative.maximumMovementActors,
-    minimumSpacing: representative.minimumSpacing,
-    arrivalsResumed: representative.arrivalsResumed,
-    replacementParties: representative.replacementPartyIds.length,
-    replacementPartyIds: representative.replacementPartyIds,
-    medianTickMilliseconds: median(allTickMilliseconds),
-    p95TickMilliseconds: percentile(allTickMilliseconds, 0.95),
-    maximumTickMilliseconds: Math.max(...allTickMilliseconds),
-  }));
+    counters: projection.summary,
+    maxExpansionsPerTick: representative.maxExpansionsPerTick,
+    maximumGroupQuantum: representative.maximumGroupQuantum,
+    batchMilliseconds: describeMilliseconds(runs.map(result => result.summary.batchMilliseconds)),
+    tickMilliseconds: describeMilliseconds(runs.flatMap(result => result.timings.ticks)),
+    phaseMilliseconds: Object.fromEntries(['planner', 'executor'].map(phase => [phase,
+      describeMilliseconds(runs.map(result => result.summary[`${phase}Milliseconds`]))])),
+    acceptance: { deterministic, workload }, accepted: deterministic && workload,
+    projection,
+  }, null, 2));
+  if (!deterministic || !workload) process.exitCode = 1;
+} catch (error) {
+  console.error(error.message);
+  if (error.evidence) console.error(JSON.stringify(error.evidence));
+  process.exitCode = 1;
 } finally {
   await server.close();
 }

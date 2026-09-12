@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState } from './initialState';
+import { createMovementCoordinator } from '../simulation/movement';
+import { SAVE_VERSION } from './saveVersion';
 
 describe('createInitialState', () => {
   it('starts the balanced economy with $600 and a $12 toast', () => {
@@ -10,10 +12,12 @@ describe('createInitialState', () => {
     expect(state.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
   });
 
-  it('starts version 5 with janitor and wash station state', () => {
+  it('starts the current save version with an empty derived coordinator and wash station state', () => {
     const state = createInitialState();
 
-    expect(state.version).toBe(5);
+    expect(state.version).toBe(SAVE_VERSION);
+    expect(state.movementCoordinator).toEqual(createMovementCoordinator());
+    expect(createInitialState().movementCoordinator).not.toBe(state.movementCoordinator);
     expect(state.floorDirt).toEqual([]);
     expect(state.washStations).toEqual([
       expect.objectContaining({ id: 'wash1', type: 'manual', w: 40, h: 40 }),
@@ -65,7 +69,7 @@ describe('createInitialState', () => {
   it('starts with one cook and three generic waiters', () => {
     const state = createInitialState();
 
-    expect(state.version).toBe(5);
+    expect(state.version).toBe(SAVE_VERSION);
     expect(state.staff.map(staff => staff.role)).toEqual(['cook', 'waiter', 'waiter', 'waiter', 'janitor']);
     expect(state.cashierStations).toHaveLength(1);
     expect(state.cashierStations[0]).toMatchObject({ id: 'cashier1' });
