@@ -20,7 +20,10 @@ function buildAdmissionState() {
       { id: 'ch1', tableId: 't1', x: 210, y: 180 },
       { id: 'ch2', tableId: 't1', x: 210, y: 260 },
     ],
-    doors: [{ id: 'door1', y: 340 }],
+    doors: [
+      { id: 'door1', y: 340, role: 'entrance' },
+      { id: 'door2', y: 440, role: 'exit' },
+    ],
     kitchenStations: [],
     serviceTables: [],
     cashierStations: [],
@@ -87,21 +90,29 @@ describe('queue admission', () => {
     expect(state).toEqual(snapshot);
   });
 
-  it('reserves a door while a non-fading customer is leaving through it', () => {
+  it('does not reserve an entrance for a separate exit departure', () => {
     const state = buildAdmissionState();
     state.customers = [{
-      id: 'out', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-      x: 900, y: 360,
+      id: 'out', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door2',
+      x: 900, y: 460,
     }];
 
-    expect(planQueuePartyAdmission(state, planArgs(state))).toBeNull();
+    expect(planQueuePartyAdmission(state, planArgs(state))).not.toBeNull();
+  });
+
+  it('rejects an exit-role door as an ingress route', () => {
+    const state = buildAdmissionState();
+
+    expect(planQueuePartyAdmission(state, {
+      ...planArgs(state), door: state.doors[1],
+    })).toBeNull();
   });
 
   it.each([{ x: 100, y: 600 }, { x: 973, y: 600 }])(
     'does not reserve the doorway for a distant departing customer at %j',
     position => {
       const state = buildAdmissionState();
-      state.customers = [{ id: 'out', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1', ...position }];
+      state.customers = [{ id: 'out', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door2', ...position }];
       const planned = planQueuePartyAdmission(state, planArgs(state));
       expect(planned).not.toBeNull();
       for (const customer of planned.admittedCustomers) {
@@ -113,8 +124,8 @@ describe('queue admission', () => {
   it('ignores a fading customer assigned to the requested door', () => {
     const state = buildAdmissionState();
     state.customers = [{
-      id: 'out', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
-      x: 980, y: 360,
+      id: 'out', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door2',
+      x: 980, y: 460,
     }];
 
     expect(planQueuePartyAdmission(state, planArgs(state))).not.toBeNull();

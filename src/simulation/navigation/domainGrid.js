@@ -1,6 +1,6 @@
 import { createGrid } from './grid';
 import { cellToWorld, worldToCell } from '../movement/navigationWorkspace';
-import { getDoorPosition, getDoors } from '../world';
+import { getDoorPosition, getDoors, isDoorCrossing, isDoorRoleForFlow } from '../world';
 import { recordSeatResidency } from '../movement/seatedDeparture';
 
 const finite = p => p && Number.isFinite(p.x) && Number.isFinite(p.y);
@@ -30,7 +30,8 @@ function exitGrid(state, actor, base) {
   if (actor.state !== 'leaving' || actor.exitPhase !== 'fading' || !finite(actor.navigationGoal)) return null;
   const door = getDoors(state).find(item => item.id === actor.exitDoorId);
   if (!door) return null;
-  const origin = getDoorPosition(state, door).outside;
+  const origin = getDoorPosition(state, door)?.outside;
+  if (!origin) return null;
   const goal = actor.navigationGoal;
   if (goal.x <= origin.x || Math.abs(distance(origin, goal) - 120) > 1e-8
     || fractionOnSegment(actor, origin, goal) === null) return null;
@@ -47,15 +48,33 @@ function exitGrid(state, actor, base) {
   });
 }
 
-export function createActorGrid(state, actor, base = createGrid(state)) {
+export function createActorGrid(state, actor, base = createGrid(state), doorFlow = null) {
   const matches = (state.customers || []).filter(customer => String(customer.id) === String(actor.id));
   if (matches.length !== 1 || !same(matches[0], actor)) return base;
   const exit = exitGrid(state, actor, base);
   if (exit) return exit;
+  const flow = doorFlow || (actor.state === 'entering'
+    ? { direction: 'ingress', doorId: actor.entryDoorId }
+    : actor.state === 'leaving'
+      ? { direction: 'egress', doorId: actor.exitDoorId }
+      : null);
+  const flowDoor = flow?.doorId == null
+    ? null
+    : getDoors(state).find(door => String(door?.id) === String(flow.doorId));
+  const flowWithCrossing = flow && flowDoor && ['ingress', 'egress'].includes(flow.direction)
+    ? {
+        ...flow,
+        allowRoleMismatch: flow.allowRoleMismatch === true
+          || (!isDoorRoleForFlow(flowDoor, flow.direction) && isDoorCrossing(state, actor, flowDoor)),
+      }
+    : flow;
+  const flowBase = flowWithCrossing && ['ingress', 'egress'].includes(flowWithCrossing.direction)
+    ? createGrid(state, null, { doorFlow: flowWithCrossing })
+    : base;
   const departing = ['checkout_moving', 'checkout_queued', 'leaving'].includes(actor.state);
   const rejected = departing && actor.seatResidency && actor.seatResidency.phase !== 'clear'
-    ? Object.freeze({ ...base, residencyRevoked: true }) : base;
-  if (base.isOpen(actor) || !departing) return rejected;
+    ? Object.freeze({ ...flowBase, residencyRevoked: true }) : flowBase;
+  if (flowBase.isOpen(actor) || !departing) return rejected;
   const chairs = (state.chairs || []).filter(chair => chair.id === actor.chairId && chair.tableId === actor.tableId);
   const tables = (state.tables || []).filter(table => table.id === actor.tableId);
   if (chairs.length !== 1 || tables.length !== 1) return rejected;
@@ -70,14 +89,18 @@ export function createActorGrid(state, actor, base = createGrid(state)) {
     || record.chair.id !== chair.id || record.chair.tableId !== table.id
     || (record.chair.rotation ?? 0) !== (chair.rotation ?? 0) || !same(record.table, table)
     || record.table.id !== table.id) return rejected;
-  const cleared = createGrid({ ...state, chairs: state.chairs.filter(item => item !== chair) });
+  const cleared = createGrid(
+    { ...state, chairs: state.chairs.filter(item => item !== chair) },
+    null,
+    { doorFlow: flowWithCrossing },
+  );
   if (!cleared.isOpen(origin) || !cleared.isOpen(actor)) return rejected;
   const cell = worldToCell(origin);
   let ports = [];
   for (const dy of [-1, 0, 1]) for (const dx of [-1, 0, 1]) {
     if (!dx && !dy) continue;
     const port = cellToWorld({ x: cell.x + dx, y: cell.y + dy });
-    if (base.isOpen(port) && cleared.segmentClear(origin, port)) ports.push(port);
+    if (flowBase.isOpen(port) && cleared.segmentClear(origin, port)) ports.push(port);
   }
   if (record.phase === 'departing' && record.connector) {
     const connector = record.connector;
@@ -87,22 +110,22 @@ export function createActorGrid(state, actor, base = createGrid(state)) {
   } else if (!same(actor, origin)) return rejected;
   // Offset chairs occupy more than the centre's raster cell. Authorise only the
   // chair's own footprint along the retained connector, never other fixtures.
-  const onDeparture = p => !base.isOpen(p) && cleared.isOpen(p)
+  const onDeparture = p => !flowBase.isOpen(p) && cleared.isOpen(p)
     && ports.some(port => fractionOnSegment(p, actor, port) !== null);
   const segmentClear = (from, to) => {
-    if (base.isOpen(from)) return base.segmentClear(from, to);
+    if (flowBase.isOpen(from)) return flowBase.segmentClear(from, to);
     return finite(from) && finite(to) && onDeparture(from)
       && ports.some(port => {
         const a = fractionOnSegment(from, actor, port), b = fractionOnSegment(to, actor, port);
         return a !== null && b !== null && b >= a && cleared.segmentClear(from, to);
       });
   };
-  return Object.freeze({ ...base,
-    signature: `${base.signature}:seat:${actor.id}:${record.generation}:${JSON.stringify(ports)}`,
-    departure: { origin, ports, record, base },
-    isOpen: p => Boolean(finite(p) && (base.isOpen(p) || onDeparture(p))),
+  return Object.freeze({ ...flowBase,
+    signature: `${flowBase.signature}:seat:${actor.id}:${record.generation}:${JSON.stringify(ports)}`,
+    departure: { origin, ports, record, base: flowBase },
+    isOpen: p => Boolean(finite(p) && (flowBase.isOpen(p) || onDeparture(p))),
     segmentClear,
-    neighbours: p => base.isOpen(p) ? base.neighbours(p) : ports.filter(port => segmentClear(p, port)),
+    neighbours: p => flowBase.isOpen(p) ? flowBase.neighbours(p) : ports.filter(port => segmentClear(p, port)),
   });
 }
 

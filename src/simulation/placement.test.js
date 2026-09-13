@@ -14,7 +14,7 @@ const state = {
   kitchenStations: [{ id: 'k1', x: 100, y: 120, equipmentId: 'eq1' }],
   serviceTables: [{ id: 'st1', x: 140, y: 120 }],
   cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
-  doors: [{ id: 'door1', y: 340 }],
+  doors: [{ id: 'door1', y: 340, role: 'entrance' }],
 };
 
 it('exposes canonical prices and footprints', () => {

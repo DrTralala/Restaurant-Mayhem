@@ -65,10 +65,11 @@ export function getOccupiedServiceSlotKeys(state) {
       && item.state === 'carried'
       && cook?.role === 'cook'
       && cook.carryingServiceItemId === item.id
-      && cook.task?.type === 'place_dish_on_service'
-      && cook.task.serviceItemId === item.id
-      && cook.task.serviceTableId === item.serviceTableId
-      && cook.task.serviceSlotIndex === item.serviceSlotIndex;
+      && (!cook.task
+        || (cook.task.type === 'place_dish_on_service'
+          && cook.task.serviceItemId === item.id
+          && cook.task.serviceTableId === item.serviceTableId
+          && cook.task.serviceSlotIndex === item.serviceSlotIndex));
     if (hasCookDeliveryReservation) {
       occupied.add(`${item.serviceTableId}:${item.serviceSlotIndex}`);
       continue;
@@ -204,7 +205,7 @@ export function hasValidDrinkReservation(state, item) {
   const counter = (state.serviceTables || []).some(table => table.id === item.serviceTableId);
   return item.kind === 'drink'
     && ['ordered', 'preparing'].includes(item.state)
-    && worker?.role === 'waiter'
+    && worker?.role === 'cook'
     && customer
     && customer.state !== 'leaving'
     && customer.drinkId === item.menuItemId
@@ -234,7 +235,14 @@ export function normaliseServiceItemOwnership(state) {
     }
     if (['ordered', 'preparing'].includes(item.state) && item.kind === 'drink'
       && !hasValidDrinkReservation(state, item)) {
-      kept.push({ ...item, serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null });
+      kept.push({
+        ...item,
+        state: 'ordered',
+        serviceTableId: null,
+        serviceSlotIndex: null,
+        assignedStaffId: null,
+        preparationStartedAt: null,
+      });
     } else if (['ordered', 'preparing'].includes(item.state)) {
       kept.push(item);
     } else {

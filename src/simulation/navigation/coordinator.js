@@ -2,8 +2,8 @@ import { createGrid, latticeAnchors } from './grid';
 import { cellKey, worldToCell } from '../movement/navigationWorkspace';
 import { advanceRouteSearch, beginRouteSearch, forkRouteSearch } from './router';
 import { planMovement } from './planner';
-import { positionAt } from './reservations';
-import { arbitrateDestinations, compareTraffic } from './traffic';
+import { actionsConflict, positionAt } from './reservations';
+import { arbitrateDestinations, orderTrafficRequests } from './traffic';
 import { chooseRecoveries } from './recovery';
 import { createActorGrid, commitActorPosition } from './domainGrid';
 import { stationaryTrajectory, trajectorySegment } from '../movement/trajectory';
@@ -49,10 +49,19 @@ function normalise(state, entries, previous) {
   for (const [id, character] of actors) {
     const entry = duplicate.has(id) ? null : descriptors.get(id);
     const goal = finitePoint(character.navigationGoal) ? copyPoint(character.navigationGoal) : null;
+    const queueRank = Number.isInteger(entry?.queueRank)
+      ? entry.queueRank
+      : Number.isInteger(entry?.checkoutAdvance?.queueRank)
+        ? entry.checkoutAdvance.queueRank : null;
+    const checkoutStationId = entry?.checkoutAdvance?.stationId ?? character.cashierStationId ?? null;
     const old = previous.records.get(id);
     requests.set(id, { id, character, start: copyPoint(character), goal,
       invalidGoal: character.navigationGoal != null && !finitePoint(character.navigationGoal),
       speed: Number.isFinite(entry?.speed) && entry.speed > 0 ? entry.speed : 0,
+      doorFlow: entry?.doorFlow || null,
+      checkoutAdvance: entry?.checkoutAdvance || null,
+      queueRank,
+      checkoutStationId,
       waitingTicks: samePoint(old?.goal, goal) ? old.waitingTicks : 0,
       priority: priority(character, entry), duplicate: duplicate.has(id) });
   }
@@ -95,6 +104,41 @@ function routeTarget(grid, start, route, speed, horizon, goal) {
   return point;
 }
 
+function planCheckoutAdvance({ grid, start, goal, speed, horizon, reservations }) {
+  const blockers = new Set();
+  const result = (status, actions = []) => ({
+    status,
+    actions,
+    blockers: [...blockers].sort(),
+  });
+  if (!grid.isOpen(start) || !grid.isOpen(goal) || !grid.segmentClear(start, goal)) {
+    return result('blocked');
+  }
+
+  const distance = Math.hypot(goal.x - start.x, goal.y - start.y);
+  if (distance === 0) return result('arrived', hold(start, horizon));
+
+  const duration = distance / speed;
+  const end = Math.min(horizon, duration);
+  const fraction = end / duration;
+  const endpoint = fraction >= 1 ? copyPoint(goal) : {
+    x: start.x + (goal.x - start.x) * fraction,
+    y: start.y + (goal.y - start.y) * fraction,
+  };
+  const actions = [{ from: copyPoint(start), to: endpoint, start: 0, end }];
+  if (end < horizon) actions.push({ from: copyPoint(endpoint), to: copyPoint(endpoint),
+    start: end, end: horizon });
+
+  for (const reservation of reservations) {
+    for (const other of reservation.actions) {
+      if (!actions.some(action => actionsConflict(action, other))) continue;
+      blockers.add(reservation.actorId);
+      return result('blocked');
+    }
+  }
+  return result(end >= duration ? 'arrived' : 'partial', actions);
+}
+
 export function advanceCharacterMovementBatch(state, entries, movementDt, metrics = null) {
   const batchStarted = metrics ? performance.now() : 0;
   let executorMilliseconds = 0;
@@ -108,7 +152,8 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
   next.requests = requests;
   const recoveryResult = chooseRecoveries({ requests, records: previous.records,
     statuses: previous.statuses, grid: baseGrid, budget: 512 });
-  const effectiveGoal = request => recoveryResult.recoveries.get(request.id)?.goal || request.goal;
+  const effectiveGoal = request => request.checkoutAdvance
+    ? request.goal : recoveryResult.recoveries.get(request.id)?.goal || request.goal;
   const arbitration = arbitrateDestinations([...requests.values()].filter(request => request.goal)
     .map(request => ({ ...request, goal: effectiveGoal(request) })), previous.claims);
   next.claims = arbitration.claims;
@@ -133,10 +178,10 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
     diagnostics.unsafeActors = [...unsafeActors].sort();
   }
 
-  for (const request of [...requests.values()].sort(compareTraffic)) {
+  for (const request of orderTrafficRequests([...requests.values()])) {
     const expansionsBefore = diagnostics.expansionsThisTick;
     const { id, goal, start, character, speed } = request;
-    const grid = createActorGrid(state, character, baseGrid);
+    const grid = createActorGrid(state, character, baseGrid, request.doorFlow);
     const target = effectiveGoal(request);
     const recovery = recoveryResult.recoveries.get(id);
     let actions = reservations.get(id).actions;
@@ -155,16 +200,17 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
       const peer = requests.get(otherId);
       if (otherId !== id && stationary(peer)) avoidance.set(otherId, { id: otherId, start: { ...peer.start } });
     }
-    const routeAvoidance = [...avoidance.values()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const routeAvoidance = request.checkoutAdvance ? []
+      : [...avoidance.values()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     const avoidanceKey = JSON.stringify(routeAvoidance);
     const sameRoute = old?.topology === grid.signature && samePoint(old.routeGoal, target)
       && old.avoidanceKey === avoidanceKey;
-    let commitment = sameRoute && old.commitment && !samePoint(start, old.commitment)
+    let commitment = !request.checkoutAdvance && sameRoute && old.commitment && !samePoint(start, old.commitment)
       && grid.isOpen(old.commitment) && (samePoint(old.commitment, target)
         || [...grid.neighbours(start), ...(grid.connectors?.(start) || [])]
           .some(point => samePoint(point, old.commitment))) ? old.commitment : null;
-    let route = sameRoute ? old.route : null;
-    let routeSearch = sameRoute
+    let route = !request.checkoutAdvance && sameRoute ? old.route : null;
+    let routeSearch = !request.checkoutAdvance && sameRoute
       && samePoint(old.searchStart, start) && old.routeSearch ? forkRouteSearch(old.routeSearch) : null;
     if (unsafeActors.has(id)) { plan = 'waiting'; reason = 'unsafe-initial-state'; }
     else if (request.duplicate) { plan = 'waiting'; reason = 'duplicate-descriptor'; }
@@ -174,6 +220,15 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
     }
     else if (plan !== 'arrived' && arbitration.blocked.has(id)) {
       plan = 'waiting'; reason = 'destination-owned'; blockers = arbitration.blocked.get(id);
+    } else if (request.checkoutAdvance && plan !== 'arrived' && speed > 0 && dt > 0) {
+      const result = planCheckoutAdvance({ grid, start, goal: target, speed, horizon,
+        reservations: [...reservations.values()].filter(item => item.actorId !== id) });
+      blockers = result.blockers;
+      if (result.actions.length) actions = result.actions;
+      if (result.status === 'blocked') {
+        plan = 'waiting';
+        reason = 'checkout-clearance';
+      }
     } else if (plan !== 'arrived' && speed > 0 && dt > 0) {
       const available = Math.min(MAX_EXPANSIONS_PER_ACTOR, MAX_EXPANSIONS_PER_TICK - diagnostics.expansionsThisTick);
       let spent = 0;
@@ -220,7 +275,7 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
       : goal ? Math.hypot(start.x - goal.x, start.y - goal.y) : 0;
     const progress = remaining < bestDistance - 1e-6;
     if (commitment && samePoint(position, commitment)) commitment = null;
-    if (!commitment) {
+    if (!request.checkoutAdvance && !commitment) {
       const nextMove = actions.find(action => action.end > dt && !samePoint(action.from, action.to));
       commitment = nextMove && !samePoint(position, nextMove.to)
         && (samePoint(nextMove.to, target) || [...grid.neighbours(nextMove.from), ...(grid.connectors?.(nextMove.from) || [])]

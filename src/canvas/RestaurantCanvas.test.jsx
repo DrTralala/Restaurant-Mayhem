@@ -57,7 +57,7 @@ const placementState = {
   ...state,
   tables: [],
   chairs: [],
-  doors: [{ id: 'door1', y: 340 }],
+  doors: [{ id: 'door1', y: 340, role: 'entrance' }],
   kitchenStations: [],
   serviceTables: [],
   cashierStations: [],
@@ -88,7 +88,7 @@ function makeFixtureMovementState(type) {
     restaurant: { expansionLevel: 1 },
     tables: [],
     chairs: [],
-    doors: [{ id: 'door1', y: 340 }],
+    doors: [{ id: 'door1', y: 340, role: 'entrance' }],
     serviceTables: [],
     cashierStations: [],
     kitchenStations: [],
@@ -117,7 +117,7 @@ function makeFixtureMovementState(type) {
 const fixtureMovementCases = [
   ['table', 't1', 'Dining table'],
   ['chair', 'ch1', 'Chair'],
-  ['door', 'door1', 'Door'],
+  ['door', 'door1', 'Door · Entrance'],
   ['serviceTable', 'st1', 'Service counter'],
   ['cashierTable', 'cashier1', 'Cashier table'],
   ['kitchenStation', 'k1', 'Kitchen station'],
@@ -644,6 +644,89 @@ describe('RestaurantCanvas object movement', () => {
     expect(screen.getByText('Staffing cashier')).toBeInTheDocument();
   });
 
+  it('picks up staff for cursor placement and dispatches only after a valid click', () => {
+    const dispatch = vi.fn();
+    const staff = { id: 's1', name: 'Sofia', role: 'waiter', morale: 80, salary: 150, skill: 3, x: 200, y: 200, task: null };
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({ ...state, staff: [staff], cashierStations: [] });
+    useRenderState.mockReturnValue({ ...state, staff: [staff], cashierStations: [] });
+    findClickedEntity.mockReturnValue({ type: 'staff', data: staff, text: 'Sofia' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { value: 600 });
+    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+
+    fireEvent.click(canvas, { clientX: 200, clientY: 200 });
+    expect(screen.getByRole('button', { name: 'Move' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 300, buttons: 0 });
+    requestAnimationFrame.mock.calls.at(-1)[0](1000);
+
+    expect(drawStaffLayer.mock.calls.at(-1)[1].staff[0]).toMatchObject({ x: 500, y: 300 });
+    expect(dispatch).not.toHaveBeenCalled();
+    fireEvent.click(canvas, { clientX: 500, clientY: 300 });
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'MOVE_STAFF', id: 's1', x: 500, y: 300 });
+  });
+
+  it('keeps staff move active for invalid destinations and cancels with Escape', () => {
+    const dispatch = vi.fn();
+    const staff = { id: 's1', name: 'Sofia', role: 'waiter', morale: 80, salary: 150, skill: 3, x: 200, y: 200, task: null };
+    const caseState = {
+      ...state,
+      staff: [staff],
+      cashierStations: [],
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 500, y: 300 }],
+    };
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue(caseState);
+    useRenderState.mockReturnValue(caseState);
+    findClickedEntity.mockReturnValue({ type: 'staff', data: staff, text: 'Sofia' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.click(canvas, { clientX: 200, clientY: 200 });
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 300, buttons: 0 });
+
+    expect(screen.getByText('Invalid: overlap')).toBeInTheDocument();
+    fireEvent.click(canvas, { clientX: 500, clientY: 300 });
+    expect(dispatch).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByText(/Click to place staff/)).not.toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('revalidates staff placement against occupancy changes before commit', () => {
+    const dispatch = vi.fn();
+    const staff = { id: 's1', name: 'Sofia', role: 'waiter', morale: 80, salary: 150, skill: 3, x: 200, y: 200, task: null };
+    const freeState = { ...state, staff: [staff], cashierStations: [] };
+    const occupiedState = {
+      ...freeState,
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 500, y: 300 }],
+    };
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue(freeState);
+    useRenderState.mockReturnValue(freeState);
+    findClickedEntity.mockReturnValue({ type: 'staff', data: staff, text: 'Sofia' });
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.click(canvas, { clientX: 200, clientY: 200 });
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 300, buttons: 0 });
+
+    useGameState.mockReturnValue(occupiedState);
+    useRenderState.mockReturnValue(occupiedState);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    fireEvent.click(canvas, { clientX: 500, clientY: 300 });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(screen.getByText('Invalid: overlap')).toBeInTheDocument();
+  });
+
   it('uses unnumbered context-menu headings', () => {
     const { container } = render(<RestaurantCanvas managementOpen={false} />);
     fireEvent.click(container.querySelector('canvas'), { clientX: 20, clientY: 40 });
@@ -855,5 +938,23 @@ describe('RestaurantCanvas object movement', () => {
     fireEvent.click(container.querySelector('canvas'), { clientX: 20, clientY: 40 });
     expect(screen.getByText('Automatic dishwasher')).toBeInTheDocument();
     expect(screen.queryByText('Chair')).not.toBeInTheDocument();
+  });
+
+  it('offers explicit entrance and exit actions for a door context menu', () => {
+    const dispatch = vi.fn();
+    const door = { id: 'door1', y: 340, role: 'entrance' };
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({ ...state, doors: [door] });
+    findClickedEntity.mockReturnValue({ type: 'door', data: door, text: 'Door · Entrance' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 907, clientY: 340 });
+
+    expect(screen.getByText('Door · Entrance')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mark as Exit' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark as Entrance' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as Exit' }));
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_DOOR_ROLE', id: 'door1', role: 'exit' });
   });
 });

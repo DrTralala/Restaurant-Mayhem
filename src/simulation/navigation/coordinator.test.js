@@ -180,4 +180,105 @@ describe('bounded traffic coordinator', () => {
     }
     expect(state.staff.every(worker => worker.x === 540)).toBe(true);
   }, 20000);
+
+  it('holds an aligned checkout advance at the line when its forward segment is blocked', () => {
+    const next = actor('next', 840, 200, { x: 840, y: 180 }, { state: 'checkout_moving' });
+    const obstruction = actor('obstruction', 840, 180, null, { state: 'waiting' });
+    let state = {
+      ...world([]),
+      cashierStations: [{ id: 'register', x: 800, y: 120, w: 80, h: 40 }],
+      customers: [next, obstruction],
+    };
+    const checkoutEntries = current => [
+      {
+        character: current.customers.find(customer => customer.id === 'next'),
+        speed: 62,
+        checkoutAdvance: { stationId: 'register', queueRank: 0 },
+      },
+      { character: current.customers.find(customer => customer.id === 'obstruction'), speed: 0 },
+    ];
+
+    for (let tick = 0; tick < 20; tick += 1) {
+      const result = advanceCharacterMovementBatch(state, checkoutEntries(state), 1 / 30);
+      expect(result.moved.get('next').x).toBe(840);
+      expect(result.coordinator.diagnostics.recoveries.has('next')).toBe(false);
+      state = {
+        ...state,
+        customers: state.customers.map(customer => result.moved.get(customer.id)),
+        movementCoordinator: result.coordinator,
+      };
+    }
+
+    state = {
+      ...state,
+      customers: state.customers.filter(customer => customer.id !== 'obstruction'),
+    };
+    for (let tick = 0; tick < 20; tick += 1) {
+      const result = advanceCharacterMovementBatch(state, [{
+        character: state.customers[0],
+        speed: 62,
+        checkoutAdvance: { stationId: 'register', queueRank: 0 },
+      }], 1 / 30);
+      state = {
+        ...state,
+        customers: [result.moved.get('next')],
+        movementCoordinator: result.coordinator,
+      };
+    }
+    expect(state.customers[0]).toMatchObject({ x: 840, y: 180 });
+  });
+
+  it('does not let a rear aligned checkout customer overtake a stalled front customer', () => {
+    const front = actor('front', 840, 200, { x: 840, y: 180 }, { state: 'checkout_moving' });
+    const rear = actor('rear', 840, 220, { x: 840, y: 200 }, { state: 'checkout_moving' });
+    const obstruction = actor('obstruction', 840, 180, null, { state: 'waiting' });
+    let state = {
+      ...world([]),
+      cashierStations: [{ id: 'register', x: 800, y: 120, w: 80, h: 40 }],
+      customers: [front, rear, obstruction],
+    };
+
+    for (let tick = 0; tick < 40; tick += 1) {
+      const result = advanceCharacterMovementBatch(state, [
+        { character: state.customers.find(customer => customer.id === 'front'), speed: 62,
+          checkoutAdvance: { stationId: 'register', queueRank: 0 } },
+        { character: state.customers.find(customer => customer.id === 'rear'), speed: 62,
+          checkoutAdvance: { stationId: 'register', queueRank: 1 } },
+        { character: state.customers.find(customer => customer.id === 'obstruction'), speed: 0 },
+      ], 1 / 30);
+      expect(result.moved.get('rear').x).toBe(840);
+      expect(result.moved.get('rear').y).toBeGreaterThanOrEqual(200);
+      state = {
+        ...state,
+        customers: state.customers.map(customer => result.moved.get(customer.id)),
+        movementCoordinator: result.coordinator,
+      };
+    }
+  });
+
+  it('does not apply retained lateral recovery to an arrived checkout hold', () => {
+    const held = actor('held', 840, 200, { x: 840, y: 200 }, { state: 'checkout_moving' });
+    const peer = actor('peer', 840, 220, { x: 840, y: 180 }, { state: 'waiting' });
+    const previous = createMovementCoordinator();
+    previous.records.set('held', {
+      goal: { x: 840, y: 200 },
+      recovery: {
+        goal: { x: 820, y: 200 }, origin: { x: 840, y: 200 },
+        peers: [{ id: 'peer', start: { x: 840, y: 220 }, goal: { x: 840, y: 180 } }],
+      },
+    });
+    let state = {
+      ...world([]),
+      customers: [held, peer],
+      movementCoordinator: previous,
+    };
+
+    const result = advanceCharacterMovementBatch(state, [
+      { character: held, speed: 62, checkoutAdvance: { stationId: 'register', queueRank: 0 } },
+      { character: peer, speed: 0 },
+    ], 1 / 30);
+
+    expect(result.coordinator.diagnostics.recoveries.has('held')).toBe(false);
+    expect(result.moved.get('held')).toMatchObject({ x: 840, y: 200 });
+  });
 });

@@ -4,7 +4,12 @@ import { getPlaceableDimensions } from './placeables';
 export const FIXTURE_TYPES = {
   table: { collection: 'tables', width: 40, height: 40, placementType: 'table', label: () => 'Dining table' },
   chair: { collection: 'chairs', width: 20, height: 20, placementType: 'chair', label: () => 'Chair' },
-  door: { collection: 'doors', width: 6, height: 40, placementType: 'door', label: () => 'Door' },
+  door: {
+    collection: 'doors', width: 6, height: 40, placementType: 'door',
+    label: (_state, data) => data.role
+      ? `Door · ${data.role[0].toUpperCase()}${data.role.slice(1)}`
+      : 'Door',
+  },
   serviceTable: { collection: 'serviceTables', width: 120, height: 40, placementType: 'serviceTable', label: () => 'Service counter' },
   cashierTable: { collection: 'cashierStations', width: 80, height: 40, placementType: 'cashierTable', label: () => 'Cashier table' },
   kitchenStation: { collection: 'kitchenStations', width: 40, height: 40, placementType: 'kitchenStation', label: (_state, data) => data.equipmentId ? 'Kitchen equipment' : 'Kitchen station' },

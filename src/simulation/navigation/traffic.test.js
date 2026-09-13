@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arbitrateDestinations, compareTraffic } from './traffic';
+import { arbitrateDestinations, compareTraffic, orderTrafficRequests } from './traffic';
 
 const request = (id, x, y, extra = {}) => ({ id, goal: { x, y }, start: { x: x - 100, y },
   priority: 2, waitingTicks: 0, ...extra });
@@ -44,6 +44,44 @@ describe('destination ownership and traffic priority', () => {
     const waiting = request('old', 400, 300, { priority: 4, waitingTicks: 300 });
     const fresh = request('new', 500, 300, { priority: 0 });
     expect(compareTraffic(waiting, fresh)).toBeLessThan(0);
+  });
+
+  it('keeps the front customer ahead of a rear customer in one checkout queue', () => {
+    const front = request('front', 400, 300, {
+      checkoutStationId: 'register', queueRank: 0, waitingTicks: 0,
+    });
+    const rear = request('rear', 500, 300, {
+      checkoutStationId: 'register', queueRank: 1, waitingTicks: 1000,
+    });
+
+    expect(orderTrafficRequests([rear, front]).map(item => item.id)).toEqual(['front', 'rear']);
+  });
+
+  it('keeps mixed checkout arbitration deterministic for every input order', () => {
+    const front = request('z', 400, 300, {
+      checkoutStationId: 'register', queueRank: 0,
+    });
+    const rear = request('a', 400, 300, {
+      checkoutStationId: 'register', queueRank: 1,
+    });
+    const unrelated = request('m', 400, 300);
+    const permutations = [
+      [front, rear, unrelated],
+      [front, unrelated, rear],
+      [rear, front, unrelated],
+      [rear, unrelated, front],
+      [unrelated, front, rear],
+      [unrelated, rear, front],
+    ];
+
+    const sortedOrders = permutations.map(items => items.slice().sort(compareTraffic).map(item => item.id));
+    expect(new Set(sortedOrders.map(order => JSON.stringify(order))).size).toBe(1);
+
+    const ordered = orderTrafficRequests([rear, unrelated, front]).map(item => item.id);
+    expect(ordered.indexOf('z')).toBeLessThan(ordered.indexOf('a'));
+
+    const claimedIds = permutations.map(items => [...arbitrateDestinations(items).claims.keys()]);
+    expect(new Set(claimedIds.map(ids => JSON.stringify(ids))).size).toBe(1);
   });
 
   it('does not let callers mutate an acquired claim through their request', () => {

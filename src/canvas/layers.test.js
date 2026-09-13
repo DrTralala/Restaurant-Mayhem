@@ -3,6 +3,7 @@ import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, dr
 import { updateStaff } from '../simulation/staff';
 import { processKitchen } from '../simulation/kitchen';
 import { getPlaceSettingPositions } from './tableGeometry';
+import { recordSeatResidency } from '../simulation/movement/seatedDeparture';
 
 function recordCtx(extraCanvas = {}) {
   const calls = {
@@ -102,7 +103,10 @@ describe('drawFloorLayer', () => {
       },
     };
 
-    drawFloorLayer(ctx, { restaurant: { expansionLevel: 1 } }, { x: 0, y: 0, zoom: 1 });
+    drawFloorLayer(ctx, {
+      restaurant: { expansionLevel: 1 },
+      doors: [{ id: 'door1', y: 340, role: 'entrance' }],
+    }, { x: 0, y: 0, zoom: 1 });
 
     expect(fills[0]).toEqual({ colour: '#2d1f0e', x: 0, y: 0, width: 800, height: 600 });
     expect(fills).toContainEqual(expect.objectContaining({ colour: '#000000', width: 6, height: 40 }));
@@ -113,7 +117,10 @@ describe('drawFloorLayer', () => {
 
     drawFloorLayer(ctx, {
       restaurant: { expansionLevel: 1 },
-      doors: [{ id: 'door1', y: 340 }, { id: 'door2', y: 440 }],
+      doors: [
+        { id: 'door1', y: 340, role: 'entrance' },
+        { id: 'door2', y: 440, role: 'exit' },
+      ],
       cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
     }, { x: 0, y: 0, zoom: 1 });
 
@@ -126,7 +133,7 @@ describe('drawFloorLayer', () => {
 
     drawFloorLayer(ctx, {
       restaurant: { expansionLevel: 1 },
-      doors: [{ id: 'door1', y: 340 }],
+      doors: [{ id: 'door1', y: 340, role: 'entrance' }],
       cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
     }, { x: 0, y: 0, zoom: 1 });
 
@@ -374,7 +381,7 @@ describe('drawFurnitureLayer', () => {
       kitchenStations: [{ id: 'k1', equipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 2 }],
       staff: [
-        { id: 'd', name: 'D', role: 'waiter', x: 100, y: 100, task: { type: 'prepare_drink', serviceItemId: 'drink' } },
+        { id: 'd', name: 'D', role: 'cook', x: 100, y: 100, task: { type: 'prepare_drink', serviceItemId: 'drink' } },
         { id: 'f', name: 'F', role: 'cook', x: 200, y: 100, task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } },
         { id: 'm', name: 'M', role: 'janitor', x: 300, y: 100, task: { type: 'wash_item', washingStartedAt: 0 } },
       ],
@@ -936,6 +943,31 @@ describe('drawStaffLayer', () => {
 describe('drawCustomerLayer', () => {
   const camera = { x: 0, y: 0, zoom: 1 };
 
+  it.each(['leaving', 'checkout_queued', 'checkout_moving'])(
+    'keeps a %s customer seated visually until they physically leave the chair', stateName => {
+      const chair = { id: 'ch1', tableId: 't1', x: 350, y: 320 };
+      const table = { id: 't1', x: 340, y: 340 };
+      let customer = {
+        id: 'c1', partyId: 'p1', state: stateName, chairId: chair.id, tableId: table.id,
+        x: 360, y: 330, menuOutcome: stateName === 'leaving' ? 'unaffordable' : 'ordered',
+      };
+      customer = { ...customer, ...recordSeatResidency(customer, chair, table) };
+      const state = { customers: [customer], chairs: [chair], tables: [table] };
+      const waiting = recordCtx();
+      drawCustomerLayer(waiting, state, camera);
+      expect(waiting._calls.arcs[0]).toMatchObject({ x: 360, y: 325 });
+      expect(waiting._calls.lines.every(point => point.y < table.y)).toBe(true);
+
+      const departed = recordCtx();
+      drawCustomerLayer(departed, {
+        ...state,
+        customers: [{ ...customer, x: 360, y: 300 }],
+      }, camera);
+      expect(departed._calls.arcs[0]).toMatchObject({ x: 360, y: 300 });
+      expect(departed._calls.lines).toContainEqual({ x: 366, y: 322 });
+    },
+  );
+
   it('fits an upright deciding customer into its chair and centres its menu beneath it', () => {
     const ctx = recordCtx();
     drawCustomerLayer(ctx, {
@@ -954,6 +986,7 @@ describe('drawCustomerLayer', () => {
     ['ordering', { state: 'ordering', dishId: 'dish' }, { x: 110, y: 105 }],
     ['eating', { state: 'eating', dishId: 'dish' }, { x: 110, y: 105 }],
     ['waiting_for_items', { state: 'waiting_for_items', dishId: 'dish' }, { x: 110, y: 105 }],
+    ['waiting_for_party', { state: 'waiting_for_party', menuOutcome: 'unaffordable', dishId: null }, { x: 110, y: 105 }],
     ['moving', { state: 'entering' }, { x: 800, y: 400 }],
     ['paying', { state: 'paying' }, { x: 800, y: 400 }],
   ])('uses chair geometry only for seated visual states: %s', (_label, customer, expected) => {

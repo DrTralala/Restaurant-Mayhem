@@ -36,7 +36,7 @@ function seated() {
       x: approachPoint.x, y: approachPoint.y }],
   }, new Map([['departure', { plan: 'arrived' }]]));
   expect(state.customers[0]).toMatchObject({ state: 'seated', x: 190, y: 210 });
-  return state;
+  return { ...state, doors: [{ id: 'door1', y: 340, role: 'exit' }] };
 }
 
 function checkout(state) {

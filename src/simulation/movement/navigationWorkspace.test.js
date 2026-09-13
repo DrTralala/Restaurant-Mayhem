@@ -52,20 +52,20 @@ it('blocks only the top interior strip, not the queue at the same height', () =>
 });
 
 it('invalidates navigation topology when the structural wall is present', () => {
-  const workspace = createNavigationWorkspace({ ...openState(), doors: [{ id: 'door1', y: 340 }] });
+  const workspace = createNavigationWorkspace({ ...openState(), doors: [{ id: 'door1', y: 340, role: 'entrance' }] });
 
   expect(workspace.blockedCellKeys).toContain('5,4');
   expect(workspace.topologyFingerprint).toContain('5,4');
 });
 
 it('does not let a top-band side door carve a structural wall cell', () => {
-  const workspace = createNavigationWorkspace({ ...openState(), doors: [{ id: 'top-door', y: 80 }] });
+  const workspace = createNavigationWorkspace({ ...openState(), doors: [{ id: 'top-door', y: 80, role: 'entrance' }] });
 
   expect(workspace.blockedCells.has('45,4')).toBe(true);
 });
 
 it('does not let a source-cell exemption cross the top interior wall', () => {
-  const state = { ...openState(), doors: [{ id: 'door1', y: 340 }] };
+  const state = { ...openState(), doors: [{ id: 'door1', y: 340, role: 'entrance' }] };
 
   expect(isSafeSegment(state, { x: 100, y: 80 }, { x: 100, y: 100 })).toBe(false);
 });

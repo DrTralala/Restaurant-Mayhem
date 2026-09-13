@@ -20,7 +20,7 @@ const actionButton = {
   cursor: 'pointer', fontFamily: 'monospace', fontSize: 12,
 };
 
-export default function StaffDetailsPanel({ staff, cashierStations, dispatch, onClose }) {
+export default function StaffDetailsPanel({ staff, cashierStations, dispatch, onMove, onClose }) {
   const [salary, setSalary] = useState(staff.salary);
 
   useEffect(() => setSalary(staff.salary), [staff.id, staff.salary]);
@@ -91,6 +91,14 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
         }}
       >
         Apply Raise
+      </button>
+
+      <button
+        type="button"
+        onClick={() => onMove?.(staff.id)}
+        style={{ ...actionButton, width: '100%', marginTop: 12, background: '#253b59', color: '#dbe9ff' }}
+      >
+        Move
       </button>
 
       <button

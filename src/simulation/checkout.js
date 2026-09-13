@@ -2,6 +2,66 @@ import { getCharacterMovementStatus } from './movement';
 import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoal';
 import { getCashierCustomerPosition } from './world';
 
+const CHECKOUT_CLEARANCE = 16;
+const CHECKOUT_GEOMETRY_EPSILON = 1e-9;
+
+function finitePoint(point) {
+  return Number.isFinite(point?.x) && Number.isFinite(point?.y);
+}
+
+function samePoint(left, right) {
+  return finitePoint(left) && finitePoint(right)
+    && left.x === right.x && left.y === right.y;
+}
+
+function checkoutLineGeometry(station) {
+  return station && [station.x, station.y, station.w, station.h].every(Number.isFinite)
+    ? {
+        stationId: String(station.id),
+        x: station.x,
+        y: station.y,
+        w: station.w,
+        h: station.h,
+      }
+    : null;
+}
+
+function sameCheckoutLineGeometry(left, right) {
+  return left?.stationId === right?.stationId
+    && left?.x === right?.x
+    && left?.y === right?.y
+    && left?.w === right?.w
+    && left?.h === right?.h;
+}
+
+function pointToSegmentDistance(point, start, end) {
+  if (!finitePoint(point) || !finitePoint(start) || !finitePoint(end)) return Infinity;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const fraction = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
+    ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+  return Math.hypot(
+    point.x - (start.x + dx * fraction),
+    point.y - (start.y + dy * fraction),
+  );
+}
+
+function validCheckoutDeparture(customer, station) {
+  const departure = customer?.checkoutDeparture;
+  if (!departure || departure.stationId == null || !finitePoint(departure.position)) return false;
+  if (String(departure.stationId) !== String(station?.id)) return false;
+  const paymentPosition = station ? getCashierCustomerPosition(station, 0) : null;
+  return samePoint(departure.position, paymentPosition);
+}
+
+function checkoutDepartureIsHolding(departureCustomer, nextCustomer, station) {
+  if (!validCheckoutDeparture(departureCustomer, station) || !finitePoint(nextCustomer)) return false;
+  const paymentPosition = getCashierCustomerPosition(station, 0);
+  return pointToSegmentDistance(departureCustomer, nextCustomer, paymentPosition)
+    < CHECKOUT_CLEARANCE - CHECKOUT_GEOMETRY_EPSILON;
+}
+
 export const CHECKOUT_PHASES = Object.freeze([
   'checkout_queued',
   'checkout_moving',
@@ -19,6 +79,10 @@ export function requeueCheckoutCustomer(customer) {
     state: 'checkout_queued',
     cashierStationId: null,
     checkoutPosition: null,
+    checkoutQueueIndex: null,
+    checkoutDeparture: null,
+    checkoutLineMember: false,
+    checkoutLineGeometry: null,
     paymentReady: false,
   };
 }
@@ -82,6 +146,18 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
       : customer;
   });
 
+  // A departure reservation is only meaningful against the exact payment
+  // position which created it. A missing or moved station therefore releases
+  // the claim on the next preparation pass instead of leaving a stale lock.
+  prepared = prepared.map(customer => {
+    if (customer.state !== 'leaving' || customer.checkoutDeparture == null) return customer;
+    const station = stations.find(candidate =>
+      String(candidate.id) === String(customer.checkoutDeparture.stationId));
+    return validCheckoutDeparture(customer, station)
+      ? customer
+      : { ...customer, checkoutDeparture: null };
+  });
+
   const processingCounts = new Map(stations.map(station => [station.id, 0]));
   const queueLengths = new Map(stations.map(station => [station.id, 0]));
   for (const customer of prepared) {
@@ -95,6 +171,21 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
       queueLengths.set(customer.cashierStationId,
         queueLengths.get(customer.cashierStationId) + 1);
     }
+  }
+
+  const initialClearanceCounts = new Map(stations.map(station => [station.id, 0]));
+  for (const station of stations) {
+    const moving = prepared
+      .filter(customer => customer.state === 'checkout_moving'
+        && customer.cashierStationId === station.id)
+      .sort((left, right) => (left.paymentQueuedAt ?? 0) - (right.paymentQueuedAt ?? 0)
+        || String(left.id).localeCompare(String(right.id)));
+    const next = moving[0];
+    if (!next) continue;
+    const holds = prepared.filter(customer => customer.state === 'leaving'
+      && checkoutDepartureIsHolding(customer, next, station)).length;
+    initialClearanceCounts.set(station.id, holds);
+    queueLengths.set(station.id, queueLengths.get(station.id) + holds);
   }
 
   prepared = prepared.map(customer => {
@@ -113,10 +204,23 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
     };
   });
 
+  const clearanceCounts = new Map(stations.map(station => [station.id, 0]));
+  for (const station of stations) {
+    const moving = prepared
+      .filter(customer => customer.state === 'checkout_moving'
+        && customer.cashierStationId === station.id)
+      .sort((left, right) => (left.paymentQueuedAt ?? 0) - (right.paymentQueuedAt ?? 0)
+        || String(left.id).localeCompare(String(right.id)));
+    const next = moving[0];
+    if (!next) continue;
+    clearanceCounts.set(station.id, prepared.filter(customer => customer.state === 'leaving'
+      && checkoutDepartureIsHolding(customer, next, station)).length);
+  }
+
   const positions = new Map();
   const queueIndexes = new Map();
   for (const station of stations) {
-    const movingIndexOffset = processingCounts.get(station.id);
+    const movingIndexOffset = processingCounts.get(station.id) + clearanceCounts.get(station.id);
     prepared
       .filter(customer => customer.state === 'checkout_moving'
         && customer.cashierStationId === station.id)
@@ -133,6 +237,12 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
     if (customer.state !== 'checkout_moving') return customer;
     const checkoutPosition = positions.get(customer.id);
     if (!checkoutPosition) return requeueCheckoutCustomer(customer);
+    const station = stationById.get(customer.cashierStationId);
+    const geometry = checkoutLineGeometry(station);
+    const geometryUnchanged = !customer.checkoutLineGeometry
+      || sameCheckoutLineGeometry(customer.checkoutLineGeometry, geometry);
+    const arrivedAtSlot = finitePoint(customer)
+      && Math.hypot(customer.x - checkoutPosition.x, customer.y - checkoutPosition.y) <= 2;
     const current = Number.isFinite(customer.x) && Number.isFinite(customer.y)
       ? customer
       : {
@@ -144,6 +254,9 @@ export function prepareCheckoutCustomers(state, customers = state.customers || [
     return {
       ...withGoal,
       checkoutPosition,
+      checkoutQueueIndex: queueIndexes.get(customer.id),
+      checkoutLineMember: geometryUnchanged && (customer.checkoutLineMember === true || arrivedAtSlot),
+      checkoutLineGeometry: geometry,
       paymentReady: false,
     };
   });

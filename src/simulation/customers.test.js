@@ -319,7 +319,10 @@ describe('spawnCustomers', () => {
 function movementState(overrides = {}) {
   return {
     ...baseState,
-    doors: [{ id: 'door1', y: 340 }],
+    doors: [
+      { id: 'door1', y: 340, role: 'entrance' },
+      { id: 'door2', y: 440, role: 'exit' },
+    ],
     chairs: [],
     kitchenStations: [],
     serviceTables: [],
@@ -369,7 +372,7 @@ describe('customer goal preparation and movement descriptors', () => {
       state: 'checkout_moving', navigationGoal: { x: 840, y: 180 },
     });
     expect(prepared.customers[1]).toMatchObject({
-      state: 'leaving', exitDoorId: 'door1', navigationGoal: { x: 993, y: 360 },
+      state: 'leaving', exitDoorId: 'door2', navigationGoal: { x: 993, y: 460 },
     });
     expect(prepared.customers.map(customer => ({ x: customer.x, y: customer.y })))
       .toEqual([{ x: 400, y: 300 }, { x: 500, y: 300 }]);
@@ -385,7 +388,7 @@ describe('customer goal preparation and movement descriptors', () => {
     const second = prepareCustomersForMovement(first, 0);
 
     expect(second.customers[0].navigationGoal).toBe(goal);
-    expect(second.customers[0]).toMatchObject({ exitDoorId: 'door1', navigationGoal: { x: 993, y: 360 } });
+    expect(second.customers[0]).toMatchObject({ exitDoorId: 'door2', navigationGoal: { x: 993, y: 460 } });
   });
 
   it('emits every finite active customer and synthetic queue blockers without routes', () => {
@@ -414,7 +417,10 @@ describe('customer goal preparation and movement descriptors', () => {
     const state = {
       ...baseState,
       restaurant: { ...baseState.restaurant, expansionLevel: 1 },
-      doors: [{ id: 'door1', y: 340 }, { id: 'door2', y: 180 }],
+       doors: [
+         { id: 'door1', y: 340, role: 'exit' },
+         { id: 'door2', y: 180, role: 'exit' },
+       ],
       customers: [
         {
           id: 'door1-first', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
@@ -462,14 +468,14 @@ describe('customer goal preparation and movement descriptors', () => {
           checkoutPosition: { x: 840, y: 200 }, navigationGoal: { x: 840, y: 200 },
           x: 400, y: 300,
         },
-        {
-          id: 'door', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
-          navigationGoal: { x: 993, y: 360 }, x: 500, y: 300,
-        },
-        {
-          id: 'fading', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
-          navigationGoal: { x: 1113, y: 360 }, x: 993, y: 360,
-        },
+         {
+           id: 'door', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door2',
+           navigationGoal: { x: 993, y: 460 }, x: 500, y: 300,
+         },
+         {
+           id: 'fading', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door2',
+           navigationGoal: { x: 1113, y: 460 }, x: 993, y: 460,
+         },
         {
           id: 'entering', state: 'entering', entryDoorId: 'door1', tableId: 't1', chairId: 'ch1',
           navigationGoal: { x: 220, y: 190 }, x: 600, y: 300,
@@ -484,16 +490,57 @@ describe('customer goal preparation and movement descriptors', () => {
       doorFlow: { doorId: null, direction: 'none' },
     });
     expect(entries.find(entry => entry.character.id === 'door')).toMatchObject({
-      speed: 55, terminalPolicy: 'hold', doorFlow: { doorId: 'door1', direction: 'egress' },
+      speed: 55, terminalPolicy: 'hold', doorFlow: { doorId: 'door2', direction: 'egress' },
     });
     expect(entries.find(entry => entry.character.id === 'fading')).toMatchObject({
-      speed: 30, terminalPolicy: 'release', doorFlow: { doorId: 'door1', direction: 'egress' },
+      speed: 30, terminalPolicy: 'release', doorFlow: { doorId: 'door2', direction: 'egress' },
     });
     expect(entries.find(entry => entry.character.id === 'entering')).toMatchObject({
       speed: 62, provenance: 'customer', doorFlow: { doorId: 'door1', direction: 'ingress' },
       ignoredIds: [],
     });
     expect(entries.find(entry => entry.character.id === 'checkout').provenance).toBe('customer');
+  });
+
+  it('constrains aligned checkout advancement but keeps table-to-queue travel on normal routing', () => {
+    const state = movementState({
+      cashierStations: [{ id: 'register', x: 800, y: 120, w: 80, h: 40 }],
+      customers: [
+        {
+          id: 'aligned', state: 'checkout_moving', cashierStationId: 'register',
+          checkoutQueueIndex: 0, checkoutPosition: { x: 840, y: 180 },
+          navigationGoal: { x: 840, y: 180 }, x: 840, y: 200, checkoutLineMember: true,
+        },
+        {
+          id: 'joining', state: 'checkout_moving', cashierStationId: 'register',
+          checkoutQueueIndex: 1, checkoutPosition: { x: 840, y: 200 },
+          navigationGoal: { x: 840, y: 200 }, x: 400, y: 300,
+        },
+      ],
+    });
+
+    const entries = getCustomerMovementEntries(state, 1);
+    expect(entries.find(entry => entry.character.id === 'aligned').checkoutAdvance).toEqual({
+      stationId: 'register', queueRank: 0, goal: { x: 840, y: 180 },
+    });
+    expect(entries.find(entry => entry.character.id === 'joining')).not.toHaveProperty('checkoutAdvance');
+  });
+
+  it('does not constrain a table customer before it reaches its checkout queue slot', () => {
+    const state = movementState({
+      tables: [{ id: 'blocking-table', x: 820, y: 240, status: 'occupied' }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+      customers: [{
+        id: 'table-joiner', state: 'checkout_moving', tableId: 'blocking-table',
+        cashierStationId: 'cashier1', checkoutQueueIndex: 1,
+        checkoutPosition: { x: 840, y: 200 }, navigationGoal: { x: 840, y: 200 },
+        x: 840, y: 300,
+      }],
+    });
+
+    const entry = getCustomerMovementEntries(state, 1)[0];
+
+    expect(entry).not.toHaveProperty('checkoutAdvance');
   });
 
   it('retains the deterministic customer-specific base exit heading', () => {
@@ -985,7 +1032,7 @@ describe('restored baseline customer gameplay', () => {
 
     expect(result.customers).toHaveLength(1);
     expect(result.customers[0]).toMatchObject({
-      state: 'leaving', exitDoorId: 'door1', navigationGoal: { x: 993, y: 360 },
+      state: 'leaving', exitDoorId: 'door2', navigationGoal: { x: 993, y: 460 },
     });
     expect(result.tables.find(table => table.id === 't1').status).toBe('dirty');
   });
@@ -1022,7 +1069,10 @@ describe('restored baseline customer gameplay', () => {
         { id: 'c1', state: 'leaving', x: 400, y: 300, patience: 0, happiness: 80 },
         { id: 'c2', state: 'leaving', x: 420, y: 300, patience: 0, happiness: 80 },
       ],
-      doors: [{ id: 'door1', y: 300 }, { id: 'door2', y: 420 }],
+      doors: [
+        { id: 'door1', y: 300, role: 'exit' },
+        { id: 'door2', y: 420, role: 'exit' },
+      ],
     }), 0);
 
     expect(new Set(result.customers.map(customer => customer.exitDoorId)))
@@ -1036,8 +1086,10 @@ describe('restored baseline customer gameplay', () => {
       seatTime: null, orderTime: null, eatTime: null,
     };
     const result = updateCustomers({
-      ...baseState, queue: [{ partyId: 'q1', members: [queuedCustomer] }],
-    }, 10);
+      ...baseState,
+      doors: [{ id: 'door1', y: 340, role: 'exit' }],
+      queue: [{ partyId: 'q1', members: [queuedCustomer] }],
+    }, { gameDt: 10, movementDt: 0.1 });
 
     expect(result.queue).toHaveLength(0);
     expect(result.customers).toHaveLength(1);
@@ -1302,7 +1354,10 @@ describe('restored baseline customer gameplay', () => {
 
   it('does not count a fading customer as door traffic for a new departure', () => {
     const result = prepareCustomersForMovement(movementState({
-      doors: [{ id: 'door1', y: 340 }, { id: 'door2', y: 420 }],
+      doors: [
+        { id: 'door1', y: 340, role: 'exit' },
+        { id: 'door2', y: 420, role: 'exit' },
+      ],
       customers: [
         { id: 'old', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1', exitFadeProgress: 0.5, x: 960, y: 360 },
         { id: 'new', state: 'leaving', x: 400, y: 340 },
@@ -1361,7 +1416,7 @@ describe('queue overflow stages hidden departures with full identity conservatio
   it('emits only visible queue blockers and keeps a leaving customer moving through the standalone wrapper', () => {
     const state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       staff: [
         { id: 's1', role: 'waiter', x: 100, y: 100 },
         { id: 's2', role: 'waiter', x: 840, y: 100 },
@@ -1411,7 +1466,7 @@ describe('queue overflow stages hidden departures with full identity conservatio
   it('emits only the canonical leased queue IDs as blockers, never hidden overflow copies', () => {
     const state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue: overflowParties(8),
     });
     const reconciledState = { ...state, queueSlots: reconcileQueueSlots(state, []) };
@@ -1434,7 +1489,7 @@ describe('queue overflow stages hidden departures with full identity conservatio
     const seedIds = overflowParties(8, 0).flatMap(party => party.members).map(member => member.id);
     let state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue: overflowParties(8, 0),
     });
     const seenCustomerIds = new Set();
@@ -1467,7 +1522,7 @@ describe('queue overflow stages hidden departures with full identity conservatio
     const seedIds = overflowParties(8).flatMap(party => party.members).map(member => member.id);
     let state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 22 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue: overflowParties(8),
     });
     const seenCustomerIds = new Set();
@@ -1490,7 +1545,7 @@ describe('queue overflow stages hidden departures with full identity conservatio
   it('stages departures across later ticks with strict handoff spacing', () => {
     let state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue: overflowParties(8, 0),
     });
     const firstTickIds = new Set();
@@ -1520,7 +1575,7 @@ describe('queue overflow stages hidden departures with full identity conservatio
   it('keeps pending departures out of queue capacity, guide admission and future spawn identity', () => {
     const state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue: overflowParties(8, 0),
     });
     const decided = prepareCustomersForMovement(state, 0);
@@ -1643,7 +1698,7 @@ describe('queue-slot lease ownership through conversion and staged departure', (
     const queueSlots = queueSlotsFor(parties, [4, 4, 0]);
     const state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue: parties,
       queueSlots,
       customers: [],
@@ -1702,7 +1757,7 @@ describe('queue-slot lease ownership through conversion and staged departure', (
     const queueSlots = queueSlotsFor(parties, [4, 4, 0]);
     const state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 22 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue: parties,
       queueSlots,
       customers: [],
@@ -1765,7 +1820,7 @@ describe('queue-slot lease ownership through conversion and staged departure', (
     };
     const state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue,
       queueSlots,
       queueDepartures: [pendingRecord],
@@ -1822,7 +1877,7 @@ describe('queue-slot lease ownership through conversion and staged departure', (
     };
     const state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue,
       queueSlots,
       queueDepartures: [pendingOldest, pendingNext],
@@ -1891,7 +1946,7 @@ describe('all-32 queue departure completion with clean lease accounting', () => 
     }));
     let state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue,
       customers: [],
     });
@@ -1937,7 +1992,7 @@ describe('runtime queue-slot reconciliation stays fail-closed without relocating
   it('keeps the unsafe diagnostic and the exact lease across ticks instead of relocating the member', () => {
     const state = movementState({
       restaurant: { ...baseState.restaurant, gameTime: 12 * 3600, expansionLevel: 1 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       queue: [{
         partyId: 'p',
         members: [{

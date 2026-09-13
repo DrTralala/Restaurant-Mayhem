@@ -63,7 +63,10 @@ export function buildCustomerQueueStressState() {
       { id: 'queue-chair-3', tableId: 'queue-table', x: 180, y: 370, rotation: 1 },
       { id: 'queue-chair-4', tableId: 'queue-table', x: 240, y: 370, rotation: 3 },
     ],
-    doors: [{ id: 'queue-door', y: 340 }],
+    doors: [
+      { id: 'queue-door', y: 340, role: 'entrance' },
+      { id: 'queue-exit', y: 440, role: 'exit' },
+    ],
     kitchenStations: [],
     serviceTables: [],
     cashierStations: [],

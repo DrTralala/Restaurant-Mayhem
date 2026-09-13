@@ -45,6 +45,17 @@ describe('fixture catalogue', () => {
     })).toEqual({ x: 400, y: 120, w: 40, h: 120 });
   });
 
+  it('labels doors with their current directional role', () => {
+    const state = createInitialState();
+
+    expect(getFixtureLabel(state, {
+      type: 'door', id: 'door1', data: state.doors[0],
+    })).toBe('Door · Entrance');
+    expect(getFixtureLabel(state, {
+      type: 'door', id: 'door2', data: state.doors[1],
+    })).toBe('Door · Exit');
+  });
+
   it('uses one public wash-station type for manual and automatic stations', () => {
     const state = {
       ...createInitialState(),

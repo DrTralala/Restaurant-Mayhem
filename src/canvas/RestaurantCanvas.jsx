@@ -5,13 +5,14 @@ import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } fro
 import { loadSprites } from './sprites';
 import { drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer, drawSelectionLayer } from './layers';
 import { findClickedEntity } from './interaction';
-import { getRestaurantWorld } from '../simulation/world';
+import { getDefaultStaffPosition, getMissingDoorWarnings, getRestaurantWorld } from '../simulation/world';
 import StaffDetailsPanel from '../components/StaffDetailsPanel';
 import { normaliseSelectionRect, selectFurnitureInRect } from './selection';
 import { getFixture, getFixtureDescriptor, getFixtureLabel, getFixtureRect, listFixtures } from '../data/fixtures';
 import { getPlaceable } from '../data/placeables';
 import { snapPlacement, validateFixtureMoves, validatePlacement } from '../simulation/placement';
 import { getServiceSlotPosition } from '../simulation/serviceItems';
+import { validateStaffMove } from '../state/staffMoves';
 
 function fixtureKey(type, id) {
   return `${type}:${id}`;
@@ -208,6 +209,24 @@ function applyMovePreview(renderState, state, move) {
   return preview;
 }
 
+function applyStaffMovePreview(renderState, move) {
+  if (!move || !Array.isArray(renderState?.staff)) return renderState;
+  return {
+    ...renderState,
+    staff: renderState.staff.map(worker => worker.id === move.id
+      ? { ...worker, x: move.point.x, y: move.point.y }
+      : worker),
+  };
+}
+
+function sameStaffMove(first, second) {
+  return first?.id === second?.id
+    && first?.point?.x === second?.point?.x
+    && first?.point?.y === second?.point?.y
+    && first?.validation?.valid === second?.validation?.valid
+    && first?.validation?.reason === second?.validation?.reason;
+}
+
 function canSellItem(state, item) {
   if (item?.type === 'table') {
     return (state.tables || []).some(table => table.id === item.id && table.status === 'empty');
@@ -254,9 +273,11 @@ export default function RestaurantCanvas({
   const [selectionRect, setSelectionRect] = useState(null);
   const [, setMoveRevision] = useState(0);
   const selectedStaff = state.staff.find(staff => staff.id === selectedStaffId) || null;
+  const doorWarnings = getMissingDoorWarnings(state);
 
   // Move mode: object follows the cursor until the next click places it.
   const moveRef = useRef(null); // { originalItems, items, anchor, validation }
+  const staffMoveRef = useRef(null); // { id, point, validation }
   const dragRef = useRef(null);
   const suppressClickRef = useRef(false);
 
@@ -304,9 +325,9 @@ export default function RestaurantCanvas({
     canvas.style.width = canvas.clientWidth + 'px';
     canvas.style.height = canvas.clientHeight + 'px';
 
-    const renderState = moveRef.current
-      ? applyMovePreview(simulationRenderState, state, moveRef.current)
-      : simulationRenderState;
+    let renderState = simulationRenderState;
+    if (moveRef.current) renderState = applyMovePreview(renderState, state, moveRef.current);
+    if (staffMoveRef.current) renderState = applyStaffMovePreview(renderState, staffMoveRef.current);
 
     drawFloorLayer(ctx, renderState, camera, sprites);
     drawFurnitureLayer(ctx, renderState, camera, sprites);
@@ -351,6 +372,17 @@ export default function RestaurantCanvas({
   }, [state, placementRequest]);
 
   useEffect(() => {
+    const current = staffMoveRef.current;
+    if (!current) return;
+    const validation = validateStaffMove(state, current.id, current.point);
+    const next = { ...current, validation };
+    if (!sameStaffMove(current, next)) {
+      staffMoveRef.current = next;
+      setMoveRevision(revision => revision + 1);
+    }
+  }, [state]);
+
+  useEffect(() => {
     cameraRef.current.manual = false;
   }, [fitRequest]);
 
@@ -361,6 +393,7 @@ export default function RestaurantCanvas({
     setSelectedItems([]);
     setSelectionRect(null);
     moveRef.current = null;
+    staffMoveRef.current = null;
     dragRef.current = null;
     setMoveRevision(revision => revision + 1);
   }, [managementOpen]);
@@ -420,6 +453,7 @@ export default function RestaurantCanvas({
         setSelectedItems([]);
         setSelectionRect(null);
         moveRef.current = null;
+        staffMoveRef.current = null;
         dragRef.current = null;
         setMoveRevision(revision => revision + 1);
       }
@@ -473,6 +507,20 @@ export default function RestaurantCanvas({
       setMoveRevision(revision => revision + 1);
       return;
     }
+    if (staffMoveRef.current) {
+      const world = getWorldPos(e);
+      const moving = staffMoveRef.current;
+      const next = {
+        ...moving,
+        point: world,
+        validation: validateStaffMove(state, moving.id, world),
+      };
+      if (!sameStaffMove(moving, next)) {
+        staffMoveRef.current = next;
+        setMoveRevision(revision => revision + 1);
+      }
+      return;
+    }
     if (dragRef.current && (e.buttons & 1) === 1) {
       const world = getWorldPos(e);
       dragRef.current.currentWorld = world;
@@ -517,6 +565,23 @@ export default function RestaurantCanvas({
     setMoveRevision(revision => revision + 1);
   };
 
+  const placeMovingStaff = () => {
+    const moving = staffMoveRef.current;
+    if (!moving) return;
+
+    const validation = validateStaffMove(state, moving.id, moving.point);
+    moving.validation = validation;
+    if (!validation.valid) {
+      setMoveRevision(revision => revision + 1);
+      return;
+    }
+
+    dispatch({ type: 'MOVE_STAFF', id: moving.id, x: moving.point.x, y: moving.point.y });
+    staffMoveRef.current = null;
+    setSelectedStaffId(null);
+    setMoveRevision(revision => revision + 1);
+  };
+
   const handleClick = (e) => {
     const currentPlacement = placementRef.current;
     if (currentPlacement) {
@@ -540,6 +605,10 @@ export default function RestaurantCanvas({
     }
     if (moveRef.current) {
       placeMovingEntity();
+      return;
+    }
+    if (staffMoveRef.current) {
+      placeMovingStaff();
       return;
     }
     const canvas = canvasRef.current;
@@ -573,7 +642,7 @@ export default function RestaurantCanvas({
   };
 
   const handleMouseDown = (e) => {
-    if (e.button !== 0 || moveRef.current || placementRef.current) return;
+    if (e.button !== 0 || moveRef.current || staffMoveRef.current || placementRef.current) return;
     const world = getWorldPos(e);
     dragRef.current = {
       startWorld: world,
@@ -624,6 +693,26 @@ export default function RestaurantCanvas({
     setMoveRevision(revision => revision + 1);
   };
 
+  const handleMoveStaff = staffId => {
+    const worker = state.staff.find(candidate => candidate.id === staffId);
+    if (!worker) return;
+    const index = state.staff.indexOf(worker);
+    const point = Number.isFinite(worker.x) && Number.isFinite(worker.y)
+      ? { x: worker.x, y: worker.y }
+      : getDefaultStaffPosition(worker.role, index, state, worker.id);
+    staffMoveRef.current = {
+      id: worker.id,
+      point,
+      validation: validateStaffMove(state, worker.id, point),
+    };
+    moveRef.current = null;
+    dragRef.current = null;
+    setMenu(null);
+    setSelectedStaffId(null);
+    setSelectedItems([]);
+    setMoveRevision(revision => revision + 1);
+  };
+
   const handleDeleteEntity = () => {
     if (!menu) return;
     dispatch({ type: 'SELL_ITEMS', items: [{ type: menu.type, id: menu.data.id }] });
@@ -649,6 +738,7 @@ export default function RestaurantCanvas({
   };
 
   const canMoveMenuEntity = Boolean(menu);
+  const menuDoor = menu?.type === 'door' ? menu.data : null;
   const canSellMenuEntity = Boolean(menu && canSellItem(state, {
     type: menu.type,
     id: menu.data.id,
@@ -659,7 +749,7 @@ export default function RestaurantCanvas({
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
-        style={{ width: '100%', height: '100%', cursor: placement ? 'crosshair' : moveRef.current ? 'none' : 'default' }}
+        style={{ width: '100%', height: '100%', cursor: placement ? 'crosshair' : (moveRef.current || staffMoveRef.current) ? 'none' : 'default' }}
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
@@ -678,6 +768,32 @@ export default function RestaurantCanvas({
           <div style={{ color: '#888', fontSize: 11, padding: '2px 8px', fontFamily: 'monospace' }}>
             {getFixtureLabel(state, { type: menu.type, data: menu.data }) || menu.type}
           </div>
+          {menuDoor && (
+            <>
+              {menuDoor.role !== 'entrance' && (
+                <button
+                  onClick={() => {
+                    dispatch({ type: 'SET_DOOR_ROLE', id: menuDoor.id, role: 'entrance' });
+                    setMenu(null);
+                  }}
+                  style={menuBtn}
+                >
+                  Mark as Entrance
+                </button>
+              )}
+              {menuDoor.role !== 'exit' && (
+                <button
+                  onClick={() => {
+                    dispatch({ type: 'SET_DOOR_ROLE', id: menuDoor.id, role: 'exit' });
+                    setMenu(null);
+                  }}
+                  style={menuBtn}
+                >
+                  Mark as Exit
+                </button>
+              )}
+            </>
+          )}
           {canMoveMenuEntity && (
             <button onClick={handleMoveEntity} style={menuBtn}>
               Move {getPlaceable(getFixturePlacementType({ type: menu.type, data: menu.data }))?.rotatable
@@ -698,6 +814,7 @@ export default function RestaurantCanvas({
           staff={selectedStaff}
           cashierStations={state.cashierStations}
           dispatch={dispatch}
+          onMove={handleMoveStaff}
           onClose={() => setSelectedStaffId(null)}
         />
       )}
@@ -747,6 +864,21 @@ export default function RestaurantCanvas({
         </div>
       )}
 
+      {staffMoveRef.current && (
+        <div style={{
+          position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
+          background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
+          fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        }}>
+          Click to place staff · Esc to cancel
+          {staffMoveRef.current.validation && !staffMoveRef.current.validation.valid && (
+            <div style={{ marginTop: 4, color: '#b00000', fontSize: 12, fontFamily: 'monospace' }}>
+              Invalid: {staffMoveRef.current.validation.reason}
+            </div>
+          )}
+        </div>
+      )}
+
       {placement && (
         <div style={{
           position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
@@ -761,6 +893,21 @@ export default function RestaurantCanvas({
           {!placement.valid && (
             <div style={{ color: '#b00000', marginTop: 4 }}>Invalid: {placement.reason}</div>
           )}
+        </div>
+      )}
+
+      {doorWarnings.length > 0 && (
+        <div
+          role="alert"
+          aria-live="polite"
+          style={{
+            position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
+            background: '#5b1f1f', color: '#ffd6d6', border: '1px solid #ef7777',
+            borderRadius: 6, padding: '8px 14px', fontSize: 12, fontFamily: 'monospace',
+            display: 'flex', flexDirection: 'column', gap: 3,
+          }}
+        >
+          {doorWarnings.map(warning => <div key={warning}>{warning}</div>)}
         </div>
       )}
 

@@ -23,7 +23,7 @@ const allFixturesState = {
   serviceItems: [],
   tables: [{ id: 't1', x: 100, y: 300, seats: 2, status: 'empty' }],
   chairs: [{ id: 'ch1', tableId: 't1', x: 200, y: 300 }],
-  doors: [{ id: 'door1', y: 340 }],
+  doors: [{ id: 'door1', y: 340, role: 'entrance' }],
   serviceTables: [{ id: 'st1', x: 100, y: 120 }],
   cashierStations: [{ id: 'cashier1', x: 300, y: 120, w: 80, h: 40 }],
   kitchenStations: [{ id: 'k1', x: 500, y: 120, equipmentId: null }],

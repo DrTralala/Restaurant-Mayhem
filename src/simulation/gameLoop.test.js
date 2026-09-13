@@ -22,6 +22,7 @@ const emptyState = {
   chairs: [],
   serviceItems: [],
   serviceTables: [],
+  doors: [{ id: 'door1', y: 340, role: 'exit' }],
   staff: [],
   dishes: [],
   equipment: [],
@@ -120,7 +121,7 @@ describe('runTick', () => {
     const state = {
       ...emptyState,
       restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600 },
-      doors: [{ id: 'door1', y: 340 }],
+      doors: [{ id: 'door1', y: 340, role: 'exit' }],
       staff: [{
         id: 'staff', role: 'waiter', x: 300, y: 300,
         navigationGoal: { x: 360, y: 300 }, task: null,
@@ -150,7 +151,7 @@ describe('runTick', () => {
     const createState = () => ({
       ...emptyState,
       restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, expansionLevel: 1 },
-      doors: [{ id: 'door1', y: 340 }],
+      doors: [{ id: 'door1', y: 340, role: 'exit' }],
       staff: [{
         id: 'staff', role: 'waiter', x: 300, y: 300,
         navigationGoal: { x: 360, y: 300 }, task: null,
@@ -244,7 +245,7 @@ describe('runTick', () => {
     runTick({
       ...emptyState,
       restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, expansionLevel: 1 },
-      doors: [{ id: 'door1', y: 340 }],
+      doors: [{ id: 'door1', y: 340, role: 'exit' }],
       staff: [{ id: 'staff', role: 'waiter', x: 300, y: 300, task: null }],
       customers: [{
         id: 'customer', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',
@@ -343,7 +344,7 @@ describe('runTick', () => {
       }],
       dishes: [{ id: 'd1', price: 12 }],
       cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
-      doors: [{ id: 'door1', y: 340 }],
+      doors: [{ id: 'door1', y: 340, role: 'exit' }],
       completedCustomers: [],
     };
     const trace = [];
@@ -411,13 +412,16 @@ describe('runTick', () => {
           x: 850, y: 440, navigationGoal: { x: 993, y: 360 },
         },
         {
-          id: 'c4', state: 'entering', entryDoorId: 'door1',
-          x: 993, y: 360, navigationGoal: { x: 800, y: 360 },
+          id: 'c4', state: 'entering', entryDoorId: 'door2',
+          x: 993, y: 460, navigationGoal: { x: 800, y: 360 },
         },
       ],
       dishes: [{ id: 'd1', price: 12 }],
       cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cw1' }],
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [
+         { id: 'door1', y: 340, role: 'exit' },
+         { id: 'door2', y: 440, role: 'entrance' },
+       ],
       completedCustomers: [],
     };
     const trace = [];
@@ -456,7 +460,7 @@ describe('runTick', () => {
     const state = {
       ...emptyState,
       restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, openHour: 10, closeHour: 22, reputation: 3 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       floorDirt: [], washStations: [], cashierStations: [],
       customers: [{
         id: 'z-customer', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
@@ -535,7 +539,10 @@ describe('runTick', () => {
         ...emptyState.restaurant, gameTime: 12 * 3600, openHour: 10, closeHour: 22,
         reputation: 3, expansionLevel: 1,
       },
-      doors: [{ id: 'door1', y: 340 }, { id: 'door2', y: 180 }],
+       doors: [
+         { id: 'door1', y: 340, role: 'exit' },
+         { id: 'door2', y: 180, role: 'exit' },
+       ],
       floorDirt: [], washStations: [], cashierStations: [],
       customers: [
         {
@@ -602,7 +609,7 @@ describe('runTick', () => {
         ...emptyState.restaurant, gameTime: 12 * 3600, openHour: 10, closeHour: 22,
         reputation: 3, expansionLevel: 1,
       },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       floorDirt: [], washStations: [], cashierStations: [],
       customers: [
         {
@@ -670,7 +677,7 @@ describe('runTick', () => {
     const state = {
       ...emptyState,
       restaurant: { ...emptyState.restaurant, gameTime: 12 * 3600, openHour: 10, closeHour: 22, reputation: 3 },
-      doors: [{ id: 'door1', y: 340 }],
+       doors: [{ id: 'door1', y: 340, role: 'exit' }],
       floorDirt: [], washStations: [], cashierStations: [],
       customers: [{
         id: 'fading-customer', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door1',

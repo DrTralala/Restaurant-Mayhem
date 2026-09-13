@@ -15,7 +15,7 @@ function makeState(overrides = {}) {
     serviceTables: [],
     cashierStations: [],
     washStations: [],
-    doors: [{ id: 'door1', y: 340 }],
+    doors: [{ id: 'door1', y: 340, role: 'entrance' }],
     customers: [],
     staff: [],
     serviceItems: [],
@@ -425,7 +425,7 @@ describe('moveFixtures', () => {
           task: { type: 'deliver_service_item', serviceItemId: 'i3', customerId: 'c1' },
           navigationGoal: { x: 20, y: 20 },
         },
-        { id: 'w3', role: 'waiter', task: { type: 'prepare_drink', serviceItemId: 'i2', serviceTableId: 'st1', serviceSlotIndex: 1 }, navigationGoal: { x: 20, y: 20 } },
+        { id: 'w3', role: 'cook', task: { type: 'prepare_drink', serviceItemId: 'i2', serviceTableId: 'st1', serviceSlotIndex: 1 }, navigationGoal: { x: 20, y: 20 } },
       ],
       serviceItems: [
         {
@@ -531,7 +531,10 @@ describe('moveFixtures', () => {
 
   it('invalidates only the gate whose own door moved', () => {
     const base = makeState({
-      doors: [{ id: 'door1', y: 340 }, { id: 'door2', y: 180 }],
+      doors: [
+        { id: 'door1', y: 340, role: 'entrance' },
+        { id: 'door2', y: 180, role: 'entrance' },
+      ],
       tables: [{
         id: 't1', seats: 1, status: 'reserved', x: 200, y: 200,
         diningPartyId: 'p1', diningCustomerIds: ['c1'],

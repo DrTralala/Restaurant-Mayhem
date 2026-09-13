@@ -218,6 +218,29 @@ describe('GameProvider staff actions', () => {
     expect(game.state.restaurant.funds).toBe(380);
     expect(game.state.staff.at(-1)).toMatchObject({ role: 'janitor', salary: 120 });
   });
+
+  it('moves staff through the guarded reducer action without accepting an invalid destination', () => {
+    const game = renderReducer();
+    const before = game.state;
+
+    game.dispatch({ type: 'MOVE_STAFF', id: 'starter-cook', x: 500, y: 300 });
+    expect(game.state.staff.find(staff => staff.id === 'starter-cook')).toMatchObject({ x: 500, y: 300 });
+
+    const moved = game.state;
+    game.dispatch({ type: 'MOVE_STAFF', id: 'starter-cook', x: Number.NaN, y: 300 });
+    expect(game.state).toBe(moved);
+    expect(game.state).not.toBe(before);
+  });
+
+  it('keeps a cashier assignment when its waiter is moved', () => {
+    const game = renderReducer();
+
+    game.dispatch({ type: 'MOVE_STAFF', id: 'starter-cashier-waiter', x: 500, y: 300 });
+
+    expect(game.state.cashierStations[0]).toMatchObject({ assignedStaffId: 'starter-cashier-waiter' });
+    expect(game.state.staff.find(staff => staff.id === 'starter-cashier-waiter'))
+      .toMatchObject({ x: 500, y: 300, role: 'waiter', salary: 150 });
+  });
 });
 
 describe('GameProvider furniture actions', () => {
@@ -310,7 +333,17 @@ describe('GameProvider furniture actions', () => {
     act(() => screen.getByRole('button', { name: 'Buy door' }).click());
 
     expect(screen.getByTestId('funds')).toHaveTextContent('200');
-    expect(screen.getByTestId('door-count')).toHaveTextContent('2');
+    expect(screen.getByTestId('door-count')).toHaveTextContent('3');
+  });
+
+  it('defaults purchased doors to entrances and supports changing a door role', () => {
+    const game = renderReducer();
+
+    game.dispatch({ type: 'BUY_DOOR' });
+    expect(game.state.doors.at(-1)).toMatchObject({ role: 'entrance' });
+
+    game.dispatch({ type: 'SET_DOOR_ROLE', id: 'door1', role: 'exit' });
+    expect(game.state.doors.find(door => door.id === 'door1')).toMatchObject({ role: 'exit' });
   });
 });
 
@@ -357,12 +390,12 @@ describe('GameProvider authoritative placement actions', () => {
       cost: 400,
       action: {
         x: getRestaurantWorld(createInitialState().restaurant).doorX,
-        y: 441,
+        y: 181,
         rotation: 0,
         cost: 1,
       },
       assertPlacement(state) {
-        expect(state.doors.at(-1)).toEqual({ id: 'door2', y: 440 });
+        expect(state.doors.at(-1)).toEqual({ id: 'door3', y: 180, role: 'entrance' });
       },
     },
     {
@@ -493,11 +526,11 @@ describe('GameProvider authoritative placement actions', () => {
       type: 'PLACE_ITEM',
       itemType: 'door',
       x: doorX,
-      y: 441,
+       y: 181,
       rotation: 0,
     });
 
-    expect(game.state.doors.at(-1)).toEqual({ id: 'door2', y: 440 });
+    expect(game.state.doors.at(-1)).toEqual({ id: 'door3', y: 180, role: 'entrance' });
   });
 
   it('clears cashier assignments when firing staff', () => {
@@ -931,7 +964,7 @@ describe('GameProvider service counter actions', () => {
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       customers: [{ id: 'c1', state: 'waiting_for_items', drinkId: 'water' }],
       serviceItems: [{ id: 'i1', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'preparing', serviceTableId: 'st1', serviceSlotIndex: 2, assignedStaffId: 'w1' }],
-      staff: [{ id: 'w1', role: 'waiter', task: { type: 'prepare_drink', serviceItemId: 'i1', serviceTableId: 'st1', serviceSlotIndex: 2 } }],
+       staff: [{ id: 'w1', role: 'cook', task: { type: 'prepare_drink', serviceItemId: 'i1', serviceTableId: 'st1', serviceSlotIndex: 2 } }],
     });
     game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
     expect(game.state.serviceTables).toHaveLength(1);
@@ -942,7 +975,7 @@ describe('GameProvider service counter actions', () => {
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       customers: [{ id: 'c1', state: 'waiting_for_items', drinkId: 'water' }],
       serviceItems: [{ id: 'i1', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'preparing', serviceTableId: 'st1', serviceSlotIndex: 2, assignedStaffId: 'w1' }],
-      staff: [{ id: 'w1', role: 'cook', task: { type: 'prepare_drink', serviceItemId: 'i1', serviceTableId: 'st1', serviceSlotIndex: 2 } }],
+       staff: [{ id: 'w1', role: 'waiter', task: { type: 'prepare_drink', serviceItemId: 'i1', serviceTableId: 'st1', serviceSlotIndex: 2 } }],
     });
     game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
     expect(game.state.serviceTables).toEqual([]);

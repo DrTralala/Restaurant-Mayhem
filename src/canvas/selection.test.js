@@ -37,7 +37,7 @@ describe('selectFurnitureInRect', () => {
       restaurant: { expansionLevel: 1 },
       tables: [{ id: 't1', x: 100, y: 300 }],
       chairs: [{ id: 'ch1', x: 200, y: 300 }],
-      doors: [{ id: 'door1', y: 340 }],
+      doors: [{ id: 'door1', y: 340, role: 'entrance' }],
       serviceTables: [{ id: 'st1', x: 100, y: 120 }],
       cashierStations: [{ id: 'cashier1', x: 300, y: 120, w: 80, h: 40 }],
       kitchenStations: [{ id: 'k1', x: 500, y: 120 }],

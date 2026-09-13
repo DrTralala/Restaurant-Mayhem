@@ -15,7 +15,7 @@ function seatedWorld() {
     chairId: chair.id, tableId: table.id, navigationGoal: { x: 300, y: 300 } };
   customer = { ...customer, ...recordSeatResidency(customer, chair, table) };
   return { restaurant: { expansionLevel: 1 }, tables: [table], chairs: [chair], customers: [customer], staff: [],
-    kitchenStations: [], serviceTables: [], doors: [{ id: 'door', y: 340 }] };
+     kitchenStations: [], serviceTables: [], doors: [{ id: 'door', y: 340, role: 'exit' }] };
 }
 
 describe('domain-authorised navigation connectors', () => {

@@ -3,13 +3,14 @@ import {
   cellToWorld,
   isInsideWorld,
 } from './pathfinding';
-import { getDoorPosition, getRestaurantWorld } from './world';
+import { getDoorPosition, getRestaurantWorld, isDoorRoleForFlow } from './world';
 import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoal';
 import { getQueueVisibleMembers } from './customerQueue';
 import {
   buildChairApproachAssignments,
   validateChairApproachAssignments,
 } from './seating';
+import { createGrid } from './navigation/grid';
 
 const QUEUE_ADMISSION_SPACING = 16;
 
@@ -22,7 +23,8 @@ function sameOrderedIds(left, right) {
 
 function getQueueAdmissionCandidates(state, door) {
   const world = getRestaurantWorld(state.restaurant || {});
-  const outside = getDoorPosition(state, door).outside;
+  const outside = getDoorPosition(state, door)?.outside;
+  if (!outside) return [];
   const first = {
     x: Math.ceil((world.queueX + 60) / world.gridSize),
     y: Math.ceil(world.kitchenY / world.gridSize),
@@ -66,9 +68,11 @@ function isFinitePoint(point) {
  * `chairIds` is indexed in party-member order.
  */
 export function planQueuePartyAdmission(state, { party, door, tableId, chairIds }) {
-  if (!party?.members?.length || !door || !tableId
+  if (!party?.members?.length || !door || !isDoorRoleForFlow(door, 'ingress') || !tableId
     || !Array.isArray(chairIds) || chairIds.length !== party.members.length) return null;
-  const { inside, outside } = getDoorPosition(state, door);
+  const position = getDoorPosition(state, door);
+  if (!position) return null;
+  const { inside, outside } = position;
   // Reserve the crossing, not the departing customer's entire journey to it.
   // A distant exit request must not starve incoming parties while tables are free.
   const activeEgress = (state.customers || []).some(customer =>
@@ -110,7 +114,12 @@ export function planQueuePartyAdmission(state, { party, door, tableId, chairIds 
     ...state,
     customers: [...(state.customers || []), ...staged],
   };
-  const assignments = buildChairApproachAssignments(candidateState, customerIds, chairIds);
+  const ingressGrid = createGrid(candidateState, null, {
+    doorFlow: { direction: 'ingress', doorId: door.id },
+  });
+  const assignments = buildChairApproachAssignments(
+    candidateState, customerIds, chairIds, { navigationGrid: ingressGrid },
+  );
   if (!assignments
     || !validateChairApproachAssignments(
       candidateState, customerIds, chairIds, assignments, tableId,

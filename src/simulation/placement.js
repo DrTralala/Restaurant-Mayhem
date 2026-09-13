@@ -113,7 +113,9 @@ function hasValidCashierWorkCell(state, rect, furnitureRects) {
   const workCell = getGridCellRect(workPosition);
   const workTarget = worldToCell(workPosition);
   const workCellReachable = getDoors(state).some(door => {
-    const start = worldToCell(getDoorPosition(state, door).inside);
+    const position = getDoorPosition(state, door);
+    if (!position) return false;
+    const start = worldToCell(position.inside);
     return (start.x === workTarget.x && start.y === workTarget.y)
       || findPath(state, start, workTarget).length > 0;
   });

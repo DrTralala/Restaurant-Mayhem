@@ -62,8 +62,13 @@ describe('createInitialState', () => {
     });
   });
 
-  it('starts with one usable entrance and exit door', () => {
-    expect(createInitialState().doors).toEqual([{ id: 'door1', y: 340 }]);
+  it('starts with separate entrance and exit doors', () => {
+    expect(createInitialState().doors.map(door => door.role).sort())
+      .toEqual(['entrance', 'exit']);
+    expect(createInitialState().doors).toEqual([
+      { id: 'door1', y: 340, role: 'entrance' },
+      { id: 'door2', y: 440, role: 'exit' },
+    ]);
   });
 
   it('starts with one cook and three generic waiters', () => {

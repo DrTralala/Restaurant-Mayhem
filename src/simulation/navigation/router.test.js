@@ -4,7 +4,7 @@ import { advanceRouteSearch, beginRouteSearch, findRoute, forkRouteSearch } from
 
 const openState = () => ({
   restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [],
-  serviceTables: [], washStations: [], cashierStations: [], doors: [{ id: 'door1', y: 340 }],
+  serviceTables: [], washStations: [], cashierStations: [], doors: [{ id: 'door1', y: 340, role: 'entrance' }],
 });
 
 function expectSafeRoute(grid, start, goal, result) {

@@ -42,7 +42,10 @@ export function createInitialState() {
       { id: 'ch11', tableId: 't4', x: 340, y: 370, rotation: 1 },
       { id: 'ch12', tableId: 't4', x: 400, y: 370, rotation: 3 },
     ],
-    doors: [{ id: 'door1', y: 340 }],
+    doors: [
+      { id: 'door1', y: 340, role: 'entrance' },
+      { id: 'door2', y: 440, role: 'exit' },
+    ],
     cashierStations: [{
       id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'starter-cashier-waiter',
     }],

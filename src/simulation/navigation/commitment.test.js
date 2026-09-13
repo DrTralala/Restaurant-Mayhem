@@ -10,14 +10,14 @@ const world = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], custo
 it('does not inherit ordinary fractional connectors into the restricted exit graph', () => {
   const actor = { id: 'exit', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door',
     x: 993, y: 360, navigationGoal: { x: 1113, y: 360 } };
-  const state = { ...world, doors: [{ id: 'door', y: 340 }], staff: [], customers: [actor] };
+  const state = { ...world, doors: [{ id: 'door', y: 340, role: 'exit' }], staff: [], customers: [actor] };
   expect(createActorGrid(state, actor).connectors(actor)).toEqual([]);
 });
 
 it('discards an exit commitment that is not an edge of its current actor graph', () => {
   const actor = { id: 'exit', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door',
     x: 997, y: 360, navigationGoal: { x: 1113, y: 360 } };
-  const state = { ...world, doors: [{ id: 'door', y: 340 }], staff: [], customers: [actor], movementCoordinator: createMovementCoordinator() };
+  const state = { ...world, doors: [{ id: 'door', y: 340, role: 'exit' }], staff: [], customers: [actor], movementCoordinator: createMovementCoordinator() };
   state.movementCoordinator.records.set(actor.id, { goal: actor.navigationGoal, routeGoal: actor.navigationGoal,
     topology: createActorGrid(state, actor).signature, avoidanceKey: '[]', route: [actor.navigationGoal],
     commitment: { x: 1000, y: 360 }, waitingTicks: 1000, bestDistance: 116 });
@@ -40,7 +40,7 @@ it('can leave a fractional start between stationary queue members without cuttin
 });
 
 it.each([1, 0.1])('does not commit a horizon-clipped exit position as a route waypoint at dt=%s', dt => {
-  let state = { ...world, doors: [{ id: 'door', y: 340 }], staff: [], customers: [{ id: 'exit',
+  let state = { ...world, doors: [{ id: 'door', y: 340, role: 'exit' }], staff: [], customers: [{ id: 'exit',
     state: 'leaving', exitPhase: 'fading', exitDoorId: 'door', x: 993, y: 360,
     navigationGoal: { x: 1113, y: 360 } }] };
   for (let index = 0; index < 4 / dt; index += 1) {

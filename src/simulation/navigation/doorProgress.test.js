@@ -4,6 +4,10 @@ import { updateCustomers } from '../customers';
 
 it('lets a waiting leaver occupying the exit approach clear it before the older blocked leaver', () => {
   let state = { ...createInitialState(), staff: [], queue: [], queueSlots: [],
+    doors: [
+      { id: 'door1', y: 340, role: 'exit' },
+      { id: 'door2', y: 440, role: 'entrance' },
+    ],
     customers: [
       { id: 'older', x: 972.6666666666666, y: 360 },
       { id: 'mouth', x: 1000, y: 371.73333333333335 },

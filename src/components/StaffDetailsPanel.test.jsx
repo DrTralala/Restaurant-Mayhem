@@ -77,15 +77,27 @@ describe('StaffDetailsPanel', () => {
 
   it('applies a selected raise and can fire the employee', () => {
     const dispatch = vi.fn();
-    render(<StaffDetailsPanel staff={staff} dispatch={dispatch} onClose={vi.fn()} />);
+    const onMove = vi.fn();
+    render(<StaffDetailsPanel staff={staff} dispatch={dispatch} onMove={onMove} onClose={vi.fn()} />);
 
     fireEvent.change(screen.getByRole('slider', { name: 'Daily salary for Sofia' }), {
       target: { value: '220' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Apply Raise' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
     fireEvent.click(screen.getByRole('button', { name: 'Fire Sofia' }));
 
     expect(dispatch).toHaveBeenCalledWith({ type: 'SET_STAFF_SALARY', id: 's1', salary: 220 });
+    expect(onMove).toHaveBeenCalledWith('s1');
     expect(dispatch).toHaveBeenCalledWith({ type: 'FIRE_STAFF', id: 's1' });
+  });
+
+  it('places Move directly above Fire employee', () => {
+    const onMove = vi.fn();
+    render(<StaffDetailsPanel staff={staff} dispatch={vi.fn()} onMove={onMove} onClose={vi.fn()} />);
+
+    const move = screen.getByRole('button', { name: 'Move' });
+    const fire = screen.getByRole('button', { name: 'Fire Sofia' });
+    expect(move.nextElementSibling).toBe(fire);
   });
 });

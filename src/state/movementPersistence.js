@@ -20,6 +20,8 @@ export function validateSavedNavigationGeometry(state) {
     if (fixtures != null && (!Array.isArray(fixtures)
       || fixtures.some(fixture => !fixture || typeof fixture !== 'object'))) invalid();
   }
+  if (Array.isArray(state.doors) && state.doors.some(door =>
+    !['entrance', 'exit'].includes(door.role))) invalid();
   const rectangles = [
     ...navigationFixtureRectangles(state),
     { x: world.doorX, y: world.kitchenY, w: 6, h: world.floorH },

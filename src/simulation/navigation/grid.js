@@ -1,4 +1,4 @@
-import { GRID_SIZE } from '../world';
+import { GRID_SIZE, getDoors, getRestaurantWorld, isDoorRoleForFlow } from '../world';
 import { cellKey, cellToWorld, resolveNavigationWorkspace, worldToCell } from '../movement/navigationWorkspace';
 
 const finitePoint = point => point && Number.isFinite(point.x) && Number.isFinite(point.y);
@@ -15,9 +15,38 @@ export function latticeAnchors(point) {
   return ys.flatMap(y => xs.map(x => cellToWorld({ x, y }))).sort(comparePoints);
 }
 
-export function createGrid(state, workspace = null) {
+function flowBlockedCells(state, navigation, doorFlow) {
+  if (!doorFlow || !['ingress', 'egress'].includes(doorFlow.direction)) {
+    return navigation.blockedCells;
+  }
+
+  const blocked = new Set(navigation.blockedCellKeys);
+  const world = getRestaurantWorld(state.restaurant || {});
+  const wallCellX = worldToCell({ x: world.doorX, y: 0 }).x;
+  const allowedDoorId = doorFlow.doorId == null ? null : String(doorFlow.doorId);
+  const allowedDoor = getDoors(state).find(door => String(door?.id) === allowedDoorId);
+  const doorCanBeUsed = allowedDoor
+    && (isDoorRoleForFlow(allowedDoor, doorFlow.direction) || doorFlow.allowRoleMismatch === true);
+
+  for (const door of getDoors(state)) {
+    if (doorCanBeUsed && String(door?.id) === allowedDoorId) continue;
+    const firstDoorCell = worldToCell({ x: world.doorX, y: door.y }).y;
+    const lastDoorCell = worldToCell({ x: world.doorX, y: door.y + 39 }).y;
+    for (let y = firstDoorCell; y <= lastDoorCell; y += 1) {
+      blocked.add(cellKey({ x: wallCellX, y }));
+    }
+  }
+  return blocked;
+}
+
+export function createGrid(state, workspace = null, options = {}) {
   const navigation = resolveNavigationWorkspace(state, workspace);
-  const { bounds, blockedCells } = navigation;
+  const { bounds } = navigation;
+  const blockedCells = flowBlockedCells(state, navigation, options.doorFlow);
+  const signature = options.doorFlow
+    && ['ingress', 'egress'].includes(options.doorFlow.direction)
+    ? `${navigation.topologyFingerprint}:flow:${options.doorFlow.direction}:${String(options.doorFlow.doorId ?? '')}:${getDoors(state).find(door => String(door?.id) === String(options.doorFlow.doorId ?? ''))?.role || ''}:${options.doorFlow.allowRoleMismatch === true ? 'crossing' : ''}`
+    : navigation.topologyFingerprint;
   const isOpen = point => Boolean(finitePoint(point)
     && point.x >= bounds.left && point.x <= bounds.right
     && point.y >= bounds.top && point.y <= bounds.bottom
@@ -61,5 +90,5 @@ export function createGrid(state, workspace = null) {
     return validCandidates(point, candidates);
   };
 
-  return Object.freeze({ signature: navigation.topologyFingerprint, bounds, isOpen, segmentClear, neighbours, connectors });
+  return Object.freeze({ signature, bounds, isOpen, segmentClear, neighbours, connectors });
 }

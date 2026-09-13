@@ -59,10 +59,10 @@ describe('checkout state', () => {
     expect(requeueCheckoutCustomer({
       id: 'c1', state: 'checkout_processing', paymentQueuedAt: 50,
       cashierStationId: 'gone', checkoutPosition: { x: 1, y: 2 }, paymentReady: true,
-      navigationGoal: { x: 3, y: 4 },
+      navigationGoal: { x: 3, y: 4 }, checkoutLineMember: true,
     })).toMatchObject({
       state: 'checkout_queued', paymentQueuedAt: 50, cashierStationId: null,
-      checkoutPosition: null, paymentReady: false,
+      checkoutPosition: null, paymentReady: false, checkoutLineMember: false,
     });
   });
 
@@ -347,6 +347,27 @@ describe('checkout state', () => {
       .toBe(false);
   });
 
+  it('records line membership at the queue slot and resets it when station geometry changes', () => {
+    const joining = {
+      id: 'joining', state: 'checkout_moving', cashierStationId: 'register',
+      paymentQueuedAt: 10, x: 840, y: 300,
+    };
+    const moving = prepareCheckoutCustomers({ ...baseState, customers: [joining] }, [joining])[0];
+
+    expect(moving.checkoutLineMember).toBe(false);
+
+    const arrivedInput = { ...moving, x: 840, y: 180 };
+    const arrived = prepareCheckoutCustomers({ ...baseState, customers: [arrivedInput] }, [arrivedInput])[0];
+    expect(arrived.checkoutLineMember).toBe(true);
+
+    const movedStation = { ...baseState,
+      cashierStations: [{ ...baseState.cashierStations[0], x: 820 }],
+      customers: [arrived],
+    };
+    const moved = prepareCheckoutCustomers(movedStation, [arrived])[0];
+    expect(moved.checkoutLineMember).toBe(false);
+  });
+
   it('makes payment ready only for rank zero after an arrived status', () => {
     const rankZero = {
       id: 'rank-zero', state: 'checkout_moving', cashierStationId: 'register',
@@ -386,6 +407,113 @@ describe('checkout state', () => {
 
     expect(result[0]).toMatchObject({
       state: 'checkout_moving', navigationGoal: { x: 840, y: 180 },
+    });
+  });
+
+  it('holds the next payer behind a live departing payer until its forward segment is clear', () => {
+    const next = {
+      id: 'next', state: 'checkout_moving', cashierStationId: 'register',
+      paymentQueuedAt: 20, paymentReady: false, x: 840, y: 200,
+    };
+    const departing = {
+      id: 'paid', state: 'leaving', exitPhase: 'to_door', x: 840, y: 180,
+      checkoutDeparture: { stationId: 'register', position: { x: 840, y: 180 } },
+    };
+
+    const held = prepareCheckoutCustomers({ ...baseState, customers: [departing, next] }, [departing, next]);
+
+    expect(held.find(customer => customer.id === 'next')).toMatchObject({
+      checkoutPosition: { x: 840, y: 200 },
+      navigationGoal: { x: 840, y: 200 },
+      paymentReady: false,
+    });
+  });
+
+  it.each([
+    ['lateral clearance below threshold', { x: 855, y: 180 }, 200],
+    ['still on the forward line farther from the cashier', { x: 840, y: 196 }, 200],
+  ])('keeps a departure %s from promoting the next payer', (_name, position, expectedY) => {
+    const departing = {
+      id: 'paid', state: 'leaving', exitPhase: 'to_door', ...position,
+      checkoutDeparture: { stationId: 'register', position: { x: 840, y: 180 } },
+    };
+    const next = {
+      id: 'next', state: 'checkout_moving', cashierStationId: 'register',
+      paymentQueuedAt: 20, paymentReady: false, x: 840, y: 200,
+    };
+
+    const [prepared] = prepareCheckoutCustomers(
+      { ...baseState, customers: [departing, next] },
+      [departing, next],
+    ).filter(customer => customer.id === 'next');
+
+    expect(prepared.checkoutPosition.y).toBe(expectedY);
+    expect(prepared.navigationGoal.y).toBe(expectedY);
+    expect(prepared.paymentReady).toBe(false);
+  });
+
+  it('releases a sixteen-pixel departure clearance, isolates stations, and cleans moved claims', () => {
+    const departing = {
+      id: 'paid', state: 'leaving', exitPhase: 'to_door', x: 856, y: 180,
+      checkoutDeparture: { stationId: 'register', position: { x: 840, y: 180 } },
+    };
+    const registerNext = {
+      id: 'register-next', state: 'checkout_moving', cashierStationId: 'register',
+      paymentQueuedAt: 20, paymentReady: false, x: 840, y: 180,
+    };
+    const otherNext = {
+      id: 'other-next', state: 'checkout_moving', cashierStationId: 'other-register',
+      paymentQueuedAt: 21, paymentReady: false, x: 640, y: 180,
+    };
+    const stations = [
+      baseState.cashierStations[0],
+      { id: 'other-register', x: 600, y: 120, w: 80, h: 40, assignedStaffId: 'cashier' },
+    ];
+    const released = prepareCheckoutCustomers({
+      ...baseState, cashierStations: stations, customers: [departing, registerNext, otherNext],
+    }, [departing, registerNext, otherNext]);
+
+    expect(released.find(customer => customer.id === 'register-next')).toMatchObject({
+      checkoutPosition: { x: 840, y: 180 }, paymentReady: true,
+    });
+    expect(released.find(customer => customer.id === 'other-next')).toMatchObject({
+      checkoutPosition: { x: 640, y: 180 }, paymentReady: true,
+    });
+
+    const absentDeparture = prepareCheckoutCustomers({
+      ...baseState, customers: [{ ...registerNext }],
+    }, [{ ...registerNext }]);
+    expect(absentDeparture[0]).toMatchObject({
+      checkoutPosition: { x: 840, y: 180 }, paymentReady: true,
+    });
+
+    const movedStation = [{ ...baseState.cashierStations[0], x: 820 }];
+    const moved = prepareCheckoutCustomers({
+      ...baseState, cashierStations: movedStation, customers: [
+        { ...departing, x: 840, y: 180 },
+        { ...registerNext, x: 860 },
+      ],
+    }, [
+      { ...departing, x: 840, y: 180 },
+      { ...registerNext, x: 860 },
+    ]);
+    expect(moved.find(customer => customer.id === 'paid').checkoutDeparture).toBeNull();
+    expect(moved.find(customer => customer.id === 'register-next')).toMatchObject({
+      checkoutPosition: { x: 860, y: 180 }, paymentReady: true,
+    });
+
+    const removed = prepareCheckoutCustomers({
+      ...baseState, cashierStations: [], customers: [
+        { ...departing, x: 840, y: 180 },
+        { ...registerNext },
+      ],
+    }, [
+      { ...departing, x: 840, y: 180 },
+      { ...registerNext },
+    ]);
+    expect(removed.find(customer => customer.id === 'paid').checkoutDeparture).toBeNull();
+    expect(removed.find(customer => customer.id === 'register-next')).toMatchObject({
+      state: 'checkout_queued', cashierStationId: null, paymentReady: false,
     });
   });
 });

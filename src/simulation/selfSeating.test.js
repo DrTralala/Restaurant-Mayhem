@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInitialState } from '../state/initialState';
 import { cellToWorld } from './pathfinding';
 import { runTick } from './gameLoop';
+import { prepareCustomersForMovement } from './customers';
 import { prepareSelfSeating, reconcileSelfSeatingState, resolveSelfSeating } from './selfSeating';
 
 function queuedState(overrides = {}) {
@@ -41,6 +42,29 @@ function partyOf(size, id = 'p1') {
       happiness: 80,
     })),
   };
+}
+
+function arrivingSeatState({
+  staff = [{ id: 'mario', role: 'waiter', x: 360, y: 400 }],
+  customers = null,
+  queue = [],
+  queueSlots = [],
+} = {}) {
+  const state = {
+    ...createInitialState(),
+    tables: [{ id: 't6', status: 'reserved', seats: 1, x: 340, y: 340,
+      diningPartyId: 'p1', diningCustomerIds: ['c1'], seatingAssignments: [{
+        customerId: 'c1', chairId: 'ch15', approachCell: { x: 16, y: 19 },
+        approachPoint: { x: 320, y: 380 },
+      }] }],
+    chairs: [{ id: 'ch15', tableId: 't6', x: 350, y: 380, rotation: 0 }],
+    staff,
+    customers: customers || [{ id: 'c1', partyId: 'p1', partySize: 1, state: 'entering',
+      tableId: 't6', chairId: 'ch15', x: 320, y: 380 }],
+    queue,
+    queueSlots,
+  };
+  return state;
 }
 
 afterEach(() => {
@@ -131,6 +155,77 @@ describe('self seating admission', () => {
     expect(next.customers[0].state).toBe('entering');
   });
 
+  it('keeps a role-flipped admission waiting without stale door ownership, then resumes through a new entrance', () => {
+    const admitted = prepareSelfSeating(queuedState());
+    const noEntrance = {
+      ...admitted,
+      doors: admitted.doors.map(door => ({ ...door, role: 'exit' })),
+    };
+    const waiting = prepareSelfSeating(prepareCustomersForMovement(noEntrance, 0));
+
+    expect(waiting.customers[0]).toMatchObject({ state: 'entering', entryDoorId: null });
+    expect(waiting.customers[0]).not.toHaveProperty('navigationGoal');
+    expect(waiting.tables[0]).toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
+    expect(waiting.queueAdmissionGate).toMatchObject({ partyId: 'p1', doorId: null });
+
+    const restored = prepareSelfSeating(prepareCustomersForMovement({
+      ...waiting,
+      doors: [
+        { id: 'door1', y: 340, role: 'exit' },
+        { id: 'door2', y: 440, role: 'exit' },
+        { id: 'door3', y: 240, role: 'entrance' },
+      ],
+    }, 0));
+    expect(restored.customers[0]).toMatchObject({ state: 'entering', entryDoorId: 'door3' });
+    expect(restored.customers[0].navigationGoal).toEqual(
+      restored.tables[0].seatingAssignments[0].approachPoint,
+    );
+    expect(restored.queueAdmissionGate).toMatchObject({ partyId: 'p1', doorId: 'door3' });
+
+    const atApproach = {
+      ...restored,
+      customers: restored.customers.map(customer => ({
+        ...customer,
+        x: customer.navigationGoal.x,
+        y: customer.navigationGoal.y,
+      })),
+    };
+    const seated = resolveSelfSeating(atApproach,
+      new Map([['c1', { plan: 'arrived' }]]));
+    const fresh = createInitialState();
+    const nextParty = prepareSelfSeating({
+      ...seated,
+      queue: [partyOf(1, 'p2')],
+      tables: [...seated.tables, fresh.tables.find(table => table.id === 't2')],
+      chairs: [...seated.chairs, ...fresh.chairs.filter(chair => chair.tableId === 't2')],
+    });
+
+    expect(nextParty.queueAdmissionGate).toMatchObject({ partyId: 'p2' });
+    expect(nextParty.tables.find(table => table.id === 't2').diningPartyId).toBe('p2');
+  });
+
+  it.each([
+    ['per-tick refresh', prepareSelfSeating],
+    ['fixture/load reconciliation', reconcileSelfSeatingState],
+  ])('releases a reservation when %s cannot find a directional approach after a table move', (_label, reconcile) => {
+    const admitted = prepareSelfSeating(queuedState());
+    const moved = {
+      ...admitted,
+      kitchenStations: [{ id: 'block', equipmentId: null, x: 860, y: 340 }],
+      tables: admitted.tables.map(table => ({ ...table, x: 500, y: 300 })),
+      chairs: admitted.chairs.map(chair => ({ ...chair, x: chair.x + 300, y: chair.y + 100 })),
+    };
+
+    const reconciled = reconcile(moved);
+
+    expect(reconciled.tables[0]).toMatchObject({ status: 'empty' });
+    expect(reconciled.tables[0]).not.toHaveProperty('diningPartyId');
+    expect(reconciled.queueAdmissionGate).toBeNull();
+    expect(reconciled.customers[0]).toMatchObject({
+      state: 'leaving', tableId: null, chairId: null,
+    });
+  });
+
   it('selects the oldest compatible party ahead of a younger infeasible one', () => {
     const state = queuedState({ queue: [partyOf(4, 'p-big'), partyOf(1, 'p-small')] });
     const next = prepareSelfSeating(state);
@@ -183,6 +278,76 @@ describe('self seating resolution', () => {
     const stillMoving = resolveSelfSeating(admitted, new Map());
     expect(stillMoving.tables[0].status).toBe('reserved');
     expect(stillMoving.customers[0].state).toBe('entering');
+  });
+
+  it('does not snap an arriving party into an occupied chair centre', () => {
+    const state = arrivingSeatState();
+    const result = resolveSelfSeating(state, new Map([['c1', { plan: 'arrived' }]]));
+
+    expect(result.tables[0].status).toBe('reserved');
+    expect(result.customers[0]).toMatchObject({ state: 'entering', x: 320, y: 380 });
+    expect(Math.hypot(result.customers[0].x - result.staff[0].x,
+      result.customers[0].y - result.staff[0].y)).toBeGreaterThanOrEqual(16);
+  });
+
+  it('keeps a party entering and retries after its swept seat connector clears', () => {
+    const state = arrivingSeatState({ staff: [{ id: 'mario', role: 'waiter', x: 340, y: 380 }] });
+    const statuses = new Map([['c1', { plan: 'arrived' }]]);
+    const held = resolveSelfSeating(state, statuses);
+
+    expect(held).toBe(state);
+    expect(held.tables[0].status).toBe('reserved');
+    expect(held.customers[0]).toMatchObject({ state: 'entering', x: 320, y: 380 });
+
+    const retried = resolveSelfSeating({
+      ...held,
+      staff: [{ ...held.staff[0], x: 500, y: 500 }],
+    }, statuses);
+    expect(retried.tables[0].status).toBe('occupied');
+    expect(retried.customers[0]).toMatchObject({ state: 'seated', x: 360, y: 390 });
+  });
+
+  it('keeps staged seat transitions apart across arriving parties', () => {
+    const state = {
+      ...createInitialState(),
+      tables: [
+        { id: 't6', status: 'reserved', seats: 1, x: 340, y: 340,
+          diningPartyId: 'p1', diningCustomerIds: ['c1'], seatingAssignments: [
+            { customerId: 'c1', chairId: 'ch15', approachCell: { x: 16, y: 19 }, approachPoint: { x: 320, y: 380 } },
+          ] },
+        { id: 't7', status: 'reserved', seats: 1, x: 340, y: 340,
+          diningPartyId: 'p2', diningCustomerIds: ['c2'], seatingAssignments: [
+            { customerId: 'c2', chairId: 'ch16', approachCell: { x: 19, y: 19 }, approachPoint: { x: 380, y: 380 } },
+          ] },
+      ],
+      chairs: [
+        { id: 'ch15', tableId: 't6', x: 350, y: 380, rotation: 0 },
+        { id: 'ch16', tableId: 't7', x: 360, y: 380, rotation: 0 },
+      ],
+      staff: [],
+      customers: [
+        { id: 'c1', partyId: 'p1', partySize: 1, state: 'entering', tableId: 't6', chairId: 'ch15', x: 320, y: 380 },
+        { id: 'c2', partyId: 'p2', partySize: 1, state: 'entering', tableId: 't7', chairId: 'ch16', x: 380, y: 380 },
+      ],
+    };
+    const statuses = new Map([['c1', { plan: 'arrived' }], ['c2', { plan: 'arrived' }]]);
+    const result = resolveSelfSeating(state, statuses);
+
+    expect(result.tables[0].status).toBe('reserved');
+    expect(result.customers.every(customer => customer.state === 'entering')).toBe(true);
+  });
+
+  it('keeps a seat transition clear of seated customers and visible queue leases', () => {
+    const result = resolveSelfSeating(arrivingSeatState({ customers: [
+        { id: 'c1', partyId: 'p1', partySize: 1, state: 'entering',
+          tableId: 't6', chairId: 'ch15', x: 320, y: 380 },
+        { id: 'seated', partyId: 'p2', state: 'seated', x: 360, y: 390 },
+      ], queue: [{ partyId: 'p3', members: [{ id: 'queued', partyId: 'p3', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'p3', x: 360, y: 390, slot: 0 }],
+    }), new Map([['c1', { plan: 'arrived' }]]));
+
+    expect(result.tables[0].status).toBe('reserved');
+    expect(result.customers.find(customer => customer.id === 'c1').state).toBe('entering');
   });
 
   it('seats every member and occupies the table once all approaches arrive', () => {

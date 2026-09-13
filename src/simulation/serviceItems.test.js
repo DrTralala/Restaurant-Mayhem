@@ -5,6 +5,7 @@ import {
   getServiceSlotPosition,
   hasDuplicateOwner,
   allOrderedItemsDelivered,
+  hasValidDrinkReservation,
   selectOrderKinds,
   selectUnlockedDrinkId,
   normaliseServiceItemOwnership,
@@ -221,7 +222,7 @@ describe('service item orders', () => {
         { id: 'i2', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'ordered', serviceTableId: 'st1', serviceSlotIndex: 1, assignedStaffId: 'w1' },
       ],
       customers: [{ id: 'c1', drinkId: 'water', state: 'waiting_for_items' }],
-      staff: [{ id: 'w1', role: 'waiter', task: { type: 'prepare_drink', serviceItemId: 'i2', serviceTableId: 'st1', serviceSlotIndex: 1 } }],
+      staff: [{ id: 'w1', role: 'cook', task: { type: 'prepare_drink', serviceItemId: 'i2', serviceTableId: 'st1', serviceSlotIndex: 1 } }],
     };
 
     expect(findAvailableServiceSlot(state)).toEqual({
@@ -248,6 +249,32 @@ describe('service item orders', () => {
     expect(findAvailableServiceSlot(state).serviceSlotIndex).toBe(0);
   });
 
+  it('rejects a drink preparation reservation owned by a waiter', () => {
+    const state = {
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', drinkId: 'water' }],
+      staff: [{
+        id: 'w1', role: 'waiter',
+        task: {
+          type: 'prepare_drink', serviceItemId: 'i1',
+          serviceTableId: 'st1', serviceSlotIndex: 0,
+        },
+      }],
+      serviceItems: [{
+        id: 'i1', kind: 'drink', menuItemId: 'water', customerId: 'c1',
+        state: 'preparing', serviceTableId: 'st1', serviceSlotIndex: 0,
+        assignedStaffId: 'w1', preparationStartedAt: 10,
+      }],
+    };
+
+    expect(hasValidDrinkReservation(state, state.serviceItems[0])).toBe(false);
+    const result = normaliseServiceItemOwnership(state);
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'ordered', serviceTableId: null, serviceSlotIndex: null,
+      assignedStaffId: null, preparationStartedAt: null,
+    });
+  });
+
   it('ignores a drink reservation whose worker task records a different slot', () => {
     const state = {
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
@@ -255,7 +282,7 @@ describe('service item orders', () => {
         id: 'i1', kind: 'drink', state: 'preparing', serviceTableId: 'st1',
         serviceSlotIndex: 0, assignedStaffId: 'w1',
       }],
-      staff: [{ id: 'w1', task: { type: 'prepare_drink', serviceItemId: 'i1', serviceTableId: 'st1', serviceSlotIndex: 1 } }],
+      staff: [{ id: 'w1', role: 'cook', task: { type: 'prepare_drink', serviceItemId: 'i1', serviceTableId: 'st1', serviceSlotIndex: 1 } }],
     };
 
     expect(findAvailableServiceSlot(state).serviceSlotIndex).toBe(0);
@@ -272,7 +299,7 @@ describe('service item orders', () => {
         id: 'i1', kind: 'drink', state: 'preparing', serviceTableId: 'st1',
         serviceSlotIndex: 0, assignedStaffId: 'w1',
       }],
-      staff: [{ id: 'w1', task }],
+      staff: [{ id: 'w1', role: 'cook', task }],
     };
 
     expect(findAvailableServiceSlot(state).serviceSlotIndex).toBe(0);
@@ -316,7 +343,7 @@ describe('service item orders', () => {
   it.each(['ordered', 'preparing'])('removes an abandoned %s item and releases its metadata', itemState => {
     const result = normaliseServiceItemOwnership({
       customers: [{ id: 'c1', state: 'leaving', drinkId: 'water' }],
-      staff: [{ id: 'w1', role: 'waiter', task: { type: 'prepare_drink', serviceItemId: 'i1' }, carryingServiceItemId: null }],
+      staff: [{ id: 'w1', role: 'cook', task: { type: 'prepare_drink', serviceItemId: 'i1' }, carryingServiceItemId: null }],
       serviceTables: [{ id: 'st1' }],
       serviceItems: [{ id: 'i1', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: itemState,
         serviceTableId: 'st1', serviceSlotIndex: 0, assignedStaffId: 'w1' }],

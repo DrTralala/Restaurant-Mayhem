@@ -483,7 +483,6 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
     const walking = movement.motion === 'traversing';
     let cx, cy;
     let seatedGeometry = null;
-    const seated = ['seated', 'ordering', 'eating', 'waiting_for_items'].includes(c.state);
     const table = c.tableId
       ? (state.tables || []).find(candidate => candidate.id === c.tableId)
       : null;
@@ -491,6 +490,13 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       ? (state.chairs || []).find(candidate =>
           candidate.id === c.chairId && candidate.tableId === c.tableId)
       : null;
+    // Deciding to leave does not mean the customer has physically stood up.
+    // Keep the chair-sized pose while departure/checkout waits for a route.
+    const waitingInChair = ['leaving', 'checkout_queued', 'checkout_moving'].includes(c.state)
+      && c.seatResidency?.phase === 'seated'
+      && chair && c.x === chair.x + 10 && c.y === chair.y + 10;
+    const seated = waitingInChair
+      || ['seated', 'ordering', 'eating', 'waiting_for_items', 'waiting_for_party'].includes(c.state);
 
     if (seated) {
       seatedGeometry = getSeatedDisplayGeometry(chair, table);

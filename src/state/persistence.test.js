@@ -9,6 +9,7 @@ import { advanceCharacterMovementBatch, createMovementCoordinator } from '../sim
 import { SAVE_VERSION } from './saveVersion';
 import { getCustomerMovementEntries, prepareCustomersForMovement, updateCustomers } from '../simulation/customers';
 import { buildCustomerQueueStressState } from '../simulation/customerQueueStress';
+import { recordSeatResidency } from '../simulation/movement/seatedDeparture';
 
 beforeEach(() => {
   localStorage.clear();
@@ -17,6 +18,86 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function savedRecoveryState(fresh) {
+  const table = {
+    id: 't6', seats: 1, status: 'occupied', x: 340, y: 340,
+    diningPartyId: 'p1', diningCustomerIds: ['c186'],
+  };
+  const chair = { id: 'ch15', tableId: table.id, x: 350, y: 380, rotation: 0 };
+  const seatOriginCustomer = {
+    id: 'c186', partyId: 'p1', partySize: 1, state: 'leaving',
+    exitPhase: 'to_door', exitDoorId: 'door2', tableId: table.id, chairId: chair.id,
+    x: 360, y: 390,
+  };
+  const c186 = { ...seatOriginCustomer, ...recordSeatResidency(seatOriginCustomer, chair, table) };
+  const cashierStation = { ...fresh.cashierStations[0] };
+  const c165 = {
+    id: 'c165', partyId: 'p2', partySize: 1, state: 'checkout_moving',
+    menuOutcome: 'ordered', dishId: null, drinkId: 'water',
+    dishPriceAtOrder: null, drinkPriceAtOrder: 15, orderSubtotal: 15, tipAmount: 0,
+    x: 840, y: 200, cashierStationId: cashierStation.id,
+    checkoutPosition: { x: 840, y: 200 }, checkoutQueueIndex: 1,
+    checkoutLineMember: true,
+    checkoutLineGeometry: {
+      stationId: cashierStation.id, x: cashierStation.x, y: cashierStation.y,
+      w: cashierStation.w, h: cashierStation.h,
+    },
+    paymentReady: false, paymentQueuedAt: 1,
+  };
+  const c168 = {
+    id: 'c168', partyId: 'p3', partySize: 1, state: 'leaving',
+    exitPhase: 'to_door', exitDoorId: 'door2', x: 840, y: 180,
+    checkoutDeparture: { stationId: cashierStation.id, position: { x: 840, y: 180 } },
+    cashierStationId: null, checkoutPosition: null, checkoutQueueIndex: null,
+    checkoutLineMember: false, checkoutLineGeometry: null, paymentReady: false,
+  };
+  const mario = {
+    id: 'mario', name: 'Mario', gender: 'male', role: 'waiter', skill: 2,
+    morale: 73, salary: 150, x: 360, y: 400,
+    task: { type: 'deliver_service_item', serviceItemId: 'carried-dish', customerId: c165.id },
+    carryingServiceItemId: 'carried-dish', navigationGoal: { x: 260, y: 380 },
+    activityPhase: 'task_assigned', idleUntil: null,
+  };
+  const cashier = {
+    ...fresh.staff.find(worker => worker.id === cashierStation.assignedStaffId),
+    x: 840, y: 100, task: null, activityPhase: 'stationed', idleUntil: null,
+  };
+
+  return {
+    ...fresh,
+    version: SAVE_VERSION,
+    restaurant: {
+      ...fresh.restaurant, funds: 87.06, gameTime: 168306, day: 2, totalServed: 119,
+    },
+    tables: [table],
+    chairs: [chair],
+    doors: [
+      { id: 'door1', y: 340, role: 'entrance' },
+      { id: 'door2', y: 180, role: 'exit' },
+    ],
+    cashierStations: [cashierStation],
+    kitchenStations: [],
+    serviceTables: [],
+    customers: [c165, c168, c186],
+    staff: [cashier, mario],
+    serviceItems: [{
+      id: 'carried-dish', kind: 'dish', state: 'carried', customerId: c165.id,
+      x: mario.x, y: mario.y,
+    }],
+    queue: [],
+    queueSlots: [],
+    queueDepartures: [],
+    queueAdmissionGate: null,
+    doorAdmissions: {
+      nextSequence: 3,
+      requests: {
+        c186: { doorId: 'door2', sequence: 1 },
+        c168: { doorId: 'door2', sequence: 2 },
+      },
+    },
+  };
+}
 
 describe('saveState', () => {
   it('does not overwrite a valid save when snapshot fixture geometry is invalid', () => {
@@ -88,7 +169,7 @@ describe('loadState', () => {
       warning.mockRestore();
     }
   });
-  it.each([1, 2, 3, 4, 5, 6, 7])('rejects obsolete version %s local saves without deleting evidence or attempting migration', version => {
+  it.each([1, 2, 3, 4, 5, 6, 7, 8])('rejects obsolete version %s local saves without deleting evidence or attempting migration', version => {
     localStorage.setItem('restaurant-sim-save', JSON.stringify({ version, restaurant: { funds: 999 } }));
     expect(loadState()).toBeNull();
     expect(JSON.parse(localStorage.getItem('restaurant-sim-save')).version).toBe(version);
@@ -112,6 +193,37 @@ describe('loadState', () => {
 });
 
 describe('hydrateState', () => {
+  it('round-trips directional door roles in a new-format save', () => {
+    const fresh = createInitialState();
+    const state = {
+      ...fresh,
+      doors: [
+        { ...fresh.doors[0], role: 'exit' },
+        { ...fresh.doors[1], role: 'entrance' },
+      ],
+    };
+
+    saveState(state);
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.doors).toEqual(state.doors);
+    expect(restored.doors.map(door => door.role)).toEqual(['exit', 'entrance']);
+  });
+
+  it('rejects invalid door roles without discarding the saved JSON', () => {
+    const saved = { ...createInitialState(), doors: [{ id: 'door1', y: 340, role: 'sideways' }] };
+    const serialized = JSON.stringify(saved);
+    localStorage.setItem('restaurant-sim-save', serialized);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      expect(loadState()).toBeNull();
+      expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   // A synchronous raster-loop regression must never lock the Vitest process itself.
   it.each([
     ['valid fractional coordinates', null, null, null],
@@ -569,6 +681,36 @@ describe('hydrateState', () => {
     });
   });
 
+  it('repairs the saved seat-origin overlap without mutating the save or fixtures', () => {
+    const fresh = createInitialState();
+    const saved = savedRecoveryState(fresh);
+    const before = JSON.stringify(saved);
+    const hydrated = hydrateState(saved, fresh);
+    const customer = hydrated.customers.find(candidate => candidate.id === 'c186');
+    const mario = hydrated.staff.find(candidate => candidate.id === 'mario');
+    const carriedDish = hydrated.serviceItems.find(item => item.id === 'carried-dish');
+
+    expect(JSON.stringify(saved)).toBe(before);
+    expect(customer).toMatchObject({ id: 'c186', x: 360, y: 390, state: 'leaving' });
+    expect(mario).toMatchObject({ task: null, carryingServiceItemId: 'carried-dish', activityPhase: null });
+    expect(mario).not.toHaveProperty('navigationGoal');
+    expect(Math.hypot(mario.x - customer.x, mario.y - customer.y)).toBeGreaterThanOrEqual(16);
+    expect(carriedDish).toMatchObject({ state: 'carried', x: mario.x, y: mario.y });
+    expect(hydrated.tables).toEqual(saved.tables);
+    expect(hydrated.chairs).toEqual(saved.chairs);
+
+    const initialFunds = hydrated.restaurant.funds;
+    const initialServed = hydrated.restaurant.totalServed;
+    let state = { ...hydrated, paused: false };
+    for (let tick = 0; tick < 400 && state.restaurant.totalServed === initialServed; tick += 1) {
+      state = runTick(state, { gameDt: 8, movementDt: 4 / 30 });
+    }
+    const paid = state.customers.find(candidate => candidate.id === 'c165');
+    expect(paid.state).toBe('leaving');
+    expect(state.restaurant.totalServed).toBe(initialServed + 1);
+    expect(state.restaurant.funds).toBeGreaterThan(initialFunds);
+  });
+
   it('normalises equipment multipliers from saved levels', () => {
     const fresh = {
       version: SAVE_VERSION,
@@ -735,7 +877,8 @@ describe('hydrateState', () => {
       customers: [{
         id: 'c1', partyId: 'p1', state: 'checkout_processing',
         cashierStationId: 'cashier1', checkoutPosition: { x: 840, y: 180 },
-        paymentReady: false, navigationGoal: { x: 840, y: 180 },
+        paymentReady: false, checkoutLineMember: true,
+        navigationGoal: { x: 840, y: 180 },
       }],
       completedCustomers: [completedPayment, { ...completedPayment, revenue: 99 }],
       pendingPartyReviews: [{
@@ -751,9 +894,67 @@ describe('hydrateState', () => {
     expect(hydrated.partyReviewHistory).toEqual([completedReview]);
     expect(hydrated.customers[0]).toMatchObject({
       id: 'c1', state: 'leaving', cashierStationId: null,
-      checkoutPosition: null, paymentReady: false,
+      checkoutPosition: null, paymentReady: false, checkoutLineMember: false,
     });
     expect(hydrated.customers[0]).not.toHaveProperty('navigationGoal');
+  });
+
+  it('preserves or reconstructs checkout departure clearance through a new save round trip', () => {
+    const fresh = createInitialState();
+    const departure = {
+      stationId: fresh.cashierStations[0].id,
+      position: { x: 840, y: 180 },
+    };
+    const state = {
+      ...fresh,
+      customers: [{ id: 'departing', state: 'leaving', x: 840, y: 180,
+        checkoutDeparture: departure }],
+    };
+
+    saveState(state);
+    const restored = hydrateState(loadState(), fresh);
+    expect(restored.customers[0].checkoutDeparture).toEqual(departure);
+
+    const holdState = {
+      ...fresh,
+      customers: [
+        { id: 'departing', state: 'leaving', x: 840, y: 180,
+          checkoutDeparture: departure },
+        { id: 'next', state: 'checkout_moving', cashierStationId: fresh.cashierStations[0].id,
+          paymentQueuedAt: 2, x: 840, y: 200 },
+      ],
+    };
+    saveState(holdState);
+    const resumed = prepareCustomersForMovement(hydrateState(loadState(), fresh), 0);
+    expect(resumed.customers.find(customer => customer.id === 'next')).toMatchObject({
+      checkoutPosition: { x: 840, y: 200 }, paymentReady: false,
+    });
+
+    const reconstructed = hydrateState({
+      ...fresh,
+      customers: [{ id: 'legacy-paid', state: 'checkout_processing', x: 840, y: 180,
+        cashierStationId: fresh.cashierStations[0].id,
+        checkoutPosition: { x: 840, y: 180 } }],
+      completedCustomers: [{ customerId: 'legacy-paid' }],
+    }, fresh);
+    expect(reconstructed.customers[0].checkoutDeparture).toEqual(departure);
+  });
+
+  it('preserves checkout line membership through a save round trip', () => {
+    const fresh = createInitialState();
+    const state = {
+      ...fresh,
+      customers: [{
+        id: 'line-member', state: 'checkout_moving', cashierStationId: 'cashier1',
+        checkoutQueueIndex: 0, checkoutPosition: { x: 840, y: 180 },
+        checkoutLineMember: true, x: 840, y: 200,
+      }],
+    };
+
+    saveState(state);
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.customers[0].checkoutLineMember).toBe(true);
   });
 });
 

@@ -1,6 +1,7 @@
 import { buildBlockedCells, cellKey, cellToWorld, findPath, worldToCell } from './pathfinding';
 import { getRestaurantWorld } from './world';
 import { canClaimDestination } from './navigation/destinations';
+import { findRoute } from './navigation/router';
 
 const CHAIR_RADIUS = 10;
 const APPROACH_DIRECTIONS = [
@@ -43,7 +44,13 @@ function compareApproachCells(left, right, customerCell) {
     || left.y - right.y;
 }
 
-export function buildChairApproachAssignments(state, customerIds, chairIds) {
+function routeGridForCustomer(navigationGrid, customer) {
+  return typeof navigationGrid === 'function'
+    ? navigationGrid(customer)
+    : navigationGrid;
+}
+
+export function buildChairApproachAssignments(state, customerIds, chairIds, { navigationGrid = null } = {}) {
   const currentState = state || {};
   if (!Array.isArray(customerIds) || !Array.isArray(chairIds)
     || customerIds.length !== chairIds.length
@@ -95,8 +102,11 @@ export function buildChairApproachAssignments(state, customerIds, chairIds) {
         && canClaimDestination(currentState, customer, cellToWorld(candidate)))
       .sort((left, right) => compareApproachCells(left, right, customerCell));
 
+    const routeGrid = routeGridForCustomer(navigationGrid, customer);
     const approachCell = candidates.find(candidate => sameCell(customerCell, candidate)
-      || findPath(currentState, customerCell, candidate).length > 0);
+      || (navigationGrid != null
+        ? routeGrid && findRoute(routeGrid, customer, cellToWorld(candidate)).status === 'found'
+        : findPath(currentState, customerCell, candidate).length > 0));
     if (!approachCell) return null;
 
     const approachPoint = cellToWorld(approachCell);
@@ -112,12 +122,20 @@ export function buildChairApproachAssignments(state, customerIds, chairIds) {
   return assignments;
 }
 
-export function validateChairApproachAssignments(state, customerIds, chairIds, assignments, tableId) {
+export function validateChairApproachAssignments(
+  state,
+  customerIds,
+  chairIds,
+  assignments,
+  tableId,
+  { navigationGrid = null } = {},
+) {
   if (!Array.isArray(customerIds) || !Array.isArray(chairIds) || !Array.isArray(assignments)
     || customerIds.length !== chairIds.length || assignments.length !== customerIds.length) return false;
   const chairsById = new Map((state?.chairs || []).map(chair => [chair?.id, chair]));
   const blocked = buildBlockedCells(state);
   const usedCells = new Set();
+  const customersById = new Map((state?.customers || []).map(customer => [customer?.id, customer]));
   return assignments.every((assignment, index) => {
     const chair = chairsById.get(chairIds[index]);
     const cell = assignment?.approachCell;
@@ -130,11 +148,15 @@ export function validateChairApproachAssignments(state, customerIds, chairIds, a
     const key = cellKey(cell);
     const chairCell = worldToCell(chair);
     const expectedPoint = cellToWorld(cell);
+    const customer = customersById.get(customerIds[index]);
+    const routeGrid = customer ? routeGridForCustomer(navigationGrid, customer) : null;
     if (usedCells.has(key)
       || Math.abs(cell.x - chairCell.x) + Math.abs(cell.y - chairCell.y) !== 1
       || point.x !== expectedPoint.x || point.y !== expectedPoint.y
       || !isRestaurantInteriorCell(state, cell)
-      || blocked.has(key)) return false;
+      || blocked.has(key)
+      || (navigationGrid != null && (!customer || !routeGrid
+        || findRoute(routeGrid, customer, point).status !== 'found'))) return false;
     usedCells.add(key);
     return true;
   });

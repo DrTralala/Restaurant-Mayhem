@@ -9,10 +9,12 @@ import { normaliseCustomerQueue, normaliseQueueDepartures, normaliseQueueSlots, 
 import { reconcileSelfSeatingState } from '../simulation/selfSeating';
 import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
 import { createMovementCoordinator } from '../simulation/navigation/coordinator';
+import { getCashierCustomerPosition } from '../simulation/world';
 import { SAVE_VERSION } from './saveVersion';
 import { normaliseDoorAdmissions } from './doorAdmissions';
 import { hydrateMovementResidencies, movementSaveSnapshot, validateSavedNavigationGeometry } from './movementPersistence';
 import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
+import { repairInvalidStaffOverlaps } from './staffMoves';
 import {
   normalisePartyReviewHistory,
   normalisePendingPartyReviews,
@@ -52,7 +54,27 @@ function uniqueCompletedCustomerVisits(value) {
   });
 }
 
-function finishCompletedCheckout(customer, completedCustomerIds) {
+function getCheckoutDeparture(customer, cashierStations) {
+  if (customer.checkoutDeparture?.stationId != null
+    && Number.isFinite(customer.checkoutDeparture.position?.x)
+    && Number.isFinite(customer.checkoutDeparture.position?.y)) {
+    return {
+      stationId: customer.checkoutDeparture.stationId,
+      position: { ...customer.checkoutDeparture.position },
+    };
+  }
+  const station = (cashierStations || []).find(candidate =>
+    String(candidate?.id) === String(customer.cashierStationId));
+  const position = Number.isFinite(customer.checkoutPosition?.x)
+    && Number.isFinite(customer.checkoutPosition?.y)
+    ? customer.checkoutPosition
+    : station ? getCashierCustomerPosition(station, 0) : null;
+  return station?.id != null && Number.isFinite(position?.x) && Number.isFinite(position?.y)
+    ? { stationId: station.id, position: { x: position.x, y: position.y } }
+    : null;
+}
+
+function finishCompletedCheckout(customer, completedCustomerIds, cashierStations) {
   if (!completedCustomerIds.has(customer.id) || !isCheckoutState(customer)) return customer;
   return clearNavigationGoal({
     ...customer,
@@ -64,6 +86,10 @@ function finishCompletedCheckout(customer, completedCustomerIds) {
     exitHeading: null,
     cashierStationId: null,
     checkoutPosition: null,
+    checkoutQueueIndex: null,
+    checkoutDeparture: getCheckoutDeparture(customer, cashierStations),
+    checkoutLineMember: false,
+    checkoutLineGeometry: null,
     paymentReady: false,
   });
 }
@@ -107,9 +133,9 @@ export function hydrateState(saved, fresh) {
     staff,
     customers: (saved.customers || fresh.customers || []).map(character =>
       finishCompletedCheckout(normaliseCustomerEconomy({
-        ...character,
-        gender: inferGender(character),
-      }), completedCustomerIds)),
+      ...character,
+      gender: inferGender(character),
+    }), completedCustomerIds, saved.cashierStations ?? fresh.cashierStations)),
     queue,
     queueDepartures,
     queueAdmissionGate: saved.queueAdmissionGate ?? fresh.queueAdmissionGate ?? null,
@@ -193,8 +219,10 @@ export function hydrateState(saved, fresh) {
   );
 
   const residencies = hydrateMovementResidencies(normaliseDoorAdmissions(hydrated));
+  const reconciled = reconcileSelfSeatingState(residencies);
+  const repaired = repairInvalidStaffOverlaps(reconciled);
   return {
-    ...reconcileSelfSeatingState(residencies),
+    ...repaired,
     version: fresh.version,
     movementCoordinator: createMovementCoordinator(),
   };

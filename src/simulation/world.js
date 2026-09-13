@@ -39,17 +39,54 @@ export function getRestaurantWorld(restaurant = {}) {
 
 export function getDoors(state = {}) {
   const world = getRestaurantWorld(state.restaurant || {});
-  return state.doors?.length
+  // An explicitly empty collection represents a restaurant with no openings.
+  // Keep the old geometry-only fallback for partial rendering fixtures, but do
+  // not let it become an eligible ingress/egress route (it has no role).
+  return Array.isArray(state.doors)
     ? state.doors
     : [{ id: 'door1', y: world.doorY }];
 }
 
+const DOOR_ROLE_BY_FLOW = Object.freeze({ ingress: 'entrance', egress: 'exit' });
+
+export function getDoorsForFlow(state = {}, direction) {
+  const role = DOOR_ROLE_BY_FLOW[direction];
+  if (!role) return [];
+  return getDoors(state).filter(door => door?.role === role && Number.isFinite(door.y));
+}
+
+export function isDoorRoleForFlow(door, direction) {
+  return Boolean(door && DOOR_ROLE_BY_FLOW[direction] === door.role);
+}
+
+export function getMissingDoorWarnings(state = {}) {
+  if (!Array.isArray(state.doors)) return [];
+  const warnings = [];
+  if (getDoorsForFlow(state, 'ingress').length === 0) {
+    warnings.push('No entrance door: queued customers are waiting.');
+  }
+  if (getDoorsForFlow(state, 'egress').length === 0) {
+    warnings.push('No exit door: departing customers are waiting.');
+  }
+  return warnings;
+}
+
 export function getDoorPosition(state, door) {
   const world = getRestaurantWorld(state.restaurant || {});
+  if (!door || !Number.isFinite(door.y)) return null;
   return {
     inside: { x: world.doorX - 20, y: door.y + 20 },
     outside: { x: world.queueX + 80, y: door.y + 20 },
   };
+}
+
+export function isDoorCrossing(state, actor, door) {
+  const world = getRestaurantWorld(state.restaurant || {});
+  const position = getDoorPosition(state, door);
+  return Boolean(position && Number.isFinite(actor?.x) && Number.isFinite(actor?.y)
+    && actor.x >= world.doorX - 40
+    && actor.x <= world.doorX + 30
+    && Math.abs(actor.y - position.inside.y) <= 30);
 }
 
 export function getCashierWorkPosition(station) {

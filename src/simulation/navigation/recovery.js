@@ -1,6 +1,6 @@
 import { cellKey, cellToWorld, worldToCell } from '../movement/navigationWorkspace';
 import { findRoute } from './router';
-import { compareTraffic } from './traffic';
+import { orderTrafficRequests } from './traffic';
 
 const samePoint = (a, b) => a && b && a.x === b.x && a.y === b.y;
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -47,11 +47,13 @@ export function chooseRecoveries({ requests, records, statuses, grid, budget }) 
   const recoveries = new Map();
   let expansions = 0;
   for (const [id, request] of requests) {
+    if (request.checkoutAdvance) continue;
     const old = records.get(id);
     if (!old?.recovery || !samePoint(old.goal, request.goal) || !grid.isOpen(old.recovery.goal)) continue;
     const outstanding = old.recovery.peers.filter(peer => {
       const current = requests.get(peer.id);
       return current?.goal && samePoint(current.goal, peer.goal) && !samePoint(current.start, current.goal)
+        && !current.checkoutAdvance
         && !passedConflict(peer, current, old.recovery.origin);
     });
     if (outstanding.length) recoveries.set(id, { ...old.recovery, peers: outstanding });
@@ -62,8 +64,9 @@ export function chooseRecoveries({ requests, records, statuses, grid, budget }) 
     { blockers: recovery.peers.filter(peer => recoveries.has(peer.id)).map(peer => peer.id) }]));
   for (const group of cycles(requests, dependencies)) {
     const passing = group.map(id => requests.get(id))
-      .filter(request => samePoint(request.start, recoveries.get(request.id).goal)).sort(compareTraffic)[0];
-    if (passing) recoveries.delete(passing.id);
+      .filter(request => samePoint(request.start, recoveries.get(request.id).goal));
+    const passingRequest = orderTrafficRequests(passing)[0];
+    if (passingRequest) recoveries.delete(passingRequest.id);
   }
   const heldDependencies = new Map([...statuses].filter(([, status]) => status.motion !== 'traversing'));
   for (const group of cycles(requests, heldDependencies)) {
@@ -74,7 +77,7 @@ export function chooseRecoveries({ requests, records, statuses, grid, budget }) 
     for (const id of group) {
       if (recoveries.has(id)) continue;
       const request = requests.get(id);
-      if (!request.goal || request.speed <= 0) continue;
+      if (!request.goal || request.speed <= 0 || request.checkoutAdvance) continue;
       const peers = group.filter(other => other !== id).map(other => requests.get(other));
       const trafficCells = new Set(peers.flatMap(peer => [peer.start, peer.goal, ...(records.get(peer.id)?.route || [])])
         .map(point => cellKey(worldToCell(point))));

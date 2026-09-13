@@ -102,7 +102,7 @@ describe('pathfinding', () => {
     const openState = {
       restaurant: { expansionLevel: 1 },
       tables: [], chairs: [], kitchenStations: [], serviceTables: [],
-      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340 }],
+      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340, role: 'entrance' }],
     };
     const start = worldToCell({ x: 80, y: 100 });
     const goal = worldToCell({ x: 260, y: 100 });
@@ -117,7 +117,7 @@ describe('pathfinding', () => {
     const openState = {
       restaurant: { expansionLevel: 1 },
       tables: [], chairs: [], kitchenStations: [], serviceTables: [],
-      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340 }],
+      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340, role: 'entrance' }],
     };
     expect(findPath(openState, worldToCell({ x: 80, y: 100 }), { x: 5, y: 4 })).toEqual([]);
   });
@@ -126,7 +126,7 @@ describe('pathfinding', () => {
     const openState = {
       restaurant: { expansionLevel: 1 },
       tables: [], chairs: [], kitchenStations: [], serviceTables: [],
-      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340 }],
+      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340, role: 'entrance' }],
     };
     const start = worldToCell({ x: 973, y: 60 });
     const goal = worldToCell({ x: 973, y: 140 });
@@ -141,7 +141,7 @@ describe('pathfinding', () => {
     const topDoorState = {
       restaurant: { expansionLevel: 1 },
       tables: [], chairs: [], kitchenStations: [], serviceTables: [],
-      cashierStations: [], washStations: [], doors: [{ id: 'top-door', y: 80 }],
+      cashierStations: [], washStations: [], doors: [{ id: 'top-door', y: 80, role: 'entrance' }],
     };
     const blocked = buildBlockedCells(topDoorState);
     const path = findPath(topDoorState, { x: 48, y: 4 }, { x: 44, y: 5 });
@@ -159,7 +159,7 @@ describe('pathfinding', () => {
     const openState = {
       restaurant: { expansionLevel: 1 },
       tables: [], chairs: [], kitchenStations: [], serviceTables: [],
-      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340 }],
+      cashierStations: [], washStations: [], doors: [{ id: 'door1', y: 340, role: 'entrance' }],
     };
     const collection = fixture.w ? (fixture.type ? 'washStations' : 'cashierStations') : 'kitchenStations';
     const state = { ...openState, [collection]: [fixture] };
@@ -204,7 +204,7 @@ describe('pathfinding', () => {
   it('allows crossing the outside wall only through a door opening', () => {
     const doorState = {
       restaurant: { expansionLevel: 1 },
-      doors: [{ id: 'door1', y: 340 }],
+      doors: [{ id: 'door1', y: 340, role: 'entrance' }],
       tables: [], chairs: [], kitchenStations: [], serviceTables: [],
     };
 

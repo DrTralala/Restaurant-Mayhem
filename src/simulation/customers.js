@@ -6,7 +6,14 @@ import {
   sameNavigationGoal,
   setNavigationGoal,
 } from './movement/navigationGoal';
-import { getDoorPosition, getDoors } from './world';
+import {
+  getDoorPosition,
+  getDoors,
+  getDoorsForFlow,
+  isDoorRoleForFlow,
+  isDoorCrossing,
+  getRestaurantWorld,
+} from './world';
 import { isCheckoutState, prepareCheckoutCustomers } from './checkout';
 import { releaseVacatedTables } from './tableLifecycle';
 import {
@@ -161,6 +168,10 @@ function leavingFields(customer, overrides = {}) {
     exitHeading: null,
     cashierStationId: null,
     checkoutPosition: null,
+    checkoutQueueIndex: null,
+    checkoutDeparture: null,
+    checkoutLineMember: false,
+    checkoutLineGeometry: null,
     paymentReady: false,
     ...overrides,
   };
@@ -321,7 +332,56 @@ function replaceCharacters(state, moved, key, committedIds = null) {
 
 function getExitDestination(state, customer) {
   const door = getDoors(state).find(candidate => candidate.id === customer.exitDoorId);
-  return door ? getDoorPosition(state, door).outside : null;
+  return door ? getDoorPosition(state, door)?.outside || null : null;
+}
+
+function nearestDoor(state, doors, customer, side) {
+  return [...doors].sort((left, right) => {
+    const leftPosition = getDoorPosition(state, left)?.[side];
+    const rightPosition = getDoorPosition(state, right)?.[side];
+    return Math.hypot(customer.x - leftPosition.x, customer.y - leftPosition.y)
+      - Math.hypot(customer.x - rightPosition.x, customer.y - rightPosition.y)
+      || String(left.id).localeCompare(String(right.id));
+  })[0] || null;
+}
+
+function restoreEnteringNavigationGoal(state, customer) {
+  if (isFinitePoint(customer.navigationGoal)) return customer;
+  const table = (state.tables || []).find(candidate => candidate.id === customer.tableId);
+  const assignment = table?.seatingAssignments?.find(candidate => candidate.customerId === customer.id);
+  return assignment && isFinitePoint(assignment.approachPoint)
+    ? setNavigationGoal(customer, assignment.approachPoint)
+     : customer;
+}
+
+function isInsideRestaurant(state, customer) {
+  const world = getRestaurantWorld(state.restaurant || {});
+  return isFinitePoint(customer) && customer.x < world.doorX - 40;
+}
+
+function isOutdoorQueuePosition(state, customer) {
+  const world = getRestaurantWorld(state.restaurant || {});
+  return isFinitePoint(customer)
+    && customer.x >= world.queueX
+    && customer.y >= world.queueY
+    && customer.y <= world.queueY + world.queueH;
+}
+
+function directOutdoorDeparture(state, customer) {
+  const choice = getQueueSafeExitChoice(state, customer);
+  if (!choice) return customer;
+  const world = getRestaurantWorld(state.restaurant || {});
+  const target = {
+    x: Math.min(world.queueX + world.queueW, Math.max(world.queueX, choice.target.x)),
+    y: Math.min(world.queueY + world.queueH, Math.max(world.queueY, choice.target.y)),
+  };
+  return setNavigationGoal({
+    ...customer,
+    exitPhase: 'fading',
+    exitDoorId: null,
+    exitFadeProgress: 0,
+    exitHeading: choice.heading,
+  }, target);
 }
 
 // Admit the oldest staged pending-departure records (hidden overflow members
@@ -509,6 +569,27 @@ export function prepareCustomersForMovement(state, gameDt) {
   );
 
   const doors = getDoors(state);
+  const entranceDoors = getDoorsForFlow(state, 'ingress');
+  const exitDoors = getDoorsForFlow(state, 'egress');
+
+  updatedCustomers = updatedCustomers.map(customer => {
+    if (customer.state !== 'entering') return customer;
+    const door = doors.find(candidate => candidate.id === customer.entryDoorId);
+    if (door && (isDoorRoleForFlow(door, 'ingress') || isDoorCrossing(state, customer, door))) {
+      return customer;
+    }
+    const replacement = nearestDoor(state, entranceDoors, customer, 'outside');
+    if (!replacement) {
+      // Once an entrant is beyond the doorway, its chair route no longer
+      // requires an entrance. Keep the interior goal while the role warning is
+      // shown; only an outside entrant must wait for an entrance to return.
+      return isInsideRestaurant(state, customer)
+        ? restoreEnteringNavigationGoal(state, { ...customer, entryDoorId: null })
+        : { ...clearNavigationGoal(customer), entryDoorId: null };
+    }
+    return restoreEnteringNavigationGoal(state, { ...customer, entryDoorId: replacement.id });
+  });
+
   const claimedDoors = new Map();
   for (const customer of updatedCustomers) {
     if (customer.state === 'leaving' && customer.exitPhase !== 'fading' && customer.exitDoorId) {
@@ -523,15 +604,34 @@ export function prepareCustomersForMovement(state, gameDt) {
       const table = (state.tables || []).find(candidate => candidate.id === leaving.tableId);
       const fallback = table && Number.isFinite(table.x) && Number.isFinite(table.y)
         ? { x: table.x + 20, y: table.y + 20 }
-        : getDoorPosition(state, getDoors(state)[0]).inside;
+        : getDoorPosition(state, getDoors(state)[0])?.inside;
+      if (!fallback) return leaving;
       leaving = { ...leaving, ...fallback };
     }
-    if (!leaving.exitDoorId) {
-      const door = [...doors].sort((a, b) => {
+    if (leaving.exitPhase === 'fading' && leaving.exitDoorId == null) {
+      return isFinitePoint(leaving.navigationGoal)
+        ? leaving
+        : directOutdoorDeparture({ ...state, queue: updatedQueue }, leaving);
+    }
+    // Queue departures fade from their own standing positions, not from the
+    // restaurant exit. Indoor departures keep their assigned doorway route.
+    if (leaving.exitDoorId == null && isOutdoorQueuePosition(state, leaving)) {
+      return directOutdoorDeparture({ ...state, queue: updatedQueue }, leaving);
+    }
+    const currentDoor = doors.find(candidate => candidate.id === leaving.exitDoorId);
+    const preservingCrossing = currentDoor
+      && (leaving.exitPhase === 'fading' || isDoorCrossing(state, leaving, currentDoor));
+    const currentDoorIsEligible = currentDoor && isDoorRoleForFlow(currentDoor, 'egress');
+    if (!currentDoorIsEligible && !preservingCrossing) {
+      const door = [...exitDoors].sort((a, b) => {
         const loadDifference = (claimedDoors.get(a.id) || 0) - (claimedDoors.get(b.id) || 0);
         return loadDifference || Math.abs(a.y - leaving.y) - Math.abs(b.y - leaving.y);
       })[0];
-      if (!door) return leaving;
+      if (!door) {
+        return isOutdoorQueuePosition(state, leaving)
+          ? directOutdoorDeparture({ ...state, queue: updatedQueue }, leaving)
+          : { ...clearNavigationGoal(leaving), exitDoorId: null };
+      }
       claimedDoors.set(door.id, (claimedDoors.get(door.id) || 0) + 1);
       leaving = { ...leaving, exitDoorId: door.id };
     }
@@ -603,6 +703,24 @@ function getCheckoutQueueRank(state, customer) {
   if (!station || !isFinitePoint(position)) return null;
   const rank = (position.y - station.y - station.h - 20) / 20;
   return Number.isInteger(rank) && rank >= 0 ? rank : null;
+}
+
+function getCheckoutAdvance(state, customer) {
+  if (customer.state !== 'checkout_moving' || customer.cashierStationId == null
+    || customer.checkoutLineMember !== true
+    || !isFinitePoint(customer.checkoutPosition) || !Number.isInteger(getCheckoutQueueRank(state, customer))) {
+    return null;
+  }
+  // Once a diner has arrived at its assigned queue slot, advancement is
+  // constrained to the line's forward segment. Customers approaching their
+  // first queue slot from a table retain ordinary pathfinding until arrival.
+  if (Math.abs(customer.x - customer.checkoutPosition.x) > 1e-6
+    || customer.y < customer.checkoutPosition.y - 1e-6) return null;
+  return {
+    stationId: customer.cashierStationId,
+    queueRank: getCheckoutQueueRank(state, customer),
+    goal: { x: customer.checkoutPosition.x, y: customer.checkoutPosition.y },
+  };
 }
 
 function activeDoorApproachCustomers(customers) {
@@ -684,6 +802,7 @@ function descriptorForCustomer(state, character, admittedCustomers) {
   const isToDoor = isLeaving && !isFading;
   const isCheckout = character.state === 'checkout_moving';
   const isEntering = character.state === 'entering';
+  const checkoutAdvance = getCheckoutAdvance(state, character);
   const doorApproachAdmitted = !isToDoor
     || admittedCustomers.has(String(character.id));
   const speed = !hasGoal ? 0
@@ -698,6 +817,7 @@ function descriptorForCustomer(state, character, admittedCustomers) {
     ignoredIds: [],
     doorFlow: { doorId: direction === 'none' ? null : doorId, direction },
     queueRank: isCheckout ? getCheckoutQueueRank(state, character) : null,
+    ...(checkoutAdvance ? { checkoutAdvance } : {}),
     terminalPolicy: isFading ? 'release' : 'hold',
     provenance: 'customer',
   };
@@ -774,7 +894,8 @@ function clampFadeProgress(distance) {
 
 export function resolveCustomersAfterMovement(state, _movementDt, statuses = new Map()) {
   const doorPositions = new Map(getDoors(state)
-    .map(door => [door.id, getDoorPosition(state, door).outside]));
+    .map(door => [door.id, getDoorPosition(state, door)?.outside])
+    .filter(([, position]) => position));
   let updatedCustomers = (state.customers || []).map(customer => {
     if (customer.state !== 'leaving' || customer.exitPhase === 'fading') return customer;
     const destination = doorPositions.get(customer.exitDoorId);

@@ -12,6 +12,7 @@ import { getRestaurantWorld } from '../simulation/world';
 import { hasValidDrinkReservation } from '../simulation/serviceItems';
 import { normaliseOperatingHour } from '../simulation/clock';
 import { moveFixtures } from './fixtureMoves';
+import { moveStaff } from './staffMoves';
 
 const DISH_QUALITY_COST = 50;
 const TRAINING_COST = 100;
@@ -168,7 +169,7 @@ function placeItem(state, action) {
     const id = getNextNumericId(doors, 'door');
     return {
       ...nextState,
-      doors: [...doors, { id, y: placement.y }],
+      doors: [...doors, { id, y: placement.y, role: 'entrance' }],
     };
   }
 
@@ -407,6 +408,8 @@ function gameReducer(state, action) {
         ),
       };
     }
+    case 'MOVE_STAFF':
+      return moveStaff(state, action.id, { x: action.x, y: action.y });
     case 'TRAIN_STAFF': {
       const staff = state.staff.find(candidate => candidate.id === action.id);
       if (!staff || !Number.isFinite(staff.skill) || staff.skill >= 10
@@ -464,6 +467,16 @@ function gameReducer(state, action) {
     }
     case 'BUY_DOOR': {
       return placeLegacyItem(state, action, 'door');
+    }
+    case 'SET_DOOR_ROLE': {
+      if (!['entrance', 'exit'].includes(action.role)
+        || !(state.doors || []).some(door => door.id === action.id)) return state;
+      return {
+        ...state,
+        doors: state.doors.map(door => door.id === action.id
+          ? { ...door, role: action.role }
+          : door),
+      };
     }
     case 'PLACE_ITEM':
       return placeItem(state, action);
