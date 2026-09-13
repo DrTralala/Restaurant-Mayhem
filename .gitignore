@@ -1,5 +1,46 @@
-node_modules
-docs/
-.worktrees/
+# Dependencies and generated output
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+.cache/
+*.tsbuildinfo
+*.log
+
+# Local saves and performance evidence
 saves/
-performance-range-memo-evidence/
+performance-*-evidence/
+test-results/
+playwright-report/
+
+# Local documentation and development tools
+docs/
+*.[mM][dD]
+!/README.md
+.worktrees/
+.superpowers/
+.opencode/
+.claude/
+opencode.json
+opencode.jsonc
+.idea/
+.vscode/
+__pycache__/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.jks
+*.keystore
+
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
