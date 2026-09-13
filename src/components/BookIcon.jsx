@@ -3,7 +3,7 @@ export default function BookIcon({ onClick, isOpen }) {
     <button
       onClick={onClick}
       style={{
-        position: 'fixed', top: 48, right: 16, zIndex: 100,
+        position: 'fixed', top: 48, right: 68, zIndex: 100,
         background: isOpen ? '#f0a500' : '#16213e',
         border: '1px solid #0f3460', borderRadius: 8,
         color: isOpen ? '#111' : '#ccc',

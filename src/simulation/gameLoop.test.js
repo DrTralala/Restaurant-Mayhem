@@ -383,7 +383,7 @@ describe('runTick', () => {
     expect(trace.every(row => row.expansions <= 2048)).toBe(true);
   });
 
-  it('keeps a post-payment wait attributable to existing door traffic', () => {
+  it('starts a paid departure alongside existing door traffic', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     const initial = createInitialState();
     let state = {
@@ -452,7 +452,7 @@ describe('runTick', () => {
     expect(firstGoal.doorAdmission).toMatchObject({ doorId: 'door1', sequence: expect.any(Number) });
     expect(firstGoal.doorAdmission.sequence).toBeGreaterThan(1);
     expect(moved).toBeDefined();
-    expect(firstGoal.tick).toBeGreaterThan(paid.tick + 1);
+    expect(firstGoal.tick).toBe(paid.tick + 1);
     expect(moved.tick).toBe(firstGoal.tick);
   });
 
@@ -532,7 +532,7 @@ describe('runTick', () => {
     expect(ids.sort()).toEqual(['filler', 'guide', 'moving']);
   });
 
-  it('serialises non-fading customers at one door without blocking independent exits', () => {
+  it('moves non-fading customers at one door without blocking independent exits', () => {
     let state = {
       ...emptyState,
       restaurant: {
@@ -596,12 +596,12 @@ describe('runTick', () => {
       }
     }
     expect(independentDoorMoved).toBe(true);
-    expect(secondDoorCustomerMovedTooEarly, JSON.stringify(earlyEvidence)).toBe(false);
+    expect(secondDoorCustomerMovedTooEarly, JSON.stringify(earlyEvidence)).toBe(true);
     expect(fadingIds).toEqual(new Set(['c1', 'c2', 'c3']));
     expect(state.customers).toHaveLength(0);
   });
 
-  it('preserves the incumbent door admission when an earlier array member starts leaving later', () => {
+  it('allows an earlier array member to join an active door approach', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     let state = {
       ...emptyState,
@@ -650,7 +650,7 @@ describe('runTick', () => {
 
     const dynamicEntries = customerDomain.getCustomerMovementEntries(state, 0.1);
     expect(dynamicEntries.find(entry => entry.character.id === 'younger')).toMatchObject({ speed: 55 });
-    expect(dynamicEntries.find(entry => entry.character.id === 'older')).toMatchObject({ speed: 0 });
+    expect(dynamicEntries.find(entry => entry.character.id === 'older')).toMatchObject({ speed: 55, doorApproach: true });
 
     const fadingOrRemoved = new Set();
     for (let tick = 0; tick < 120 && state.customers.length; tick += 1) {
@@ -728,7 +728,7 @@ describe('runTick', () => {
 
     const result = runTick(state, 0);
 
-    expect(result.staff[0]).toMatchObject({ task: null, carryingServiceItemId: null });
+    expect(result.staff[0]).toMatchObject({ task: null, carryingServiceItemIds: [] });
     expect(result.serviceItems).toEqual([expect.objectContaining({ id: 'i1', state: 'to_clean' })]);
   });
 
@@ -761,8 +761,8 @@ describe('runTick', () => {
 
     const result = runTick(state, 0);
 
-    expect(result.staff[0]).toMatchObject({ task: null, carryingServiceItemId: null });
-    expect(result.staff[1]).toMatchObject({ carryingServiceItemId: 'i1' });
+    expect(result.staff[0]).toMatchObject({ task: null, carryingServiceItemIds: [] });
+    expect(result.staff[1]).toMatchObject({ carryingServiceItemIds: ['i1'] });
     expect(result.serviceItems).toEqual([item]);
   });
 

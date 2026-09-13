@@ -405,7 +405,7 @@ describe('moveFixtures', () => {
     });
     expect(result.staff[0]).not.toHaveProperty('navigationGoal');
     const { navigationGoal: _navigationGoal, ...unchanged } = state.staff[0];
-    expect(result.staff[0]).toEqual({ ...unchanged, carryingServiceItemId: null });
+    expect(result.staff[0]).toEqual({ ...unchanged, carryingServiceItemIds: [] });
   });
 
   it('cancels work tied to moved tables, seated customers, and service counters', () => {
@@ -446,7 +446,7 @@ describe('moveFixtures', () => {
     expect(result.serviceItems[0]).toMatchObject({
       serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null,
     });
-    expect(result.staff[1]).toMatchObject({ task: null, carryingServiceItemId: 'i3' });
+    expect(result.staff[1]).toMatchObject({ task: null, carryingServiceItemIds: ['i3'] });
     expect(result.serviceItems[1]).toMatchObject({ id: 'i3', state: 'carried' });
   });
 

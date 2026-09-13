@@ -15,6 +15,8 @@ import { normaliseDoorAdmissions } from './doorAdmissions';
 import { hydrateMovementResidencies, movementSaveSnapshot, validateSavedNavigationGeometry } from './movementPersistence';
 import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
 import { repairInvalidStaffOverlaps } from './staffMoves';
+import { getCarriedServiceItemIds, getStaffCarryCapacity, withCarriedServiceItemIds } from '../simulation/staffInventory';
+import { normaliseServiceItemOwnership } from '../simulation/serviceItems';
 import {
   normalisePartyReviewHistory,
   normalisePendingPartyReviews,
@@ -36,6 +38,7 @@ export function loadState() {
     const saved = JSON.parse(serialized);
     if (saved?.version !== SAVE_VERSION) return null;
     validateSavedNavigationGeometry(saved);
+    validateSavedServiceItemInventory(saved);
     return saved;
   } catch (e) {
     console.warn('Failed to load state:', e);
@@ -52,6 +55,82 @@ function uniqueCompletedCustomerVisits(value) {
     seenCustomerIds.add(payment.customerId);
     return true;
   });
+}
+
+const CARRIED_SERVICE_ITEM_STATES = new Set(['carried', 'carried_dirty']);
+
+function rawCarriedServiceItemIds(worker) {
+  if (Array.isArray(worker?.carryingServiceItemIds)) return worker.carryingServiceItemIds;
+  return worker?.carryingServiceItemId == null ? [] : [worker.carryingServiceItemId];
+}
+
+function invalidSavedServiceItemInventory(reason) {
+  throw new Error(`Invalid saved service-item inventory: ${reason}`);
+}
+
+// Save validation is deliberately narrow: reject contradictory inventory rather
+// than silently dropping an item during ownership normalisation. Legitimate
+// dish-plus-drink orders remain distinct because the owner key includes kind.
+function validateSavedServiceItemInventory(saved) {
+  const serviceItems = Array.isArray(saved?.serviceItems) ? saved.serviceItems : null;
+  const workers = Array.isArray(saved?.staff) ? saved.staff : null;
+  if (!serviceItems && !workers) return;
+
+  const itemsById = new Map();
+  const ownerKinds = new Set();
+  for (const item of serviceItems || []) {
+    if (item?.id == null) invalidSavedServiceItemInventory('service item is missing an ID');
+    const itemId = String(item.id);
+    if (itemsById.has(itemId)) {
+      invalidSavedServiceItemInventory(`duplicate service item ID ${itemId}`);
+    }
+    itemsById.set(itemId, item);
+    if (item.customerId != null && item.kind != null) {
+      const ownerKey = `${String(item.customerId)}\u0000${String(item.kind)}`;
+      if (ownerKinds.has(ownerKey)) {
+        invalidSavedServiceItemInventory(
+          `duplicate ${item.kind} item for customer ${item.customerId}`,
+        );
+      }
+      ownerKinds.add(ownerKey);
+    }
+  }
+
+  const carriedOwners = new Map();
+  for (const worker of workers || []) {
+    if (Array.isArray(worker?.carryingServiceItemIds)
+      && worker.carryingServiceItemId != null) {
+      invalidSavedServiceItemInventory(`worker ${worker.id} has conflicting inventory fields`);
+    }
+    const ids = rawCarriedServiceItemIds(worker);
+    const seen = new Set();
+    const loadKinds = new Set();
+    for (const rawId of ids) {
+      if (rawId == null) invalidSavedServiceItemInventory(`worker ${worker.id} has an empty item reference`);
+      const itemId = String(rawId);
+      if (seen.has(itemId)) {
+        invalidSavedServiceItemInventory(`worker ${worker.id} repeats service item ${itemId}`);
+      }
+      seen.add(itemId);
+      const item = itemsById.get(itemId);
+      if (!item) invalidSavedServiceItemInventory(`worker ${worker.id} carries missing item ${itemId}`);
+      if (!CARRIED_SERVICE_ITEM_STATES.has(item.state)) {
+        invalidSavedServiceItemInventory(`worker ${worker.id} carries item ${itemId} in state ${item.state}`);
+      }
+      if (carriedOwners.has(itemId)) {
+        invalidSavedServiceItemInventory(`service item ${itemId} has multiple carriers`);
+      }
+      carriedOwners.set(itemId, worker.id);
+      loadKinds.add(item.state);
+    }
+    if (loadKinds.size > 1) {
+      invalidSavedServiceItemInventory(`worker ${worker.id} mixes clean and dirty items`);
+    }
+    if (ids.length > getStaffCarryCapacity(worker)) {
+      invalidSavedServiceItemInventory(`worker ${worker.id} exceeds carrying capacity`);
+    }
+  }
+
 }
 
 function getCheckoutDeparture(customer, cashierStations) {
@@ -100,8 +179,9 @@ export function hydrateState(saved, fresh) {
   if (saved.version != null && saved.version !== SAVE_VERSION) {
     throw new Error('Saved game is incompatible with the current game version');
   }
+  validateSavedServiceItemInventory(saved);
   const staff = (saved.staff || fresh.staff || []).map(character => ({
-    ...character,
+    ...withCarriedServiceItemIds(character, getCarriedServiceItemIds(character)),
     gender: inferGender(character),
   }));
   const queue = normaliseCustomerQueue(saved.queue || fresh.queue || []).map(party => ({
@@ -157,6 +237,10 @@ export function hydrateState(saved, fresh) {
   hydrated.serviceItems = consumption.serviceItems.filter(item =>
     !completedCustomerIds.has(item?.customerId)
       || !['ordered', 'preparing'].includes(item?.state));
+  const ownership = normaliseServiceItemOwnership(hydrated);
+  hydrated.customers = ownership.customers;
+  hydrated.staff = ownership.staff;
+  hydrated.serviceItems = ownership.serviceItems;
   if ('tables' in saved || 'tables' in fresh) {
     hydrated.tables = saved.tables || fresh.tables || [];
   }

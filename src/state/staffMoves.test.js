@@ -141,7 +141,7 @@ describe('moveStaff', () => {
 
     const result = moveStaff(state, 'worker', { x: 500, y: 300 });
 
-    expect(result.staff[0]).toMatchObject({ x: 500, y: 300, carryingServiceItemId: 'dish' });
+    expect(result.staff[0]).toMatchObject({ x: 500, y: 300, carryingServiceItemIds: ['dish'] });
     expect(result.serviceItems[0]).toMatchObject({ id: 'dish', state: 'carried', x: 500, y: 300 });
     expect(result.staff[0]).not.toHaveProperty('navigationGoal');
   });
@@ -165,7 +165,7 @@ describe('moveStaff', () => {
     });
 
     const moved = moveStaff(state, 'worker', { x: 500, y: 300 });
-    expect(moved.staff[0]).toMatchObject({ x: 500, y: 300, task: null, carryingServiceItemId: 'dish' });
+    expect(moved.staff[0]).toMatchObject({ x: 500, y: 300, task: null, carryingServiceItemIds: ['dish'] });
     expect(moved.serviceItems[0]).toMatchObject({ state: 'carried', x: 500, y: 300 });
     expect(findAvailableServiceSlot(moved)).toMatchObject({ serviceTableId: 'service', serviceSlotIndex: 1 });
 

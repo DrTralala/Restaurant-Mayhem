@@ -6,6 +6,7 @@ import { CHARACTER_CLEARANCE } from '../simulation/navigation/destinations';
 import { findPath, worldToCell } from '../simulation/pathfinding';
 import { getDefaultStaffPosition, getRestaurantWorld } from '../simulation/world';
 import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout';
+import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 
 const SEATED_CUSTOMER_STATES = new Set([
   'seated',
@@ -189,7 +190,7 @@ function removeMapEntries(map, id) {
   return next;
 }
 
-function invalidateMovementRuntime(state, id) {
+export function invalidateMovementRuntime(state, id) {
   const coordinator = state.movementCoordinator;
   if (!coordinator || typeof coordinator !== 'object') {
     return { ...state, movementCoordinator: createMovementCoordinator() };
@@ -293,15 +294,18 @@ export function moveStaff(state, id, point) {
     customers: work.customers,
     serviceItems: work.serviceItems,
     staff: state.staff.map(candidate => candidate === worker
-      ? { ...clearStaffRuntime(candidate), x: point.x, y: point.y }
+      ? withCarriedServiceItemIds(
+        { ...clearStaffRuntime(candidate), x: point.x, y: point.y },
+        getCarriedServiceItemIds(candidate),
+      )
       : candidate),
   }, worker.id);
 
-  const carriedId = worker.carryingServiceItemId;
-  if (carriedId != null && Array.isArray(next.serviceItems)) {
+  const carriedIds = getCarriedServiceItemIds(worker);
+  if (carriedIds.length > 0 && Array.isArray(next.serviceItems)) {
     next = {
       ...next,
-      serviceItems: next.serviceItems.map(item => item.id === carriedId
+      serviceItems: next.serviceItems.map(item => carriedIds.includes(item.id)
         && ['carried', 'carried_dirty'].includes(item.state)
         ? { ...item, x: point.x, y: point.y }
         : item),

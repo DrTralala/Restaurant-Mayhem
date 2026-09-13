@@ -6,6 +6,7 @@ import {
   listFixtures,
 } from '../data/fixtures';
 import { findPath, worldToCell } from './pathfinding';
+import { buildBlockedCells, cellKey } from './movement/navigationWorkspace';
 import { GRID_SIZE, getCashierWorkPosition, getDoorPosition, getDoors, getRestaurantWorld } from './world';
 
 function invalid(reason) {
@@ -245,6 +246,22 @@ function hasValidChairRelationships(state, fixtures) {
   });
 }
 
+function movesStrandAnActor(state, finalState, moves) {
+  if (!moves.some(move => move.type === 'door')) return false;
+  const before = buildBlockedCells(state);
+  const after = buildBlockedCells(finalState);
+  const newlyBlocked = new Set([...after].filter(key => !before.has(key)));
+  if (newlyBlocked.size === 0) return false;
+
+  const actors = [
+    ...(state.staff || []),
+    ...(state.customers || []),
+    ...(state.queueSlots || []),
+  ];
+  return actors.some(actor => isFinitePoint(actor)
+    && newlyBlocked.has(cellKey(worldToCell(actor))));
+}
+
 export function validateFixtureMoves(state = {}, moves = []) {
   const currentState = state || {};
   if (!Array.isArray(moves)) return invalid('malformed-moves');
@@ -333,6 +350,10 @@ export function validateFixtureMoves(state = {}, moves = []) {
       return rectangleIntersects(rect, getFixtureRect(finalState, candidate));
     });
     if (overlapsFixture) return invalid('overlap');
+  }
+
+  if (movesStrandAnActor(currentState, finalState, normalisedMoves)) {
+    return invalid('door-occupied');
   }
 
   const furnitureFixtures = finalFixtures.filter(fixture => fixture.type !== 'door');

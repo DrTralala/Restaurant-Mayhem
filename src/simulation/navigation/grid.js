@@ -42,18 +42,51 @@ function flowBlockedCells(state, navigation, doorFlow) {
 export function createGrid(state, workspace = null, options = {}) {
   const navigation = resolveNavigationWorkspace(state, workspace);
   const { bounds } = navigation;
+  const world = getRestaurantWorld(state.restaurant || {});
   const blockedCells = flowBlockedCells(state, navigation, options.doorFlow);
+  const doorGeometrySignature = JSON.stringify(getDoors(state)
+    .map(door => [door?.id, door?.y, door?.role]));
   const signature = options.doorFlow
     && ['ingress', 'egress'].includes(options.doorFlow.direction)
-    ? `${navigation.topologyFingerprint}:flow:${options.doorFlow.direction}:${String(options.doorFlow.doorId ?? '')}:${getDoors(state).find(door => String(door?.id) === String(options.doorFlow.doorId ?? ''))?.role || ''}:${options.doorFlow.allowRoleMismatch === true ? 'crossing' : ''}`
-    : navigation.topologyFingerprint;
+    ? `${navigation.topologyFingerprint}:doors:${doorGeometrySignature}:flow:${options.doorFlow.direction}:${String(options.doorFlow.doorId ?? '')}:${getDoors(state).find(door => String(door?.id) === String(options.doorFlow.doorId ?? ''))?.role || ''}:${options.doorFlow.allowRoleMismatch === true ? 'crossing' : ''}`
+    : `${navigation.topologyFingerprint}:doors:${doorGeometrySignature}`;
   const isOpen = point => Boolean(finitePoint(point)
     && point.x >= bounds.left && point.x <= bounds.right
     && point.y >= bounds.top && point.y <= bounds.bottom
     && !blockedCells.has(cellKey(worldToCell(point))));
 
+  const allowedDoor = options.doorFlow?.doorId == null
+    ? null
+    : getDoors(state).find(door => String(door?.id) === String(options.doorFlow.doorId));
+  const continuousDoorOpeningClear = (from, to) => {
+    if (!allowedDoor || !Number.isFinite(allowedDoor.y)) return true;
+    const wallLeft = world.doorX;
+    const wallRight = world.doorX + 6;
+    const minimumX = Math.min(from.x, to.x);
+    const maximumX = Math.max(from.x, to.x);
+    if (maximumX < wallLeft - 1e-9 || minimumX > wallRight + 1e-9) return true;
+    const samples = [];
+    const addAtX = x => {
+      if (x < minimumX - 1e-9 || x > maximumX + 1e-9) return;
+      if (to.x === from.x) {
+        if (Math.abs(x - from.x) <= 1e-9) samples.push(from.y, to.y);
+        return;
+      }
+      const fraction = (x - from.x) / (to.x - from.x);
+      samples.push(from.y + (to.y - from.y) * fraction);
+    };
+    addAtX(wallLeft);
+    addAtX(wallRight);
+    if (to.x === from.x && from.x >= wallLeft - 1e-9 && from.x <= wallRight + 1e-9) {
+      samples.push(from.y, to.y);
+    }
+    return samples.every(y => y >= allowedDoor.y - 1e-9
+      && y < allowedDoor.y + 40 - 1e-9);
+  };
+
   const segmentClear = (from, to) => {
     if (!isOpen(from) || !isOpen(to)) return false;
+    if (!continuousDoorOpeningClear(from, to)) return false;
     // Partition at every cell boundary, rather than sampling at a fixed spatial
     // interval that could miss a very short incursion near a blocked corner.
     const boundaries = [0, 1];
@@ -90,5 +123,13 @@ export function createGrid(state, workspace = null, options = {}) {
     return validCandidates(point, candidates);
   };
 
-  return Object.freeze({ signature, bounds, isOpen, segmentClear, neighbours, connectors });
+  return Object.freeze({
+    signature,
+    bounds,
+    doorFlow: options.doorFlow ? Object.freeze({ ...options.doorFlow }) : null,
+    isOpen,
+    segmentClear,
+    neighbours,
+    connectors,
+  });
 }

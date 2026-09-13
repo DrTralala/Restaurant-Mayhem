@@ -93,8 +93,18 @@ export function arbitrateDestinations(requests, previousClaims = new Map()) {
     requests.filter(request => Number.isFinite(request.goal?.x) && Number.isFinite(request.goal?.y)),
     compareArbitration,
   );
+  const requestsById = new Map(ordered.map(request => [request.id, request]));
+  const sharesDoorApproach = (request, ownerId) => {
+    const owner = requestsById.get(ownerId);
+    return request.doorApproach === true
+      && owner?.doorApproach === true
+      && request.doorFlow?.direction === 'egress'
+      && owner.doorFlow?.direction === 'egress'
+      && String(request.doorFlow.doorId) === String(owner.doorFlow.doorId);
+  };
   for (const request of ordered) {
-    const owners = [...claims].filter(([, point]) => Math.hypot(point.x - request.goal.x, point.y - request.goal.y) < CHARACTER_CLEARANCE)
+    const owners = [...claims].filter(([ownerId, point]) => !sharesDoorApproach(request, ownerId)
+      && Math.hypot(point.x - request.goal.x, point.y - request.goal.y) < CHARACTER_CLEARANCE)
       .map(([id]) => id);
     if (owners.length) blocked.set(request.id, owners);
     else claims.set(request.id, { ...request.goal });

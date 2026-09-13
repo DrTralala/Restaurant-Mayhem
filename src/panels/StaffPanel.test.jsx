@@ -99,6 +99,22 @@ describe('StaffPanel', () => {
     expect(typeof call.staff.salary).toBe('number');
   });
 
+  it.each([
+    [0, 1],
+    [0.999999, 3],
+  ])('keeps random hire skill at the %s boundary', (randomValue, expectedSkill) => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState());
+    useDispatch.mockReturnValue(dispatch);
+    vi.spyOn(Math, 'random').mockReturnValue(randomValue);
+
+    render(<StaffPanel />);
+    fireEvent.click(screen.getByText('+ Hire'));
+    fireEvent.click(screen.getByText('Cook'));
+
+    expect(dispatch.mock.calls[0][0].staff.skill).toBe(expectedSkill);
+  });
+
   it('chooses an unused name when hiring', () => {
     const dispatch = vi.fn();
     useGameState.mockReturnValue(makeState());

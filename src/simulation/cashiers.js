@@ -4,6 +4,8 @@ export function getAssignedCashierStation(stations, staffId) {
   ) || null;
 }
 
+import { getCarriedServiceItemIds } from './staffInventory';
+
 export function getAvailableWaiterId(staff, stations) {
   const assignedStaffIds = new Set(
     (Array.isArray(stations) ? stations : [])
@@ -16,7 +18,7 @@ export function getAvailableWaiterId(staff, stations) {
       && candidate.id != null
       && !assignedStaffIds.has(candidate.id)
       && candidate.task == null
-      && candidate.carryingServiceItemId == null
+      && getCarriedServiceItemIds(candidate).length === 0
   )?.id ?? null;
 }
 

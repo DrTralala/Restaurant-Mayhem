@@ -7,6 +7,7 @@ const finite = p => p && Number.isFinite(p.x) && Number.isFinite(p.y);
 const same = (a, b) => finite(a) && finite(b) && a.x === b.x && a.y === b.y;
 const point = p => ({ x: p.x, y: p.y });
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const EXIT_DISTANCE = 120;
 
 function freezeResidency(record) {
   return Object.freeze({ ...record, position: Object.freeze(point(record.position)),
@@ -26,14 +27,48 @@ function fractionOnSegment(p, from, to) {
   return fraction;
 }
 
+function isDoorOpeningPoint(state, door, point) {
+  const outside = getDoorPosition(state, door)?.outside;
+  return Boolean(outside && finite(point)
+    && Math.abs(point.x - outside.x) <= 1e-9
+    && point.y >= door.y - 1e-9
+    && point.y < door.y + 40 - 1e-9);
+}
+
+function getExitOrigin(state, actor, door) {
+  const outside = door ? getDoorPosition(state, door)?.outside : null;
+  const selected = actor.exitCrossingPoint;
+  const savedFadeOrigin = actor.exitFadeOrigin;
+  const isSavedFadeRay = origin => finite(origin) && finite(actor) && finite(actor.navigationGoal)
+    && actor.x >= origin.x - 1e-9
+    && actor.navigationGoal.x > origin.x
+    && Math.abs(distance(origin, actor.navigationGoal) - EXIT_DISTANCE) <= 1e-9
+    && fractionOnSegment(actor, origin, actor.navigationGoal) !== null;
+  if (isSavedFadeRay(savedFadeOrigin)) return point(savedFadeOrigin);
+  if (finite(selected)) {
+    const savedFadeRay = isSavedFadeRay(selected);
+    if (!outside || isDoorOpeningPoint(state, door, selected) || savedFadeRay) {
+      return point(selected);
+    }
+  }
+  if (outside && finite(actor) && finite(actor.navigationGoal)
+    && actor.x >= outside.x - 1e-9
+    && actor.navigationGoal.x > actor.x
+    && Math.abs(distance(actor, actor.navigationGoal) - EXIT_DISTANCE) <= 1e-9) {
+    // A saved/in-flight fade may predate the crossing-point field. Once the
+    // actor is already outside, its current position is the safe ray origin.
+    return point(actor);
+  }
+  return outside ? point(outside) : null;
+}
+
 function exitGrid(state, actor, base) {
   if (actor.state !== 'leaving' || actor.exitPhase !== 'fading' || !finite(actor.navigationGoal)) return null;
   const door = getDoors(state).find(item => item.id === actor.exitDoorId);
-  if (!door) return null;
-  const origin = getDoorPosition(state, door)?.outside;
+  const origin = getExitOrigin(state, actor, door);
   if (!origin) return null;
   const goal = actor.navigationGoal;
-  if (goal.x <= origin.x || Math.abs(distance(origin, goal) - 120) > 1e-8
+  if (goal.x <= origin.x || Math.abs(distance(origin, goal) - EXIT_DISTANCE) > 1e-8
     || fractionOnSegment(actor, origin, goal) === null) return null;
   const edgeFraction = Math.min(1, (base.bounds.right - origin.x) / (goal.x - origin.x));
   const edge = { x: origin.x + (goal.x - origin.x) * edgeFraction,
@@ -48,11 +83,33 @@ function exitGrid(state, actor, base) {
   });
 }
 
+function outdoorFadeGrid(actor, base) {
+  if (actor.state !== 'leaving' || actor.exitPhase !== 'fading'
+    || actor.exitDoorId != null || !finite(actor) || !finite(actor.navigationGoal)
+    || actor.x < base.bounds.right - 1e-9 || actor.navigationGoal.x <= actor.x
+    || !Number.isFinite(distance(actor, actor.navigationGoal))
+    || distance(actor, actor.navigationGoal) > EXIT_DISTANCE + 1e-9) return null;
+  const start = point(actor);
+  const goal = point(actor.navigationGoal);
+  const isOpen = p => fractionOnSegment(p, start, goal) !== null;
+  return Object.freeze({
+    ...base,
+    signature: `${base.signature}:outdoor-fade:${actor.id}:${JSON.stringify([start, goal])}`,
+    isOpen,
+    segmentClear: (from, to) => isOpen(from) && isOpen(to)
+      && fractionOnSegment(to, start, goal) >= fractionOnSegment(from, start, goal),
+    neighbours: p => isOpen(p) && !same(p, goal) ? [point(goal)] : [],
+    connectors: () => [],
+  });
+}
+
 export function createActorGrid(state, actor, base = createGrid(state), doorFlow = null) {
   const matches = (state.customers || []).filter(customer => String(customer.id) === String(actor.id));
   if (matches.length !== 1 || !same(matches[0], actor)) return base;
   const exit = exitGrid(state, actor, base);
   if (exit) return exit;
+  const outdoorFade = outdoorFadeGrid(actor, base);
+  if (outdoorFade) return outdoorFade;
   const flow = doorFlow || (actor.state === 'entering'
     ? { direction: 'ingress', doorId: actor.entryDoorId }
     : actor.state === 'leaving'
@@ -68,8 +125,12 @@ export function createActorGrid(state, actor, base = createGrid(state), doorFlow
           || (!isDoorRoleForFlow(flowDoor, flow.direction) && isDoorCrossing(state, actor, flowDoor)),
       }
     : flow;
+  const baseMatchesFlow = flowWithCrossing && base?.doorFlow
+    && base.doorFlow.direction === flowWithCrossing.direction
+    && String(base.doorFlow.doorId) === String(flowWithCrossing.doorId)
+    && Boolean(base.doorFlow.allowRoleMismatch) === Boolean(flowWithCrossing.allowRoleMismatch);
   const flowBase = flowWithCrossing && ['ingress', 'egress'].includes(flowWithCrossing.direction)
-    ? createGrid(state, null, { doorFlow: flowWithCrossing })
+    ? baseMatchesFlow ? base : createGrid(state, null, { doorFlow: flowWithCrossing })
     : base;
   const departing = ['checkout_moving', 'checkout_queued', 'leaving'].includes(actor.state);
   const rejected = departing && actor.seatResidency && actor.seatResidency.phase !== 'clear'

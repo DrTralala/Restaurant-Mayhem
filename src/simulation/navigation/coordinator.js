@@ -59,6 +59,7 @@ function normalise(state, entries, previous) {
       invalidGoal: character.navigationGoal != null && !finitePoint(character.navigationGoal),
       speed: Number.isFinite(entry?.speed) && entry.speed > 0 ? entry.speed : 0,
       doorFlow: entry?.doorFlow || null,
+      doorApproach: entry?.doorApproach === true,
       checkoutAdvance: entry?.checkoutAdvance || null,
       queueRank,
       checkoutStationId,

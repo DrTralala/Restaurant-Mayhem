@@ -336,7 +336,7 @@ describe('service item orders', () => {
       serviceItems: [{ id: 'i1', kind: 'drink', customerId: 'c1', state: 'ordered',
         serviceTableId: 'st1', serviceSlotIndex: 0, assignedStaffId: 'missing' }],
     });
-    expect(result.staff[0].carryingServiceItemId).toBeNull();
+    expect(result.staff[0].carryingServiceItemIds).toEqual([]);
     expect(result.serviceItems[0]).toMatchObject({ serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null });
   });
 
@@ -380,7 +380,7 @@ describe('service item orders', () => {
     const result = normaliseServiceItemOwnership({ customers: [{ id: 'c1' }], serviceTables: [],
       staff: [{ id: 'w1', carryingServiceItemId: 'i1' }, { id: 'w2', carryingServiceItemId: 'i1' }],
       serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'c1', state: 'carried' }] });
-    expect(result.staff.every(worker => worker.carryingServiceItemId == null)).toBe(true);
+    expect(result.staff.every(worker => worker.carryingServiceItemIds.length === 0)).toBe(true);
     expect(result.serviceItems[0].state).toBe('to_clean');
   });
 
@@ -389,7 +389,7 @@ describe('service item orders', () => {
       const result = normaliseServiceItemOwnership({ tables: [{ id: 't1' }], customers: [], serviceTables: [],
         staff: [{ id: 'worker', role, carryingServiceItemId: 'i1' }],
         serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried_dirty' }] });
-      expect(result.staff[0].carryingServiceItemId).toBeNull();
+      expect(result.staff[0].carryingServiceItemIds).toEqual([]);
       expect(result.serviceItems[0].state).toBe('dirty_at_table');
     }
   });
@@ -475,7 +475,7 @@ describe('service item orders', () => {
     const item = { id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'carried' };
     const result = normaliseServiceItemOwnership({ customers: [{ id: 'c1', dishId: 'd1' }], serviceTables: [],
       staff: [{ id: 'w1', role: 'waiter', carryingServiceItemId: 'i1' }], serviceItems: [item] });
-    expect(result.staff[0].carryingServiceItemId).toBe('i1');
+    expect(result.staff[0].carryingServiceItemIds).toEqual(['i1']);
     expect(result.serviceItems[0]).toEqual(item);
   });
 

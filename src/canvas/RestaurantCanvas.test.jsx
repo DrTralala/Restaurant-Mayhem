@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import RestaurantCanvas from './RestaurantCanvas';
 import { drawCustomerLayer, drawFurnitureLayer, drawStaffLayer } from './layers';
 import { calculateFitCamera } from './camera';
@@ -956,5 +956,23 @@ describe('RestaurantCanvas object movement', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mark as Exit' }));
 
     expect(dispatch).toHaveBeenCalledWith({ type: 'SET_DOOR_ROLE', id: 'door1', role: 'exit' });
+  });
+
+  it('keeps door Move before both role actions in DOM order', () => {
+    const door = { id: 'door1', y: 340 };
+    useGameState.mockReturnValue({ ...state, doors: [door] });
+    findClickedEntity.mockReturnValue({ type: 'door', data: door, text: 'Door' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 907, clientY: 340 });
+
+    const menu = screen.getByText('Door').parentElement;
+    const buttons = within(menu).getAllByRole('button').map(button => button.textContent.trim());
+    const moveIndex = buttons.findIndex(label => label.startsWith('Move'));
+    const entranceIndex = buttons.indexOf('Mark as Entrance');
+    const exitIndex = buttons.indexOf('Mark as Exit');
+
+    expect(moveIndex).toBeLessThan(entranceIndex);
+    expect(moveIndex).toBeLessThan(exitIndex);
   });
 });

@@ -14,6 +14,9 @@ import {
   isDoorCrossing,
   getRestaurantWorld,
 } from './world';
+import { createGrid } from './navigation/grid';
+import { createActorGrid } from './navigation/domainGrid';
+import { findRoute } from './navigation/router';
 import { isCheckoutState, prepareCheckoutCustomers } from './checkout';
 import { releaseVacatedTables } from './tableLifecycle';
 import {
@@ -48,6 +51,12 @@ export function getExitHeading(customerId) {
 const EXIT_QUEUE_CLEARANCE = 16;
 const EXIT_GEOMETRY_EPSILON = 1e-9;
 const EXIT_DISTANCE = 120;
+const EXIT_OPENING_HEIGHT = 40;
+const EXIT_REACHABILITY_EXPANSIONS = 2048;
+const EXIT_REACHABILITY_CACHE_LIMIT = 1024;
+const EXIT_FLOW_GRID_CACHE_LIMIT = 32;
+const exitReachabilityCache = new Map();
+const exitFlowGridCache = new Map();
 
 function isFinitePoint(point) {
   return Number.isFinite(point?.x) && Number.isFinite(point?.y);
@@ -98,10 +107,14 @@ function longestQueueSafePrefix(start, heading, maximumDistance, projectedMember
   return Math.max(0, prefix);
 }
 
-function getQueueSafeExitChoice(state, customer) {
+function getQueueSafeExitChoice(state, customer, additionalMembers = [], includePhysicalActors = false) {
   if (!isFinitePoint(customer)) return null;
 
-  const projectedMembers = getQueueVisibleMembers(state, state.queue).filter(isFinitePoint);
+  const projectedMembers = [
+    ...(includePhysicalActors ? getExitPhysicalActors(state, customer) : []),
+    ...getQueueVisibleMembers(state, state.queue),
+    ...additionalMembers,
+  ].filter(isFinitePoint);
   const stableHeading = getExitHeading(customer.id);
   const preferredSign = stableHeading.angleDegrees > 0 ? 1 : -1;
   const angleCandidates = [
@@ -142,13 +155,14 @@ function getQueueSafeExitChoice(state, customer) {
   }
 
   const heading = longestPrefix.heading || getHeadingForAngle(angleCandidates[0]);
+  const distance = Math.max(0, longestPrefix.distance);
   return {
     heading,
     target: {
       x: customer.x + heading.x * EXIT_DISTANCE,
       y: customer.y + heading.y * EXIT_DISTANCE,
     },
-    distance: Math.max(0, longestPrefix.distance),
+    distance,
   };
 }
 
@@ -332,7 +346,142 @@ function replaceCharacters(state, moved, key, committedIds = null) {
 
 function getExitDestination(state, customer) {
   const door = getDoors(state).find(candidate => candidate.id === customer.exitDoorId);
-  return door ? getDoorPosition(state, door)?.outside || null : null;
+  const position = door ? getDoorPosition(state, door) : null;
+  if (!position) return null;
+  const crossing = customer.exitCrossingPoint;
+  const validCrossing = isFinitePoint(crossing)
+    && Math.abs(crossing.x - position.outside.x) <= EXIT_GEOMETRY_EPSILON
+    && crossing.y >= door.y - EXIT_GEOMETRY_EPSILON
+    && crossing.y < door.y + EXIT_OPENING_HEIGHT - EXIT_GEOMETRY_EPSILON;
+  return validCrossing
+    ? { x: position.outside.x, y: crossing.y }
+    : position.outside;
+}
+
+function isPastExitCrossing(state, customer, door) {
+  const outside = getDoorPosition(state, door)?.outside;
+  return Boolean(outside && isFinitePoint(customer)
+    && customer.x >= outside.x - EXIT_GEOMETRY_EPSILON
+    && customer.y >= door.y - EXIT_GEOMETRY_EPSILON
+    && customer.y < door.y + EXIT_OPENING_HEIGHT - EXIT_GEOMETRY_EPSILON);
+}
+
+function samePoint(left, right) {
+  return isFinitePoint(left) && isFinitePoint(right)
+    && left.x === right.x && left.y === right.y;
+}
+
+function clearExitCrossingPoint(customer) {
+  if (!Object.hasOwn(customer, 'exitCrossingPoint') && !Object.hasOwn(customer, 'exitFadeOrigin')) return customer;
+  const { exitCrossingPoint: _exitCrossingPoint, exitFadeOrigin: _exitFadeOrigin, ...cleared } = customer;
+  return cleared;
+}
+
+function setExitCrossingPoint(customer, point) {
+  return samePoint(customer.exitCrossingPoint, point)
+    ? customer
+    : { ...customer, exitCrossingPoint: { x: point.x, y: point.y } };
+}
+
+function getExitCrossingCandidates(state, door) {
+  const position = getDoorPosition(state, door);
+  if (!position || !Number.isFinite(door?.y)) return [];
+  const world = getRestaurantWorld(state.restaurant || {});
+  const centreY = position.outside.y;
+  const yValues = new Set([centreY]);
+  const firstLatticeY = Math.ceil((door.y - EXIT_GEOMETRY_EPSILON) / world.gridSize) * world.gridSize;
+  for (let y = firstLatticeY; y < door.y + EXIT_OPENING_HEIGHT - EXIT_GEOMETRY_EPSILON; y += world.gridSize) {
+    if (y >= door.y - EXIT_GEOMETRY_EPSILON) yValues.add(y);
+  }
+  return [...yValues]
+    .filter(y => y >= door.y - EXIT_GEOMETRY_EPSILON
+      && y < door.y + EXIT_OPENING_HEIGHT - EXIT_GEOMETRY_EPSILON)
+    .map(y => ({ x: position.outside.x, y }))
+    .sort((left, right) => Math.abs(left.y - centreY) - Math.abs(right.y - centreY) || left.y - right.y);
+}
+
+function getExitPhysicalActors(state, customer) {
+  const id = String(customer.id);
+  return [
+    ...(state.staff || []),
+    ...(state.customers || []),
+    ...getQueueVisibleMembers(state, state.queue),
+  ].filter(actor => String(actor.id ?? actor.memberId) !== id && isFinitePoint(actor));
+}
+
+function isExitCrossingPointSafe(state, customer, point) {
+  return getExitPhysicalActors(state, customer).every(actor =>
+    Math.hypot(point.x - actor.x, point.y - actor.y)
+      >= EXIT_QUEUE_CLEARANCE - EXIT_GEOMETRY_EPSILON);
+}
+
+function setBoundedCache(cache, key, value, limit) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  if (cache.size > limit) {
+    cache.delete(cache.keys().next().value);
+  }
+}
+
+function navigationTopologyKey(state) {
+  const geometry = (items, keys) => (items || []).map(item => keys.map(key => item?.[key]));
+  return JSON.stringify({
+    expansionLevel: state.restaurant?.expansionLevel ?? 1,
+    tables: geometry(state.tables, ['id', 'x', 'y']),
+    chairs: geometry(state.chairs, ['id', 'tableId', 'x', 'y', 'rotation']),
+    kitchenStations: geometry(state.kitchenStations, ['id', 'x', 'y']),
+    serviceTables: geometry(state.serviceTables, ['id', 'x', 'y', 'rotation']),
+    cashierStations: geometry(state.cashierStations, ['id', 'x', 'y', 'w', 'h']),
+    washStations: geometry(state.washStations, ['id', 'x', 'y', 'w', 'h']),
+    doors: getDoors(state).map(door => [door?.id, door?.y, door?.role]),
+  });
+}
+
+function getExitFlowGrid(state, door) {
+  if (!door) return null;
+  const key = `${navigationTopologyKey(state)}:egress:${String(door.id)}:${door.role || ''}`;
+  if (exitFlowGridCache.has(key)) return exitFlowGridCache.get(key);
+  const grid = createGrid(state, null, { doorFlow: { direction: 'egress', doorId: door.id } });
+  setBoundedCache(exitFlowGridCache, key, grid, EXIT_FLOW_GRID_CACHE_LIMIT);
+  return grid;
+}
+
+function isReachableExitCrossingPoint(state, customer, door, point, flowGrid = null) {
+  const flow = { direction: 'egress', doorId: door.id };
+  const base = flowGrid || createGrid(state, null, { doorFlow: flow });
+  const grid = createActorGrid(state, customer, base, flow);
+  if (!grid.isOpen(point)) return false;
+  // A legacy cleared-residency fixture can retain a blocked table cell while
+  // the customer has already logically left its seat. Keep the old goal
+  // assignment in that case; the coordinator still applies the authoritative
+  // domain grid before any movement is committed.
+  if (!grid.isOpen(customer)) return customer.seatResidency?.phase === 'clear';
+  const key = JSON.stringify([grid.signature, door.y, customer.x, customer.y, point.x, point.y]);
+  if (exitReachabilityCache.has(key)) return exitReachabilityCache.get(key);
+  const result = findRoute(grid, customer, point, {
+    maxExpansions: EXIT_REACHABILITY_EXPANSIONS,
+  });
+  if (result.status === 'found' || result.status === 'unreachable') {
+    setBoundedCache(exitReachabilityCache, key, result.status === 'found', EXIT_REACHABILITY_CACHE_LIMIT);
+  }
+  return result.status === 'found';
+}
+
+function chooseExitCrossingPoint(state, customer, door, flowGrid = null) {
+  const candidates = getExitCrossingCandidates(state, door);
+  const previous = [customer.exitCrossingPoint, customer.navigationGoal]
+    .find(point => candidates.some(candidate => samePoint(candidate, point)));
+  const ordered = previous
+    ? [previous, ...candidates.filter(candidate => !samePoint(candidate, previous))]
+    : candidates;
+  return ordered.find(point => isExitCrossingPointSafe(state, customer, point)
+    && isReachableExitCrossingPoint(state, customer, door, point, flowGrid)) || null;
+}
+
+function assignExitCrossingPoint(state, customer, door, flowGrid = null) {
+  const crossing = chooseExitCrossingPoint(state, customer, door, flowGrid);
+  if (!crossing) return clearNavigationGoal(clearExitCrossingPoint(customer));
+  return setNavigationGoal(setExitCrossingPoint(customer, crossing), crossing);
 }
 
 function nearestDoor(state, doors, customer, side) {
@@ -367,13 +516,71 @@ function isOutdoorQueuePosition(state, customer) {
     && customer.y <= world.queueY + world.queueH;
 }
 
-function directOutdoorDeparture(state, customer) {
-  const choice = getQueueSafeExitChoice(state, customer);
-  if (!choice) return customer;
+function directOutdoorDeparture(state, customer, additionalMembers = []) {
   const world = getRestaurantWorld(state.restaurant || {});
+  const currentGoal = customer.navigationGoal;
+  const alreadyBeyondQueue = customer.x >= world.queueX + world.queueW - EXIT_GEOMETRY_EPSILON;
+  const canContinueExistingTail = alreadyBeyondQueue
+    && isFinitePoint(currentGoal)
+    && isBoundedOutdoorTail(customer, currentGoal)
+    && currentGoal.y >= world.queueY
+    && currentGoal.y <= world.queueY + world.queueH
+    && isQueueClear(customer, currentGoal, [
+      ...getQueueVisibleMembers(state, state.queue),
+      ...additionalMembers,
+    ].filter(isFinitePoint));
+  if (canContinueExistingTail) {
+    const distance = Math.hypot(currentGoal.x - customer.x, currentGoal.y - customer.y);
+    const heading = {
+      angleDegrees: Math.atan2(currentGoal.y - customer.y, currentGoal.x - customer.x) * 180 / Math.PI,
+      x: (currentGoal.x - customer.x) / distance,
+      y: (currentGoal.y - customer.y) / distance,
+    };
+    return setNavigationGoal({
+      ...customer,
+      exitPhase: 'fading',
+      exitDoorId: null,
+      exitFadeProgress: 0,
+      exitHeading: heading,
+    }, currentGoal);
+  }
+  const choice = getQueueSafeExitChoice(state, customer, additionalMembers);
+  if (!choice) return customer;
+  const outwardTarget = alreadyBeyondQueue ? {
+    x: customer.x + Math.max(0, choice.heading.x) * EXIT_DISTANCE,
+    y: customer.y + choice.heading.y * EXIT_DISTANCE,
+  } : choice.target;
+  const boundaryDistance = alreadyBeyondQueue ? choice.distance : Math.min(
+    choice.distance,
+    choice.heading.x > EXIT_GEOMETRY_EPSILON
+      ? (world.queueX + world.queueW - customer.x) / choice.heading.x
+      : choice.heading.x < -EXIT_GEOMETRY_EPSILON
+        ? (world.queueX - customer.x) / choice.heading.x
+        : Infinity,
+    choice.heading.y > EXIT_GEOMETRY_EPSILON
+      ? (world.queueY + world.queueH - customer.y) / choice.heading.y
+      : choice.heading.y < -EXIT_GEOMETRY_EPSILON
+        ? (world.queueY - customer.y) / choice.heading.y
+        : Infinity,
+  );
+  if (boundaryDistance <= EXIT_GEOMETRY_EPSILON) {
+    return clearNavigationGoal({
+      ...customer,
+      exitPhase: 'fading',
+      exitDoorId: null,
+      exitFadeProgress: 0,
+      exitHeading: choice.heading,
+    });
+  }
+  const boundedTarget = alreadyBeyondQueue ? outwardTarget : {
+    x: customer.x + choice.heading.x * boundaryDistance,
+    y: customer.y + choice.heading.y * boundaryDistance,
+  };
   const target = {
-    x: Math.min(world.queueX + world.queueW, Math.max(world.queueX, choice.target.x)),
-    y: Math.min(world.queueY + world.queueH, Math.max(world.queueY, choice.target.y)),
+    x: alreadyBeyondQueue
+      ? boundedTarget.x
+      : Math.min(world.queueX + world.queueW, Math.max(world.queueX, boundedTarget.x)),
+    y: Math.min(world.queueY + world.queueH, Math.max(world.queueY, boundedTarget.y)),
   };
   return setNavigationGoal({
     ...customer,
@@ -382,6 +589,85 @@ function directOutdoorDeparture(state, customer) {
     exitFadeProgress: 0,
     exitHeading: choice.heading,
   }, target);
+}
+
+function isOutdoorGoal(state, customer, goal) {
+  const world = getRestaurantWorld(state.restaurant || {});
+  return isBoundedOutdoorTail(customer, goal)
+    && goal.x >= world.queueX
+    && goal.y >= world.queueY
+    && goal.y <= world.queueY + world.queueH
+    && ((customer.x < world.queueX + world.queueW - EXIT_GEOMETRY_EPSILON
+      && goal.x <= world.queueX + world.queueW)
+      || (customer.x >= world.queueX + world.queueW - EXIT_GEOMETRY_EPSILON
+        && goal.x > customer.x));
+}
+
+function isBoundedOutdoorTail(customer, goal) {
+  if (!isFinitePoint(customer) || !isFinitePoint(goal) || goal.x <= customer.x) return false;
+  const distance = Math.hypot(goal.x - customer.x, goal.y - customer.y);
+  return Number.isFinite(distance) && distance <= EXIT_DISTANCE + EXIT_GEOMETRY_EPSILON;
+}
+
+function isValidDoorFadeRoute(state, customer) {
+  const goal = customer.navigationGoal;
+  const savedOrigin = customer.exitFadeOrigin || customer.exitCrossingPoint;
+  const savedRoute = isFinitePoint(savedOrigin) && isFinitePoint(customer)
+    && isFinitePoint(goal)
+    && goal.x > savedOrigin.x
+    && Math.abs(Math.hypot(goal.x - savedOrigin.x, goal.y - savedOrigin.y) - EXIT_DISTANCE)
+      <= EXIT_GEOMETRY_EPSILON;
+  const origin = savedRoute ? savedOrigin : getExitDestination(state, customer);
+  if (!origin || !isFinitePoint(customer) || !isFinitePoint(goal)) return false;
+  const dx = goal.x - origin.x;
+  const dy = goal.y - origin.y;
+  const length = Math.hypot(dx, dy);
+  if (goal.x <= origin.x || Math.abs(length - EXIT_DISTANCE) > EXIT_GEOMETRY_EPSILON) return false;
+  const along = (customer.x - origin.x) * dx + (customer.y - origin.y) * dy;
+  const cross = (customer.x - origin.x) * dy - (customer.y - origin.y) * dx;
+  return along >= -EXIT_GEOMETRY_EPSILON
+    && along <= length * length + EXIT_GEOMETRY_EPSILON
+    && Math.abs(cross) <= EXIT_GEOMETRY_EPSILON;
+}
+
+function isExitFadePathClear(state, customer) {
+  return isFinitePoint(customer.navigationGoal)
+    && isQueueClear(customer, customer.navigationGoal, getExitPhysicalActors(state, customer));
+}
+
+function isDirectOutdoorFade(state, customer) {
+  return customer.state === 'leaving'
+    && customer.exitPhase === 'fading'
+    && (customer.exitDoorId == null
+      || (isOutdoorQueuePosition(state, customer) && !isValidDoorFadeRoute(state, customer)));
+}
+
+function planDirectOutdoorDepartures(state, customers) {
+  const candidates = customers
+    .filter(customer => isDirectOutdoorFade(state, customer) && isFinitePoint(customer))
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const assignments = new Map();
+  for (const customer of candidates) {
+    const otherCustomers = candidates
+      .filter(other => String(other.id) !== String(customer.id))
+      .flatMap(other => [
+        ...(isFinitePoint(other) ? [other] : []),
+        ...(isFinitePoint(other.navigationGoal) ? [other.navigationGoal] : []),
+      ]);
+    const assignedGoals = [...assignments.values()]
+      .filter(assigned => isFinitePoint(assigned.navigationGoal))
+      .map(assigned => assigned.navigationGoal);
+    const blockers = [...otherCustomers, ...assignedGoals];
+    const goalIsSafe = isOutdoorGoal(state, customer, customer.navigationGoal)
+      && isQueueClear(customer, customer.navigationGoal, [
+        ...getQueueVisibleMembers(state, state.queue),
+        ...blockers,
+      ].filter(isFinitePoint));
+    assignments.set(String(customer.id), goalIsSafe
+      ? customer.exitDoorId == null ? customer : directOutdoorDeparture(state, customer, blockers)
+      : directOutdoorDeparture(state, customer, blockers));
+  }
+  return assignments;
 }
 
 // Admit the oldest staged pending-departure records (hidden overflow members
@@ -568,6 +854,9 @@ export function prepareCustomersForMovement(state, gameDt) {
     updatedCustomers,
   );
 
+  const departureState = { ...state, queue: updatedQueue, queueSlots };
+  const directOutdoorDepartures = planDirectOutdoorDepartures(departureState, updatedCustomers);
+
   const doors = getDoors(state);
   const entranceDoors = getDoorsForFlow(state, 'ingress');
   const exitDoors = getDoorsForFlow(state, 'egress');
@@ -608,20 +897,26 @@ export function prepareCustomersForMovement(state, gameDt) {
       if (!fallback) return leaving;
       leaving = { ...leaving, ...fallback };
     }
-    if (leaving.exitPhase === 'fading' && leaving.exitDoorId == null) {
-      return isFinitePoint(leaving.navigationGoal)
-        ? leaving
-        : directOutdoorDeparture({ ...state, queue: updatedQueue }, leaving);
+    if (leaving.exitPhase === 'fading') {
+      const directDeparture = directOutdoorDepartures.get(String(leaving.id));
+      if (directDeparture) return directDeparture;
+      if (leaving.exitDoorId == null) {
+        return directOutdoorDeparture(departureState, leaving);
+      }
     }
     // Queue departures fade from their own standing positions, not from the
     // restaurant exit. Indoor departures keep their assigned doorway route.
     if (leaving.exitDoorId == null && isOutdoorQueuePosition(state, leaving)) {
-      return directOutdoorDeparture({ ...state, queue: updatedQueue }, leaving);
+      return directOutdoorDeparture(departureState, leaving);
     }
     const currentDoor = doors.find(candidate => candidate.id === leaving.exitDoorId);
     const preservingCrossing = currentDoor
       && (leaving.exitPhase === 'fading' || isDoorCrossing(state, leaving, currentDoor));
     const currentDoorIsEligible = currentDoor && isDoorRoleForFlow(currentDoor, 'egress');
+    if (leaving.exitPhase !== 'fading' && currentDoorIsEligible
+      && isPastExitCrossing(state, leaving, currentDoor)) {
+      return startCustomerFading(departureState, leaving);
+    }
     if (!currentDoorIsEligible && !preservingCrossing) {
       const door = [...exitDoors].sort((a, b) => {
         const loadDifference = (claimedDoors.get(a.id) || 0) - (claimedDoors.get(b.id) || 0);
@@ -629,48 +924,51 @@ export function prepareCustomersForMovement(state, gameDt) {
       })[0];
       if (!door) {
         return isOutdoorQueuePosition(state, leaving)
-          ? directOutdoorDeparture({ ...state, queue: updatedQueue }, leaving)
-          : { ...clearNavigationGoal(leaving), exitDoorId: null };
+          ? directOutdoorDeparture(departureState, leaving)
+          : { ...clearNavigationGoal(clearExitCrossingPoint(leaving)), exitDoorId: null };
       }
       claimedDoors.set(door.id, (claimedDoors.get(door.id) || 0) + 1);
-      leaving = { ...leaving, exitDoorId: door.id };
+      leaving = clearExitCrossingPoint({ ...leaving, exitDoorId: door.id });
     }
     const destination = getExitDestination(state, leaving);
     if (!destination) return leaving;
     if (leaving.exitPhase === 'fading') {
       if (!isFinitePoint(leaving.navigationGoal)) {
-        const choice = getQueueSafeExitChoice(state, leaving);
+        const choice = getQueueSafeExitChoice(state, leaving, [], true);
         if (!choice) return leaving;
         leaving = { ...leaving, exitHeading: choice.heading };
         return setNavigationGoal(leaving, choice.target);
       }
+      if (!isExitFadePathClear(departureState, leaving)) {
+        const choice = getQueueSafeExitChoice(departureState, leaving, [], true);
+        if (choice && !samePoint(choice.target, leaving.navigationGoal)) {
+          return setNavigationGoal({
+            ...leaving,
+            exitFadeProgress: 0,
+            exitHeading: choice.heading,
+            exitFadeOrigin: { x: leaving.x, y: leaving.y },
+          }, choice.target);
+        }
+      }
       return leaving;
     }
-    return setNavigationGoal(leaving, destination);
+    const routeDoor = doors.find(candidate => candidate.id === leaving.exitDoorId);
+    if (preservingCrossing) {
+      const inFlightPoint = getExitCrossingCandidates(state, routeDoor)
+        .find(candidate => samePoint(candidate, leaving.navigationGoal)) || destination;
+      return isFinitePoint(inFlightPoint)
+        ? setNavigationGoal(setExitCrossingPoint(leaving, inFlightPoint), inFlightPoint)
+        : leaving;
+    }
+    return assignExitCrossingPoint(
+      { ...departureState, customers: updatedCustomers },
+      leaving,
+      routeDoor,
+      getExitFlowGrid(state, routeDoor),
+    );
   });
 
   const doorAdmissions = updateDoorAdmissions(state.doorAdmissions, updatedCustomers);
-
-  // Door-gated leavers represent intentional door waiting without an active
-  // navigation goal: only the customer currently admitted to approach a door
-  // carries the door destination goal, so the public movement status never
-  // misreports a waiting leaver as unreachable. The preserved door intent is
-  // the explicit exitDoorId + to_door phase; the goal is re-created by the
-  // ordinary preparation pass as soon as the leaver is admitted.
-  if (activeDoorApproachCustomers(updatedCustomers).length > 0) {
-    const admittedDoorCustomers = admittedDoorApproachIds({
-      ...state,
-      customers: updatedCustomers,
-      ...(doorAdmissions ? { doorAdmissions } : {}),
-    });
-    updatedCustomers = updatedCustomers.map(customer => {
-      const waitingAtDoor = customer.state === 'leaving'
-        && customer.exitPhase !== 'fading'
-        && customer.exitDoorId != null
-        && !admittedDoorCustomers.has(String(customer.id));
-      return waitingAtDoor ? clearNavigationGoal(customer) : customer;
-    });
-  }
 
   return {
     ...state,
@@ -758,37 +1056,7 @@ function updateDoorAdmissions(previous, customers) {
   return { nextSequence, requests };
 }
 
-function admittedDoorApproachIds(state) {
-  const candidatesByDoor = new Map();
-  const requests = state.doorAdmissions?.requests || {};
-  for (const customer of activeDoorApproachCustomers(state.customers)) {
-    const doorId = String(customer.exitDoorId);
-    const record = requests[String(customer.id)];
-    const candidates = candidatesByDoor.get(doorId) || [];
-    candidates.push({
-      customer,
-      sequence: record && String(record.doorId) === doorId && Number.isInteger(record.sequence)
-        ? record.sequence
-        : Infinity,
-    });
-    candidatesByDoor.set(doorId, candidates);
-  }
-
-  const admittedCustomers = new Set();
-  for (const candidates of candidatesByDoor.values()) {
-    candidates.sort((left, right) => left.sequence - right.sequence
-      || String(left.customer.id).localeCompare(String(right.customer.id)));
-    const destination = getExitDestination(state, candidates[0].customer);
-    // FIFO cannot require its head to occupy a point already occupied by a
-    // gated leaver. Let that mouth occupant clear the shared approach first.
-    const occupying = destination && candidates.find(({ customer }) =>
-      Math.hypot(customer.x - destination.x, customer.y - destination.y) < 16);
-    admittedCustomers.add(String((occupying || candidates[0]).customer.id));
-  }
-  return admittedCustomers;
-}
-
-function descriptorForCustomer(state, character, admittedCustomers) {
+function descriptorForCustomer(state, character) {
   const movingState = character.state === 'checkout_moving'
     || character.state === 'leaving'
     || character.state === 'entering';
@@ -803,11 +1071,9 @@ function descriptorForCustomer(state, character, admittedCustomers) {
   const isCheckout = character.state === 'checkout_moving';
   const isEntering = character.state === 'entering';
   const checkoutAdvance = getCheckoutAdvance(state, character);
-  const doorApproachAdmitted = !isToDoor
-    || admittedCustomers.has(String(character.id));
   const speed = !hasGoal ? 0
     : isFading ? 30
-      : isToDoor ? doorApproachAdmitted ? 55 : 0
+      : isToDoor ? 55
         : isCheckout || isEntering ? 62
           : 0;
   const direction = isLeaving ? 'egress' : isEntering ? 'ingress' : 'none';
@@ -818,6 +1084,7 @@ function descriptorForCustomer(state, character, admittedCustomers) {
     doorFlow: { doorId: direction === 'none' ? null : doorId, direction },
     queueRank: isCheckout ? getCheckoutQueueRank(state, character) : null,
     ...(checkoutAdvance ? { checkoutAdvance } : {}),
+    ...(isToDoor ? { doorApproach: true } : {}),
     terminalPolicy: isFading ? 'release' : 'hold',
     provenance: 'customer',
   };
@@ -825,10 +1092,9 @@ function descriptorForCustomer(state, character, admittedCustomers) {
 }
 
 export function getCustomerMovementEntries(state, _movementDt) {
-  const admittedCustomers = admittedDoorApproachIds(state);
   const active = (state.customers || [])
     .filter(character => character?.id != null && isFinitePoint(character))
-    .map(character => descriptorForCustomer(state, character, admittedCustomers));
+    .map(character => descriptorForCustomer(state, character));
   const queue = getQueueVisibleMembers(state, state.queue)
     .filter(member => member?.id != null && isFinitePoint(member))
     .map(character => ({
@@ -877,13 +1143,22 @@ function getCustomerBatchEntries(state, movementDt) {
 }
 
 function startCustomerFading(state, customer) {
-  const choice = getQueueSafeExitChoice(state, customer);
+  const destination = getExitDestination(state, customer);
+  const door = getDoors(state).find(candidate => candidate.id === customer.exitDoorId);
+  const crossing = customer.exitDoorId != null && isFinitePoint(destination)
+    ? isPastExitCrossing(state, customer, door)
+      ? { x: customer.x, y: customer.y }
+      : { x: destination.x, y: destination.y }
+    : null;
+  const withCrossing = crossing ? setExitCrossingPoint(customer, crossing) : customer;
+  const choice = getQueueSafeExitChoice(state, withCrossing, [], true);
   if (!choice) return customer;
   const fading = {
-    ...customer,
+    ...withCrossing,
     exitPhase: 'fading',
     exitFadeProgress: 0,
     exitHeading: choice.heading,
+    ...(isFinitePoint(withCrossing) ? { exitFadeOrigin: { x: withCrossing.x, y: withCrossing.y } } : {}),
   };
   return setNavigationGoal(fading, choice.target);
 }
@@ -893,12 +1168,9 @@ function clampFadeProgress(distance) {
 }
 
 export function resolveCustomersAfterMovement(state, _movementDt, statuses = new Map()) {
-  const doorPositions = new Map(getDoors(state)
-    .map(door => [door.id, getDoorPosition(state, door)?.outside])
-    .filter(([, position]) => position));
   let updatedCustomers = (state.customers || []).map(customer => {
     if (customer.state !== 'leaving' || customer.exitPhase === 'fading') return customer;
-    const destination = doorPositions.get(customer.exitDoorId);
+    const destination = getExitDestination(state, customer);
     const status = suppliedMovementStatus(state, statuses, customer.id);
     if (!destination || !sameNavigationGoal(customer.navigationGoal, destination)
       || !isAtNavigationGoal(customer) || status.plan !== 'arrived') return customer;

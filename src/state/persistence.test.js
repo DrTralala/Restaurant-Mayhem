@@ -193,6 +193,93 @@ describe('loadState', () => {
 });
 
 describe('hydrateState', () => {
+  it('rejects duplicate service-item IDs instead of silently merging owners', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      staff: [],
+      customers: [
+        { id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast', tableId: 't1' },
+        { id: 'c2', state: 'waiting_for_items', dishId: 'starter-toast', tableId: 't2' },
+      ],
+      serviceItems: [
+        { id: 'duplicate', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', tableId: 't1', state: 'ordered' },
+        { id: 'duplicate', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c2', tableId: 't2', state: 'ordered' },
+      ],
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow(/service-item inventory/i);
+  });
+
+  it('rejects same-customer same-kind duplicates while preserving a legitimate dish and drink pair', () => {
+    const fresh = createInitialState();
+    const duplicate = {
+      ...fresh,
+      staff: [],
+      customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast', tableId: 't1' }],
+      serviceItems: [
+        { id: 'first', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', tableId: 't1', state: 'ordered' },
+        { id: 'second', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', tableId: 't1', state: 'ordered' },
+      ],
+    };
+    expect(() => hydrateState(duplicate, fresh)).toThrow(/service-item inventory/i);
+
+    const valid = {
+      ...fresh,
+      staff: [],
+      customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast', drinkId: 'water', tableId: 't1' }],
+      serviceItems: [
+        { id: 'dish', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', tableId: 't1', state: 'ordered' },
+        { id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1', state: 'ordered' },
+      ],
+    };
+    expect(hydrateState(valid, fresh).serviceItems.map(item => item.id)).toEqual(['dish', 'drink']);
+  });
+
+  it('rejects a carried load that mixes clean and dirty service items', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      staff: [{ ...fresh.staff[0], id: 'carrier', role: 'waiter', carryingServiceItemIds: ['clean', 'dirty'] }],
+      customers: [
+        { id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast', tableId: 't1' },
+        { id: 'c2', state: 'waiting_for_items', dishId: 'starter-toast', tableId: 't2' },
+      ],
+      serviceItems: [
+        { id: 'clean', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', tableId: 't1', state: 'carried' },
+        { id: 'dirty', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c2', tableId: 't2', state: 'carried_dirty' },
+      ],
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow(/service-item inventory/i);
+  });
+
+  it('rejects malformed inventory through loadState without deleting the saved JSON', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      staff: [],
+      customers: [
+        { id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast', tableId: 't1' },
+        { id: 'c2', state: 'waiting_for_items', dishId: 'starter-toast', tableId: 't2' },
+      ],
+      serviceItems: [
+        { id: 'duplicate', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', tableId: 't1', state: 'ordered' },
+        { id: 'duplicate', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c2', tableId: 't2', state: 'ordered' },
+      ],
+    };
+    const serialized = JSON.stringify(saved);
+    localStorage.setItem('restaurant-sim-save', serialized);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      expect(loadState()).toBeNull();
+      expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it('round-trips directional door roles in a new-format save', () => {
     const fresh = createInitialState();
     const state = {
@@ -276,7 +363,7 @@ describe('hydrateState', () => {
     expect(child.stderr).toBe('');
     expect(child.stdout).toContain(collection ? 'REJECTED Invalid saved navigation geometry' : 'ACCEPTED');
   });
-  it('preserves the near-door incumbent and deterministic FIFO hand-off through reload', () => {
+  it('preserves door admissions and concurrent movement through reload', () => {
     const fresh = createInitialState();
     let state = { ...fresh, staff: [], customers: [{ id: 'z', x: 990, y: 360,
       state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1' }] };
@@ -288,17 +375,17 @@ describe('hydrateState', () => {
     saveState(state);
     let restored = hydrateState(loadState(), fresh);
     expect(restored.doorAdmissions).toEqual(admissions);
-    const admitted = current => getCustomerMovementEntries(current).filter(entry => entry.speed === 55)
-      .map(entry => entry.character.id);
-    expect(admitted(restored)).toEqual(['z']);
+    const moving = current => getCustomerMovementEntries(current).filter(entry => entry.speed === 55)
+      .map(entry => entry.character.id).sort();
+    expect(moving(restored)).toEqual(['a', 'z']);
     restored.customers.reverse();
     restored = prepareCustomersForMovement(restored, 0);
-    expect(admitted(restored)).toEqual(['z']);
+    expect(moving(restored)).toEqual(['a', 'z']);
     restored.customers = restored.customers.filter(actor => actor.id !== 'z');
     restored.customers.unshift({ id: '0-new', x: 860, y: 280,
       state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1' });
     restored = prepareCustomersForMovement(restored, 0);
-    expect(admitted(restored)).toEqual(['a']);
+    expect(moving(restored)).toEqual(['0-new', 'a']);
     expect(restored.doorAdmissions.requests['0-new'].sequence)
       .toBeGreaterThan(restored.doorAdmissions.requests.a.sequence);
   });
@@ -476,7 +563,7 @@ describe('hydrateState', () => {
       version: SAVE_VERSION,
       movementCoordinator: createMovementCoordinator(),
       restaurant: { funds: 999, totalServed: 0, openHour: 10, closeHour: 22 },
-      staff: [{ id: 'custom-cook', gender: 'male' }],
+      staff: [{ id: 'custom-cook', gender: 'male', carryingServiceItemIds: [] }],
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       serviceItems: [],
       customers: [],
@@ -692,7 +779,7 @@ describe('hydrateState', () => {
 
     expect(JSON.stringify(saved)).toBe(before);
     expect(customer).toMatchObject({ id: 'c186', x: 360, y: 390, state: 'leaving' });
-    expect(mario).toMatchObject({ task: null, carryingServiceItemId: 'carried-dish', activityPhase: null });
+    expect(mario).toMatchObject({ task: null, carryingServiceItemIds: ['carried-dish'], activityPhase: null });
     expect(mario).not.toHaveProperty('navigationGoal');
     expect(Math.hypot(mario.x - customer.x, mario.y - customer.y)).toBeGreaterThanOrEqual(16);
     expect(carriedDish).toMatchObject({ state: 'carried', x: mario.x, y: mario.y });

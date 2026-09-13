@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { getStaffCarryCapacity } from '../simulation/staffInventory';
 
 const taskLabels = {
   clean_table: 'Cleaning table',
@@ -65,6 +66,10 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
 
       <div style={{ fontSize: 12, marginBottom: 16 }}>
         Current task: <strong style={{ color: '#fff' }}>{task}</strong>
+      </div>
+
+      <div style={{ fontSize: 12, marginBottom: 16 }}>
+        Carry capacity: <strong style={{ color: '#fff' }}>{getStaffCarryCapacity(staff)}</strong>
       </div>
 
       <label htmlFor={`salary-${staff.id}`} style={{ display: 'block', fontSize: 12 }}>

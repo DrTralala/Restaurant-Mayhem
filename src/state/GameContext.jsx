@@ -10,9 +10,10 @@ import { assignWaiterToStation } from '../simulation/cashiers';
 import { getNextNumericId, snapPlacement, validatePlacement } from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
 import { hasValidDrinkReservation } from '../simulation/serviceItems';
+import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseOperatingHour } from '../simulation/clock';
 import { moveFixtures } from './fixtureMoves';
-import { moveStaff } from './staffMoves';
+import { invalidateMovementRuntime, moveStaff } from './staffMoves';
 
 const DISH_QUALITY_COST = 50;
 const TRAINING_COST = 100;
@@ -369,27 +370,58 @@ function gameReducer(state, action) {
       return {
         ...state,
         restaurant: { ...state.restaurant, funds: state.restaurant.funds - salary },
-        staff: [...state.staff, { ...staff, salary, carryingServiceItemId: null }],
+        staff: [...state.staff, { ...withCarriedServiceItemIds(staff, []), salary }],
       };
     }
     case 'FIRE_STAFF':
       {
         const fired = state.staff.find(staff => staff.id === action.id);
-        const carriedId = fired?.carryingServiceItemId;
-        return {
+        const carriedIds = new Set(getCarriedServiceItemIds(fired));
+        const firedTask = fired?.task;
+        return invalidateMovementRuntime({
           ...state,
           staff: state.staff.filter(s => s.id !== action.id),
-          serviceItems: (state.serviceItems || []).map(item => item.assignedStaffId === action.id
-            && item.kind === 'drink' && ['ordered', 'preparing'].includes(item.state)
-            ? { ...item, serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null }
-            : item.id === carriedId && item.state === 'carried'
-              ? { ...item, state: 'to_clean' } : item),
+          serviceItems: (state.serviceItems || []).map(item => {
+            if (carriedIds.has(item.id)) {
+              if (item.state === 'carried') {
+                return { ...item, state: 'to_clean', assignedStaffId: null };
+              }
+              if (item.state === 'carried_dirty') {
+                return (state.tables || []).some(table => table.id === item.tableId)
+                  ? { ...item, state: 'dirty_at_table', assignedStaffId: null }
+                  : {
+                    ...item, state: 'queued_for_wash', washStationId: null,
+                    washStartedAt: null, assignedStaffId: null,
+                  };
+              }
+            }
+            if (item.assignedStaffId === action.id && item.kind === 'dish'
+              && ['ordered', 'preparing', 'ready'].includes(item.state)) {
+              return {
+                ...item, state: 'ordered', stationId: null, serviceTableId: null,
+                serviceSlotIndex: null, assignedStaffId: null,
+                preparationStartedAt: null, readyAt: null,
+              };
+            }
+            if (item.assignedStaffId === action.id && item.kind === 'drink'
+              && ['ordered', 'preparing'].includes(item.state)) {
+              return {
+                ...item, serviceTableId: null, serviceSlotIndex: null,
+                assignedStaffId: null, preparationStartedAt: null,
+              };
+            }
+            if (firedTask?.type === 'wash_item' && item.id === firedTask.serviceItemId
+              && ['queued_for_wash', 'washing'].includes(item.state)) {
+              return { ...item, state: 'queued_for_wash', washStartedAt: null };
+            }
+            return item;
+          }),
           cashierStations: (state.cashierStations || []).map(station => {
             if (station.assignedStaffId !== action.id) return station;
             const { assignedStaffId, ...unassigned } = station;
             return unassigned;
           }),
-        };
+        }, action.id);
       }
     case 'RENAME_STAFF':
       return {
@@ -418,7 +450,13 @@ function gameReducer(state, action) {
         ...state,
         restaurant: { ...state.restaurant, funds: state.restaurant.funds - TRAINING_COST },
         staff: state.staff.map(s =>
-          s.id === action.id ? { ...s, skill: Math.min(s.skill + 1, 10) } : s
+          s.id === action.id
+            ? {
+              ...s,
+              skill: Math.min(s.skill + 1, 10),
+              morale: Math.min((Number.isFinite(s.morale) ? s.morale : 0) + 10, 100),
+            }
+            : s
         ),
       };
     }

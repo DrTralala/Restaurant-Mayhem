@@ -9,6 +9,7 @@ import { getCharacterMovementStatus } from './movement';
 import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoal';
 import { getCashierWorkPosition } from './world';
 import { canClaimDestination } from './navigation/destinations';
+import { getCarriedServiceItemIds } from './staffInventory';
 
 export const STAFF_ACTIVITY_PHASES = Object.freeze([
   'idle_waiting', 'idle_roaming', 'task_assigned', 'working', 'stationed',
@@ -30,7 +31,7 @@ function idleDelay(worker) {
 function canRoam(state, worker) {
   return !worker.task
     && worker.role !== 'cook'
-    && !worker.carryingServiceItemId
+    && getCarriedServiceItemIds(worker).length === 0
     && !getAssignedCashierStation(state.cashierStations, worker.id);
 }
 
@@ -54,7 +55,7 @@ export function markWorking(worker) {
 }
 
 export function settleTasklessActivity(state, worker) {
-  if (worker.task || worker.carryingServiceItemId) return markTaskAssigned(worker);
+  if (worker.task || getCarriedServiceItemIds(worker).length > 0) return markTaskAssigned(worker);
   if (!canRoam(state, worker)) {
     const stationGoal = cashierStationGoal(state, worker);
     if (stationGoal && !atPoint(worker, stationGoal)) {
@@ -81,7 +82,7 @@ export function prepareStaffActivity(state, worker) {
   if (worker.task) {
     return worker.activityPhase === 'working' ? worker : markTaskAssigned(worker);
   }
-  if (worker.carryingServiceItemId) return markTaskAssigned(worker);
+  if (getCarriedServiceItemIds(worker).length > 0) return markTaskAssigned(worker);
   if (!canRoam(state, worker)) {
     const stationGoal = cashierStationGoal(state, worker);
     if (stationGoal && !atPoint(worker, stationGoal)) {

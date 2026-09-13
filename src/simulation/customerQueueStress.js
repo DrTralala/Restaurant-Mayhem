@@ -54,7 +54,7 @@ export function buildCustomerQueueStressState() {
       x: 860,
       y: 360,
       task: null,
-      carryingServiceItemId: null,
+      carryingServiceItemIds: [],
     }],
     tables: [{ id: 'queue-table', seats: PARTY_SIZE, status: 'empty', x: 200, y: 360 }],
     chairs: [

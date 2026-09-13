@@ -413,7 +413,7 @@ describe('customer goal preparation and movement descriptors', () => {
     });
   });
 
-  it('admits one non-fading customer per door while leaving independent doors concurrent', () => {
+  it('allows non-fading customers to approach one door while leaving independent doors concurrent', () => {
     const state = {
       ...baseState,
       restaurant: { ...baseState.restaurant, expansionLevel: 1 },
@@ -440,7 +440,7 @@ describe('customer goal preparation and movement descriptors', () => {
     const entries = getCustomerMovementEntries(state, 1);
 
     expect(entries.find(entry => entry.character.id === 'door1-first')).toMatchObject({ speed: 55 });
-    expect(entries.find(entry => entry.character.id === 'door1-second')).toMatchObject({ speed: 0 });
+    expect(entries.find(entry => entry.character.id === 'door1-second')).toMatchObject({ speed: 55, doorApproach: true });
     expect(entries.find(entry => entry.character.id === 'door2-only')).toMatchObject({ speed: 55 });
     expect(entries.find(entry => entry.character.id === 'door1-second').character.navigationGoal)
       .toEqual({ x: 993, y: 360 });

@@ -121,6 +121,56 @@ describe('domain-authorised navigation connectors', () => {
     expect(createActorGrid(state, imposter, base).isOpen(customer.navigationGoal)).toBe(false);
   });
 
+  it('keeps a selected off-centre crossing origin for the bounded fading ray', () => {
+    const customer = { id: 'off-centre-exit', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door',
+      exitCrossingPoint: { x: 993, y: 340 }, x: 993, y: 340,
+      navigationGoal: { x: 1113, y: 340 } };
+    const state = { ...seatedWorld(), customers: [customer] };
+    const base = createGrid(state);
+    const grid = createActorGrid(state, customer, base);
+
+    expect(findRoute(grid, customer, customer.navigationGoal).status).toBe('found');
+    expect(findRoute(grid, customer, customer.navigationGoal).points).toEqual([customer.navigationGoal]);
+  });
+
+  it('finishes a partially completed off-centre fade after the door moves', () => {
+    const customer = { id: 'moved-off-centre-exit', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door',
+      exitCrossingPoint: { x: 993, y: 340 }, x: 1023, y: 340,
+      navigationGoal: { x: 1113, y: 340 } };
+    const state = { ...seatedWorld(), doors: [{ id: 'door', y: 440, role: 'exit' }], customers: [customer] };
+    const grid = createActorGrid(state, customer, createGrid(state));
+
+    expect(findRoute(grid, customer, customer.navigationGoal).status).toBe('found');
+  });
+
+  it('rejects uncapped outdoor fade rays but preserves bounded edge and door tails', () => {
+    const uncapped = {
+      id: 'uncapped', state: 'leaving', exitPhase: 'fading', exitDoorId: null,
+      x: 1040, y: 360, navigationGoal: { x: 100000, y: 360 },
+    };
+    const edge = {
+      id: 'edge', state: 'leaving', exitPhase: 'fading', exitDoorId: null,
+      x: 1033, y: 360, navigationGoal: { x: 1153, y: 360 },
+    };
+    const movedDoor = {
+      id: 'moved-door', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door',
+      x: 1040, y: 360, navigationGoal: { x: 1113, y: 360 },
+    };
+    for (const customer of [uncapped, edge, movedDoor]) {
+      const state = { ...seatedWorld(), customers: [customer] };
+      const base = createGrid(state);
+      const grid = createActorGrid(state, customer, base);
+      const route = findRoute(grid, customer, customer.navigationGoal);
+      if (customer.id === 'uncapped') {
+        expect(grid.isOpen(customer.navigationGoal)).toBe(false);
+        expect(route.status).toBe('unreachable');
+      } else {
+        expect(grid.isOpen(customer.navigationGoal)).toBe(true);
+        expect(route.status).toBe('found');
+      }
+    }
+  });
+
   it('executes chair departure and off-grid fading through the real coordinator at bounded speed', () => {
     let state = seatedWorld();
     state.customers.push({ id: 'exit', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door',

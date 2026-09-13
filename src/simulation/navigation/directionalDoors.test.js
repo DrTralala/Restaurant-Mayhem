@@ -147,6 +147,23 @@ describe('directional door routing', () => {
     expect(crossingGrid.isOpen({ x: getRestaurantWorld(initial.restaurant).doorX, y: 360 })).toBe(true);
   });
 
+  it('preserves an off-centre in-flight crossing when the door role changes', () => {
+    const crossing = {
+      id: 'off-centre-crossing', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door1',
+      x: 907, y: 340, navigationGoal: { x: 993, y: 340 },
+    };
+    const prepared = prepareCustomersForMovement(stateWithCustomer(crossing, [
+      { id: 'door1', y: 340, role: 'entrance' },
+      { id: 'door2', y: 440, role: 'exit' },
+    ]), 0);
+
+    expect(prepared.customers[0]).toMatchObject({
+      exitDoorId: 'door1',
+      exitCrossingPoint: { x: 993, y: 340 },
+      navigationGoal: { x: 993, y: 340 },
+    });
+  });
+
   it('does not assign a fallback exit when no exit role exists', () => {
     const state = stateWithCustomer({
       id: 'leaving', state: 'leaving', exitPhase: 'to_door',

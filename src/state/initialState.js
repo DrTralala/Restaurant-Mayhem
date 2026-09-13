@@ -73,7 +73,7 @@ export function createInitialState() {
         skill: 3,
         morale: 80,
         salary: 200,
-        carryingServiceItemId: null,
+        carryingServiceItemIds: [],
       },
       {
         id: 'starter-waiter',
@@ -83,7 +83,7 @@ export function createInitialState() {
         skill: 3,
         morale: 80,
         salary: 150,
-        carryingServiceItemId: null,
+        carryingServiceItemIds: [],
       },
       {
         id: 'starter-host',
@@ -93,7 +93,7 @@ export function createInitialState() {
         skill: 2,
         morale: 80,
         salary: 150,
-        carryingServiceItemId: null,
+        carryingServiceItemIds: [],
       },
       {
         id: 'starter-cashier-waiter',
@@ -103,11 +103,11 @@ export function createInitialState() {
         skill: 2,
         morale: 80,
         salary: 150,
-        carryingServiceItemId: null,
+        carryingServiceItemIds: [],
       },
       {
         id: 'starter-janitor', name: 'Mia', gender: 'female', role: 'janitor',
-        skill: 2, morale: 80, salary: 120, carryingServiceItemId: null,
+        skill: 2, morale: 80, salary: 120, carryingServiceItemIds: [],
       },
     ],
     dishes: [

@@ -494,12 +494,16 @@ describe('GameProvider authoritative placement actions', () => {
     const initial = createInitialState();
     const game = renderReducer({
       cashierStations: [],
+      customers: [{ id: 'c2', state: 'waiting_for_items', dishId: 'd1', tableId: 't1' }],
+      serviceItems: [{
+        id: 'i2', kind: 'dish', menuItemId: 'd1', customerId: 'c2', tableId: 't1', state: 'carried',
+      }],
       staff: initial.staff.map(staff => {
         if (staff.id === 'starter-waiter') {
            return { ...staff, task: { type: 'pickup_service_item', serviceItemId: 'i1' } };
         }
         if (staff.id === 'starter-host') {
-           return { ...staff, carryingServiceItemId: 'i2' };
+           return { ...staff, carryingServiceItemIds: ['i2'] };
         }
         return staff;
       }),
@@ -548,6 +552,34 @@ describe('GameProvider authoritative placement actions', () => {
       { id: 'cashier1', x: 800, y: 120, w: 80, h: 40 },
       { id: 'cashier2', x: 600, y: 300, w: 80, h: 40 },
     ]);
+  });
+
+  it('clears only the fired staff actor from movement runtime bookkeeping', () => {
+    const game = renderReducer();
+    const coordinator = game.state.movementCoordinator;
+    const runtimeMaps = ['requests', 'statuses', 'claims', 'records', 'plans'];
+    runtimeMaps.forEach(name => {
+      coordinator[name].set('starter-waiter', { id: 'starter-waiter' });
+      coordinator[name].set('starter-cook', { id: 'starter-cook' });
+    });
+    coordinator.diagnostics = {
+      ...coordinator.diagnostics,
+      waiting: new Map([['starter-waiter', true], ['starter-cook', true]]),
+      actorExpansions: new Map([['starter-waiter', 1], ['starter-cook', 1]]),
+      recoveries: new Map([['starter-waiter', 1], ['starter-cook', 1]]),
+    };
+
+    game.dispatch({ type: 'FIRE_STAFF', id: 'starter-waiter' });
+
+    expect(game.state.staff.some(staff => staff.id === 'starter-waiter')).toBe(false);
+    runtimeMaps.forEach(name => {
+      expect(game.state.movementCoordinator[name].has('starter-waiter')).toBe(false);
+      expect(game.state.movementCoordinator[name].has('starter-cook')).toBe(true);
+    });
+    ['waiting', 'actorExpansions', 'recoveries'].forEach(name => {
+      expect(game.state.movementCoordinator.diagnostics[name].has('starter-waiter')).toBe(false);
+      expect(game.state.movementCoordinator.diagnostics[name].has('starter-cook')).toBe(true);
+    });
   });
 });
 
@@ -756,16 +788,42 @@ describe('GameProvider guarded economy actions', () => {
     const training = renderReducer({ restaurant: { funds: 100 } });
     training.dispatch({ type: 'TRAIN_STAFF', id: 'starter-cook', cost: 0 });
     expect(training.state.restaurant.funds).toBe(0);
-    expect(training.state.staff.find(staff => staff.id === 'starter-cook').skill).toBe(4);
+    expect(training.state.staff.find(staff => staff.id === 'starter-cook')).toMatchObject({
+      skill: 4, morale: 90, carryingServiceItemIds: [],
+    });
 
     training.dispatch({ type: 'GIVE_BONUS', id: 'starter-cook', cost: -100 });
     expect(training.state.restaurant.funds).toBe(0);
-    expect(training.state.staff.find(staff => staff.id === 'starter-cook').morale).toBe(80);
+    expect(training.state.staff.find(staff => staff.id === 'starter-cook').morale).toBe(90);
 
     const service = renderReducer({ restaurant: { funds: 299 } });
     service.dispatch({ type: 'BUY_SERVICE_TABLE', cost: 0 });
     expect(service.state.restaurant.funds).toBe(299);
     expect(service.state.serviceTables).toHaveLength(1);
+  });
+
+  it('caps trained skill and morale without discarding an existing load', () => {
+    const training = renderReducer({
+      restaurant: { funds: 100 },
+      staff: createInitialState().staff.map(staff => staff.id === 'starter-cook'
+        ? { ...staff, skill: 9, morale: 95, carryingServiceItemIds: ['dish', 'drink'] }
+        : staff),
+      customers: [
+        { id: 'c1', state: 'waiting_for_items', dishId: 'dish' },
+        { id: 'c2', state: 'waiting_for_items', drinkId: 'water' },
+      ],
+      serviceItems: [
+        { id: 'dish', kind: 'dish', state: 'carried', customerId: 'c1' },
+        { id: 'drink', kind: 'drink', state: 'carried', customerId: 'c2' },
+      ],
+    });
+
+    training.dispatch({ type: 'TRAIN_STAFF', id: 'starter-cook' });
+
+    expect(training.state.staff.find(staff => staff.id === 'starter-cook')).toMatchObject({
+      skill: 10, morale: 100, carryingServiceItemIds: ['dish', 'drink'],
+    });
+    expect(training.state.restaurant.funds).toBe(0);
   });
 
   it('uses the canonical expansion cost and rejects expansion at the configured maximum', () => {
@@ -938,6 +996,7 @@ describe('GameProvider service counter actions', () => {
         { id: 'st1', x: 140, y: 120 },
         { id: 'st2', x: 400, y: 120 },
       ],
+      customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'd1' }],
        serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'c1', serviceTableId: 'st1', state: 'on_service' }],
     });
 

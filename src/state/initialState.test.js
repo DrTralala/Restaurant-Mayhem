@@ -28,8 +28,8 @@ describe('createInitialState', () => {
     expect(state.unlockedDrinkIds).toEqual(['water']);
     expect(state.serviceItems).toEqual([]);
     expect(state.queueAdmissionGate).toBeNull();
-    expect(state.staff.every(staff => staff.carryingServiceItemId === null
-      || typeof staff.carryingServiceItemId === 'string')).toBe(true);
+    expect(state.staff.every(staff => Array.isArray(staff.carryingServiceItemIds)
+      && staff.carryingServiceItemIds.length === 0)).toBe(true);
   });
 
   it('gives starter staff distinct names', () => {

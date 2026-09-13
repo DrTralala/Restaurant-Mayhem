@@ -141,6 +141,20 @@ describe('settings menu', () => {
     expect(screen.getByRole('button', { name: 'Save Game' })).toBeInTheDocument();
   });
 
+  it('renders top-right controls in visual left-to-right DOM order', () => {
+    render(<App />);
+
+    const menu = screen.getByRole('button', { name: 'Menu' });
+    const management = screen.getByRole('button', { name: 'Management' });
+    const settings = screen.getByRole('button', { name: 'Settings' });
+    const follows = (first, second) => Boolean(
+      first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+
+    expect(follows(menu, management)).toBe(true);
+    expect(follows(management, settings)).toBe(true);
+  });
+
   it('closes Menu when empty canvas space is clicked', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'Menu' }));

@@ -7,6 +7,7 @@ import {
 } from '../simulation/movement/navigationWorkspace';
 import { hydrateSeatResidency } from '../simulation/movement/seatedDeparture';
 import { getDoors, getRestaurantWorld } from '../simulation/world';
+import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 
 // Validate before any unit-step raster loop. Finite numbers alone need not advance by one.
 export function validateSavedNavigationGeometry(state) {
@@ -53,6 +54,11 @@ const withoutSeatingTransition = actor => {
   return domain;
 };
 
+const canonicalStaff = worker => withCarriedServiceItemIds(
+  worker,
+  getCarriedServiceItemIds(worker),
+);
+
 // Shared by both persistence transports. Input is live trusted state, not imported JSON.
 export function movementSaveSnapshot(state) {
   const { movementCoordinator: _movementCoordinator, ...domain } = state;
@@ -60,7 +66,8 @@ export function movementSaveSnapshot(state) {
   const workspace = createNavigationWorkspace(state);
   return {
     ...domain,
-    ...(Array.isArray(state.staff) ? { staff: state.staff.map(withoutSeatingTransition) } : {}),
+    ...(Array.isArray(state.staff) ? { staff: state.staff.map(worker =>
+      withoutSeatingTransition(canonicalStaff(worker))) } : {}),
     ...(Array.isArray(state.queue) ? { queue: state.queue.map(party => Array.isArray(party.members)
       ? { ...party, members: party.members.map(withoutSeatingTransition) } : withoutSeatingTransition(party)) } : {}),
     ...(Array.isArray(state.customers) ? { customers: state.customers.map(actor =>
@@ -72,7 +79,7 @@ export function hydrateMovementResidencies(state) {
   validateSavedNavigationGeometry(state);
   const workspace = createNavigationWorkspace(state);
   return { ...state,
-    staff: state.staff.map(withoutSeatingTransition),
+    staff: state.staff.map(worker => withoutSeatingTransition(canonicalStaff(worker))),
     queue: state.queue.map(party => ({ ...party, members: party.members.map(withoutSeatingTransition) })),
     customers: state.customers.map(actor => hydrateSeatResidency(state, actor, workspace)),
   };

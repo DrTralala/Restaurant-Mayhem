@@ -54,7 +54,7 @@ describe('staff task cancellation without arrival', () => {
       { id: 'departed', state: 'waiting_for_items', tableId: 't3', dishId: 'starter-toast' },
     ];
     state.serviceItems[0].state = 'carried';
-    state.staff[1].carryingServiceItemId = 'abandoned-food';
+    state.staff[1].carryingServiceItemIds = ['abandoned-food'];
     const originalTasks = structuredClone(state.staff.map(worker => worker.task));
     const result = resolveStaffAfterMovement(state, 2,
       new Map(state.staff.map(worker => [worker.id, { plan: 'planning', motion: 'holding' }])));
@@ -78,7 +78,7 @@ function activeServiceState() {
     ],
     serviceItems: state.serviceItems.map(item => ({ ...item, state: 'carried' })),
     staff: state.staff.map(worker => ({ ...worker,
-      carryingServiceItemId: worker.id === 'starter-host' ? 'abandoned-food' : null,
+      carryingServiceItemIds: worker.id === 'starter-host' ? ['abandoned-food'] : [],
     })),
   };
 }

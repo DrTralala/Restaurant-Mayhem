@@ -1,4 +1,5 @@
 import { ACTIVITY_DURATIONS } from './activity';
+import { getCarriedServiceItemIds } from './staffInventory';
 
 const DIRTY_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
 const WASH_STATION_CAPACITY = Object.freeze({ manual: 8, automatic: 12 });
@@ -7,18 +8,28 @@ export function getWashStationCapacity(station) {
   return WASH_STATION_CAPACITY[station?.type] ?? 0;
 }
 
-export function getWashStationOccupancy(state, station, { excludeServiceItemId = null } = {}) {
+export function getWashStationOccupancy(state, station, {
+  excludeServiceItemId = null,
+  excludeServiceItemIds = [],
+} = {}) {
   if (!station?.id) return 0;
+  const excludedIds = new Set(excludeServiceItemIds);
+  if (excludeServiceItemId != null) excludedIds.add(excludeServiceItemId);
   const ids = new Set((state.serviceItems || [])
-    .filter(item => item.id !== excludeServiceItemId
+    .filter(item => !excludedIds.has(item.id)
       && item.washStationId === station.id
       && ['queued_for_wash', 'washing'].includes(item.state))
     .map(item => item.id));
   for (const worker of state.staff || []) {
     if (worker.task?.type === 'deliver_dirty_item'
-      && worker.task.washStationId === station.id
-      && worker.task.serviceItemId !== excludeServiceItemId) {
-      ids.add(worker.task.serviceItemId);
+      && worker.task.washStationId === station.id) {
+      if (worker.task.serviceItemId != null && !excludedIds.has(worker.task.serviceItemId)) {
+        ids.add(worker.task.serviceItemId);
+      }
+      for (const itemId of getCarriedServiceItemIds(worker)) {
+        const item = (state.serviceItems || []).find(candidate => candidate.id === itemId);
+        if (item?.state === 'carried_dirty' && !excludedIds.has(itemId)) ids.add(itemId);
+      }
     }
   }
   return ids.size;

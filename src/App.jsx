@@ -38,14 +38,6 @@ function AppInner() {
           onPlacementComplete={() => setPlacementRequest(null)}
           onEmptySpaceClick={closeTopLevelMenus}
         />
-        <BookIcon
-          onClick={() => {
-            setMenuOpen(false);
-            setSettingsOpen(false);
-            setModalOpen(v => !v);
-          }}
-          isOpen={modalOpen}
-        />
         <MenuIcon
           onClick={() => {
             setModalOpen(false);
@@ -53,6 +45,14 @@ function AppInner() {
             setMenuOpen(v => !v);
           }}
           isOpen={menuOpen}
+        />
+        <BookIcon
+          onClick={() => {
+            setMenuOpen(false);
+            setSettingsOpen(false);
+            setModalOpen(v => !v);
+          }}
+          isOpen={modalOpen}
         />
         <SettingsMenu
           isOpen={settingsOpen}

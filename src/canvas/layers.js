@@ -11,6 +11,7 @@ import { getQueueDisplayLayout } from '../simulation/customerQueue';
 import { getCustomerConsumptionRemainingFraction } from '../simulation/consumption';
 import { getPlaceableDimensions } from '../data/placeables';
 import { getCharacterMovementStatus } from '../simulation/movement';
+import { getCarriedServiceItemIds } from '../simulation/staffInventory';
 
 function drawVerticalProgress(ctx, x, y, remaining) {
   if (!Number.isFinite(remaining)) return;
@@ -460,14 +461,20 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
     ctx.textAlign = 'start';
     renderedStaff.push({ x, y });
 
-    const carriedItem = Array.isArray(state.serviceItems)
-      ? state.serviceItems.find(item => item.id === s.carryingServiceItemId)
-      : null;
-    if (carriedItem) {
+    const carriedItems = Array.isArray(state.serviceItems)
+      ? getCarriedServiceItemIds(s)
+        .map(id => state.serviceItems.find(item => item.id === id))
+        .filter(Boolean)
+      : [];
+    carriedItems.forEach((carriedItem, carriedIndex) => {
       ctx.fillStyle = '#fff';
       ctx.font = '12px sans-serif';
-      ctx.fillText(getServiceItemEmoji(carriedItem, state.dishes || []), x + 12, y - 14);
-    }
+      ctx.fillText(
+        getServiceItemEmoji(carriedItem, state.dishes || []),
+        x + 12 + carriedIndex * 12,
+        y - 14,
+      );
+    });
   }
 
   ctx.restore();
