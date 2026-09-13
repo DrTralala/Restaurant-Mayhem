@@ -93,7 +93,7 @@ describe('spawnCustomers', () => {
   });
 
   it('spawns dinner-rush parties every 8 to 15 real seconds on average', () => {
-    const dinner = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 19 * 3600 } };
+    const dinner = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 18.5 * 3600 } };
     vi.spyOn(Math, 'random').mockReturnValue(0.1);
 
     expect(spawnCustomers(dinner, 60).queue).toHaveLength(1);
@@ -202,6 +202,28 @@ describe('spawnCustomers', () => {
     expect(new Set(result.queue[0].members.map(customer => customer.partyId)).size).toBe(1);
     expect(result.queue[0].members.map(customer => customer.gender)).toEqual(['male', 'female']);
   });
+
+  it.each([
+    [0.449999, 1, 'solo'],
+    [0.45, 2, 'couple'],
+    [0.799999, 2, 'couple'],
+    [0.8, 3, 'triple'],
+    [0.899999, 3, 'triple'],
+    [0.9, 4, 'family'],
+  ])('uses the approved party boundary %s for a %s-person %s',
+    (partyRoll, expectedSize, expectedType) => {
+      vi.spyOn(Math, 'random')
+        .mockReturnValueOnce(0)
+        .mockReturnValue(partyRoll);
+
+      const result = spawnCustomers(baseState, 60);
+      const members = result.queue[0].members;
+
+      expect(members).toHaveLength(expectedSize);
+      expect(members.every(customer => customer.partyType === expectedType)).toBe(true);
+      expect(members.every(customer => customer.partySize === expectedSize)).toBe(true);
+      expect(new Set(members.map(customer => customer.partyId)).size).toBe(1);
+    });
 
   it('assigns independent spending profiles to members of one party', () => {
     vi.spyOn(Math, 'random')

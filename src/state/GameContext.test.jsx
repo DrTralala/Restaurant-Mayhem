@@ -137,7 +137,7 @@ describe('GameProvider staff actions', () => {
     try {
       render(<GameProvider><ReducerHarness current={current} /><SettingsMenu isOpen /></GameProvider>);
       const before = current.state;
-      await act(async () => screen.getByRole('button', { name: 'Load Game' }).click());
+      await act(async () => screen.getByRole('button', { name: 'Load game' }).click());
       expect(screen.getByRole('status')).toHaveTextContent('Invalid saved navigation geometry');
       expect(current.state).toBe(before);
       expect(current.state.restaurant.funds).toBe(600);
@@ -216,6 +216,31 @@ describe('GameProvider staff actions', () => {
     });
 
     expect(game.state.restaurant.funds).toBe(380);
+    expect(game.state.staff.at(-1)).toMatchObject({ role: 'janitor', salary: 120 });
+  });
+
+  it('hires beyond the legacy seven-staff capacity while charging each authoritative salary', () => {
+    const game = renderReducer({ restaurant: { funds: 450 } });
+    const makeStaff = id => ({ id, name: id, role: 'waiter', skill: 1, morale: 80, salary: 1 });
+
+    game.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('sixth') });
+    game.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('seventh') });
+    game.dispatch({ type: 'HIRE_STAFF', staff: makeStaff('eighth') });
+
+    expect(game.state.staff).toHaveLength(8);
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.staff.slice(-3).map(staff => staff.salary)).toEqual([150, 150, 150]);
+  });
+
+  it('accepts an exact-salary hire without requiring spare funds', () => {
+    const game = renderReducer({ restaurant: { funds: 120 } });
+
+    game.dispatch({
+      type: 'HIRE_STAFF',
+      staff: { id: 'janitor-exact', name: 'June', role: 'janitor', salary: 0, skill: 1, morale: 80 },
+    });
+
+    expect(game.state.restaurant.funds).toBe(0);
     expect(game.state.staff.at(-1)).toMatchObject({ role: 'janitor', salary: 120 });
   });
 
@@ -554,6 +579,42 @@ describe('GameProvider authoritative placement actions', () => {
     ]);
   });
 
+  it('releases every member of a cooking batch when firing its cook', () => {
+    const game = renderReducer({
+      staff: [{ id: 'batch-cook', role: 'cook', skill: 5, morale: 80, x: 200, y: 200 }],
+      kitchenStations: [{ id: 'k1', equipmentId: null, x: 100, y: 120 }],
+      customers: [
+        { id: 'c1', state: 'waiting_for_items', dishId: 'recipe' },
+        { id: 'c2', state: 'waiting_for_items', dishId: 'recipe' },
+      ],
+      dishes: [{ id: 'recipe', prepTime: 60 }],
+      serviceItems: [
+        {
+          id: 'i1', kind: 'dish', menuItemId: 'recipe', customerId: 'c1', state: 'preparing',
+          batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'batch-cook', preparationStartedAt: 50,
+        },
+        {
+          id: 'i2', kind: 'dish', menuItemId: 'recipe', customerId: 'c2', state: 'ready',
+          batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'batch-cook', readyAt: 80,
+        },
+      ],
+      cookingBatches: [{
+        id: 'batch-1', cookId: 'batch-cook', stationId: 'k1', serviceItemIds: ['i1', 'i2'],
+        status: 'preparing', startedAt: 50,
+      }],
+    });
+
+    game.dispatch({ type: 'FIRE_STAFF', id: 'batch-cook' });
+
+    expect(game.state.cookingBatches).toEqual([]);
+    expect(game.state.serviceItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'i1', state: 'ordered', assignedStaffId: null }),
+      expect.objectContaining({ id: 'i2', state: 'ordered', assignedStaffId: null }),
+    ]));
+    expect(game.state.serviceItems.find(item => item.id === 'i1')).not.toHaveProperty('batchId');
+    expect(game.state.serviceItems.find(item => item.id === 'i2')).not.toHaveProperty('batchId');
+  });
+
   it('clears only the fired staff actor from movement runtime bookkeeping', () => {
     const game = renderReducer();
     const coordinator = game.state.movementCoordinator;
@@ -787,14 +848,14 @@ describe('GameProvider guarded economy actions', () => {
   it('does not let staff development or service counters overdraw funds', () => {
     const training = renderReducer({ restaurant: { funds: 100 } });
     training.dispatch({ type: 'TRAIN_STAFF', id: 'starter-cook', cost: 0 });
-    expect(training.state.restaurant.funds).toBe(0);
+    expect(training.state.restaurant.funds).toBe(100);
     expect(training.state.staff.find(staff => staff.id === 'starter-cook')).toMatchObject({
-      skill: 4, morale: 90, carryingServiceItemIds: [],
+      skill: 3, morale: 80, carryingServiceItemIds: [],
     });
 
     training.dispatch({ type: 'GIVE_BONUS', id: 'starter-cook', cost: -100 });
-    expect(training.state.restaurant.funds).toBe(0);
-    expect(training.state.staff.find(staff => staff.id === 'starter-cook').morale).toBe(90);
+    expect(training.state.restaurant.funds).toBe(50);
+    expect(training.state.staff.find(staff => staff.id === 'starter-cook').morale).toBe(100);
 
     const service = renderReducer({ restaurant: { funds: 299 } });
     service.dispatch({ type: 'BUY_SERVICE_TABLE', cost: 0 });
@@ -802,9 +863,24 @@ describe('GameProvider guarded economy actions', () => {
     expect(service.state.serviceTables).toHaveLength(1);
   });
 
+  it('charges the shared current-skill training price rather than a caller-supplied cost', () => {
+    const game = renderReducer({
+      restaurant: { funds: 620 },
+      staff: createInitialState().staff.map(staff => staff.id === 'starter-cook'
+        ? { ...staff, skill: 3 }
+        : staff),
+    });
+
+    game.dispatch({ type: 'TRAIN_STAFF', id: 'starter-cook', cost: 1 });
+
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.staff.find(staff => staff.id === 'starter-cook'))
+      .toMatchObject({ skill: 4, morale: 90 });
+  });
+
   it('caps trained skill and morale without discarding an existing load', () => {
     const training = renderReducer({
-      restaurant: { funds: 100 },
+      restaurant: { funds: 17600 },
       staff: createInitialState().staff.map(staff => staff.id === 'starter-cook'
         ? { ...staff, skill: 9, morale: 95, carryingServiceItemIds: ['dish', 'drink'] }
         : staff),

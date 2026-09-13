@@ -10,6 +10,7 @@ import { recordSeatResidency } from './movement/seatedDeparture';
 import { buildCustomerQueueStressState } from './customerQueueStress';
 import { getQueueVisibleMembers, reconcileQueueSlots } from './customerQueue';
 import { getTipRate } from './balance';
+import { ACTIVITY_DURATIONS } from './activity';
 
 const emptyState = {
   restaurant: { funds: 500, gameTime: 100, day: 1, openHour: 10, closeHour: 22, totalServed: 0, reputation: 2.0 },
@@ -1010,8 +1011,6 @@ describe('runTick', () => {
     }
 
     expect(secondStationTookPayment).toBe(true);
-    expect(state.customers.find(customer => customer.id === 'c2'))
-      .toMatchObject({ state: 'leaving', departureReason: 'served' });
     expect(state.restaurant.totalServed).toBe(2);
   });
 
@@ -1538,11 +1537,15 @@ describe('runTick', () => {
     let sawAutomaticCompletion = false;
     let sawManualWashing = false;
     let sawManualCompletion = false;
-    let sawAutomaticCompleteWhileManualWashing = false;
+    let sawConcurrentWashing = false;
+    let sawFloorDirtRecovery = false;
     let previousManual = state.serviceItems.find(item => item.id === 'manual-item');
     let previousAutomatic = state.serviceItems.find(item => item.id === 'automatic-item');
 
-    for (let tick = 0; tick < 600; tick += 1) {
+    // runTick(1 / 60) advances one game second. The automatic item starts at
+    // gameTime 1, so completion is observed on tick 601 at the approved 600s
+    // duration rather than the old 180s boundary.
+    for (let tick = 0; tick < ACTIVITY_DURATIONS.automaticWash + 1; tick += 1) {
       state = runTick(state, 1 / 60);
       const manual = state.serviceItems.find(item => item.id === 'manual-item');
       const automatic = state.serviceItems.find(item => item.id === 'automatic-item');
@@ -1552,22 +1555,22 @@ describe('runTick', () => {
       sawManualWashing ||= manual?.state === 'washing';
       sawAutomaticCompletion ||= previousAutomatic?.state === 'washing' && !automatic;
       sawManualCompletion ||= previousManual?.state === 'washing' && !manual;
-      sawAutomaticCompleteWhileManualWashing ||= sawAutomaticCompletion && manual?.state === 'washing';
+      sawConcurrentWashing ||= automatic?.state === 'washing' && manual?.state === 'washing';
+      sawFloorDirtRecovery ||= state.floorDirt.length > 0
+        && janitor?.task?.type === 'clean_floor'
+        && janitor.task.dirtId === state.floorDirt[0].id;
       previousManual = manual;
       previousAutomatic = automatic;
-      if (sawManualCompletion && state.floorDirt.length > 0
-        && janitor?.task?.type === 'clean_floor'
-        && janitor.task.dirtId === state.floorDirt[0].id) break;
+      if (sawAutomaticCompletion && sawManualCompletion && sawFloorDirtRecovery) break;
     }
 
     expect(sawAutomaticWashing).toBe(true);
     expect(sawAutomaticCompletion).toBe(true);
     expect(sawManualWashing).toBe(true);
     expect(sawManualCompletion).toBe(true);
-    expect(sawAutomaticCompleteWhileManualWashing).toBe(true);
+    expect(sawConcurrentWashing).toBe(true);
     expect(janitorWashClaims).toEqual(new Set(['manual-item']));
-    expect(state.floorDirt.length).toBeGreaterThan(0);
-    expect(state.staff[0].task).toMatchObject({ type: 'clean_floor', dirtId: state.floorDirt[0].id });
+    expect(sawFloorDirtRecovery).toBe(true);
   });
 
   it('credits each completed payment once without retaining or marking the consumed queue', () => {

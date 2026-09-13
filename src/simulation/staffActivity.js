@@ -10,6 +10,7 @@ import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoa
 import { getCashierWorkPosition } from './world';
 import { canClaimDestination } from './navigation/destinations';
 import { getCarriedServiceItemIds } from './staffInventory';
+import { getStaffPerformanceMultiplier } from './staffPerformance';
 
 export const STAFF_ACTIVITY_PHASES = Object.freeze([
   'idle_waiting', 'idle_roaming', 'task_assigned', 'working', 'stationed',
@@ -74,8 +75,10 @@ export function settleTasklessActivity(state, worker) {
 }
 
 export function getStaffMovementSpeed(worker) {
-  if (worker.activityPhase === 'idle_roaming') return IDLE_ROAM_SPEED;
-  return worker.role === 'waiter' ? 75 : 55;
+  const baseSpeed = worker.activityPhase === 'idle_roaming'
+    ? IDLE_ROAM_SPEED
+    : worker.role === 'waiter' ? 75 : 55;
+  return baseSpeed * getStaffPerformanceMultiplier(worker);
 }
 
 export function prepareStaffActivity(state, worker) {

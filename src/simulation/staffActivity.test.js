@@ -22,6 +22,16 @@ const state = {
 };
 
 describe('staff activity', () => {
+  it.each([
+    [0, 37.5, 10],
+    [50, 75, 20],
+    [100, 112.5, 30],
+  ])('scales walking and idle-roam speed for morale %s', (morale, walking, roaming) => {
+    expect(getStaffMovementSpeed({ role: 'waiter', morale })).toBe(walking);
+    expect(getStaffMovementSpeed({ role: 'waiter', morale, activityPhase: 'idle_roaming' }))
+      .toBe(roaming);
+  });
+
   it('schedules an eligible employee before roaming', () => {
     const worker = settleTasklessActivity(state, state.staff[0]);
     expect(worker).toMatchObject({ activityPhase: 'idle_waiting' });

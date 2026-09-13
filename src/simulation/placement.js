@@ -385,3 +385,251 @@ export function getNextNumericId(items, prefix) {
   }
   return `${idPrefix}${highest + 1}`;
 }
+
+function fixtureCopyKey(type, id) {
+  return `${type}:${String(id)}`;
+}
+
+function expandFixtureCopies(state, requestedCopies) {
+  if (!Array.isArray(requestedCopies)) return invalid('malformed-copies');
+  const expanded = requestedCopies.map(copy => ({ ...copy }));
+
+  for (const tableCopy of requestedCopies.filter(copy => copy?.type === 'table')) {
+    const table = getFixture(state, 'table', tableCopy.id)?.data;
+    if (!table) continue;
+    const deltaX = tableCopy.x - table.x;
+    const deltaY = tableCopy.y - table.y;
+
+    for (const chair of (state.chairs || []).filter(candidate => candidate.tableId === table.id)) {
+      const explicit = expanded.find(copy => copy?.type === 'chair' && copy.id === chair.id);
+      const expected = { x: chair.x + deltaX, y: chair.y + deltaY };
+      if (explicit) {
+        if (explicit.x !== expected.x || explicit.y !== expected.y) {
+          return invalid('inconsistent-table-chair');
+        }
+        continue;
+      }
+      expanded.push({
+        type: 'chair',
+        id: chair.id,
+        x: expected.x,
+        y: expected.y,
+      });
+    }
+  }
+
+  return { valid: true, copies: expanded };
+}
+
+function uniqueTemporaryId(collection, index, usedIds) {
+  let candidate = `__copy_${collection}_${index}`;
+  let suffix = 1;
+  while (usedIds.has(String(candidate))) {
+    candidate = `__copy_${collection}_${index}_${suffix}`;
+    suffix += 1;
+  }
+  usedIds.add(String(candidate));
+  return candidate;
+}
+
+function getCopyCandidateData(source, copy, id, tableIds) {
+  const data = { ...source.data, id };
+  if (source.type === 'door') {
+    delete data.x;
+    data.y = copy.y;
+  } else {
+    data.x = copy.x;
+    data.y = copy.y;
+  }
+  if (Object.prototype.hasOwnProperty.call(copy, 'rotation')
+    && !['chair', 'serviceTable'].includes(source.type)) {
+    data.rotation = copy.rotation;
+  }
+  if (source.type === 'chair') {
+    const copiedTableId = tableIds.get(fixtureCopyKey('table', source.data.tableId));
+    data.tableId = copiedTableId ?? source.data.tableId;
+  }
+  return data;
+}
+
+function hasValidCopiedChairRelationships(finalFixtures, copiedChairs) {
+  const tables = finalFixtures.filter(fixture => fixture.type === 'table');
+  const chairs = finalFixtures.filter(fixture => fixture.type === 'chair');
+
+  return copiedChairs.every(chair => {
+    const chairRect = getFixtureRect(null, chair);
+    if (!chairRect) return false;
+    const adjacentTables = tables.filter(table => {
+      const tableRect = getFixtureRect(null, table);
+      return tableRect && areAdjacent(chairRect, tableRect);
+    });
+    const linkedTable = adjacentTables.length === 1
+      && adjacentTables[0].id === chair.data.tableId
+      ? adjacentTables[0]
+      : null;
+    if (!linkedTable || !Number.isFinite(linkedTable.data.seats)) return false;
+
+    return chairs.filter(candidate => candidate.data.tableId === linkedTable.id).length
+      <= linkedTable.data.seats;
+  });
+}
+
+function getFinalFurnitureRects(finalFixtures, excludeFixture = null) {
+  return finalFixtures
+    .filter(fixture => fixture.type !== 'door'
+      && !fixtureIdentityMatches(fixture, excludeFixture))
+    .map(fixture => getFixtureCopyRect(null, fixture))
+    .filter(Boolean);
+}
+
+function getFixtureCopyRect(state, fixture) {
+  const rect = getFixtureRect(state, fixture);
+  if (!rect || fixture?.type !== 'cashierTable') return rect;
+
+  return {
+    ...rect,
+    w: Number.isFinite(fixture.data.w) ? fixture.data.w : rect.w,
+    h: Number.isFinite(fixture.data.h) ? fixture.data.h : rect.h,
+  };
+}
+
+export function validateFixtureCopies(state = {}, requestedCopies = []) {
+  const currentState = state || {};
+  if (!Array.isArray(requestedCopies)) return invalid('malformed-copies');
+  const requestedSources = new Set();
+  for (const copy of requestedCopies) {
+    const sourceKey = fixtureCopyKey(copy?.type, copy?.id);
+    if (requestedSources.has(sourceKey)) return invalid('duplicate-copy');
+    requestedSources.add(sourceKey);
+  }
+  const expandedResult = expandFixtureCopies(currentState, requestedCopies);
+  if (!expandedResult.valid) return expandedResult;
+  const copies = expandedResult.copies;
+  if (copies.length === 0) return invalid('malformed-copies');
+
+  const world = getRestaurantWorld(currentState.restaurant || {});
+  const seenSources = new Set();
+  const sourceFixtures = [];
+  for (const copy of copies) {
+    const descriptor = getFixtureDescriptor(copy?.type);
+    if (!descriptor) return invalid('unknown-fixture-type');
+    const sourceKey = fixtureCopyKey(copy.type, copy.id);
+    if (seenSources.has(sourceKey)) return invalid('duplicate-copy');
+    seenSources.add(sourceKey);
+
+    const source = getFixture(currentState, copy.type, copy.id);
+    if (!source) return invalid('missing-fixture');
+    if (!isFinitePoint(copy)) return invalid('non-finite-coordinate');
+    if (copy.type === 'door' && copy.x !== world.doorX) return invalid('door-wall');
+    if (Object.prototype.hasOwnProperty.call(copy, 'rotation')
+      && (!Number.isInteger(copy.rotation) || copy.rotation < 0 || copy.rotation > 3)) {
+      return invalid('malformed-rotation');
+    }
+    sourceFixtures.push(source);
+  }
+
+  const tableIds = new Map();
+  const usedIdsByCollection = new Map();
+  copies.forEach((copy, index) => {
+    if (copy.type !== 'table') return;
+    const descriptor = getFixtureDescriptor(copy.type);
+    const usedIds = usedIdsByCollection.get(descriptor.collection) || new Set(
+      (currentState[descriptor.collection] || []).map(item => String(item.id)),
+    );
+    usedIdsByCollection.set(descriptor.collection, usedIds);
+    tableIds.set(fixtureCopyKey('table', copy.id), uniqueTemporaryId(descriptor.collection, index, usedIds));
+  });
+
+  const candidateFixtures = copies.map((copy, index) => {
+    const source = sourceFixtures[index];
+    const descriptor = getFixtureDescriptor(copy.type);
+    const usedIds = usedIdsByCollection.get(descriptor.collection) || new Set(
+      (currentState[descriptor.collection] || []).map(item => String(item.id)),
+    );
+    usedIdsByCollection.set(descriptor.collection, usedIds);
+    const id = copy.type === 'table'
+      ? tableIds.get(fixtureCopyKey('table', copy.id))
+      : uniqueTemporaryId(descriptor.collection, index, usedIds);
+    return {
+      type: copy.type,
+      id,
+      data: getCopyCandidateData(source, copy, id, tableIds),
+    };
+  });
+
+  const finalState = { ...currentState };
+  const copiedByCollection = new Map();
+  for (const fixture of candidateFixtures) {
+    const descriptor = getFixtureDescriptor(fixture.type);
+    const collection = copiedByCollection.get(descriptor.collection) || [];
+    collection.push(fixture.data);
+    copiedByCollection.set(descriptor.collection, collection);
+  }
+  for (const [collection, records] of copiedByCollection) {
+    finalState[collection] = [...(currentState[collection] || []), ...records];
+  }
+
+  const finalFixtures = listFixtures(finalState);
+  const copiedFixtureSet = new Set(candidateFixtures.map(fixture => fixture.id));
+  const candidateRects = new Map();
+  for (const fixture of candidateFixtures) {
+    const rect = getFixtureCopyRect(finalState, fixture);
+    const placementType = getFixturePlacementType(fixture);
+    if (!rect || rect.w <= 0 || rect.h <= 0) return invalid('malformed-copy');
+    if (!isWithinFloor(world, rect, placementType)) return invalid('outside-floor');
+    candidateRects.set(fixture.id, rect);
+  }
+
+  for (const fixture of candidateFixtures.filter(candidate => candidate.type === 'door')) {
+    const rect = candidateRects.get(fixture.id);
+    const overlapsDoor = finalFixtures.some(candidate => candidate.type === 'door'
+      && candidate.id !== fixture.id
+      && (() => {
+        const candidateRect = getFixtureCopyRect(finalState, candidate);
+        return candidateRect && rectangleIntersects(rect, candidateRect);
+      })());
+    if (overlapsDoor) return invalid('door-overlap');
+  }
+
+  for (const fixture of candidateFixtures) {
+    const rect = candidateRects.get(fixture.id);
+    const overlapsFixture = finalFixtures.some(candidate => {
+      if (candidate.id === fixture.id && copiedFixtureSet.has(candidate.id)) return false;
+      const candidateRect = getFixtureCopyRect(finalState, candidate);
+      if (!candidateRect) return false;
+      if (fixture.type === 'door' && candidate.type === 'door') return false;
+      return rectangleIntersects(rect, candidateRect);
+    });
+    if (overlapsFixture) return invalid('overlap');
+  }
+
+  if (movesStrandAnActor(currentState, finalState, copies)) {
+    return invalid('door-occupied');
+  }
+
+  for (const cashier of finalFixtures.filter(fixture => fixture.type === 'cashierTable')) {
+    const cashierRect = getFixtureCopyRect(finalState, cashier);
+    if (!cashierRect) return invalid('malformed-copy');
+    if (!hasValidCashierWorkCell(
+      finalState,
+      cashierRect,
+      getFinalFurnitureRects(finalFixtures, cashier),
+    )) return invalid('cashier-work-cell');
+  }
+
+  const copiedChairs = candidateFixtures.filter(fixture => fixture.type === 'chair');
+  if (!hasValidCopiedChairRelationships(finalFixtures, copiedChairs)) {
+    return invalid('chair-table');
+  }
+
+  const normalisedCopies = copies.map(copy => ({
+    type: copy.type,
+    id: copy.id,
+    x: copy.type === 'door' ? world.doorX : copy.x,
+    y: copy.y,
+    ...(Object.prototype.hasOwnProperty.call(copy, 'rotation')
+      ? { rotation: copy.rotation }
+      : {}),
+  }));
+  return { valid: true, reason: null, copies: normalisedCopies };
+}

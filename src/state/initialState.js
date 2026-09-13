@@ -60,6 +60,7 @@ export function createInitialState() {
     queueDepartures: [],    // ordered pending-departure records for hidden overflow members
     queueAdmissionGate: null,
     serviceItems: [],
+    cookingBatches: [],
     serviceTables: [
       { id: 'st1', x: 140, y: 120 },
     ],
@@ -133,7 +134,6 @@ export function createInitialState() {
     recipeSlots: 1,
     unlockedDrinkIds: ['water'],
     drinkOverrides: {},
-    staffSlots: 7,
     completedCustomers: [],
     pendingPartyReviews: [],
     partyReviewHistory: [],

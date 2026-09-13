@@ -278,6 +278,129 @@ function queuedAdmissionState() {
 }
 
 describe('updateStaff', () => {
+  it.each([
+    ['take_order', 15],
+    ['take_payment', 15],
+    ['clean_table', 15],
+    ['clean_floor', 15],
+    ['wash_item', 15],
+  ])('records morale-scaled accumulated work for %s', (type, expectedWork) => {
+    const taskByType = {
+      take_order: { type, customerId: 'c1', startedAt: 0, accumulatedWork: 0, lastProgressAt: 0 },
+      take_payment: { type, customerId: 'c1', stationId: 'cashier1', startedAt: 0, accumulatedWork: 0, lastProgressAt: 0 },
+      clean_table: { type, tableId: 't1', cleaningStartedAt: 0, accumulatedWork: 0, lastProgressAt: 0 },
+      clean_floor: { type, dirtId: 'd1', cleaningStartedAt: 0, accumulatedWork: 0, lastProgressAt: 0 },
+      wash_item: { type, serviceItemId: 'item', washStationId: 'sink', washingStartedAt: 0 },
+    };
+    const staff = {
+      id: 'worker', role: type === 'clean_floor' || type === 'wash_item' ? 'janitor' : 'waiter',
+      morale: 0, x: type === 'take_payment' ? 840 : 200,
+      y: type === 'take_payment' ? 100 : 200, task: taskByType[type],
+    };
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 30 },
+      staff: [staff],
+      customers: type === 'take_order'
+        ? [{ id: 'c1', state: 'seated', tableId: 't1' }]
+        : type === 'take_payment'
+          ? [{ id: 'c1', state: 'checkout_processing', cashierStationId: 'cashier1',
+            paymentReady: false, x: 840, y: 180 }]
+          : [],
+      tables: type === 'clean_table'
+        ? [{ id: 't1', status: 'dirty', x: 200, y: 200 }]
+        : [],
+      floorDirt: type === 'clean_floor' ? [{ id: 'd1', x: 200, y: 200 }] : [],
+      washStations: type === 'wash_item'
+        ? [{ id: 'sink', type: 'manual', x: 200, y: 200 }]
+        : [],
+      serviceItems: type === 'wash_item'
+        ? [{ id: 'item', state: 'washing', washStationId: 'sink', washStartedAt: 0,
+          accumulatedWork: 0, lastProgressAt: 0 }]
+        : [],
+      cashierStations: type === 'take_payment'
+        ? [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'worker' }]
+        : [],
+    };
+    const result = resolveStaffAfterMovement(state, 30);
+
+    const source = type === 'wash_item' ? result.serviceItems[0] : result.staff[0].task;
+    expect(source).toMatchObject({ accumulatedWork: expectedWork, lastProgressAt: 30 });
+  });
+
+  it('changes only future work when morale changes and ignores a repeated timestamp', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 30 },
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1' }],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+      staff: [{ id: 'worker', role: 'waiter', morale: 100, x: 200, y: 200,
+        task: { type: 'take_order', customerId: 'c1', startedAt: 0,
+          accumulatedWork: 0, lastProgressAt: 0 } }],
+    };
+    const first = resolveStaffAfterMovement(state, 30);
+    const changed = resolveStaffAfterMovement({
+      ...first,
+      restaurant: { ...first.restaurant, gameTime: 40 },
+      staff: [{ ...first.staff[0], morale: 0 }],
+    }, 10);
+    const repeated = resolveStaffAfterMovement(changed, 0);
+
+    expect(first.staff[0].task).toMatchObject({ accumulatedWork: 45, lastProgressAt: 30 });
+    expect(changed.staff[0].task).toMatchObject({ accumulatedWork: 50, lastProgressAt: 40 });
+    expect(repeated.staff[0].task).toEqual(changed.staff[0].task);
+  });
+
+  it('persists morale-scaled drink preparation work on the service item', () => {
+    const result = resolveStaffAfterMovement({
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 30 },
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      serviceItems: [{ id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1',
+        state: 'preparing', serviceTableId: 'st1', serviceSlotIndex: 0, assignedStaffId: 'cook',
+        preparationStartedAt: 0, accumulatedWork: 0, lastProgressAt: 0 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', tableId: 't1', drinkId: 'water' }],
+      staff: [{ id: 'cook', role: 'cook', morale: 0, x: 120, y: 120,
+        task: { type: 'prepare_drink', serviceItemId: 'drink', serviceTableId: 'st1', serviceSlotIndex: 0 } }],
+    }, 30);
+
+    expect(result.serviceItems[0]).toMatchObject({ accumulatedWork: 15, lastProgressAt: 30 });
+    expect(result.staff[0].task).toMatchObject({ accumulatedWork: 15, lastProgressAt: 30 });
+  });
+
+  it('hydrates drink progress from the task when the older item ledger is absent', () => {
+    const result = resolveStaffAfterMovement({
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 40 },
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      serviceItems: [{ id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1',
+        state: 'preparing', serviceTableId: 'st1', serviceSlotIndex: 0, assignedStaffId: 'cook',
+        preparationStartedAt: 0 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', tableId: 't1', drinkId: 'water' }],
+      staff: [{ id: 'cook', role: 'cook', morale: 100, x: 120, y: 120,
+        task: { type: 'prepare_drink', serviceItemId: 'drink', serviceTableId: 'st1', serviceSlotIndex: 0,
+          accumulatedWork: 30, lastProgressAt: 30 } }],
+    }, 10);
+
+    expect(result.serviceItems[0]).toMatchObject({ accumulatedWork: 45, lastProgressAt: 40 });
+    expect(result.staff[0].task).toMatchObject({ accumulatedWork: 45, lastProgressAt: 40 });
+  });
+
+  it('hydrates manual washing progress from the task when the item ledger is absent', () => {
+    const result = resolveStaffAfterMovement({
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 40 },
+      washStations: [{ id: 'sink', type: 'manual', x: 200, y: 200 }],
+      serviceItems: [{ id: 'item', state: 'washing', washStationId: 'sink', washStartedAt: 0 }],
+      staff: [{ id: 'janitor', role: 'janitor', morale: 100, x: 200, y: 200,
+        task: { type: 'wash_item', serviceItemId: 'item', washStationId: 'sink', washingStartedAt: 0,
+          accumulatedWork: 30, lastProgressAt: 30 } }],
+    }, 10);
+
+    expect(result.serviceItems[0]).toMatchObject({ accumulatedWork: 45, lastProgressAt: 40 });
+    expect(result.staff[0].task).toMatchObject({ accumulatedWork: 45, lastProgressAt: 40 });
+  });
+
   function orderOutcomeState(customers) {
     return {
       ...baseState,
@@ -924,8 +1047,9 @@ describe('updateStaff', () => {
     const assigned = updateStaff({ ...baseState, staff, serviceItems, washStations }, 0);
     const deliveries = assigned.staff.map(worker => worker.task);
     expect(new Set(deliveries.map(task => task?.washStationId))).toEqual(
-      new Set(['sink', 'auto-1', 'auto-2']),
+      new Set(['auto-1', 'auto-2']),
     );
+    expect(deliveries.every(task => ['auto-1', 'auto-2'].includes(task?.washStationId))).toBe(true);
 
     const delivered = updateStaff({
       ...assigned,
@@ -1985,13 +2109,13 @@ describe('updateStaff', () => {
 
     const waiting = updateStaff({
       ...started,
-      restaurant: { ...started.restaurant, gameTime: 219.999 },
+      restaurant: { ...started.restaurant, gameTime: 192.307 },
     }, 0);
     expect(waiting.tables[0].status).toBe('dirty');
 
     const finished = updateStaff({
       ...started,
-      restaurant: { ...started.restaurant, gameTime: 220 },
+      restaurant: { ...started.restaurant, gameTime: 192.308 },
     }, 0);
     expect(finished.tables[0].status).toBe('empty');
     expect(finished.staff[0].task).toBeNull();
@@ -2133,9 +2257,9 @@ describe('updateStaff', () => {
     };
     const started = updateStaff(state, 0);
     expect(started.staff[0].task).toMatchObject({ type: 'clean_floor', cleaningStartedAt: 100 });
-    expect(updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 219 } }, 0).floorDirt)
+    expect(updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 192.307 } }, 0).floorDirt)
       .toHaveLength(1);
-    expect(updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 220 } }, 0).floorDirt)
+    expect(updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 192.308 } }, 0).floorDirt)
       .toHaveLength(0);
   });
 
@@ -3033,8 +3157,9 @@ describe('updateStaff', () => {
     };
     const result = updateStaff(state, 1);
 
-    expect(result.staff[0].task).toEqual({
+    expect(result.staff[0].task).toMatchObject({
       type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
+      batchId: expect.any(String), serviceItemIds: ['i1', 'i2'],
     });
     expect(result.staff[0].navigationGoal).toEqual(cellToWorld({ x: 3, y: 5 }));
   });

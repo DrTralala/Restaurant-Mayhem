@@ -22,7 +22,13 @@ describe('createInitialState', () => {
     expect(state.washStations).toEqual([
       expect.objectContaining({ id: 'wash1', type: 'manual', w: 40, h: 40 }),
     ]);
-    expect(state.staffSlots).toBe(7);
+    expect(state).not.toHaveProperty('staffSlots');
+    expect(state.milestones.filter(milestone => ['m2', 'm6', 'm12'].includes(milestone.id)))
+      .toEqual([
+        expect.objectContaining({ id: 'm2', reward: { type: 'none' } }),
+        expect.objectContaining({ id: 'm6', reward: { type: 'none' } }),
+        expect.objectContaining({ id: 'm12', reward: { type: 'none' } }),
+      ]);
     expect(state.staff.map(staff => staff.role)).toContain('janitor');
     expect(state.staff).toHaveLength(5);
     expect(state.unlockedDrinkIds).toEqual(['water']);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { selectFurnitureInRect } from './selection';
+import { expandFurnitureSelection, selectFurnitureInRect } from './selection';
 
 describe('selectFurnitureInRect', () => {
   it('selects every table and chair intersecting a drag rectangle', () => {
@@ -55,6 +55,42 @@ describe('selectFurnitureInRect', () => {
       { type: 'cashierTable', id: 'cashier1' },
       { type: 'kitchenStation', id: 'k1' },
       { type: 'washStation', id: 'wash1' },
+    ]);
+  });
+});
+
+describe('expandFurnitureSelection', () => {
+  it('adds every linked chair when a table is selected without duplicating explicit chairs', () => {
+    const state = {
+      tables: [{ id: 't1', x: 20, y: 20 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 70, y: 30 },
+        { id: 'ch2', tableId: 't1', x: 70, y: 80 },
+      ],
+    };
+
+    expect(expandFurnitureSelection(state, [
+      { type: 'table', id: 't1' },
+      { type: 'chair', id: 'ch1' },
+    ])).toEqual([
+      { type: 'table', id: 't1' },
+      { type: 'chair', id: 'ch1' },
+      { type: 'chair', id: 'ch2' },
+    ]);
+  });
+
+  it('drops stale selection references while retaining valid catalogue order', () => {
+    const state = {
+      tables: [{ id: 't1', x: 20, y: 20 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 70, y: 30 }],
+    };
+
+    expect(expandFurnitureSelection(state, [
+      { type: 'chair', id: 'gone' },
+      { type: 'table', id: 't1' },
+    ])).toEqual([
+      { type: 'table', id: 't1' },
+      { type: 'chair', id: 'ch1' },
     ]);
   });
 });

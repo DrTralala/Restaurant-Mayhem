@@ -1,6 +1,7 @@
 import { screenToWorld } from './camera';
 import { getDefaultStaffPosition } from '../simulation/world';
 import { getFixtureLabel, getFixtureRect, listFixtures } from '../data/fixtures';
+import { humaniseIdentifier } from '../typography';
 
 export function findClickedEntity(state, camera, screenX, screenY) {
   const world = screenToWorld(camera, screenX, screenY);
@@ -13,7 +14,7 @@ export function findClickedEntity(state, camera, screenX, screenY) {
       return {
         type: 'staff',
         data: staff,
-        text: `${staff.name} · ${staff.role} · ${Math.round(staff.morale)}% morale`,
+        text: `${staff.name} · ${humaniseIdentifier(staff.role)} · ${Math.round(staff.morale)}% morale`,
       };
     }
   }

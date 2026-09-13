@@ -2,7 +2,12 @@ import { DRINKS } from '../data/drinks';
 import { DIRTY_STATES } from './dishwashing';
 import { isCheckoutState } from './checkout';
 import { chooseAffordableBasket } from './menuEconomy';
-import { getCarriedServiceItemIds, withCarriedServiceItemIds } from './staffInventory';
+import { clearNavigationGoal } from './movement/navigationGoal';
+import {
+  getCarriedServiceItemIds,
+  getStaffCarryCapacity,
+  withCarriedServiceItemIds,
+} from './staffInventory';
 
 export function selectOrderKinds(roll) {
   if (roll < 0.75) return ['dish'];
@@ -196,6 +201,12 @@ function isPhysicalServiceItem(item) {
   return ['ready', 'on_service', 'carried', 'delivered', 'to_clean', ...DIRTY_STATES].includes(item.state);
 }
 
+function carriedInventoryKind(item) {
+  if (item?.state === 'carried_dirty') return 'dirty';
+  if (item?.state === 'carried') return 'clean';
+  return null;
+}
+
 export function hasValidDrinkReservation(state, item) {
   const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
   const worker = (state.staff || []).find(staff => staff.id === item.assignedStaffId);
@@ -254,8 +265,9 @@ export function normaliseServiceItemOwnership(state) {
       const item = kept.find(candidate => candidate.id === id);
       if (!item || !['carried', 'carried_dirty'].includes(item.state)
         || (item.state === 'carried_dirty' && worker.role !== 'waiter')) continue;
-      const owners = carrierCandidates.get(item.id) || [];
-      carrierCandidates.set(item.id, [...owners, worker.id]);
+      const itemKey = String(item.id);
+      const owners = carrierCandidates.get(itemKey) || [];
+      carrierCandidates.set(itemKey, [...owners, worker.id]);
     }
   }
   const carrierByItem = new Map(
@@ -263,12 +275,27 @@ export function normaliseServiceItemOwnership(state) {
       .filter(([, owners]) => owners.length === 1)
       .map(([itemId, [workerId]]) => [itemId, workerId]),
   );
-  const staff = (state.staff || []).map(worker => withCarriedServiceItemIds(
+  const acceptedCarrierByItem = new Map();
+  for (const worker of state.staff || []) {
+    let inventoryKind = null;
+    let acceptedCount = 0;
+    for (const id of getCarriedServiceItemIds(worker)) {
+      const item = kept.find(candidate => String(candidate.id) === String(id));
+      if (!item || carrierByItem.get(String(item.id)) !== worker.id) continue;
+      const itemKind = carriedInventoryKind(item);
+      if (inventoryKind == null) inventoryKind = itemKind;
+      if (itemKind !== inventoryKind || acceptedCount >= getStaffCarryCapacity(worker)) continue;
+      acceptedCarrierByItem.set(String(item.id), worker.id);
+      acceptedCount += 1;
+    }
+  }
+  let staff = (state.staff || []).map(worker => withCarriedServiceItemIds(
     worker,
-    getCarriedServiceItemIds(worker).filter(id => carrierByItem.get(id) === worker.id),
+    getCarriedServiceItemIds(worker).filter(id =>
+      acceptedCarrierByItem.get(String(id)) === worker.id),
   ));
   let serviceItems = kept.map(item => {
-    const carrierId = carrierByItem.get(item.id);
+    const carrierId = acceptedCarrierByItem.get(String(item.id));
     if (carrierId == null && item.state === 'carried') return { ...item, state: 'to_clean' };
     if (carrierId == null && item.state === 'carried_dirty') {
       return item.tableId != null && (state.tables || []).some(table => table.id === item.tableId)
@@ -293,6 +320,58 @@ export function normaliseServiceItemOwnership(state) {
       return { ...item, washStationId: null, washStartedAt: null };
     }
     return item;
+  });
+
+  // Manual washing has an explicit worker/station boundary once it starts.
+  // Recover malformed or abandoned reservations to the queue, and retain only
+  // the first valid task when a legacy save contains competing owners.
+  const validWashTaskByItem = new Map();
+  for (const worker of staff) {
+    const task = worker.task;
+    if (task?.type !== 'wash_item') continue;
+    const item = serviceItems.find(candidate => String(candidate.id) === String(task.serviceItemId));
+    const station = (state.washStations || []).find(candidate =>
+      String(candidate.id) === String(item?.washStationId));
+    const valid = worker.role === 'janitor'
+      && item
+      && ['queued_for_wash', 'washing'].includes(item.state)
+      && station?.type === 'manual'
+      && String(task.washStationId) === String(item.washStationId)
+      && (item.assignedStaffId == null
+        || String(item.assignedStaffId) === String(worker.id));
+    if (valid && !validWashTaskByItem.has(String(item.id))) {
+      validWashTaskByItem.set(String(item.id), worker);
+    }
+  }
+
+  serviceItems = serviceItems.map(item => {
+    if (!['queued_for_wash', 'washing'].includes(item.state)) return item;
+    const station = (state.washStations || []).find(candidate =>
+      String(candidate.id) === String(item.washStationId));
+    if (!station) {
+      return item.assignedStaffId == null ? item : { ...item, assignedStaffId: null };
+    }
+    if (station.type !== 'manual') return item;
+    const owner = validWashTaskByItem.get(String(item.id));
+    if (!owner && (item.state === 'washing' || item.assignedStaffId != null)) {
+      return {
+        ...item,
+        state: 'queued_for_wash',
+        washStartedAt: null,
+        assignedStaffId: null,
+      };
+    }
+    return owner && item.assignedStaffId == null
+      ? { ...item, assignedStaffId: owner.id }
+      : item;
+  });
+  staff = staff.map(worker => {
+    const task = worker.task;
+    if (task?.type !== 'wash_item') return worker;
+    const owner = validWashTaskByItem.get(String(task.serviceItemId));
+    return owner && String(owner.id) === String(worker.id)
+      ? worker
+      : { ...clearNavigationGoal(worker), task: null };
   });
 
   const finalCustomers = customers.map(customer => {

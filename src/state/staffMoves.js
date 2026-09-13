@@ -7,6 +7,7 @@ import { findPath, worldToCell } from '../simulation/pathfinding';
 import { getDefaultStaffPosition, getRestaurantWorld } from '../simulation/world';
 import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
+import { recoverCookingBatches } from '../simulation/cookingBatches';
 
 const SEATED_CUSTOMER_STATES = new Set([
   'seated',
@@ -287,13 +288,14 @@ export function moveStaff(state, id, point) {
   const validation = validateStaffMove(state, id, point);
   if (!validation.valid) return state;
 
-  const worker = state.staff.find(candidate => sameId(candidate?.id, id));
-  const work = resetStaffWork(state, worker);
+  const recovered = recoverCookingBatches(state, { cookIds: [id] });
+  const worker = recovered.staff.find(candidate => sameId(candidate?.id, id));
+  const work = resetStaffWork(recovered, worker);
   let next = invalidateMovementRuntime({
-    ...state,
+    ...recovered,
     customers: work.customers,
     serviceItems: work.serviceItems,
-    staff: state.staff.map(candidate => candidate === worker
+    staff: recovered.staff.map(candidate => candidate === worker
       ? withCarriedServiceItemIds(
         { ...clearStaffRuntime(candidate), x: point.x, y: point.y },
         getCarriedServiceItemIds(candidate),

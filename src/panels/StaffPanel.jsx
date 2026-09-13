@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { getNameGender } from '../canvas/characterAppearance';
+import { getStaffTrainingCost, STAFF_SALARIES } from '../simulation/staffProgression';
+import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 
-const ROLE_SALARIES = { cook: 200, waiter: 150, janitor: 120 };
-const ROLES = Object.keys(ROLE_SALARIES);
+const ROLES = Object.keys(STAFF_SALARIES);
 const NAMES = ['Marco', 'Anna', 'Luca', 'Sofia', 'Giovanni', 'Isabella', 'Mario', 'Elena'];
 
 const smallBtn = {
+  ...TYPOGRAPHY.control,
   background: '#333', color: '#ccc', border: '1px solid #555',
-  padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11,
+  padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
 };
 
 export default function StaffPanel() {
@@ -17,8 +19,7 @@ export default function StaffPanel() {
   const [showHire, setShowHire] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
-  const staffFull = state.staff.length >= state.staffSlots;
-  const canAffordAnyRole = Object.values(ROLE_SALARIES).some(salary => state.restaurant.funds >= salary);
+  const canAffordAnyRole = Object.values(STAFF_SALARIES).some(salary => state.restaurant.funds >= salary);
 
   const handleHire = (role) => {
     const usedNames = new Set(state.staff.map(staff => staff.name.toLowerCase()));
@@ -26,8 +27,8 @@ export default function StaffPanel() {
     const namePool = availableNames.length > 0 ? availableNames : NAMES;
     const name = namePool[Math.floor(Math.random() * namePool.length)];
     const skill = 1 + Math.floor(Math.random() * 3);
-    const salary = ROLE_SALARIES[role];
-    if (staffFull || state.restaurant.funds < salary) return;
+    const salary = STAFF_SALARIES[role];
+    if (state.restaurant.funds < salary) return;
     dispatch({
       type: 'HIRE_STAFF',
       staff: {
@@ -61,12 +62,13 @@ export default function StaffPanel() {
   };
 
   return (
-    <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
+    <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h3 style={{ color: '#f0a500', margin: 0 }}>Staff ({state.staff.length}/{state.staffSlots})</h3>
-        <button onClick={() => setShowHire(!showHire)} disabled={staffFull || !canAffordAnyRole} style={{
+        <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: 0 }}>Staff ({state.staff.length})</h3>
+        <button onClick={() => setShowHire(!showHire)} disabled={!canAffordAnyRole} style={{
+          ...TYPOGRAPHY.control,
           background: '#f0a500', color: '#111', border: 'none',
-          padding: '6px 14px', borderRadius: 4, cursor: 'pointer', fontSize: 13,
+          padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
         }}>
           + Hire
         </button>
@@ -74,20 +76,25 @@ export default function StaffPanel() {
 
       {showHire && (
         <div style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, marginBottom: 12 }}>
-          <h4 style={{ marginBottom: 8 }}>Hire Staff</h4>
+          <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Hire staff</h4>
           {ROLES.map(role => (
-            <button key={role} onClick={() => handleHire(role)}
-              disabled={staffFull || state.restaurant.funds < ROLE_SALARIES[role]} style={{
+             <button key={role} onClick={() => handleHire(role)}
+              disabled={state.restaurant.funds < STAFF_SALARIES[role]} style={{
+              ...TYPOGRAPHY.control,
               background: '#333', color: '#ccc', border: '1px solid #555',
               padding: '8px 14px', borderRadius: 4, cursor: 'pointer', marginRight: 8, marginBottom: 4,
             }}>
-              {role.charAt(0).toUpperCase() + role.slice(1)}
+              {humaniseIdentifier(role)}
             </button>
           ))}
         </div>
       )}
 
-      {state.staff.map(s => (
+      {state.staff.map(s => {
+        const trainingCost = getStaffTrainingCost(s);
+        const trainingDisabled = trainingCost == null || s.skill >= 10
+          || state.restaurant.funds < trainingCost;
+        return (
         <div key={s.id} style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, marginBottom: 8, border: '1px solid #0f3460' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             {editingId === s.id ? (
@@ -100,14 +107,14 @@ export default function StaffPanel() {
                   if (event.key === 'Escape') cancelRename();
                 }}
                 autoFocus
-                style={{ background: '#111', color: '#ccc', border: '1px solid #555', borderRadius: 4, padding: '3px 6px' }}
+                style={{ ...TYPOGRAPHY.body, background: '#111', color: '#ccc', border: '1px solid #555', borderRadius: 4, padding: '3px 6px' }}
               />
             ) : (
               <strong>{s.name}</strong>
             )}
-            <span style={{ color: '#888' }}>{s.role} · ${s.salary}/day</span>
-          </div>
-          <div style={{ fontSize: 12, margin: '4px 0' }}>
+              <span style={{ ...TYPOGRAPHY.secondary, color: '#888' }}>{humaniseIdentifier(s.role)} · ${s.salary}/day</span>
+            </div>
+          <div style={{ ...TYPOGRAPHY.secondary, margin: '4px 0' }}>
             Skill: {'█'.repeat(s.skill)}{'░'.repeat(10 - s.skill)}
             <span style={{ marginLeft: 16 }}>Morale: {Math.round(s.morale)}%</span>
           </div>
@@ -122,9 +129,9 @@ export default function StaffPanel() {
             ) : (
               <button onClick={() => startRename(s)} style={smallBtn}>Rename</button>
             )}
-            <button onClick={() => dispatch({ type: 'TRAIN_STAFF', id: s.id, cost: 100 })} disabled={s.skill >= 10 || state.restaurant.funds < 100}
-              style={{ ...smallBtn, opacity: (s.skill >= 10 || state.restaurant.funds < 100) ? 0.5 : 1 }}>
-              Train ($100)
+            <button onClick={() => dispatch({ type: 'TRAIN_STAFF', id: s.id, cost: trainingCost })} disabled={trainingDisabled}
+              style={{ ...smallBtn, opacity: trainingDisabled ? 0.5 : 1 }}>
+              Train ({trainingCost == null ? 'Unavailable' : `$${trainingCost}`})
             </button>
             <button onClick={() => dispatch({ type: 'GIVE_BONUS', id: s.id, cost: 50 })} disabled={state.restaurant.funds < 50}
               style={{ ...smallBtn, opacity: state.restaurant.funds < 50 ? 0.5 : 1 }}>
@@ -136,10 +143,11 @@ export default function StaffPanel() {
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {state.staff.length === 0 && (
-        <p style={{ color: '#666' }}>No staff yet. Hire your first employee!</p>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#666' }}>No staff yet. Hire your first employee!</p>
       )}
     </div>
   );

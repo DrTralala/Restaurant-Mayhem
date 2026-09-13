@@ -14,6 +14,64 @@ const baseState = {
 };
 
 describe('processKitchen', () => {
+  it('advances dish preparation with the cook morale rate without changing automatic timers', () => {
+    const item = {
+      id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+      state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+      preparationStartedAt: 0, accumulatedWork: 0, lastProgressAt: 0,
+    };
+    const result = processKitchen({
+      ...baseState,
+      restaurant: { gameTime: 30 },
+      serviceItems: [item],
+      dishes: [{ id: 'toast', prepTime: 60 }],
+      kitchenStations: [{ id: 'k1' }],
+      staff: [{ id: 'cook1', role: 'cook', morale: 0,
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' } }],
+    });
+
+    expect(result.serviceItems[0]).toMatchObject({ accumulatedWork: 15, lastProgressAt: 30 });
+  });
+
+  it('keeps equipment and global speed modifiers when the assigned cook has no task record', () => {
+    const result = processKitchen({
+      ...baseState,
+      restaurant: { gameTime: 50 },
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+        state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+        preparationStartedAt: 0,
+      }],
+      dishes: [{ id: 'toast', prepTime: 120 }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'oven' }],
+      equipment: [{ id: 'oven', owned: true, speedMultiplier: 2 }],
+      upgrades: [{ level: 1, effects: { type: 'globalSpeed', value: 0.25 } }],
+      staff: [{ id: 'cook1', role: 'cook', morale: 50 }],
+    });
+
+    expect(result.serviceItems[0]).toMatchObject({ state: 'ready', readyAt: 50 });
+  });
+
+  it('keeps the cook task ledger in step when an older item ledger is missing', () => {
+    const result = processKitchen({
+      ...baseState,
+      restaurant: { gameTime: 40 },
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+        state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+        preparationStartedAt: 0,
+      }],
+      dishes: [{ id: 'toast', prepTime: 120 }],
+      kitchenStations: [{ id: 'k1' }],
+      staff: [{ id: 'cook1', role: 'cook', morale: 100,
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
+          accumulatedWork: 30, lastProgressAt: 30 } }],
+    });
+
+    expect(result.serviceItems[0]).toMatchObject({ accumulatedWork: 45, lastProgressAt: 40 });
+    expect(result.staff[0].task).toMatchObject({ accumulatedWork: 45, lastProgressAt: 40 });
+  });
+
   const deliveredItems = {
     dish: {
       id: 'dish', customerId: 'c1', tableId: 't1', kind: 'dish',
@@ -134,9 +192,11 @@ describe('processKitchen', () => {
       state: 'ready', serviceTableId: null, serviceSlotIndex: null, x: 120, y: 140,
       readyAt: 91, assignedStaffId: 'cook1', stationId: 'k1',
     });
-    expect(result.staff[0].task).toEqual({
+    expect(result.staff[0].task).toMatchObject({
       type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
     });
+    expect(result.staff[0].task.accumulatedWork).toBeCloseTo(120.12);
+    expect(result.staff[0].task.lastProgressAt).toBe(91);
   });
 
   it('does not progress preparing dishes with invalid equipment or cook ownership', () => {

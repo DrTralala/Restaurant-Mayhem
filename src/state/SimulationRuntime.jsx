@@ -3,6 +3,7 @@ import { advanceFixedStep } from '../simulation/fixedStep';
 import { runTick } from '../simulation/gameLoop';
 import { interpolateSimulationState } from '../canvas/interpolation';
 import { useDispatch, useGameGeneration, useGameState } from './GameContext';
+import { TYPOGRAPHY } from '../typography';
 
 const RenderStateContext = createContext(null);
 const RuntimeFaultContext = createContext({ fault: null, reportFault: () => {} });
@@ -99,9 +100,9 @@ export default function SimulationRuntime({ children }) {
       {fault && <div role="alert" style={{
         position: 'fixed', bottom: 60, left: '50%', transform: 'translateX(-50%)',
         zIndex: 200, maxWidth: '90vw', padding: '12px 20px', borderRadius: 8,
-        background: '#8b2525', color: '#fff', fontFamily: 'monospace',
+        ...TYPOGRAPHY.secondary, background: '#8b2525', color: '#fff',
       }}>
-        Gameplay stopped after a {fault.phase} error. Open Settings to start a New Game
+        Gameplay stopped after a {fault.phase} error. Open Settings to start a new game
         {' '}or load a saved game. Error details are in the browser console.
       </div>}
     </RenderStateContext.Provider>

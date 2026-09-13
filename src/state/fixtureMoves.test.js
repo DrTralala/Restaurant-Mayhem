@@ -179,6 +179,52 @@ describe('moveFixtures', () => {
     expect(result.staff[0]).not.toHaveProperty('navigationGoal');
   });
 
+  it('releases every member when a kitchen station used by a batch moves', () => {
+    const state = makeState({
+      tables: [],
+      chairs: [],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
+      equipment: [{ id: 'eq1', owned: true }],
+      dishes: [{ id: 'recipe', requiredEquipmentId: 'eq1' }],
+      customers: [
+        { id: 'c1', state: 'waiting_for_items', dishId: 'recipe' },
+        { id: 'c2', state: 'waiting_for_items', dishId: 'recipe' },
+      ],
+      staff: [{
+        id: 'cook1', role: 'cook', navigationGoal: { x: 100, y: 120 },
+        task: {
+          type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
+          serviceItemIds: ['i1', 'i2'], stationId: 'k1',
+        },
+      }],
+      serviceItems: [
+        {
+          id: 'i1', kind: 'dish', menuItemId: 'recipe', customerId: 'c1', state: 'preparing',
+          batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'cook1', preparationStartedAt: 50,
+        },
+        {
+          id: 'i2', kind: 'dish', menuItemId: 'recipe', customerId: 'c2', state: 'ready',
+          batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'cook1', readyAt: 80,
+        },
+      ],
+      cookingBatches: [{
+        id: 'batch-1', cookId: 'cook1', stationId: 'k1', serviceItemIds: ['i1', 'i2'],
+        status: 'preparing', startedAt: 50,
+      }],
+    });
+
+    const result = moveFixtures(state, [{ type: 'kitchenStation', id: 'k1', x: 500, y: 120 }]);
+
+    expect(result.cookingBatches).toEqual([]);
+    expect(result.staff[0].task).toBeNull();
+    expect(result.serviceItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'i1', state: 'ordered', assignedStaffId: null }),
+      expect.objectContaining({ id: 'i2', state: 'ordered', assignedStaffId: null }),
+    ]));
+    expect(result.serviceItems.find(item => item.id === 'i1')).not.toHaveProperty('batchId');
+    expect(result.serviceItems.find(item => item.id === 'i2')).not.toHaveProperty('batchId');
+  });
+
   it('returns the original state and preserves preparation for an unchanged kitchen station', () => {
     const state = makeState({
       tables: [],

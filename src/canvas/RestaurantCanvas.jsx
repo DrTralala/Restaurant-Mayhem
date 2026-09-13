@@ -7,16 +7,17 @@ import { drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawStaffLaye
 import { findClickedEntity } from './interaction';
 import { getDefaultStaffPosition, getMissingDoorWarnings, getRestaurantWorld } from '../simulation/world';
 import StaffDetailsPanel from '../components/StaffDetailsPanel';
-import { normaliseSelectionRect, selectFurnitureInRect } from './selection';
-import { getFixture, getFixtureDescriptor, getFixtureLabel, getFixtureRect, listFixtures } from '../data/fixtures';
+import { expandFurnitureSelection, normaliseSelectionRect, selectFurnitureInRect } from './selection';
+import { getFixture, getFixtureDescriptor, getFixtureLabel, getFixtureRect } from '../data/fixtures';
 import { getPlaceable } from '../data/placeables';
-import { snapPlacement, validateFixtureMoves, validatePlacement } from '../simulation/placement';
+import { snapPlacement, validateFixtureCopies, validateFixtureMoves, validatePlacement } from '../simulation/placement';
 import { getServiceSlotPosition } from '../simulation/serviceItems';
 import { validateStaffMove } from '../state/staffMoves';
-
-function fixtureKey(type, id) {
-  return `${type}:${id}`;
-}
+import {
+  getFixtureCopyEligibility,
+  getFixtureCopyReasonMessage,
+} from '../state/fixtureCopies';
+import { getCanvasFont, humaniseIdentifier, TYPOGRAPHY } from '../typography';
 
 function buildPlacement(state, request, point, rotation = 0) {
   const placementRequest = typeof request === 'string' ? { itemType: request } : request;
@@ -47,6 +48,15 @@ function getFixturePlacementType(fixture) {
     : descriptor?.placementType;
 }
 
+function getPlacementLabel(state, placement) {
+  const itemType = placement?.itemType;
+  if (itemType === 'equipmentStation') {
+    const equipment = (state.equipment || []).find(candidate => candidate.id === placement.equipmentId);
+    if (equipment?.name) return equipment.name;
+  }
+  return getPlaceable(itemType)?.label || humaniseIdentifier(itemType);
+}
+
 function getMoveItem(state, fixture) {
   const rect = getFixtureRect(state, fixture);
   if (!rect) return null;
@@ -65,18 +75,97 @@ function isRotatableMoveItem(state, item) {
 }
 
 function expandSelectedFixtures(state, selectedItems) {
-  const selected = new Set((selectedItems || []).map(item => fixtureKey(item.type, item.id)));
-  for (const item of selectedItems || []) {
-    if (item.type !== 'table') continue;
-    for (const chair of (state.chairs || []).filter(candidate => candidate.tableId === item.id)) {
-      selected.add(fixtureKey('chair', chair.id));
-    }
-  }
-
-  return listFixtures(state)
-    .filter(fixture => selected.has(fixtureKey(fixture.type, fixture.id)))
+  return expandFurnitureSelection(state, selectedItems)
+    .map(item => getFixture(state, item.type, item.id))
+    .filter(Boolean)
     .map(fixture => getMoveItem(state, fixture))
     .filter(Boolean);
+}
+
+function buildCopyItems(state, originalItems, anchor, world) {
+  const primary = originalItems[0];
+  if (!primary || !anchor || !world) return originalItems.map(item => ({ ...item }));
+  const fixture = getFixture(state, primary.type, primary.id);
+  const placementType = fixture && getFixturePlacementType(fixture);
+  const target = placementType
+    ? snapPlacement(placementType, world, state, primary.rotation ?? 0)
+    : null;
+  if (!target) return originalItems.map(item => ({ ...item }));
+  const deltaX = target.x - anchor.x;
+  const deltaY = target.y - anchor.y;
+  return originalItems.map(item => ({
+    ...item,
+    x: item.type === 'door'
+      ? getRestaurantWorld(state.restaurant || {}).doorX
+      : item.x + deltaX,
+    y: item.y + deltaY,
+  }));
+}
+
+function copyValidation(state, items) {
+  const eligibility = getFixtureCopyEligibility(state, items);
+  if (!eligibility.valid) return eligibility;
+  if (!Number.isFinite(state?.restaurant?.funds)
+    || state.restaurant.funds < eligibility.price) {
+    return {
+      valid: false,
+      reason: 'insufficient-funds',
+      message: getFixtureCopyReasonMessage('insufficient-funds'),
+      price: eligibility.price,
+      totalPrice: eligibility.totalPrice,
+      items: eligibility.items,
+    };
+  }
+  const validation = validateFixtureCopies(state, items);
+  return {
+    ...validation,
+    message: validation.valid ? null : getFixtureCopyReasonMessage(validation.reason),
+    price: eligibility.price,
+    totalPrice: eligibility.totalPrice,
+    items: eligibility.items,
+  };
+}
+
+function drawCustomCashierPreview(ctx, camera, item, valid, width, height) {
+  ctx.save();
+  ctx.translate(camera.x, camera.y);
+  ctx.scale(camera.zoom, camera.zoom);
+  ctx.fillStyle = valid ? 'rgba(70,200,110,0.45)' : 'rgba(220,70,70,0.45)';
+  ctx.strokeStyle = valid ? 'rgba(70,200,110,0.9)' : 'rgba(220,70,70,0.9)';
+  ctx.lineWidth = 2 / camera.zoom;
+  ctx.fillRect(item.x, item.y, width, height);
+  ctx.strokeRect(item.x, item.y, width, height);
+  ctx.fillStyle = '#eee';
+  ctx.font = getCanvasFont('compact');
+  ctx.fillText('Cashier', item.x + 12, item.y + 23);
+  ctx.restore();
+}
+
+function drawCopyPreview(ctx, state, camera, copy) {
+  const valid = copy.validation?.valid === true;
+  for (const item of copy.items || []) {
+    const fixture = getFixture(state, item.type, item.id);
+    const itemType = fixture && getFixturePlacementType(fixture);
+    if (!itemType) continue;
+    if (itemType === 'cashierTable') {
+      const placeable = getPlaceable(itemType);
+      const width = Number.isFinite(fixture.data.w) && fixture.data.w > 0
+        ? fixture.data.w : placeable.width;
+      const height = Number.isFinite(fixture.data.h) && fixture.data.h > 0
+        ? fixture.data.h : placeable.height;
+      if (width !== placeable.width || height !== placeable.height) {
+        drawCustomCashierPreview(ctx, camera, item, valid, width, height);
+        continue;
+      }
+    }
+    drawPlacementPreview(ctx, state, camera, {
+      itemType,
+      x: item.x,
+      y: item.y,
+      rotation: item.rotation ?? 0,
+      valid,
+    });
+  }
 }
 
 function snapMoveItem(state, item) {
@@ -277,6 +366,7 @@ export default function RestaurantCanvas({
 
   // Move mode: object follows the cursor until the next click places it.
   const moveRef = useRef(null); // { originalItems, items, anchor, validation }
+  const copyRef = useRef(null); // { originalItems, items, anchor, validation, price }
   const staffMoveRef = useRef(null); // { id, point, validation }
   const dragRef = useRef(null);
   const suppressClickRef = useRef(false);
@@ -332,6 +422,7 @@ export default function RestaurantCanvas({
     drawFloorLayer(ctx, renderState, camera, sprites);
     drawFurnitureLayer(ctx, renderState, camera, sprites);
     if (placement) drawPlacementPreview(ctx, state, camera, placement);
+    if (copyRef.current) drawCopyPreview(ctx, state, camera, copyRef.current);
     const characterRenderOptions = { timeMs, reducedMotion: reducedMotionRef.current };
     drawStaffLayer(ctx, renderState, camera, characterRenderOptions);
     drawCustomerLayer(ctx, renderState, camera, characterRenderOptions);
@@ -372,6 +463,25 @@ export default function RestaurantCanvas({
   }, [state, placementRequest]);
 
   useEffect(() => {
+    const current = copyRef.current;
+    if (!current) return;
+    const validation = copyValidation(state, current.items);
+    const next = {
+      ...current,
+      validation,
+      price: validation.price ?? current.price,
+    };
+    if (current.validation?.valid !== validation.valid
+      || current.validation?.reason !== validation.reason
+      || current.price !== next.price) {
+      copyRef.current = next;
+      setMoveRevision(revision => revision + 1);
+    } else {
+      copyRef.current = next;
+    }
+  }, [state]);
+
+  useEffect(() => {
     const current = staffMoveRef.current;
     if (!current) return;
     const validation = validateStaffMove(state, current.id, current.point);
@@ -395,6 +505,7 @@ export default function RestaurantCanvas({
     moveRef.current = null;
     staffMoveRef.current = null;
     dragRef.current = null;
+    copyRef.current = null;
     setMoveRevision(revision => revision + 1);
   }, [managementOpen]);
 
@@ -449,6 +560,7 @@ export default function RestaurantCanvas({
           setPlacement(null);
           onPlacementComplete?.();
         }
+        copyRef.current = null;
         setMenu(null);
         setSelectedItems([]);
         setSelectionRect(null);
@@ -463,17 +575,19 @@ export default function RestaurantCanvas({
   }, [state, onPlacementComplete]);
 
   useEffect(() => {
-    if (!placement) return undefined;
     const cancelPlacement = (event) => {
-      if (!placementRef.current) return;
+      if (!placementRef.current && !copyRef.current) return;
       event.preventDefault();
+      const hadPlacement = Boolean(placementRef.current);
       placementRef.current = null;
       setPlacement(null);
-      onPlacementComplete?.();
+      copyRef.current = null;
+      setMoveRevision(revision => revision + 1);
+      if (hadPlacement) onPlacementComplete?.();
     };
     window.addEventListener('contextmenu', cancelPlacement);
     return () => window.removeEventListener('contextmenu', cancelPlacement);
-  }, [placement, onPlacementComplete]);
+  }, [onPlacementComplete]);
 
   // --- Mouse handlers ---
 
@@ -494,6 +608,19 @@ export default function RestaurantCanvas({
           setPlacement(next);
         }
       }
+      return;
+    }
+    if (copyRef.current) {
+      const copying = copyRef.current;
+      if (copying.originalItems.length === 0) return;
+      if (!copying.anchor) {
+        const primary = copying.originalItems[0];
+        copying.anchor = { x: primary.x, y: primary.y };
+      }
+      copying.items = buildCopyItems(state, copying.originalItems, copying.anchor, getWorldPos(e));
+      copying.validation = copyValidation(state, copying.items);
+      copying.price = copying.validation.price ?? copying.price;
+      setMoveRevision(revision => revision + 1);
       return;
     }
     if (moveRef.current) {
@@ -565,6 +692,24 @@ export default function RestaurantCanvas({
     setMoveRevision(revision => revision + 1);
   };
 
+  const placeCopy = () => {
+    const copying = copyRef.current;
+    if (!copying) return;
+
+    const validation = copyValidation(state, copying.items);
+    copying.validation = validation;
+    copying.price = validation.price ?? copying.price;
+    if (!validation.valid) {
+      setMoveRevision(revision => revision + 1);
+      return;
+    }
+
+    dispatch({ type: 'COPY_FIXTURES', items: validation.copies });
+    copyRef.current = null;
+    setSelectedItems([]);
+    setMoveRevision(revision => revision + 1);
+  };
+
   const placeMovingStaff = () => {
     const moving = staffMoveRef.current;
     if (!moving) return;
@@ -607,6 +752,10 @@ export default function RestaurantCanvas({
       placeMovingEntity();
       return;
     }
+    if (copyRef.current) {
+      placeCopy();
+      return;
+    }
     if (staffMoveRef.current) {
       placeMovingStaff();
       return;
@@ -642,7 +791,7 @@ export default function RestaurantCanvas({
   };
 
   const handleMouseDown = (e) => {
-    if (e.button !== 0 || moveRef.current || staffMoveRef.current || placementRef.current) return;
+    if (e.button !== 0 || moveRef.current || copyRef.current || staffMoveRef.current || placementRef.current) return;
     const world = getWorldPos(e);
     dragRef.current = {
       startWorld: world,
@@ -707,6 +856,7 @@ export default function RestaurantCanvas({
     };
     moveRef.current = null;
     dragRef.current = null;
+    suppressClickRef.current = false;
     setMenu(null);
     setSelectedStaffId(null);
     setSelectedItems([]);
@@ -719,6 +869,30 @@ export default function RestaurantCanvas({
     setMenu(null);
   };
 
+  const handleCopySelected = () => {
+    const eligibility = getFixtureCopyEligibility(state, selectedItems);
+    const originalItems = eligibility.valid
+      ? eligibility.items
+        .map(item => getFixture(state, item.type, item.id))
+        .filter(Boolean)
+        .map(fixture => getMoveItem(state, fixture))
+        .filter(Boolean)
+      : [];
+    copyRef.current = {
+      originalItems,
+      items: originalItems.map(item => ({ ...item })),
+      anchor: null,
+      validation: eligibility.valid ? copyValidation(state, originalItems) : eligibility,
+      price: eligibility.price ?? 0,
+    };
+    moveRef.current = null;
+    dragRef.current = null;
+    suppressClickRef.current = false;
+    setMenu(null);
+    setSelectedStaffId(null);
+    setMoveRevision(revision => revision + 1);
+  };
+
   const handleMoveSelected = () => {
     const items = expandSelectedFixtures(state, selectedItems);
     if (items.length === 0) return;
@@ -728,6 +902,8 @@ export default function RestaurantCanvas({
       anchor: null,
       validation: null,
     };
+    copyRef.current = null;
+    suppressClickRef.current = false;
     setMoveRevision(revision => revision + 1);
   };
 
@@ -744,12 +920,13 @@ export default function RestaurantCanvas({
     id: menu.data.id,
   }));
   const sellableSelectedItems = selectedItems.filter(item => canSellItem(state, item));
+  const currentCopy = copyRef.current;
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
-        style={{ width: '100%', height: '100%', cursor: placement ? 'crosshair' : (moveRef.current || staffMoveRef.current) ? 'none' : 'default' }}
+        style={{ width: '100%', height: '100%', cursor: placement || currentCopy ? 'crosshair' : (moveRef.current || staffMoveRef.current) ? 'none' : 'default' }}
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
@@ -765,8 +942,8 @@ export default function RestaurantCanvas({
           padding: 6, display: 'flex', flexDirection: 'column', gap: 4,
           minWidth: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
         }}>
-          <div style={{ color: '#888', fontSize: 11, padding: '2px 8px', fontFamily: 'monospace' }}>
-            {getFixtureLabel(state, { type: menu.type, data: menu.data }) || menu.type}
+          <div style={{ ...TYPOGRAPHY.secondary, color: '#888', padding: '2px 8px' }}>
+            {getFixtureLabel(state, { type: menu.type, data: menu.data }) || humaniseIdentifier(menu.type)}
           </div>
           {menuDoor && (
             <>
@@ -785,7 +962,7 @@ export default function RestaurantCanvas({
                   }}
                   style={menuBtn}
                 >
-                  Mark as Entrance
+                  Mark as entrance
                 </button>
               )}
               {menuDoor.role !== 'exit' && (
@@ -796,7 +973,7 @@ export default function RestaurantCanvas({
                   }}
                   style={menuBtn}
                 >
-                  Mark as Exit
+                  Mark as exit
                 </button>
               )}
             </>
@@ -836,14 +1013,15 @@ export default function RestaurantCanvas({
         }} />;
       })()}
 
-      {selectedItems.length > 0 && !moveRef.current && (
+      {selectedItems.length > 0 && !moveRef.current && !currentCopy && (
         <div style={{
           position: 'absolute', left: '50%', bottom: 16, transform: 'translateX(-50%)', zIndex: 300,
           display: 'flex', alignItems: 'center', gap: 8,
           background: '#16213e', border: '1px solid #f0a500', borderRadius: 8,
-          padding: '7px 10px', color: '#ddd', fontFamily: 'monospace', fontSize: 12,
+          ...TYPOGRAPHY.secondary, padding: '7px 10px', color: '#ddd',
         }}>
-          <strong>{selectedItems.length} selected</strong>
+          <strong style={TYPOGRAPHY.control}>{selectedItems.length} selected</strong>
+          <button onClick={handleCopySelected} style={menuBtn}>Copy</button>
           <button onClick={handleMoveSelected} style={menuBtn}>Move selected</button>
           {sellableSelectedItems.length > 0 && (
             <button onClick={handleSellSelected} style={{ ...menuBtn, color: '#ef7777' }}>Sell selected</button>
@@ -857,15 +1035,31 @@ export default function RestaurantCanvas({
         <div style={{
           position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
           background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
-          fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          ...TYPOGRAPHY.control, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         }}>
           Click to place · {moveRef.current.originalItems.length === 1
             && isRotatableMoveItem(state, moveRef.current.originalItems[0]) ? 'R to rotate · ' : ''}Esc to cancel
           {moveRef.current.validation && !moveRef.current.validation.valid && (
             <div style={{
-              marginTop: 4, color: '#b00000', fontSize: 12, fontFamily: 'monospace',
+              ...TYPOGRAPHY.secondary, marginTop: 4, color: '#b00000',
             }}>
               Invalid: {moveRef.current.validation.reason}
+            </div>
+          )}
+        </div>
+      )}
+
+      {currentCopy && (
+        <div style={{
+          position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
+          background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
+          ...TYPOGRAPHY.control, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          textAlign: 'center',
+        }}>
+          <div>Click to place copy · ${currentCopy.price} · Esc to cancel</div>
+          {currentCopy.validation && !currentCopy.validation.valid && (
+            <div style={{ ...TYPOGRAPHY.secondary, marginTop: 4, color: '#b00000' }}>
+              Invalid: {currentCopy.validation.message || getFixtureCopyReasonMessage(currentCopy.validation.reason)}
             </div>
           )}
         </div>
@@ -875,11 +1069,11 @@ export default function RestaurantCanvas({
         <div style={{
           position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
           background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
-          fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          ...TYPOGRAPHY.control, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         }}>
           Click to place staff · Esc to cancel
           {staffMoveRef.current.validation && !staffMoveRef.current.validation.valid && (
-            <div style={{ marginTop: 4, color: '#b00000', fontSize: 12, fontFamily: 'monospace' }}>
+            <div style={{ ...TYPOGRAPHY.secondary, marginTop: 4, color: '#b00000' }}>
               Invalid: {staffMoveRef.current.validation.reason}
             </div>
           )}
@@ -890,15 +1084,12 @@ export default function RestaurantCanvas({
         <div style={{
           position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
           background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
-          fontSize: 13, fontFamily: 'monospace', boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          ...TYPOGRAPHY.control, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
           textAlign: 'center',
         }}>
-          <div>Place {placement.itemType === 'equipmentStation'
-            ? state.equipment.find(equipment => equipment.id === placement.equipmentId)?.name
-              || placement.itemType
-            : placement.itemType} · Click to buy · R to rotate · Right click/Esc to cancel</div>
+          <div>Place {getPlacementLabel(state, placement)} · Click to buy · R to rotate · Right click/Esc to cancel</div>
           {!placement.valid && (
-            <div style={{ color: '#b00000', marginTop: 4 }}>Invalid: {placement.reason}</div>
+            <div style={{ ...TYPOGRAPHY.secondary, color: '#b00000', marginTop: 4 }}>Invalid: {placement.reason}</div>
           )}
         </div>
       )}
@@ -910,7 +1101,7 @@ export default function RestaurantCanvas({
           style={{
             position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
             background: '#5b1f1f', color: '#ffd6d6', border: '1px solid #ef7777',
-            borderRadius: 6, padding: '8px 14px', fontSize: 12, fontFamily: 'monospace',
+            ...TYPOGRAPHY.secondary, borderRadius: 6, padding: '8px 14px',
             display: 'flex', flexDirection: 'column', gap: 3,
           }}
         >
@@ -941,21 +1132,19 @@ export default function RestaurantCanvas({
 }
 
 const zoomBtn = {
+  ...TYPOGRAPHY.control,
   background: 'rgba(22,33,62,0.85)',
   color: '#ccc',
   border: '1px solid #0f3460',
   padding: '4px 10px',
   borderRadius: 4,
   cursor: 'pointer',
-  fontSize: 14,
-  fontWeight: 'bold',
-  fontFamily: 'monospace',
   lineHeight: 1,
   userSelect: 'none',
 };
 
 const menuBtn = {
+  ...TYPOGRAPHY.control,
   background: '#1a1a2e', color: '#ccc', border: '1px solid #333',
-  padding: '6px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12,
-  textAlign: 'left', fontFamily: 'monospace',
+  padding: '6px 12px', borderRadius: 4, cursor: 'pointer', textAlign: 'left',
 };

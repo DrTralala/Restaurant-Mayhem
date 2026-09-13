@@ -6,7 +6,7 @@ describe('activity timing', () => {
     expect(ACTIVITY_DURATIONS).toMatchObject({
       takeOrder: 60, prepareDrink: 120, consumeDrink: 180,
       consumeFood: 480, consumeBoth: 600, takePayment: 60,
-      wipeFloor: 120, manualWash: 300, automaticWash: 180,
+      wipeFloor: 120, manualWash: 300, automaticWash: 600,
     });
   });
 

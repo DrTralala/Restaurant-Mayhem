@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import StaffPanel from './StaffPanel';
+import { FONT_FAMILY } from '../typography';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
@@ -26,7 +27,41 @@ function makeState(overrides = {}) {
 }
 
 describe('StaffPanel', () => {
-  it('disables hiring when all six staff slots are used', () => {
+  it('does not disable hiring or show a legacy staff-slot denominator', () => {
+    const state = makeState({
+      staffSlots: 7,
+      staff: Array.from({ length: 8 }, (_, index) => ({
+        id: `s${index + 1}`, name: `Staff ${index + 1}`, role: 'waiter', skill: 1, morale: 80, salary: 150,
+      })),
+    });
+    useGameState.mockReturnValue(state);
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    expect(screen.getByText('+ Hire')).toBeEnabled();
+    expect(screen.getByText('Staff (8)')).toBeInTheDocument();
+    expect(screen.queryByText('Staff (8/7)')).not.toBeInTheDocument();
+  });
+
+  it('shows and dispatches the shared training price for the current skill', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+      restaurant: { funds: 620 },
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+
+    const train = screen.getByRole('button', { name: 'Train ($620)' });
+    expect(train).toBeEnabled();
+    fireEvent.click(train);
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'TRAIN_STAFF', id: 's1', cost: 620 });
+  });
+
+  it('keeps hiring enabled when six staff members are already employed', () => {
     const base = makeState();
     const state = makeState({
       staffSlots: 6,
@@ -41,10 +76,10 @@ describe('StaffPanel', () => {
 
     render(<StaffPanel />);
 
-    expect(screen.getByText('+ Hire')).toBeDisabled();
+    expect(screen.getByText('+ Hire')).toBeEnabled();
   });
 
-  it('shows current staff usage against available slots', () => {
+  it('shows the current staff count without a legacy slot denominator', () => {
     const base = makeState();
     const state = makeState({ staff: [base.staff[0]] });
     useGameState.mockReturnValue(state);
@@ -52,7 +87,7 @@ describe('StaffPanel', () => {
 
     render(<StaffPanel />);
 
-    expect(screen.getByText('Staff (1/7)')).toBeInTheDocument();
+    expect(screen.getByText('Staff (1)')).toBeInTheDocument();
   });
 
   it('disables hire controls that are unaffordable', () => {
@@ -152,7 +187,9 @@ describe('StaffPanel', () => {
     render(<StaffPanel />);
     const marcoCard = screen.getByText('Marco').parentElement.parentElement;
     fireEvent.click(within(marcoCard).getByText('Rename'));
-    fireEvent.change(within(marcoCard).getByRole('textbox'), { target: { value: '  Matteo  ' } });
+    const renameInput = within(marcoCard).getByRole('textbox');
+    expect(renameInput).toHaveStyle({ fontFamily: FONT_FAMILY, fontSize: '14px' });
+    fireEvent.change(renameInput, { target: { value: '  Matteo  ' } });
     fireEvent.click(within(marcoCard).getByText('Save'));
 
     expect(dispatch).toHaveBeenCalledWith({ type: 'RENAME_STAFF', id: 's1', name: 'Matteo' });
@@ -170,7 +207,7 @@ describe('StaffPanel', () => {
     render(<StaffPanel />);
 
     expect(screen.getByText('Marco')).toBeInTheDocument();
-    expect(screen.getByText(/cook/)).toBeInTheDocument();
+    expect(screen.getByText(/cook/i)).toBeInTheDocument();
   });
 
   it('rounds morale to the nearest whole percentage', () => {

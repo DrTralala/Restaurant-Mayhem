@@ -43,9 +43,9 @@ describe('dishwashing lifecycle', () => {
     };
     const started = updateAutomaticDishwashers(base);
     expect(started.serviceItems.find(item => item.id === 'old')).toMatchObject({ state: 'washing', washStartedAt: 100 });
-    const waiting = updateAutomaticDishwashers({ ...started, restaurant: { gameTime: 279 } });
+    const waiting = updateAutomaticDishwashers({ ...started, restaurant: { gameTime: 699 } });
     expect(waiting.serviceItems).toHaveLength(2);
-    const done = updateAutomaticDishwashers({ ...waiting, restaurant: { gameTime: 280 } });
+    const done = updateAutomaticDishwashers({ ...waiting, restaurant: { gameTime: 700 } });
     expect(done.serviceItems.map(item => item.id)).toEqual(['new']);
   });
 
@@ -56,7 +56,7 @@ describe('dishwashing lifecycle', () => {
     ] };
     const started = updateAutomaticDishwashers(state);
     expect(started.serviceItems.map(item => item.state)).toEqual(['washing', 'queued_for_wash']);
-    const done = updateAutomaticDishwashers({ ...started, restaurant: { gameTime: 190 } });
+    const done = updateAutomaticDishwashers({ ...started, restaurant: { gameTime: 610 } });
     expect(done.serviceItems).toHaveLength(1);
     expect(done.serviceItems[0].state).toBe('queued_for_wash');
   });

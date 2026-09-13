@@ -3,6 +3,7 @@ import { getPlaceable } from '../data/placeables';
 import {
   getPlacementRect,
   snapPlacement,
+  validateFixtureCopies,
   validateFixtureMoves,
   validatePlacement,
 } from './placement';
@@ -206,5 +207,60 @@ describe('fixture movement validation', () => {
     expect(validateFixtureMoves(state, [
       { type: 'chair', id: 'ch1', x: 210, y: 180, rotation: 1.5 },
     ])).toMatchObject({ valid: false, reason: 'malformed-rotation' });
+  });
+});
+
+describe('fixture copy validation', () => {
+  it('validates copied candidates against the originals and preserves table-chair links', () => {
+    const result = validateFixtureCopies(state, [
+      { type: 'table', id: 't1', x: 600, y: 300 },
+      { type: 'chair', id: 'ch1', x: 610, y: 280 },
+    ]);
+
+    expect(result).toMatchObject({ valid: true, reason: null });
+    expect(result.copies).toEqual([
+      { type: 'table', id: 't1', x: 600, y: 300 },
+      { type: 'chair', id: 'ch1', x: 610, y: 280 },
+    ]);
+  });
+
+  it('keeps the original fixtures as obstacles for a copy', () => {
+    expect(validateFixtureCopies(state, [
+      { type: 'table', id: 't1', x: 200, y: 200 },
+    ])).toMatchObject({ valid: false, reason: 'overlap' });
+  });
+
+  it('rejects a copied door submitted away from its wall', () => {
+    expect(validateFixtureCopies(state, [
+      { type: 'door', id: 'door1', x: 100, y: 80 },
+    ])).toMatchObject({ valid: false, reason: 'door-wall' });
+  });
+
+  it('applies door and cashier layout rules to copied candidates', () => {
+    expect(validateFixtureCopies(state, [
+      { type: 'door', id: 'door1', x: 907, y: 340 },
+    ])).toMatchObject({ valid: false, reason: 'door-overlap' });
+
+    const blockedCashier = {
+      ...state,
+      chairs: [
+        ...state.chairs,
+        { id: 'blocker', tableId: 't1', x: 640, y: 280 },
+      ],
+    };
+    expect(validateFixtureCopies(blockedCashier, [
+      { type: 'cashierTable', id: 'cashier1', x: 600, y: 300 },
+    ])).toMatchObject({ valid: false, reason: 'cashier-work-cell' });
+  });
+
+  it('rejects malformed, duplicate, and stale copy sources atomically', () => {
+    expect(validateFixtureCopies(state, [{ type: 'table', id: 'gone', x: 600, y: 300 }]))
+      .toMatchObject({ valid: false, reason: 'missing-fixture' });
+    expect(validateFixtureCopies(state, [
+      { type: 'table', id: 't1', x: 600, y: 300 },
+      { type: 'table', id: 't1', x: 700, y: 300 },
+    ])).toMatchObject({ valid: false, reason: 'duplicate-copy' });
+    expect(validateFixtureCopies(state, [{ type: 'table', id: 't1', x: Number.NaN, y: 300 }]))
+      .toMatchObject({ valid: false, reason: 'non-finite-coordinate' });
   });
 });

@@ -3,7 +3,7 @@ import { ITEM_PRICES } from './items';
 export const PLACEABLES = {
   table: {
     type: 'table',
-    label: 'Dining Table',
+    label: 'Dining table',
     price: ITEM_PRICES.table,
     width: 40,
     height: 40,
@@ -12,7 +12,7 @@ export const PLACEABLES = {
   },
   chair: {
     type: 'chair',
-    label: 'Dining Chair',
+    label: 'Dining chair',
     price: ITEM_PRICES.chair,
     width: 20,
     height: 20,
@@ -21,7 +21,7 @@ export const PLACEABLES = {
   },
   door: {
     type: 'door',
-    label: 'Additional Door',
+    label: 'Additional door',
     price: ITEM_PRICES.door,
     width: 6,
     height: 40,
@@ -30,7 +30,7 @@ export const PLACEABLES = {
   },
   serviceTable: {
     type: 'serviceTable',
-    label: 'Service Counter',
+    label: 'Service counter',
     price: ITEM_PRICES.serviceTable,
     width: 120,
     height: 40,
@@ -39,7 +39,7 @@ export const PLACEABLES = {
   },
   cashierTable: {
     type: 'cashierTable',
-    label: 'Cashier Table',
+    label: 'Cashier',
     price: ITEM_PRICES.cashierTable,
     width: 80,
     height: 40,
@@ -48,7 +48,7 @@ export const PLACEABLES = {
   },
   kitchenStation: {
     type: 'kitchenStation',
-    label: 'Kitchen Station',
+    label: 'Kitchen station',
     price: null,
     width: 40,
     height: 40,
@@ -66,7 +66,7 @@ export const PLACEABLES = {
   },
   equipmentStation: {
     type: 'equipmentStation',
-    label: 'Equipment Station',
+    label: 'Equipment station',
     price: null,
     width: 40,
     height: 40,
@@ -74,7 +74,7 @@ export const PLACEABLES = {
     rotatable: false,
   },
   automaticDishwasher: {
-    type: 'automaticDishwasher', label: 'Automatic Dishwasher',
+    type: 'automaticDishwasher', label: 'Automatic dishwasher',
     price: ITEM_PRICES.automaticDishwasher, width: 40, height: 40, grid: 20, rotatable: false,
   },
 };

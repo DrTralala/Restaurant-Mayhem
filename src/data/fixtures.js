@@ -7,12 +7,17 @@ export const FIXTURE_TYPES = {
   door: {
     collection: 'doors', width: 6, height: 40, placementType: 'door',
     label: (_state, data) => data.role
-      ? `Door · ${data.role[0].toUpperCase()}${data.role.slice(1)}`
+      ? `Door · ${data.role.toLowerCase()}`
       : 'Door',
   },
   serviceTable: { collection: 'serviceTables', width: 120, height: 40, placementType: 'serviceTable', label: () => 'Service counter' },
-  cashierTable: { collection: 'cashierStations', width: 80, height: 40, placementType: 'cashierTable', label: () => 'Cashier table' },
-  kitchenStation: { collection: 'kitchenStations', width: 40, height: 40, placementType: 'kitchenStation', label: (_state, data) => data.equipmentId ? 'Kitchen equipment' : 'Kitchen station' },
+  cashierTable: { collection: 'cashierStations', width: 80, height: 40, placementType: 'cashierTable', label: () => 'Cashier' },
+  kitchenStation: {
+    collection: 'kitchenStations', width: 40, height: 40, placementType: 'kitchenStation',
+    label: (state, data) => data.equipmentId
+      ? state?.equipment?.find(equipment => equipment.id === data.equipmentId)?.name || 'Kitchen station'
+      : 'Kitchen station',
+  },
   washStation: { collection: 'washStations', width: 40, height: 40, placementType: data => data.type === 'automatic' ? 'automaticDishwasher' : 'manualSink', label: (_state, data) => data.type === 'automatic' ? 'Automatic dishwasher' : 'Sink' },
 };
 

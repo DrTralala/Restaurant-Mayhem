@@ -18,7 +18,7 @@ export function getWashStationOccupancy(state, station, {
   const ids = new Set((state.serviceItems || [])
     .filter(item => !excludedIds.has(item.id)
       && item.washStationId === station.id
-      && ['queued_for_wash', 'washing'].includes(item.state))
+      && ['queued_for_wash', 'washing', 'carried_dirty'].includes(item.state))
     .map(item => item.id));
   for (const worker of state.staff || []) {
     if (worker.task?.type === 'deliver_dirty_item'

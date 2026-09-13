@@ -127,15 +127,21 @@ describe('operating-hour helpers', () => {
 
 describe('rush hour and analogue clock helpers', () => {
   it.each([
-    [6.5 * 3600, 1], [8 * 3600, 2], [10 * 3600, 1],
-    [12.5 * 3600, 2.5], [19 * 3600, 3], [22 * 3600, 1],
+    [6 * 3600, 1], [7 * 3600, 2], [8 * 3600, 1],
+    [11 * 3600, 1], [12.5 * 3600, 2.5], [14 * 3600, 1],
+    [17 * 3600, 1], [18.5 * 3600, 3], [20 * 3600, 1],
   ])('returns the approved rush multiplier at %s seconds', (time, expected) => {
     expect(getRushHourMultiplier(time)).toBeCloseTo(expected);
   });
 
   it('interpolates each side of lunch rush', () => {
     expect(getRushHourMultiplier(11.75 * 3600)).toBeCloseTo(1.75);
-    expect(getRushHourMultiplier(13.75 * 3600)).toBeCloseTo(1.75);
+    expect(getRushHourMultiplier(13.75 * 3600)).toBeCloseTo(1.25);
+  });
+
+  it('wraps rush-hour boundaries across whole days', () => {
+    expect(getRushHourMultiplier(24 * 3600 + 7 * 3600)).toBeCloseTo(2);
+    expect(getRushHourMultiplier(-16 * 3600)).toBeCloseTo(1);
   });
 
   it('derives analogue hand angles including partial hours', () => {

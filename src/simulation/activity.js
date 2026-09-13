@@ -7,7 +7,7 @@ export const ACTIVITY_DURATIONS = Object.freeze({
   takePayment: 60,
   wipeFloor: 120,
   manualWash: 300,
-  automaticWash: 180,
+  automaticWash: 600,
 });
 
 export function getRemainingFraction(now, startedAt, duration) {

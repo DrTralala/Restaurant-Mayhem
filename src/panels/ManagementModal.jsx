@@ -5,6 +5,7 @@ import StaffPanel from './StaffPanel';
 import MilestonePanel from './MilestonePanel';
 import StatsPanel from './StatsPanel';
 import HoursPanel from './HoursPanel';
+import { TYPOGRAPHY } from '../typography';
 
 const TABS = [
   { key: 'upgrades', label: 'Upgrades' },
@@ -33,6 +34,7 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
         position: 'relative', width: '90%', maxWidth: 700, maxHeight: '80vh',
         background: '#16213e', borderRadius: 12, border: '1px solid #0f3460',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        ...TYPOGRAPHY.body,
       }}>
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -44,10 +46,11 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
                 key={t.key}
                 onClick={() => setTab(t.key)}
                 style={{
+                  ...TYPOGRAPHY.control,
                   background: tab === t.key ? '#f0a500' : 'transparent',
                   color: tab === t.key ? '#111' : '#ccc',
                   border: 'none', padding: '6px 14px', borderRadius: 4,
-                  cursor: 'pointer', fontSize: '13px', fontFamily: 'monospace',
+                  cursor: 'pointer',
                 }}
               >
                 {t.label}
@@ -55,8 +58,9 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
             ))}
           </div>
           <button onClick={onClose} style={{
+            ...TYPOGRAPHY.icon,
             background: 'none', border: 'none', color: '#888',
-            fontSize: '18px', cursor: 'pointer',
+            cursor: 'pointer',
           }}>
             ✕
           </button>

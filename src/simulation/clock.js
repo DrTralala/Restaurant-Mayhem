@@ -77,9 +77,9 @@ export function getRushHourMultiplier(totalSeconds) {
   const time = ((totalSeconds % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY;
   return Math.max(
     1,
-    ramp(time, 6.5 * 3600, 8 * 3600, 10 * 3600, 2),
-    ramp(time, 11 * 3600, 12.5 * 3600, 15 * 3600, 2.5),
-    ramp(time, 17 * 3600, 19 * 3600, 22 * 3600, 3),
+    ramp(time, 6 * 3600, 7 * 3600, 8 * 3600, 2),
+    ramp(time, 11 * 3600, 12.5 * 3600, 14 * 3600, 2.5),
+    ramp(time, 17 * 3600, 18.5 * 3600, 20 * 3600, 3),
   );
 }
 

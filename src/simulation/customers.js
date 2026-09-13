@@ -266,6 +266,7 @@ function chooseParty() {
   const roll = Math.random();
   if (roll < 0.45) return { type: 'solo', size: 1 };
   if (roll < 0.80) return { type: 'couple', size: 2 };
+  if (roll < 0.90) return { type: 'triple', size: 3 };
   return { type: 'family', size: 4 };
 }
 

@@ -1,5 +1,11 @@
-import { getUpgradeEffect } from './balance';
 import { advanceConsumption } from './consumption';
+import {
+  advanceStaffTaskProgress,
+  getStaffTaskLegacyRate,
+  getStaffTaskRate,
+  getStaffTaskSource,
+} from './staffPerformance';
+import { getBatchServiceItemIds, normaliseCookingBatches } from './cookingBatches';
 
 const PHYSICAL_ITEM_STATES = new Set(['on_service', 'carried', 'delivered']);
 const DIRTY_ITEM_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
@@ -21,13 +27,20 @@ function canProgressDish(state, item) {
     : null;
   if (dish.requiredEquipmentId && !equipment) return null;
 
-  return { dish, equipment, station };
+  return { dish, equipment, station, cook };
 }
 
 export function processKitchen(state) {
   const consumption = advanceConsumption(state);
-  const customers = consumption.customers;
-  let serviceItems = consumption.serviceItems;
+  const reconciled = normaliseCookingBatches({
+    ...state,
+    customers: consumption.customers,
+    serviceItems: consumption.serviceItems,
+  });
+  const customers = reconciled.customers;
+  let serviceItems = reconciled.serviceItems;
+  const cookingBatches = reconciled.cookingBatches;
+  const progressByItemId = new Map();
 
   serviceItems = serviceItems.map(item => {
     if (item.kind !== 'dish') return item;
@@ -42,16 +55,47 @@ export function processKitchen(state) {
     }
     if (item.state !== 'preparing') return item;
 
-    const kitchenState = { ...state, customers, serviceItems };
+    const kitchenState = { ...reconciled, customers, serviceItems };
     const preparation = canProgressDish(kitchenState, item);
     if (!preparation) return item;
 
-    const speedMultiplier = preparation.equipment?.speedMultiplier || 1;
-    const globalSpeedEffect = getUpgradeEffect(kitchenState, 'globalSpeed');
-    const cookTime = (preparation.dish.prepTime || 60)
-      / (speedMultiplier * (1 + globalSpeedEffect));
-    const elapsed = state.restaurant.gameTime - item.preparationStartedAt;
-    if (elapsed < cookTime) return item;
+    const preparationTask = {
+      type: 'prepare_dish', serviceItemId: item.id, stationId: item.stationId,
+    };
+    const cookTask = preparation.cook.task?.type === 'prepare_dish'
+      && (preparation.cook.task.serviceItemId === item.id
+        || (preparation.cook.task.batchId != null
+          && getBatchServiceItemIds(
+            cookingBatches?.find(batch => batch.id === preparation.cook.task.batchId),
+          ).includes(item.id)))
+      ? {
+        ...preparation.cook.task,
+        serviceItemId: item.id,
+      }
+      : preparationTask;
+    if (cookTask.batchId != null && cookTask.serviceItemId !== preparation.cook.task.serviceItemId) {
+      delete cookTask.accumulatedWork;
+      delete cookTask.lastProgressAt;
+    }
+    const progressSource = getStaffTaskSource(kitchenState, {
+      ...preparation.cook,
+      task: cookTask,
+    });
+    const progress = advanceStaffTaskProgress(
+      progressSource,
+      state.restaurant.gameTime,
+      getStaffTaskRate(kitchenState, preparation.cook, preparationTask),
+      item.preparationStartedAt,
+      getStaffTaskLegacyRate(kitchenState, preparation.cook, preparationTask),
+    );
+    progressByItemId.set(item.id, progress);
+    if (progress.accumulatedWork < (preparation.dish.prepTime || 60)) {
+      return {
+        ...item,
+        accumulatedWork: progress.accumulatedWork,
+        lastProgressAt: progress.lastProgressAt,
+      };
+    }
 
     return {
       ...item,
@@ -62,7 +106,7 @@ export function processKitchen(state) {
     };
   }).filter(Boolean);
 
-  const staff = (state.staff || []).map(worker => {
+  const staff = (reconciled.staff || []).map(worker => {
     if (worker.task?.type !== 'prepare_dish') return worker;
     const item = serviceItems.find(candidate => candidate.id === worker.task.serviceItemId);
     const dish = item && (state.dishes || []).find(candidate => candidate.id === item.menuItemId);
@@ -77,8 +121,15 @@ export function processKitchen(state) {
       && item.stationId === worker.task.stationId
       && canProgressDish({ ...state, customers, serviceItems }, item);
     const validPreparation = validOrderedTask || validActiveTask;
-    return validPreparation ? worker : { ...worker, task: null };
+    if (!validPreparation) return { ...worker, task: null };
+    const progress = progressByItemId.get(item?.id);
+    return progress
+      ? { ...worker, task: {
+        ...worker.task,
+        accumulatedWork: progress.accumulatedWork,
+        lastProgressAt: progress.lastProgressAt,
+      } }
+      : worker;
   });
-  const result = { ...state, customers, serviceItems, staff };
-  return result;
+  return normaliseCookingBatches({ ...state, customers, serviceItems, staff });
 }

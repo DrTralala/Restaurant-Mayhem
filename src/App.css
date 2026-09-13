@@ -4,12 +4,38 @@
   box-sizing: border-box;
 }
 
+:root {
+  --font-ui: 'Segoe UI', system-ui, sans-serif;
+  --font-size-body: 14px;
+  --font-size-secondary: 12px;
+  --font-size-control: 13px;
+  --font-size-heading: 18px;
+}
+
 body {
   background: #000000;
   color: #eee;
-  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+  font-weight: 400;
+  line-height: 1.4;
   overflow: hidden;
   height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #f0a500;
+  outline-offset: 2px;
 }
 
 #root {
@@ -37,7 +63,7 @@ body {
   border-radius: 4px;
   background: transparent;
   color: #111;
-  font: bold 20px/24px monospace;
+  font: 600 20px/24px var(--font-ui);
   cursor: pointer;
   transform: translateY(-50%);
 }

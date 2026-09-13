@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getStaffCarryCapacity } from '../simulation/staffInventory';
+import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 
 const taskLabels = {
   clean_table: 'Cleaning table',
@@ -17,8 +18,9 @@ const taskLabels = {
 };
 
 const actionButton = {
+  ...TYPOGRAPHY.control,
   border: '1px solid #0f3460', borderRadius: 5, padding: '8px 12px',
-  cursor: 'pointer', fontFamily: 'monospace', fontSize: 12,
+  cursor: 'pointer',
 };
 
 export default function StaffDetailsPanel({ staff, cashierStations, dispatch, onMove, onClose }) {
@@ -26,28 +28,28 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
 
   useEffect(() => setSalary(staff.salary), [staff.id, staff.salary]);
 
-  const role = staff.role.charAt(0).toUpperCase() + staff.role.slice(1);
+  const role = humaniseIdentifier(staff.role);
   const assignedStation = cashierStations?.find(station => station.assignedStaffId === staff.id);
   const task = taskLabels[staff.task?.type]
     || (staff.role === 'waiter' && assignedStation ? 'Staffing cashier' : 'Available');
 
   return (
     <aside style={{
+      ...TYPOGRAPHY.body,
       position: 'absolute', top: 64, right: 16, zIndex: 250, width: 250,
       background: '#0d1528', border: '1px solid #0f3460', borderRadius: 8,
       color: '#ccc', padding: 16, boxShadow: '0 8px 24px rgba(0,0,0,0.55)',
-      fontFamily: 'monospace',
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
         <div>
-          <h3 style={{ color: '#f0a500', margin: 0, fontSize: 18 }}>{staff.name}</h3>
-          <div style={{ color: '#8fa4c8', marginTop: 3 }}>{role}</div>
+          <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: 0 }}>{staff.name}</h3>
+          <div style={{ ...TYPOGRAPHY.secondary, color: '#8fa4c8', marginTop: 3 }}>{role}</div>
         </div>
         <button
           type="button"
           aria-label="Close staff details"
           onClick={onClose}
-          style={{ background: 'transparent', border: 0, color: '#aaa', cursor: 'pointer', fontSize: 18 }}
+          style={{ ...TYPOGRAPHY.icon, background: 'transparent', border: 0, color: '#aaa', cursor: 'pointer' }}
         >
           ×
         </button>
@@ -55,24 +57,24 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, margin: '16px 0' }}>
         <div style={{ background: '#16213e', borderRadius: 5, padding: 9 }}>
-          <div style={{ color: '#7788a8', fontSize: 10 }}>MORALE</div>
+          <div style={{ ...TYPOGRAPHY.secondary, color: '#7788a8' }}>Morale</div>
           <strong style={{ color: '#fff' }}>{Math.round(staff.morale)}%</strong>
         </div>
         <div style={{ background: '#16213e', borderRadius: 5, padding: 9 }}>
-          <div style={{ color: '#7788a8', fontSize: 10 }}>SKILL</div>
+          <div style={{ ...TYPOGRAPHY.secondary, color: '#7788a8' }}>Skill</div>
           <strong style={{ color: '#fff' }}>{staff.skill}/10</strong>
         </div>
       </div>
 
-      <div style={{ fontSize: 12, marginBottom: 16 }}>
+      <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 16 }}>
         Current task: <strong style={{ color: '#fff' }}>{task}</strong>
       </div>
 
-      <div style={{ fontSize: 12, marginBottom: 16 }}>
+      <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 16 }}>
         Carry capacity: <strong style={{ color: '#fff' }}>{getStaffCarryCapacity(staff)}</strong>
       </div>
 
-      <label htmlFor={`salary-${staff.id}`} style={{ display: 'block', fontSize: 12 }}>
+      <label htmlFor={`salary-${staff.id}`} style={{ ...TYPOGRAPHY.secondary, display: 'block' }}>
         Daily salary: <strong style={{ color: '#f0a500' }}>${salary}</strong>
       </label>
       <input
@@ -95,7 +97,7 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
           color: salary > staff.salary ? '#111' : '#777',
         }}
       >
-        Apply Raise
+        Apply raise
       </button>
 
       <button

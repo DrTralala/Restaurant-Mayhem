@@ -1,5 +1,6 @@
 import { useDispatch, useGameState } from '../state/GameContext';
 import { formatOperatingHour } from '../simulation/clock';
+import { TYPOGRAPHY } from '../typography';
 
 const HOUR_OPTIONS = Array.from({ length: 48 }, (_, index) => index / 2);
 
@@ -14,6 +15,7 @@ export default function HoursPanel() {
   const dispatch = useDispatch();
   const { openHour, closeHour } = state.restaurant;
   const selectStyle = {
+    ...TYPOGRAPHY.control,
     width: '100%',
     marginTop: 6,
     padding: '9px 10px',
@@ -21,21 +23,19 @@ export default function HoursPanel() {
     background: '#16213e',
     border: '1px solid #0f3460',
     borderRadius: 4,
-    fontFamily: 'monospace',
-    fontSize: 14,
   };
 
   return (
-    <section style={{ color: '#ccc', fontFamily: 'monospace' }}>
-      <h3 style={{ color: '#f0a500', margin: '0 0 6px' }}>Operating Hours</h3>
-      <p style={{ color: '#888', fontSize: 12, margin: '0 0 14px' }}>
+    <section style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
+      <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '0 0 6px' }}>Operating hours</h3>
+      <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '0 0 14px' }}>
         Arrivals stop at closing time. Customers already inside finish their visit.
       </p>
 
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12,
       }}>
-        <label>
+        <label style={TYPOGRAPHY.secondary}>
           Opening time
           <select
             aria-label="Opening time"
@@ -53,7 +53,7 @@ export default function HoursPanel() {
           </select>
         </label>
 
-        <label>
+        <label style={TYPOGRAPHY.secondary}>
           Closing time
           <select
             aria-label="Closing time"
@@ -80,10 +80,10 @@ export default function HoursPanel() {
         borderLeft: '4px solid #f0a500',
         borderRadius: 6,
       }}>
-        <span style={{ display: 'block', color: '#888', fontSize: 11, marginBottom: 4 }}>
-          CURRENT SCHEDULE
-        </span>
-        <strong style={{ color: '#f0a500', fontSize: 16 }}>
+         <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#888', marginBottom: 4 }}>
+           Current schedule
+         </span>
+         <strong style={{ ...TYPOGRAPHY.subheading, color: '#f0a500' }}>
           {scheduleSummary(openHour, closeHour)}
         </strong>
       </div>

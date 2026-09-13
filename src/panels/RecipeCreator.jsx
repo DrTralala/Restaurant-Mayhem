@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { BASES, METHODS, BASE_EQUIPMENT_MAP } from '../data/recipes';
+import { TYPOGRAPHY } from '../typography';
 
-const selectStyle = { background: '#1a1a2e', color: '#ccc', border: '1px solid #333', padding: '4px 8px', borderRadius: 4, marginLeft: 8 };
-const inputStyle = { background: '#1a1a2e', color: '#ccc', border: '1px solid #333', padding: '6px 8px', borderRadius: 4, width: '100%', marginTop: 4 };
-const btnStyle = { background: '#f0a500', color: '#111', border: 'none', padding: '8px 16px', borderRadius: 4, cursor: 'pointer' };
+const selectStyle = { ...TYPOGRAPHY.control, background: '#1a1a2e', color: '#ccc', border: '1px solid #333', padding: '4px 8px', borderRadius: 4, marginLeft: 8 };
+const inputStyle = { ...TYPOGRAPHY.body, background: '#1a1a2e', color: '#ccc', border: '1px solid #333', padding: '6px 8px', borderRadius: 4, width: '100%', marginTop: 4 };
+const btnStyle = { ...TYPOGRAPHY.control, background: '#f0a500', color: '#111', border: 'none', padding: '8px 16px', borderRadius: 4, cursor: 'pointer' };
 
 export default function RecipeCreator({ onClose }) {
   const state = useGameState();
@@ -50,32 +51,32 @@ export default function RecipeCreator({ onClose }) {
   };
 
   return (
-    <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
-      <h3 style={{ marginBottom: 12, color: '#f0a500' }}>Create New Dish</h3>
+    <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
+      <h3 style={{ ...TYPOGRAPHY.heading, marginBottom: 12, color: '#f0a500' }}>Create new dish</h3>
 
-      {error && <p style={{ color: '#d44', marginBottom: 8 }}>{error}</p>}
+      {error && <p style={{ ...TYPOGRAPHY.secondary, color: '#d44', marginBottom: 8 }}>{error}</p>}
 
       <div style={{ marginBottom: 8 }}>
-        <label>Base Ingredient:</label>
+         <label style={TYPOGRAPHY.secondary}>Base ingredient:</label>
         <select value={base} onChange={e => setBase(e.target.value)} style={selectStyle}>
           {BASES.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
       </div>
 
       <div style={{ marginBottom: 8 }}>
-        <label>Cooking Method:</label>
+         <label style={TYPOGRAPHY.secondary}>Cooking method:</label>
         <select value={method} onChange={e => setMethod(e.target.value)} style={selectStyle}>
           {METHODS.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
         {equipment && (
-          <span style={{ marginLeft: 8, fontSize: 12, color: equipment.owned ? '#4a7' : '#d44' }}>
+           <span style={{ ...TYPOGRAPHY.secondary, marginLeft: 8, color: equipment.owned ? '#4a7' : '#d44' }}>
             Requires: {equipment.name} {equipment.owned ? '✓' : '✗'}
           </span>
         )}
       </div>
 
       <div style={{ marginBottom: 8 }}>
-        <label htmlFor="dish-name">Dish Name:</label>
+         <label htmlFor="dish-name" style={TYPOGRAPHY.secondary}>Dish name:</label>
         <input
           id="dish-name"
           value={dishName}
@@ -86,7 +87,7 @@ export default function RecipeCreator({ onClose }) {
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <label htmlFor="dish-price">Price: $</label>
+         <label htmlFor="dish-price" style={TYPOGRAPHY.secondary}>Price: $</label>
         <input
           id="dish-price"
           type="number" value={price} min={1} max={100} step={1}

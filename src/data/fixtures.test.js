@@ -45,15 +45,29 @@ describe('fixture catalogue', () => {
     })).toEqual({ x: 400, y: 120, w: 40, h: 120 });
   });
 
-  it('labels doors with their current directional role', () => {
+  it('labels doors with their current directional role in sentence case', () => {
     const state = createInitialState();
 
     expect(getFixtureLabel(state, {
       type: 'door', id: 'door1', data: state.doors[0],
-    })).toBe('Door · Entrance');
+    })).toBe('Door · entrance');
     expect(getFixtureLabel(state, {
       type: 'door', id: 'door2', data: state.doors[1],
-    })).toBe('Door · Exit');
+    })).toBe('Door · exit');
+  });
+
+  it('names cashier and kitchen fixtures without hiding equipment names', () => {
+    const state = createInitialState();
+
+    expect(getFixtureLabel(state, {
+      type: 'cashierTable', id: 'cashier1', data: state.cashierStations[0],
+    })).toBe('Cashier');
+    expect(getFixtureLabel(state, {
+      type: 'kitchenStation', id: 'k2', data: state.kitchenStations[1],
+    })).toBe('Kitchen station');
+    expect(getFixtureLabel(state, {
+      type: 'kitchenStation', id: 'k1', data: state.kitchenStations[0],
+    })).toBe('Toaster');
   });
 
   it('uses one public wash-station type for manual and automatic stations', () => {
@@ -82,13 +96,13 @@ describe('fixture catalogue', () => {
 
   it('provides non-shop geometry for existing stations and equipment placement', () => {
     expect(getPlaceable('kitchenStation')).toMatchObject({
-      price: null, width: 40, height: 40, grid: 20,
+      price: null, width: 40, height: 40, grid: 20, label: 'Kitchen station',
     });
     expect(getPlaceable('manualSink')).toMatchObject({
-      price: null, width: 40, height: 40, grid: 20,
+      price: null, width: 40, height: 40, grid: 20, label: 'Sink',
     });
     expect(getPlaceable('equipmentStation')).toMatchObject({
-      price: null, width: 40, height: 40, grid: 20,
+      price: null, width: 40, height: 40, grid: 20, label: 'Equipment station',
     });
   });
 });

@@ -15,10 +15,10 @@ describe('ItemsPanel', () => {
 
     render(<ItemsPanel onStartPlacement={vi.fn()} />);
 
-    expect(screen.getByText('Dining Table')).toBeInTheDocument();
-    expect(screen.getByText('Dining Chair')).toBeInTheDocument();
-    expect(screen.getByText('Additional Door')).toBeInTheDocument();
-    expect(screen.getByText('Cashier Table')).toBeInTheDocument();
+    expect(screen.getByText('Dining table')).toBeInTheDocument();
+    expect(screen.getByText('Dining chair')).toBeInTheDocument();
+    expect(screen.getByText('Additional door')).toBeInTheDocument();
+    expect(screen.getByText('Cashier')).toBeInTheDocument();
   });
 
   it('offers the automatic dishwasher at $600 with its catalogue description', () => {
@@ -27,7 +27,7 @@ describe('ItemsPanel', () => {
 
     render(<ItemsPanel onStartPlacement={vi.fn()} />);
 
-    expect(screen.getByText('Automatic Dishwasher')).toBeInTheDocument();
+    expect(screen.getByText('Automatic dishwasher')).toBeInTheDocument();
     expect(screen.getByText('$600')).toBeInTheDocument();
     expect(screen.getByText('Washes queued dishes automatically in three in-game minutes.'))
       .toBeInTheDocument();
@@ -39,7 +39,7 @@ describe('ItemsPanel', () => {
     useDispatch.mockReturnValue(vi.fn());
     render(<ItemsPanel onStartPlacement={startPlacement} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Buy chair ($50)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Buy Dining chair ($50)' }));
 
     expect(startPlacement).toHaveBeenCalledWith('chair');
   });
@@ -50,7 +50,7 @@ describe('ItemsPanel', () => {
     useDispatch.mockReturnValue(vi.fn());
     render(<ItemsPanel onStartPlacement={startPlacement} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Buy door ($400)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Buy Additional door ($400)' }));
 
     expect(startPlacement).toHaveBeenCalledWith('door');
   });

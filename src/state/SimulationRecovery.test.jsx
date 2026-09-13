@@ -8,6 +8,7 @@ import RestaurantCanvas from '../canvas/RestaurantCanvas';
 import { runTick } from '../simulation/gameLoop';
 import { interpolateSimulationState } from '../canvas/interpolation';
 import { drawFloorLayer } from '../canvas/layers';
+import { FONT_FAMILY } from '../typography';
 
 // Fault injection only: the provider, reducer, runtime and canvas are real.
 vi.mock('../simulation/gameLoop', () => ({ runTick: vi.fn() }));
@@ -91,7 +92,9 @@ it.each(['tick', 'interpolation'])('latches a %s fault without killing the frame
     .mockImplementationOnce(() => { throw fault; });
 
   expect(() => frame(68)).not.toThrow();
-  expect(screen.getByRole('alert')).toHaveTextContent(/New Game/);
+  const alert = screen.getByRole('alert');
+  expect(alert).toHaveTextContent(/new game/);
+  expect(alert).toHaveStyle({ fontFamily: FONT_FAMILY });
   expect(currentState.restaurant.gameTime).toBe(36002);
   expect(frames.size).toBe(1);
   expect(errorLog).toHaveBeenCalledTimes(1);

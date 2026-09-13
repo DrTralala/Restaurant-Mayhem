@@ -61,16 +61,16 @@ describe('settings menu', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
 
-    expect(screen.getByRole('button', { name: 'Save Game' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Load Game' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'New Game' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save game' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load game' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New game' })).toBeInTheDocument();
   });
 
   it('saves the current game to the repository on demand', async () => {
     saveRepositoryState.mockResolvedValue({ filename: '2026-08-13 2.36pm.json' });
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save Game' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save game' }));
 
     expect(saveRepositoryState).toHaveBeenCalledWith(gameState);
     expect(await screen.findByText('Saved as 2026-08-13 2.36pm.json')).toBeInTheDocument();
@@ -83,7 +83,7 @@ describe('settings menu', () => {
     hydrateState.mockReturnValue(hydrated);
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Load Game' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
 
     expect(await screen.findByText('Loaded 2026-08-13 2.36pm.json')).toBeInTheDocument();
     expect(dispatch).toHaveBeenCalledWith({ type: 'LOAD_STATE', state: hydrated });
@@ -94,13 +94,13 @@ describe('settings menu', () => {
     localStorage.setItem('restaurant-sim-save', '{}');
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    fireEvent.click(screen.getByRole('button', { name: 'New Game' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New game' }));
 
     expect(dispatch).toHaveBeenCalledWith({
       type: 'LOAD_STATE', state: { version: 1, paused: false },
     });
     expect(localStorage.getItem('restaurant-sim-save')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Save Game' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save game' })).not.toBeInTheDocument();
   });
 
   it('closes Settings when empty canvas space is clicked', () => {
@@ -109,7 +109,7 @@ describe('settings menu', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Empty canvas' }));
 
-    expect(screen.queryByRole('button', { name: 'Save Game' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save game' })).not.toBeInTheDocument();
   });
 
   it('closes Management when empty canvas space is clicked', () => {
@@ -128,17 +128,17 @@ describe('settings menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Menu' }));
     expect(screen.getByText('Menu panel')).toBeInTheDocument();
     expect(screen.queryByText('Management panel')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Save Game' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save game' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Management' }));
     expect(screen.queryByText('Menu panel')).not.toBeInTheDocument();
     expect(screen.getByText('Management panel')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Save Game' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save game' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     expect(screen.queryByText('Menu panel')).not.toBeInTheDocument();
     expect(screen.queryByText('Management panel')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save Game' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save game' })).toBeInTheDocument();
   });
 
   it('renders top-right controls in visual left-to-right DOM order', () => {

@@ -1,5 +1,6 @@
 import { useGameState } from '../state/GameContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { TYPOGRAPHY } from '../typography';
 
 const AUTO_DISMISS_MS = 5000;
 
@@ -11,8 +12,9 @@ function ToastBanner({ notification, onDismiss }) {
 
   return (
     <div className="toast-banner" role="status" style={{
+      ...TYPOGRAPHY.body,
       background: '#f0a500', color: '#111', padding: '10px 44px 10px 24px',
-      borderRadius: 8, fontSize: '14px', fontFamily: 'monospace',
+      borderRadius: 8,
       marginBottom: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
     }}>
       {notification.message}

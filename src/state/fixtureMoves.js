@@ -4,6 +4,7 @@ import {
   getServiceSlotPosition,
   normaliseServiceItemOwnership,
 } from '../simulation/serviceItems';
+import { recoverCookingBatches } from '../simulation/cookingBatches';
 import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout';
 import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
 import { createNavigationWorkspace } from '../simulation/movement/navigationWorkspace';
@@ -246,6 +247,7 @@ export function moveFixtures(state, requestedMoves) {
   if (next.queueAdmissionGate != null && movedDoorIds.has(next.queueAdmissionGate.doorId)) {
     next.queueAdmissionGate = null;
   }
+  next = recoverCookingBatches(next, { stationIds: [...kitchenStationIds] });
   const residencies = reconcileFixtureResidencies(state, next, createNavigationWorkspace(next));
   return normaliseServiceItemOwnership(reconcileSelfSeatingState(residencies));
 }

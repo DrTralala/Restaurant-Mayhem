@@ -25,3 +25,18 @@ export function selectFurnitureInRect(state, rawRect) {
     })
     .map(fixture => ({ type: fixture.type, id: fixture.id }));
 }
+
+export function expandFurnitureSelection(state, selectedItems = []) {
+  if (!Array.isArray(selectedItems)) return [];
+  const selected = new Set(selectedItems.map(item => `${item?.type}:${item?.id}`));
+  for (const item of selectedItems) {
+    if (item?.type !== 'table') continue;
+    for (const chair of state?.chairs || []) {
+      if (chair?.tableId === item.id) selected.add(`chair:${chair.id}`);
+    }
+  }
+
+  return listFixtures(state)
+    .filter(fixture => selected.has(`${fixture.type}:${fixture.id}`))
+    .map(fixture => ({ type: fixture.type, id: fixture.id }));
+}

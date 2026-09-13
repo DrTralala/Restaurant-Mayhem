@@ -93,7 +93,7 @@ describe('findClickedEntity staff selection', () => {
     const staff = { id: 's1', name: 'Sofia', role: 'waiter', x: 220, y: 120, morale: 79.6 };
     const hit = findClickedEntity({ ...state, staff: [staff] }, camera, 220, 120);
 
-    expect(hit).toEqual({ type: 'staff', data: staff, text: 'Sofia · waiter · 80% morale' });
+    expect(hit).toEqual({ type: 'staff', data: staff, text: 'Sofia · Waiter · 80% morale' });
   });
 
   it('hit-tests an assigned waiter at the cashier fallback position', () => {
@@ -106,6 +106,6 @@ describe('findClickedEntity staff selection', () => {
       }],
     }, camera, 840, 100);
 
-    expect(hit).toEqual({ type: 'staff', data: staff, text: 'Elena · waiter · 80% morale' });
+    expect(hit).toEqual({ type: 'staff', data: staff, text: 'Elena · Waiter · 80% morale' });
   });
 });

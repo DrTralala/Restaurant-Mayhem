@@ -26,7 +26,7 @@ describe('RecipeCreator', () => {
     expect(price).toHaveAttribute('min', '1');
     expect(price).toHaveAttribute('max', '100');
 
-    fireEvent.change(screen.getByLabelText('Dish Name:'), { target: { value: 'Soup' } });
+    fireEvent.change(screen.getByLabelText('Dish name:'), { target: { value: 'Soup' } });
     fireEvent.change(price, { target: { value: '101' } });
     expect(screen.getByRole('button', { name: /Create/ })).toBeDisabled();
 
@@ -43,7 +43,7 @@ describe('RecipeCreator', () => {
     useDispatch.mockReturnValue(vi.fn());
 
     render(<RecipeCreator onClose={vi.fn()} />);
-    fireEvent.change(screen.getByLabelText('Dish Name:'), { target: { value: 'Soup' } });
+    fireEvent.change(screen.getByLabelText('Dish name:'), { target: { value: 'Soup' } });
 
     expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
   });

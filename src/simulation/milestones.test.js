@@ -42,7 +42,7 @@ describe('checkMilestones', () => {
     expect(result.recipeSlots).toBe(1);
   });
 
-  it('applies newStaffSlot reward', () => {
+  it('ignores a retired newStaffSlot reward', () => {
     const state = {
       milestones: [
         { id: 'm2', description: 'Hire first staff', condition: { type: 'reputation', threshold: 2 }, reward: { type: 'newStaffSlot' }, achieved: false },
@@ -53,6 +53,7 @@ describe('checkMilestones', () => {
       notifications: [],
     };
     const result = checkMilestones(state);
-    expect(result.staffSlots).toBe(1);
+    expect(result.milestones[0]).toMatchObject({ id: 'm2', achieved: true, reward: { type: 'none' } });
+    expect(result).not.toHaveProperty('staffSlots');
   });
 });

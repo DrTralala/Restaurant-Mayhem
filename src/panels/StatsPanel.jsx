@@ -1,7 +1,8 @@
 import { useRef, useEffect } from 'react';
 import { useGameState } from '../state/GameContext';
+import { getCanvasFont, TYPOGRAPHY } from '../typography';
 
-const statBox = { background: '#1a1a2e', borderRadius: 6, padding: 10, border: '1px solid #0f3460' };
+const statBox = { ...TYPOGRAPHY.secondary, background: '#1a1a2e', borderRadius: 6, padding: 10, border: '1px solid #0f3460' };
 
 export default function StatsPanel() {
   const state = useGameState();
@@ -40,23 +41,23 @@ export default function StatsPanel() {
       ctx.fillStyle = '#f0a500';
       ctx.fillRect(i * (barWidth + 4) + 2, canvas.height - h, barWidth, h);
       ctx.fillStyle = '#888';
-      ctx.font = '10px monospace';
+      ctx.font = getCanvasFont('compact');
       ctx.fillText(`D${d.day}`, i * (barWidth + 4) + 2, canvas.height - 2);
     });
   }, [state.dailyHistory]);
 
   return (
-    <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
-      <h3 style={{ color: '#f0a500', marginBottom: 12 }}>Statistics</h3>
+    <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
+      <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', marginBottom: 12 }}>Statistics</h3>
 
       <div style={{ marginBottom: 16 }}>
-        <h4 style={{ marginBottom: 4 }}>Daily Revenue</h4>
+        <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 4 }}>Daily revenue</h4>
         <canvas ref={canvasRef} style={{ width: '100%', height: 120, background: '#111', borderRadius: 8 }} />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 13 }}>
-        <div style={statBox}>Total Served: <strong>{state.restaurant.totalServed}</strong></div>
-        <div style={statBox}>Current Day: <strong>{state.restaurant.day}</strong></div>
+      <div style={{ ...TYPOGRAPHY.secondary, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={statBox}>Total served: <strong>{state.restaurant.totalServed}</strong></div>
+        <div style={statBox}>Current day: <strong>{state.restaurant.day}</strong></div>
         <div style={statBox}>Funds: <strong>${state.restaurant.funds.toFixed(0)}</strong></div>
         <div style={statBox}>Reputation: <strong>{state.restaurant.reputation.toFixed(1)} ★</strong></div>
         <div style={statBox}>Staff: <strong>{state.staff.length}</strong></div>
@@ -64,8 +65,8 @@ export default function StatsPanel() {
       </div>
 
       <div style={{ marginTop: 16 }}>
-        <h4 style={{ marginBottom: 8 }}>Party Reviews</h4>
-        <div style={{ display: 'grid', gap: 8, fontSize: 12 }}>
+        <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Party reviews</h4>
+        <div style={{ ...TYPOGRAPHY.secondary, display: 'grid', gap: 8 }}>
           <div style={statBox}>Average party review: {averagePartyReview}</div>
           <div style={statBox}>Completed reviews: {partyReviewHistory.length}</div>
           <div style={statBox}>
@@ -104,12 +105,13 @@ export default function StatsPanel() {
           }
         }}
         style={{
+          ...TYPOGRAPHY.control,
           marginTop: 16, width: '100%',
           background: '#633', color: '#d44', border: '1px solid #844',
-          padding: '8px 16px', borderRadius: 4, cursor: 'pointer', fontSize: 13,
+          padding: '8px 16px', borderRadius: 4, cursor: 'pointer',
         }}
       >
-        New Game
+        New game
       </button>
     </div>
   );

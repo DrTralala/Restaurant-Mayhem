@@ -1,8 +1,9 @@
+import { normaliseMilestones } from '../data/milestones';
+
 export function checkMilestones(state) {
-  let milestones = [...state.milestones];
+  let milestones = normaliseMilestones(state.milestones, []);
   let notifications = [...(state.notifications || [])];
   let recipeSlots = state.recipeSlots || 0;
-  let staffSlots = state.staffSlots || 0;
 
   for (let i = 0; i < milestones.length; i++) {
     const m = milestones[i];
@@ -39,12 +40,10 @@ export function checkMilestones(state) {
         case 'newDishSlot':
           recipeSlots += 1;
           break;
-        case 'newStaffSlot':
-          staffSlots += 1;
-          break;
       }
     }
   }
 
-  return { ...state, milestones, notifications, recipeSlots, staffSlots };
+  const { staffSlots: _legacyStaffSlots, ...stateWithoutStaffSlots } = state;
+  return { ...stateWithoutStaffSlots, milestones, notifications, recipeSlots };
 }

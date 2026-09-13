@@ -1,4 +1,10 @@
 import { useGameState } from '../state/GameContext';
+import { humaniseIdentifier, sentenceCase, TYPOGRAPHY } from '../typography';
+
+function formatReward(reward) {
+  if (!reward?.type || reward.type === 'none') return 'No reward';
+  return humaniseIdentifier(reward.type);
+}
 
 export default function MilestonePanel() {
   const state = useGameState();
@@ -18,8 +24,8 @@ export default function MilestonePanel() {
   };
 
   return (
-    <div style={{ color: '#ccc', fontFamily: 'monospace' }}>
-      <h3 style={{ color: '#f0a500', marginBottom: 12 }}>Milestones</h3>
+    <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
+      <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', marginBottom: 12 }}>Milestones</h3>
       {state.milestones.map(m => {
         const progress = m.achieved ? 100 : getProgress(m);
         return (
@@ -29,13 +35,13 @@ export default function MilestonePanel() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
               <span>{m.achieved ? '✅' : '🔒'}</span>
-              <span>{m.description}</span>
+              <span>{sentenceCase(m.description)}</span>
             </div>
             <div style={{ background: '#111', borderRadius: 4, height: 6, overflow: 'hidden' }}>
               <div style={{ background: m.achieved ? '#4a7' : '#f0a500', height: '100%', width: `${progress}%`, borderRadius: 4, transition: 'width 0.3s' }} />
             </div>
-            <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
-              Reward: {m.reward.type.replace(/([A-Z])/g, ' $1').trim()}
+            <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0 0' }}>
+              Reward: {formatReward(m.reward)}
             </p>
           </div>
         );

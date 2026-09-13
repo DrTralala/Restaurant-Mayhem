@@ -52,7 +52,7 @@ describe('replacement navigation save boundary', () => {
     } });
     function CurrentFunds() { return <output data-testid="funds">{useGameState().restaurant.funds}</output>; }
     render(<GameProvider><CurrentFunds /><SettingsMenu isOpen onToggle={() => {}} /></GameProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Load Game' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
     expect(await screen.findByText(/incompatible/i)).toBeInTheDocument();
     expect(screen.getByTestId('funds')).toHaveTextContent('600');
   });

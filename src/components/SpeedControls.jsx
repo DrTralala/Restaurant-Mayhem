@@ -1,11 +1,13 @@
 import { useEffect } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
+import { TYPOGRAPHY } from '../typography';
 
 const speeds = [1, 2, 4];
 
 const btnStyle = {
+  ...TYPOGRAPHY.control,
   background: '#333', border: '1px solid #555', borderRadius: 4,
-  color: '#ccc', padding: '4px 12px', cursor: 'pointer', fontSize: '13px',
+  color: '#ccc', padding: '4px 12px', cursor: 'pointer',
 };
 
 export default function SpeedControls({ onFit }) {

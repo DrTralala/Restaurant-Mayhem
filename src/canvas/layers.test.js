@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawQueueLayer } from './layers';
 import { updateStaff } from '../simulation/staff';
 import { processKitchen } from '../simulation/kitchen';
+import { ACTIVITY_DURATIONS } from '../simulation/activity';
 import { getPlaceSettingPositions } from './tableGeometry';
 import { recordSeatResidency } from '../simulation/movement/seatedDeparture';
 
@@ -124,7 +125,8 @@ describe('drawFloorLayer', () => {
       cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
     }, { x: 0, y: 0, zoom: 1 });
 
-    expect(ctx._calls.texts.map(call => call.text)).toContain('$ CASHIER');
+    expect(ctx._calls.texts.map(call => call.text)).toContain('Cashier');
+    expect(ctx._calls.texts.map(call => call.text)).not.toContain('QUEUE');
     expect(ctx._calls.rects.filter(rect => rect.w === 6 && rect.h === 40)).toHaveLength(2);
   });
 
@@ -138,7 +140,7 @@ describe('drawFloorLayer', () => {
     }, { x: 0, y: 0, zoom: 1 });
 
     expect(ctx._calls.rects).toContainEqual({ x: 800, y: 120, w: 80, h: 40 });
-    expect(ctx._calls.texts.map(call => call.text)).toContain('$ CASHIER');
+    expect(ctx._calls.texts.map(call => call.text)).toContain('Cashier');
   });
 });
 
@@ -284,15 +286,16 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.rotations).toContain(Math.PI / 2);
   });
 
-  it('draws dirt, station labels, queue stacks, and exact half progress', () => {
+  it('draws dirt, sentence-case station labels, queue stacks, and exact half progress', () => {
     const ctx = recordCtx();
     drawFurnitureLayer(ctx, { tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
-      floorDirt: [{ x: 100, y: 100 }, { x: Infinity, y: 20 }], restaurant: { gameTime: 90 },
+      floorDirt: [{ x: 100, y: 100 }, { x: Infinity, y: 20 }],
+      restaurant: { gameTime: ACTIVITY_DURATIONS.automaticWash / 2 },
       washStations: [{ id: 'sink', type: 'manual', x: 20, y: 20 }, { id: 'auto', type: 'automatic', x: 100, y: 20 }],
       serviceItems: [{ id: 'a', washStationId: 'auto', state: 'washing', washStartedAt: 0 },
         { id: 'b', washStationId: 'auto', state: 'queued_for_wash' }] }, { x: 0, y: 0, zoom: 1 });
     expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining([
-      '💦', 'SINK', 'AUTO', '0 / 8', '2 / 12',
+      '💦', 'Sink', 'Dishwasher', '0 / 8', '2 / 12',
     ]));
     expect(ctx._calls.rects).toContainEqual(expect.objectContaining({ x: 143, y: 45, w: 1, h: 7 }));
   });
@@ -558,11 +561,27 @@ describe('drawFurnitureLayer', () => {
     expect(preparing.serviceItems[0]).toMatchObject({ state: 'preparing', preparationStartedAt: 100 });
     const ctx = recordCtx();
     drawStaffLayer(ctx, { ...preparing, restaurant: { gameTime: 130 } }, { x: 0, y: 0, zoom: 1 });
-    expect(ctx._calls.rects).toContainEqual(expect.objectContaining({ w: 1, h: 7 }));
+    expect(ctx._calls.rects).toContainEqual(expect.objectContaining({ w: 1, h: 4.8999999999999995 }));
 
     const completed = processKitchen({ ...preparing, restaurant: { gameTime: 160 } });
     expect(completed.staff[0].task).toMatchObject({ type: 'prepare_dish', serviceItemId: 'food' });
     expect(completed.serviceItems[0]).toMatchObject({ state: 'ready', x: 120, y: 120 });
+  });
+
+  it('labels empty kitchen stations and preserves the installed equipment name', () => {
+    const ctx = recordCtx();
+
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [
+        { id: 'empty', x: 100, y: 120, equipmentId: null },
+        { id: 'toaster', x: 160, y: 120, equipmentId: 'eq1' },
+      ], serviceTables: [], equipment: [{ id: 'eq1', name: 'Toaster' }], dishes: [], serviceItems: [],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining([
+      'Kitchen station', 'Toaster',
+    ]));
+    expect(ctx._calls.texts.map(call => call.text)).not.toContain('Kitchen equipment');
   });
 });
 
@@ -604,6 +623,21 @@ describe('drawOverlayLayer', () => {
 
 describe('drawStaffLayer', () => {
   const camera = { x: 0, y: 0, zoom: 1 };
+
+  it('renders morale-scaled accumulated work instead of reusing the legacy timestamp formula', () => {
+    const ctx = recordCtx();
+    drawStaffLayer(ctx, {
+      restaurant: { expansionLevel: 1, gameTime: 40 },
+      serviceItems: [{ id: 'food', kind: 'dish', menuItemId: 'dish', state: 'preparing',
+        preparationStartedAt: 0, accumulatedWork: 0, lastProgressAt: 0 }],
+      dishes: [{ id: 'dish', prepTime: 60 }],
+      kitchenStations: [{ id: 'k1' }], equipment: [],
+      staff: [{ id: 'cook', name: 'Cook', role: 'cook', morale: 0, x: 100, y: 100,
+        task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } }],
+    }, camera);
+
+    expect(ctx._calls.rects).toContainEqual(expect.objectContaining({ w: 1, h: 9.333333333333334 }));
+  });
 
   it('uses dynamic s.x/s.y when both are finite', () => {
     const staff = [
@@ -873,7 +907,9 @@ describe('drawStaffLayer', () => {
       this._calls.texts.push({ text, x, y, font: this.font });
     };
     drawStaffLayer(ctx, state, camera);
-    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍞', font: '12px sans-serif' }));
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
+      text: '🍞', font: "400 12px 'Segoe UI', system-ui, sans-serif",
+    }));
   });
 
   it('shows the carried drink emoji when carrying a drink', () => {

@@ -2,6 +2,7 @@ const SAVE_KEY = 'restaurant-sim-save';
 import { inferGender } from '../canvas/characterAppearance';
 import { normaliseDrinkOverrides } from '../data/drinks';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
+import { normaliseMilestones } from '../data/milestones';
 import { normaliseOperatingHour } from '../simulation/clock';
 import { normaliseConsumptionState } from '../simulation/consumption';
 import { isCheckoutState } from '../simulation/checkout';
@@ -17,6 +18,7 @@ import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
 import { repairInvalidStaffOverlaps } from './staffMoves';
 import { getCarriedServiceItemIds, getStaffCarryCapacity, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseServiceItemOwnership } from '../simulation/serviceItems';
+import { normaliseCookingBatches } from '../simulation/cookingBatches';
 import {
   normalisePartyReviewHistory,
   normalisePendingPartyReviews,
@@ -203,9 +205,12 @@ export function hydrateState(saved, fresh) {
   const settledPartyIds = new Set(partyReviewHistory.map(review => review.partyId));
   const pendingPartyReviews = normalisePendingPartyReviews(saved.pendingPartyReviews)
     .filter(record => !settledPartyIds.has(record.partyId));
+  const { staffSlots: _savedStaffSlots, ...savedWithoutStaffSlots } = saved;
+  const { staffSlots: _freshStaffSlots, ...freshWithoutStaffSlots } = fresh;
+  const hasMilestones = 'milestones' in saved || 'milestones' in fresh;
   const hydrated = {
-    ...fresh,
-    ...saved,
+    ...freshWithoutStaffSlots,
+    ...savedWithoutStaffSlots,
     restaurant: {
       ...fresh.restaurant,
       ...(saved.restaurant || {}),
@@ -221,6 +226,9 @@ export function hydrateState(saved, fresh) {
     queueAdmissionGate: saved.queueAdmissionGate ?? fresh.queueAdmissionGate ?? null,
     pendingPartyReviews,
     partyReviewHistory,
+    ...(hasMilestones
+      ? { milestones: normaliseMilestones(saved.milestones, fresh.milestones || []) }
+      : {}),
     drinkOverrides: normaliseDrinkOverrides(saved.drinkOverrides ?? fresh.drinkOverrides),
     floorDirt: Array.isArray(saved.floorDirt) ? saved.floorDirt : fresh.floorDirt,
     washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
@@ -241,6 +249,10 @@ export function hydrateState(saved, fresh) {
   hydrated.customers = ownership.customers;
   hydrated.staff = ownership.staff;
   hydrated.serviceItems = ownership.serviceItems;
+  const cooking = normaliseCookingBatches(hydrated);
+  hydrated.staff = cooking.staff || hydrated.staff;
+  hydrated.serviceItems = cooking.serviceItems || hydrated.serviceItems;
+  if (Array.isArray(cooking.cookingBatches)) hydrated.cookingBatches = cooking.cookingBatches;
   if ('tables' in saved || 'tables' in fresh) {
     hydrated.tables = saved.tables || fresh.tables || [];
   }
@@ -252,10 +264,6 @@ export function hydrateState(saved, fresh) {
     hydrated.restaurant.closeHour,
     normaliseOperatingHour(fresh.restaurant.closeHour, 22),
   );
-
-  if ('staffSlots' in saved || 'staffSlots' in fresh) {
-    hydrated.staffSlots = Math.max(fresh.staffSlots || 0, staff.length, saved.staffSlots || 0);
-  }
 
   if (saved.dishes || fresh.dishes) {
     hydrated.dishes = (saved.dishes || fresh.dishes).map((dish, index) => {

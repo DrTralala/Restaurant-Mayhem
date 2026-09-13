@@ -12,14 +12,15 @@ import { getRestaurantWorld } from '../simulation/world';
 import { hasValidDrinkReservation } from '../simulation/serviceItems';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseOperatingHour } from '../simulation/clock';
+import { getStaffTrainingCost, STAFF_SALARIES } from '../simulation/staffProgression';
+import { recoverCookingBatches } from '../simulation/cookingBatches';
+import { copyFixtures } from './fixtureCopies';
 import { moveFixtures } from './fixtureMoves';
 import { invalidateMovementRuntime, moveStaff } from './staffMoves';
 
 const DISH_QUALITY_COST = 50;
-const TRAINING_COST = 100;
 const BONUS_COST = 50;
 const STARTING_DISH_QUALITY = 1;
-const STAFF_SALARIES = { cook: 200, waiter: 150, janitor: 120 };
 const EXPANSION_COSTS = [0, 1000, 3000, 6000];
 
 function canAfford(state, cost) {
@@ -364,8 +365,7 @@ function gameReducer(state, action) {
     }
     case 'HIRE_STAFF': {
       const salary = STAFF_SALARIES[action.staff?.role];
-      if (!action.staff || state.staff.length >= state.staffSlots
-        || salary == null || !canAfford(state, salary)) return state;
+      if (!action.staff || salary == null || !canAfford(state, salary)) return state;
       const { ...staff } = action.staff;
       return {
         ...state,
@@ -376,18 +376,19 @@ function gameReducer(state, action) {
     case 'FIRE_STAFF':
       {
         const fired = state.staff.find(staff => staff.id === action.id);
+        const recovered = recoverCookingBatches(state, { cookIds: [action.id] });
         const carriedIds = new Set(getCarriedServiceItemIds(fired));
         const firedTask = fired?.task;
         return invalidateMovementRuntime({
-          ...state,
-          staff: state.staff.filter(s => s.id !== action.id),
-          serviceItems: (state.serviceItems || []).map(item => {
+          ...recovered,
+          staff: recovered.staff.filter(s => s.id !== action.id),
+          serviceItems: (recovered.serviceItems || []).map(item => {
             if (carriedIds.has(item.id)) {
               if (item.state === 'carried') {
                 return { ...item, state: 'to_clean', assignedStaffId: null };
               }
               if (item.state === 'carried_dirty') {
-                return (state.tables || []).some(table => table.id === item.tableId)
+                return (recovered.tables || []).some(table => table.id === item.tableId)
                   ? { ...item, state: 'dirty_at_table', assignedStaffId: null }
                   : {
                     ...item, state: 'queued_for_wash', washStationId: null,
@@ -416,7 +417,7 @@ function gameReducer(state, action) {
             }
             return item;
           }),
-          cashierStations: (state.cashierStations || []).map(station => {
+          cashierStations: (recovered.cashierStations || []).map(station => {
             if (station.assignedStaffId !== action.id) return station;
             const { assignedStaffId, ...unassigned } = station;
             return unassigned;
@@ -444,11 +445,12 @@ function gameReducer(state, action) {
       return moveStaff(state, action.id, { x: action.x, y: action.y });
     case 'TRAIN_STAFF': {
       const staff = state.staff.find(candidate => candidate.id === action.id);
+      const cost = getStaffTrainingCost(staff);
       if (!staff || !Number.isFinite(staff.skill) || staff.skill >= 10
-        || !canAfford(state, TRAINING_COST)) return state;
+        || cost == null || !canAfford(state, cost)) return state;
       return {
         ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - TRAINING_COST },
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - cost },
         staff: state.staff.map(s =>
           s.id === action.id
             ? {
@@ -521,6 +523,8 @@ function gameReducer(state, action) {
     case 'MOVE_FIXTURES':
     case 'MOVE_ITEMS':
       return moveFixtures(state, action.items);
+    case 'COPY_FIXTURES':
+      return copyFixtures(state, action.items);
     case 'SELL_ITEMS': {
       const selectedTableIds = new Set(action.items
         .filter(item => item.type === 'table')

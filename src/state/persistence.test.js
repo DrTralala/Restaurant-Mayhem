@@ -155,6 +155,84 @@ describe('saveState', () => {
 });
 
 describe('loadState', () => {
+  it('releases a saved cooking batch whose station no longer exists', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      version: SAVE_VERSION,
+      kitchenStations: [],
+      customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'recipe' }],
+      dishes: [{ id: 'recipe', prepTime: 60 }],
+      staff: [{
+        id: 'cook', role: 'cook', skill: 5, morale: 80, x: 200, y: 200,
+        task: {
+          type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
+          serviceItemIds: ['i1'], stationId: 'missing-station',
+        },
+      }],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'recipe', customerId: 'c1',
+        state: 'preparing', batchId: 'batch-1', stationId: 'missing-station',
+        assignedStaffId: 'cook', preparationStartedAt: 50,
+      }],
+      cookingBatches: [{
+        id: 'batch-1', cookId: 'cook', stationId: 'missing-station',
+        serviceItemIds: ['i1'], status: 'preparing', startedAt: 50,
+      }],
+    };
+
+    const restored = hydrateState(saved, fresh);
+
+    expect(restored.cookingBatches).toEqual([]);
+    expect(restored.staff[0].task).toBeNull();
+    expect(restored.serviceItems[0]).toMatchObject({
+      state: 'ordered', stationId: null, assignedStaffId: null, preparationStartedAt: null,
+    });
+    expect(restored.serviceItems[0]).not.toHaveProperty('batchId');
+  });
+
+  it('hydrates an explicit empty batch ledger from its matching task member', () => {
+    const fresh = createInitialState();
+    const cook = {
+      ...fresh.staff.find(worker => worker.id === 'starter-cook'),
+      x: 80,
+      y: 160,
+      task: {
+        type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
+        serviceItemIds: ['i1'], stationId: 'k1', startedAt: 50,
+      },
+    };
+    const saved = {
+      ...fresh,
+      version: SAVE_VERSION,
+      restaurant: { ...fresh.restaurant, gameTime: 80 },
+      staff: [cook],
+      customers: [{
+        id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: 'starter-toast',
+      }],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', tableId: 't1',
+        state: 'preparing', stationId: null, assignedStaffId: null,
+        preparationStartedAt: 50, readyAt: null,
+      }],
+      cookingBatches: [{
+        id: 'batch-1', cookId: 'starter-cook', stationId: 'k1', serviceItemIds: [],
+        status: 'preparing', startedAt: 50,
+      }],
+    };
+
+    const restored = hydrateState(saved, fresh);
+
+    expect(restored.cookingBatches).toHaveLength(1);
+    expect(restored.cookingBatches[0].serviceItemIds).toEqual(['i1']);
+    expect(restored.serviceItems[0]).toMatchObject({
+      state: 'preparing', batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'starter-cook',
+    });
+    expect(restored.staff[0].task).toMatchObject({
+      type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
+    });
+  });
+
   it('rejects invalid fixture geometry without discarding the saved JSON', () => {
     const saved = createInitialState();
     saved.cashierStations[0].w = -1;
@@ -854,7 +932,7 @@ describe('hydrateState', () => {
     expect(hydrated.dishes[0]).toMatchObject({ name: 'Valid', marker: 'preserved' });
   });
 
-  it('hydrates staff capacity to the fresh default, current headcount, or larger saved capacity', () => {
+  it('ignores legacy staff capacity values during hydration', () => {
     const fresh = createInitialState();
     const legacy = hydrateState({ ...fresh, staffSlots: 3 }, fresh);
     const crowdedStaff = [...fresh.staff, ...Array.from({ length: 3 }, (_, index) => ({
@@ -864,10 +942,30 @@ describe('hydrateState', () => {
     const crowded = hydrateState({ ...fresh, staff: crowdedStaff, staffSlots: 3 }, fresh);
     const expanded = hydrateState({ ...fresh, staffSlots: 9 }, fresh);
 
-    expect(legacy.staffSlots).toBe(7);
-    expect(crowded.staffSlots).toBe(8);
-    expect(expanded.staffSlots).toBe(9);
+    expect(legacy).not.toHaveProperty('staffSlots');
+    expect(crowded).not.toHaveProperty('staffSlots');
+    expect(expanded).not.toHaveProperty('staffSlots');
+    expect(crowded.staff).toHaveLength(8);
     expect(legacy.version).toBe(SAVE_VERSION);
+  });
+
+  it('ignores legacy staff slots and normalises retired milestone rewards without losing history', () => {
+    const fresh = createInitialState();
+    const savedMilestones = fresh.milestones.map(milestone => milestone.id === 'm6'
+      ? {
+          ...milestone,
+          condition: { type: 'reputation', threshold: 4 },
+          reward: { type: 'newStaffSlot' },
+          achieved: true,
+        }
+      : milestone);
+
+    const hydrated = hydrateState({ ...fresh, staffSlots: 99, milestones: savedMilestones }, fresh);
+
+    expect(hydrated).not.toHaveProperty('staffSlots');
+    expect(hydrated.milestones).toEqual(savedMilestones.map(milestone => milestone.id === 'm6'
+      ? { ...milestone, reward: { type: 'none' } }
+      : milestone));
   });
 
   it('normalises drink overrides and defaults missing state', () => {

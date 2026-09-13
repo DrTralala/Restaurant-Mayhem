@@ -83,7 +83,7 @@ describe('StaffDetailsPanel', () => {
     fireEvent.change(screen.getByRole('slider', { name: 'Daily salary for Sofia' }), {
       target: { value: '220' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Raise' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply raise' }));
     fireEvent.click(screen.getByRole('button', { name: 'Move' }));
     fireEvent.click(screen.getByRole('button', { name: 'Fire Sofia' }));
 

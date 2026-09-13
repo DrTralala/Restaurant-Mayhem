@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { TYPOGRAPHY } from '../typography';
 import MenuPanel from './MenuPanel';
 
 export default function MenuModal({ isOpen, onClose }) {
@@ -45,6 +46,7 @@ export default function MenuModal({ isOpen, onClose }) {
         position: 'relative', width: '90%', maxWidth: 700, maxHeight: '80vh',
         background: '#16213e', borderRadius: 12, border: '1px solid #0f3460',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        ...TYPOGRAPHY.body,
       }}>
         <button
           ref={closeButtonRef}
@@ -52,9 +54,10 @@ export default function MenuModal({ isOpen, onClose }) {
           aria-label="Close menu"
           onClick={onClose}
           style={{
+            ...TYPOGRAPHY.icon,
             position: 'absolute', top: 10, right: 10, zIndex: 1,
             width: 32, height: 32, border: '1px solid #0f3460', borderRadius: 8,
-            background: '#0f3460', color: '#fff', fontSize: 22, lineHeight: 1,
+            background: '#0f3460', color: '#fff',
             cursor: 'pointer',
           }}
         >

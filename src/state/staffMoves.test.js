@@ -228,6 +228,52 @@ describe('moveStaff', () => {
     });
   });
 
+  it('releases every member when a cook carrying a cooking batch is moved', () => {
+    const state = makeState({
+      kitchenStations: [{ id: 'station', equipmentId: null, x: 100, y: 120 }],
+      customers: [
+        { id: 'c1', state: 'waiting_for_items', dishId: 'recipe' },
+        { id: 'c2', state: 'waiting_for_items', dishId: 'recipe' },
+      ],
+      dishes: [{ id: 'recipe', prepTime: 60 }],
+      staff: [{
+        id: 'worker', role: 'cook', skill: 5, morale: 80, x: 200, y: 200,
+        task: {
+          type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
+          serviceItemIds: ['i1', 'i2'], stationId: 'station',
+        },
+        carryingServiceItemIds: [],
+      }],
+      serviceItems: [
+        {
+          id: 'i1', kind: 'dish', menuItemId: 'recipe', customerId: 'c1',
+          state: 'preparing', batchId: 'batch-1', stationId: 'station', assignedStaffId: 'worker',
+          preparationStartedAt: 50,
+        },
+        {
+          id: 'i2', kind: 'dish', menuItemId: 'recipe', customerId: 'c2',
+          state: 'ready', batchId: 'batch-1', stationId: 'station', assignedStaffId: 'worker',
+          readyAt: 80,
+        },
+      ],
+      cookingBatches: [{
+        id: 'batch-1', cookId: 'worker', stationId: 'station',
+        serviceItemIds: ['i1', 'i2'], status: 'preparing', startedAt: 50,
+      }],
+    });
+
+    const result = moveStaff(state, 'worker', { x: 500, y: 300 });
+
+    expect(result.cookingBatches).toEqual([]);
+    expect(result.staff[0].task).toBeNull();
+    expect(result.serviceItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'i1', state: 'ordered', assignedStaffId: null }),
+      expect.objectContaining({ id: 'i2', state: 'ordered', assignedStaffId: null }),
+    ]));
+    expect(result.serviceItems.find(item => item.id === 'i1')).not.toHaveProperty('batchId');
+    expect(result.serviceItems.find(item => item.id === 'i2')).not.toHaveProperty('batchId');
+  });
+
   it('removes stale movement runtime and task arrival evidence for the moved worker', () => {
     const state = makeState({
       staff: [{ ...makeState().staff[0], navigationGoal: { x: 400, y: 200 }, task: { type: 'clean_floor', dirtId: 'd1' } }],
