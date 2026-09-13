@@ -76,3 +76,7 @@ The production build is written to `dist/`, which is generated locally and exclu
 - React 18 and JavaScript modules
 - Vite 6
 - Vitest 2, jsdom and React Testing Library
+
+## Licence
+
+[MIT](LICENSE)
