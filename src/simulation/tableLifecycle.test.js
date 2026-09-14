@@ -63,6 +63,44 @@ describe('party-owned table reservation', () => {
 });
 
 describe('releaseVacatedTables', () => {
+  it('never marks a table empty while a cancelled order is still seated', () => {
+    const table = {
+      id: 't1', status: 'occupied', diningPartyId: 'p1',
+      diningCustomerIds: ['cancelled'], x: 200, y: 200,
+    };
+    const state = {
+      tables: [table], chairs: [],
+      customers: [{
+        id: 'cancelled', partyId: 'p1', tableId: 't1', state: 'seated',
+        foodOutcome: 'cancelled', cancelledServiceItemIds: ['dish'],
+        seatResidency: { phase: 'seated', actorId: 'cancelled', partyId: 'p1' },
+      }],
+      serviceItems: [{
+        id: 'dish', kind: 'dish', customerId: 'cancelled', state: 'to_clean',
+        foodCancelled: true, tableId: 't1',
+      }],
+    };
+
+    expect(releaseVacatedTables(state).tables[0].status).toBe('occupied');
+  });
+
+  it('only makes a dining table reusable after the party has physically cleared', () => {
+    const table = {
+      id: 't1', status: 'occupied', diningPartyId: 'p1',
+      diningCustomerIds: ['cancelled'], x: 200, y: 200,
+    };
+    const customer = {
+      id: 'cancelled', partyId: 'p1', tableId: 't1', state: 'checkout_queued',
+      foodOutcome: 'cancelled', cancelledServiceItemIds: ['dish'],
+      seatResidency: { phase: 'clear', actorId: 'cancelled', partyId: 'p1' },
+      x: 840, y: 180,
+    };
+
+    expect(releaseVacatedTables({ tables: [table], chairs: [], customers: [customer] })
+      .tables[0].status).toBe('dirty');
+    expect(reserveTableForParty({ ...table, status: 'dirty' }, 'p2', [assignment])).toBeNull();
+  });
+
   it('ignores old checkout customers when the new party owns the table', () => {
     const table = {
       id: 't1', status: 'occupied', diningPartyId: 'new-party',

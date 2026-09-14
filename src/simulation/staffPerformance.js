@@ -20,6 +20,20 @@ function positiveRate(value, fallback = 1) {
   return Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
+const JANITOR_WORK_TYPES = new Set(['wash_item', 'clean_table', 'clean_floor']);
+
+function getSkillWorkMultiplier(worker, task) {
+  const skill = Number.isFinite(worker?.skill) ? worker.skill : 1;
+  if (worker?.role === 'waiter' && task?.type === 'take_order') {
+    return skill >= 5 ? 2 : 1;
+  }
+  if (worker?.role === 'janitor' && JANITOR_WORK_TYPES.has(task?.type)) {
+    // Skill 10 replaces, rather than stacks with, the skill 5 multiplier.
+    return skill >= 10 ? 2 : skill >= 5 ? 1.5 : 1;
+  }
+  return 1;
+}
+
 /** Return the work-rate multiplier contributed by an employee's morale. */
 export function getStaffPerformanceMultiplier(worker) {
   const morale = Number.isFinite(worker?.morale) ? worker.morale : 50;
@@ -41,6 +55,49 @@ function getStation(state, task) {
   return (state?.kitchenStations || []).find(candidate => candidate.id === task?.stationId);
 }
 
+function cleaningTarget(state, task) {
+  if (task?.type === 'clean_table') {
+    return (state?.tables || []).find(candidate => candidate.id === task.tableId);
+  }
+  if (task?.type === 'clean_floor') {
+    return (state?.floorDirt || []).find(candidate => candidate.id === task.dirtId);
+  }
+  return null;
+}
+
+function cleaningActionBelongsToWorker(action, worker) {
+  const ownerId = action?.staffId ?? action?.workerId ?? action?.assignedStaffId;
+  return ownerId == null || worker?.id == null
+    || String(ownerId) === String(worker.id);
+}
+
+function normaliseCleaningAction(action) {
+  if (!action || typeof action !== 'object' || Array.isArray(action)) return null;
+  const startedAt = Number.isFinite(action.startedAt)
+    ? action.startedAt : action.cleaningStartedAt;
+  const cleaningStartedAt = Number.isFinite(action.cleaningStartedAt)
+    ? action.cleaningStartedAt : startedAt;
+  return {
+    ...action,
+    ...(Number.isFinite(startedAt) && !Number.isFinite(action.startedAt)
+      ? { startedAt } : {}),
+    ...(Number.isFinite(cleaningStartedAt) && !Number.isFinite(action.cleaningStartedAt)
+      ? { cleaningStartedAt } : {}),
+  };
+}
+
+/**
+ * Return the durable cleaning ledger owned by a table or floor-dirt target.
+ * The shared record shape is `{ staffId, startedAt, accumulatedWork,
+ * lastProgressAt }`; `cleaningStartedAt` is accepted and mirrored for the
+ * existing task-timing API.
+ */
+export function getStaffCleaningActionSource(state, worker) {
+  const target = cleaningTarget(state, worker?.task);
+  const action = normaliseCleaningAction(target?.cleaningAction);
+  return action && cleaningActionBelongsToWorker(action, worker) ? action : null;
+}
+
 function inheritProgress(source, task) {
   if (!source) return source;
   const progress = {};
@@ -55,7 +112,9 @@ function inheritProgress(source, task) {
 /** Return the complete rate for a staff task, including kitchen modifiers. */
 export function getStaffTaskRate(state, worker, task = worker?.task) {
   const moraleRate = getStaffPerformanceMultiplier(worker);
-  if (task?.type !== 'prepare_dish') return moraleRate;
+  if (task?.type !== 'prepare_dish') {
+    return moraleRate * getSkillWorkMultiplier(worker, task);
+  }
 
   const station = getStation(state, task);
   const equipment = (state?.equipment || []).find(candidate =>
@@ -100,6 +159,9 @@ function taskSource(state, worker) {
       task,
     ) || task;
   }
+  if (task.type === 'clean_table' || task.type === 'clean_floor') {
+    return inheritProgress(getStaffCleaningActionSource(state, worker), task) || task;
+  }
   return task;
 }
 
@@ -111,7 +173,7 @@ function taskStartedAt(source, task) {
     return source?.washStartedAt ?? task.washingStartedAt;
   }
   if (task?.type === 'clean_table' || task?.type === 'clean_floor') {
-    return source?.cleaningStartedAt;
+    return source?.cleaningStartedAt ?? source?.startedAt;
   }
   return source?.startedAt;
 }
@@ -190,6 +252,23 @@ export function advanceStaffTaskProgress(
 }
 
 export const advanceStaffWork = advanceStaffTaskProgress;
+
+/**
+ * Settle work through a known clock boundary before changing a worker's rate.
+ * This keeps the pure progress helper usable by reducers without importing
+ * staff or introducing a dependency cycle.
+ */
+export function settleStaffTaskProgress(
+  task,
+  now,
+  rate = 1,
+  legacyStartedAt = task?.startedAt,
+  legacyRate = 1,
+) {
+  return advanceStaffTaskProgress(task, now, rate, legacyStartedAt, legacyRate);
+}
+
+export const settleStaffWork = settleStaffTaskProgress;
 
 /** Return a renderable, non-mutating view of a staff task's work ledger. */
 export function getStaffTaskProgress(state, worker) {

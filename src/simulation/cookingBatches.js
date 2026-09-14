@@ -42,6 +42,17 @@ function customerIsActive(state, customerId) {
   return Boolean(customer && customer.state !== 'leaving');
 }
 
+function customerCancelledItemIds(state, customerId) {
+  const customer = (state?.customers || []).find(candidate =>
+    sameId(candidate?.id, customerId));
+  return new Set((customer?.cancelledServiceItemIds || []).map(id => String(id)));
+}
+
+function isCancelledFoodItem(state, item) {
+  return item?.foodCancelled === true
+    || customerCancelledItemIds(state, item?.customerId).has(String(item?.id));
+}
+
 function itemById(serviceItems, itemId) {
   return (serviceItems || []).find(item => sameId(item?.id, itemId));
 }
@@ -132,6 +143,7 @@ export function getEligibleCookingItems(state, cook, station, claimedServiceItem
       if (item?.kind !== 'dish' || item.state !== 'ordered'
         || item.assignedStaffId != null || item.batchId != null
         || claimed.has(item.id)) return false;
+      if (isCancelledFoodItem(state, item)) return false;
       if (!customerIsActive(state, item.customerId)) return false;
       return isDishCompatibleWithStation(state, dishForItem(state, item), station);
     })
@@ -173,6 +185,19 @@ function resetBatchPreparation(item) {
 function recoverBatchPhysicalItem(item) {
   if (!item) return item;
   const without = withoutBatchId(item);
+  if (item.foodCancelled === true && item.state === 'carried') {
+    // Cancellation has already invalidated the destination, but the cook's
+    // physical load remains authoritative until a safe waste handoff.
+    return without;
+  }
+  if (item.foodCancelled === true
+    && ['ready', 'on_service', 'delivered'].includes(item.state)) {
+    return {
+      ...without,
+      state: 'to_clean',
+      assignedStaffId: null,
+    };
+  }
   if (item.state === 'carried') {
     return {
       ...without,
@@ -215,7 +240,9 @@ export function releaseCookingBatch(state, batchId) {
   });
   const staff = (state.staff || []).map(worker => {
     const nextIds = getCarriedServiceItemIds(worker)
-      .filter(id => !memberIds.has(String(id)));
+      .filter(id => !memberIds.has(String(id))
+        || serviceItems.some(item => sameId(item.id, id)
+          && item.foodCancelled === true && item.state === 'carried'));
     const cleared = clearBatchTask(worker, batchId, [...memberIds]);
     return withCarriedServiceItemIds(cleared, nextIds);
   });
@@ -365,6 +392,15 @@ export function normaliseCookingBatches(state) {
       }
       const dish = dishForItem(state, item);
       const customerActive = customerIsActive(state, item.customerId);
+      if (isCancelledFoodItem(state, item)) {
+        itemMap.set(key, { ...item, foodCancelled: true, deliveryProhibited: true });
+        if (item.state === 'ordered' || item.state === 'preparing') {
+          droppedItemIds.add(key);
+        } else {
+          releasedItemIds.add(key);
+        }
+        continue;
+      }
       if (item.kind !== 'dish' || !customerActive
         || !isDishCompatibleWithStation(state, dish, station)) {
         if (!customerActive && (item.state === 'ordered' || item.state === 'preparing')) {

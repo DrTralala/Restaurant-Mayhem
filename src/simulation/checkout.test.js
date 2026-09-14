@@ -37,6 +37,20 @@ describe('checkout state', () => {
     expect(enterCheckout(entered, 200).paymentQueuedAt).toBe(100);
   });
 
+  it('queues a zero-balance cancelled-food customer without dropping party or table ownership', () => {
+    const customer = {
+      id: 'cancelled', partyId: 'p1', state: 'seated', tableId: 't1',
+      dishId: null, drinkId: null, orderSubtotal: 0,
+      foodOutcome: 'cancelled', cancelledServiceItemIds: ['dish-1'],
+    };
+    const queued = enterCheckout(customer, 100);
+
+    expect(queued).toMatchObject({
+      state: 'checkout_queued', partyId: 'p1', tableId: 't1',
+      orderSubtotal: 0, foodOutcome: 'cancelled',
+    });
+  });
+
   it('recognises every checkout phase and the legacy paying state', () => {
     expect([...CHECKOUT_PHASES].every(isCheckoutState)).toBe(true);
     expect(isCheckoutState({ state: 'paying' })).toBe(true);

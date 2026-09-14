@@ -2,6 +2,7 @@ import { EQUIPMENT } from '../data/equipment';
 import { UPGRADES } from '../data/upgrades';
 import { MILESTONES } from '../data/milestones';
 import { createMovementCoordinator } from '../simulation/navigation/coordinator';
+import { createStaffDutyDefaults } from '../simulation/staffSchedules';
 import { SAVE_VERSION } from './saveVersion';
 
 export function createInitialState() {
@@ -55,6 +56,7 @@ export function createInitialState() {
     ],
     floorDirt: [],
     washStations: [{ id: 'wash1', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],
+    staffAmenities: [],
     queue: [],              // customers waiting outside for a free table
     queueSlots: [],         // durable exact-position queue leases { memberId, partyId, x, y, slot? }
     queueDepartures: [],    // ordered pending-departure records for hidden overflow members
@@ -75,6 +77,7 @@ export function createInitialState() {
         morale: 80,
         salary: 200,
         carryingServiceItemIds: [],
+        ...createStaffDutyDefaults(),
       },
       {
         id: 'starter-waiter',
@@ -85,6 +88,7 @@ export function createInitialState() {
         morale: 80,
         salary: 150,
         carryingServiceItemIds: [],
+        ...createStaffDutyDefaults(),
       },
       {
         id: 'starter-host',
@@ -95,6 +99,7 @@ export function createInitialState() {
         morale: 80,
         salary: 150,
         carryingServiceItemIds: [],
+        ...createStaffDutyDefaults(),
       },
       {
         id: 'starter-cashier-waiter',
@@ -105,10 +110,12 @@ export function createInitialState() {
         morale: 80,
         salary: 150,
         carryingServiceItemIds: [],
+        ...createStaffDutyDefaults(),
       },
       {
         id: 'starter-janitor', name: 'Mia', gender: 'female', role: 'janitor',
         skill: 2, morale: 80, salary: 120, carryingServiceItemIds: [],
+        ...createStaffDutyDefaults(),
       },
     ],
     dishes: [

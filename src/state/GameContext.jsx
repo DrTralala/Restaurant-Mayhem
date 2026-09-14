@@ -2,6 +2,8 @@ import { createContext, useContext, useReducer, useEffect, useRef } from 'react'
 import { createInitialState } from './initialState';
 import { hydrateState, loadState, saveState } from './persistence';
 import { ITEM_PRICES, ITEM_SELL_RATIO } from '../data/items';
+import { getFixture, getFixtureDescriptor } from '../data/fixtures';
+import { createEmptyAmenitySlots, isAmenityInUse } from '../data/staffAmenities';
 import { getDrink, getResolvedDrink, normaliseDrinkOverrides } from '../data/drinks';
 import { getPlaceable } from '../data/placeables';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
@@ -9,11 +11,21 @@ import { clampReputation } from '../simulation/balance';
 import { assignWaiterToStation } from '../simulation/cashiers';
 import { getNextNumericId, snapPlacement, validatePlacement } from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
-import { hasValidDrinkReservation } from '../simulation/serviceItems';
+import { getOccupiedServiceSlotKeys } from '../simulation/serviceItems';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseOperatingHour } from '../simulation/clock';
 import { getStaffTrainingCost, STAFF_SALARIES } from '../simulation/staffProgression';
-import { recoverCookingBatches } from '../simulation/cookingBatches';
+import { getWashStationOccupancy, updateAutomaticDishwashers } from '../simulation/dishwashing';
+import { getDishwasherStats } from '../simulation/dishwasherProgression';
+import { createStaffDutyDefaults, validateStaffSchedule } from '../simulation/staffSchedules';
+import {
+  getStaffTaskLegacyRate,
+  getStaffTaskTiming,
+  settleStaffTaskProgress,
+} from '../simulation/staffPerformance';
+import { getCleaningTarget, isCleaningTask } from '../simulation/cleaningActions';
+import { releaseStaffWork } from '../simulation/staffTaskLifecycle';
+import { releaseAmenitySlot } from '../simulation/staffWellbeing';
 import { copyFixtures } from './fixtureCopies';
 import { moveFixtures } from './fixtureMoves';
 import { invalidateMovementRuntime, moveStaff } from './staffMoves';
@@ -28,6 +40,253 @@ function canAfford(state, cost) {
     && cost >= 0
     && Number.isFinite(state.restaurant.funds)
     && state.restaurant.funds >= cost;
+}
+
+function getCataloguePrice(itemType, fallback = null) {
+  return Number.isFinite(ITEM_PRICES[itemType]) ? ITEM_PRICES[itemType] : fallback;
+}
+
+function sameId(left, right) {
+  return left != null && right != null && String(left) === String(right);
+}
+
+function getFixtureSalePrice(fixture) {
+  const descriptor = getFixtureDescriptor(fixture?.type);
+  const placementType = typeof descriptor?.placementType === 'function'
+    ? descriptor.placementType(fixture?.data)
+    : descriptor?.placementType;
+  return getCataloguePrice(placementType, getPlaceable(placementType)?.price);
+}
+
+function isWashStationSaleSafe(state, station) {
+  return station?.type === 'automatic'
+    && getWashStationOccupancy(state, station) === 0;
+}
+
+function isServiceTableSaleSafe(state, table) {
+  const prefix = `${String(table.id)}:`;
+  return ![...getOccupiedServiceSlotKeys(state)].some(key => key.startsWith(prefix));
+}
+
+function isCashierSaleSafe(state, station) {
+  return !(state.staff || []).some(worker => worker.task?.type === 'take_payment'
+    && sameId(worker.task.stationId, station.id))
+    && !(state.customers || []).some(customer => sameId(customer.cashierStationId, station.id)
+      && ['checkout_moving', 'checkout_processing', 'checkout_queued'].includes(customer.state));
+}
+
+function isDoorSaleSafe(state, door) {
+  const doorId = door?.id;
+  if (doorId == null) return false;
+  const activeActors = [
+    ...(state.customers || []),
+    ...(state.queue || []).flatMap(party => party?.members || []),
+  ];
+  if (activeActors.some(actor => actor.state === 'entering'
+    && sameId(actor.entryDoorId, doorId))) return false;
+  if (activeActors.some(actor => actor.state === 'leaving'
+    && sameId(actor.exitDoorId, doorId) && actor.exitPhase !== 'fading')) return false;
+  if (sameId(state.queueAdmissionGate?.doorId, doorId)) return false;
+  const requests = state.doorAdmissions?.requests;
+  return !Object.values(requests || {}).some(request => sameId(request?.doorId, doorId));
+}
+
+function isFixtureSaleSafe(state, fixture) {
+  const data = fixture?.data;
+  if (!data) return false;
+  if (fixture.type === 'table') return data.status === 'empty';
+  if (fixture.type === 'chair') {
+    const table = (state.tables || []).find(candidate => sameId(candidate.id, data.tableId));
+    return table?.status === 'empty'
+      && !(state.customers || []).some(customer => sameId(customer.chairId, data.id));
+  }
+  if (fixture.type === 'washStation') return isWashStationSaleSafe(state, data);
+  if (fixture.type === 'staffAmenity') return !isAmenityInUse(data);
+  if (fixture.type === 'serviceTable') return isServiceTableSaleSafe(state, data);
+  if (fixture.type === 'cashierTable') return isCashierSaleSafe(state, data);
+  return fixture.type === 'door' && isDoorSaleSafe(state, data);
+}
+
+function getSaleSelection(state, requestedItems) {
+  if (!Array.isArray(requestedItems) || requestedItems.length === 0) return null;
+
+  const seen = new Set();
+  const fixtures = [];
+  for (const item of requestedItems) {
+    if (!item || item.type == null || item.id == null) return null;
+    const key = `${item.type}:${String(item.id)}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    const fixture = getFixture(state, item.type, item.id);
+    if (!fixture || getFixtureSalePrice(fixture) == null || !isFixtureSaleSafe(state, fixture)) {
+      return null;
+    }
+    fixtures.push(fixture);
+  }
+
+  const selectedTables = new Set(fixtures
+    .filter(fixture => fixture.type === 'table')
+    .map(fixture => fixture.id));
+  const selectedChairs = new Set(fixtures
+    .filter(fixture => fixture.type === 'chair')
+    .map(fixture => fixture.id));
+  const removedChairs = new Set(selectedChairs);
+  for (const chair of state.chairs || []) {
+    if (selectedTables.has(chair.tableId)) removedChairs.add(chair.id);
+  }
+
+  let refundBase = 0;
+  for (const fixture of fixtures) {
+    if (fixture.type === 'table') refundBase += ITEM_PRICES.table;
+    else if (fixture.type === 'chair' && selectedTables.has(fixture.data.tableId)) continue;
+    else refundBase += getFixtureSalePrice(fixture);
+  }
+  for (const chair of state.chairs || []) {
+    if (selectedTables.has(chair.tableId)
+      && !fixtures.some(fixture => fixture.type === 'chair' && fixture.id === chair.id)) {
+      refundBase += ITEM_PRICES.chair;
+    }
+  }
+
+  return {
+    fixtures,
+    selectedTables,
+    removedChairs,
+    refund: Math.round(refundBase * ITEM_SELL_RATIO),
+  };
+}
+
+function sellFixtures(state, requestedItems) {
+  const selection = getSaleSelection(state, requestedItems);
+  if (!selection) return state;
+
+  const selectedByType = new Map();
+  for (const fixture of selection.fixtures) {
+    const ids = selectedByType.get(fixture.type) || new Set();
+    ids.add(fixture.id);
+    selectedByType.set(fixture.type, ids);
+  }
+  const remove = (type, record) => selectedByType.get(type)?.has(record.id);
+
+  return {
+    ...state,
+    restaurant: { ...state.restaurant, funds: state.restaurant.funds + selection.refund },
+    tables: (state.tables || []).filter(table => !selection.selectedTables.has(table.id)),
+    chairs: (state.chairs || []).filter(chair => !selection.removedChairs.has(chair.id)),
+    doors: (state.doors || []).filter(door => !remove('door', door)),
+    serviceTables: (state.serviceTables || []).filter(table => !remove('serviceTable', table)),
+    cashierStations: (state.cashierStations || []).filter(station => !remove('cashierTable', station)),
+    washStations: (state.washStations || []).filter(station => !remove('washStation', station)),
+    staffAmenities: (state.staffAmenities || []).filter(amenity => !remove('staffAmenity', amenity)),
+  };
+}
+
+function taskServiceItemIds(state, worker) {
+  const task = worker?.task;
+  const ids = [
+    ...(Array.isArray(task?.serviceItemIds) ? task.serviceItemIds : []),
+    task?.serviceItemId,
+  ].filter(id => id != null);
+  if (task?.type === 'prepare_dish' && task.batchId != null) {
+    const batch = (state.cookingBatches || []).find(candidate =>
+      sameId(candidate.id, task.batchId));
+    ids.push(...(batch?.serviceItemIds || []));
+  }
+  return [...new Set(ids.map(id => String(id)))];
+}
+
+function progressStartForItem(item, task, fallback) {
+  return item?.preparationStartedAt
+    ?? item?.washStartedAt
+    ?? item?.startedAt
+    ?? item?.cleaningStartedAt
+    ?? task?.preparationStartedAt
+    ?? task?.washingStartedAt
+    ?? task?.startedAt
+    ?? fallback;
+}
+
+// The lifecycle module exposes release semantics for turnover, while the
+// performance module exposes the pure boundary settlement used by rate changes.
+// Keep rate changes on the canonical target/item ledgers rather than rerolling a
+// task from its old timestamp after morale or skill changes.
+function settleStaffWorkBeforeRateChange(state, worker) {
+  const now = state.restaurant?.gameTime;
+  const timing = getStaffTaskTiming(state, worker);
+  if (!timing || !Number.isFinite(now)) return state;
+
+  const task = worker.task;
+  const legacyRate = getStaffTaskLegacyRate(state, worker, task);
+  const primaryProgress = settleStaffTaskProgress(
+    timing.source,
+    now,
+    timing.rate,
+    timing.startedAt,
+    legacyRate,
+  );
+  let next = state;
+  let taskProgress = primaryProgress;
+
+  if (isCleaningTask(task) && task.type !== 'wash_item') {
+    const target = getCleaningTarget(next, task);
+    if (target?.cleaningAction) {
+      const collectionKey = task.type === 'clean_floor' ? 'floorDirt' : 'tables';
+      const targetId = task.type === 'clean_floor' ? task.dirtId : task.tableId;
+      next = {
+        ...next,
+        [collectionKey]: (next[collectionKey] || []).map(candidate => sameId(candidate.id, targetId)
+          ? {
+            ...candidate,
+            cleaningAction: {
+              ...candidate.cleaningAction,
+              accumulatedWork: primaryProgress.accumulatedWork,
+              lastProgressAt: primaryProgress.lastProgressAt,
+            },
+          }
+          : candidate),
+      };
+    }
+  } else if (Array.isArray(next.serviceItems)) {
+    const itemIds = new Set(taskServiceItemIds(next, worker));
+    next = {
+      ...next,
+      serviceItems: next.serviceItems.map(item => {
+        if (!itemIds.has(String(item.id))) return item;
+        const progress = String(item.id) === String(task.serviceItemId)
+          ? primaryProgress
+          : settleStaffTaskProgress(
+            item,
+            now,
+            timing.rate,
+            progressStartForItem(item, task, timing.startedAt),
+            legacyRate,
+          );
+        if (!Number.isFinite(progress.accumulatedWork)) return item;
+        return {
+          ...item,
+          accumulatedWork: progress.accumulatedWork,
+          lastProgressAt: progress.lastProgressAt,
+        };
+      }),
+    };
+  }
+
+  if (Number.isFinite(taskProgress.accumulatedWork)) {
+    next = {
+      ...next,
+      staff: next.staff.map(candidate => candidate.id === worker.id
+        ? {
+          ...candidate,
+          task: {
+            ...candidate.task,
+            accumulatedWork: taskProgress.accumulatedWork,
+            lastProgressAt: taskProgress.lastProgressAt,
+          },
+        }
+        : candidate),
+    };
+  }
+  return next;
 }
 
 function getLegacyPlacement(state, action, itemType) {
@@ -120,7 +379,9 @@ function placeItem(state, action) {
     ? { ...requestedPlacement, y: snappedDoor.y }
     : requestedPlacement;
   const result = item && validatePlacement(state, placement);
-  const price = equipment ? equipment.purchaseCost : item?.price;
+  const price = equipment
+    ? equipment.purchaseCost
+    : getCataloguePrice(action.itemType, item?.price);
   if (!item || !result?.valid || !canAfford(state, price)
     || (action.itemType === 'equipmentStation' && (!equipment || equipment.owned))) return state;
 
@@ -206,7 +467,22 @@ function placeItem(state, action) {
       ...nextState,
       washStations: [...washStations, {
         id: getNextNumericId(washStations, 'wash'), type: 'automatic',
-        x: placement.x, y: placement.y, w: 40, h: 40,
+        level: 1, x: placement.x, y: placement.y, w: 40, h: 40,
+      }],
+    };
+  }
+
+  if (item.staffAmenity) {
+    const staffAmenities = state.staffAmenities || [];
+    return {
+      ...nextState,
+      staffAmenities: [...staffAmenities, {
+        id: getNextNumericId(staffAmenities, 'amenity'),
+        type: action.itemType,
+        x: placement.x,
+        y: placement.y,
+        rotation: placement.rotation,
+        slots: createEmptyAmenitySlots(action.itemType),
       }],
     };
   }
@@ -363,67 +639,85 @@ function gameReducer(state, action) {
         ),
       };
     }
+    case 'UPGRADE_DISHWASHER': {
+      const station = (state.washStations || []).find(candidate => candidate.id === action.id);
+      const level = station?.level;
+      const stats = getDishwasherStats(level);
+      const cost = stats?.nextUpgradeCost;
+      if (station?.type !== 'automatic' || !Number.isInteger(level) || level < 1 || level > 9
+        || !Number.isFinite(cost) || !canAfford(state, cost)) return state;
+
+      const settled = updateAutomaticDishwashers(state);
+      return {
+        ...settled,
+        restaurant: { ...settled.restaurant, funds: settled.restaurant.funds - cost },
+        washStations: (settled.washStations || []).map(candidate => candidate.id === station.id
+          ? { ...candidate, level: level + 1 }
+          : candidate),
+      };
+    }
     case 'HIRE_STAFF': {
       const salary = STAFF_SALARIES[action.staff?.role];
       if (!action.staff || salary == null || !canAfford(state, salary)) return state;
       const { ...staff } = action.staff;
+      const hiredStaff = {
+        ...staff,
+        ...createStaffDutyDefaults(),
+        task: null,
+        activityPhase: null,
+        idleUntil: null,
+      };
       return {
         ...state,
         restaurant: { ...state.restaurant, funds: state.restaurant.funds - salary },
-        staff: [...state.staff, { ...withCarriedServiceItemIds(staff, []), salary }],
+        staff: [...state.staff, { ...withCarriedServiceItemIds(hiredStaff, []), salary }],
       };
     }
-    case 'FIRE_STAFF':
-      {
-        const fired = state.staff.find(staff => staff.id === action.id);
-        const recovered = recoverCookingBatches(state, { cookIds: [action.id] });
-        const carriedIds = new Set(getCarriedServiceItemIds(fired));
-        const firedTask = fired?.task;
-        return invalidateMovementRuntime({
-          ...recovered,
-          staff: recovered.staff.filter(s => s.id !== action.id),
-          serviceItems: (recovered.serviceItems || []).map(item => {
-            if (carriedIds.has(item.id)) {
-              if (item.state === 'carried') {
-                return { ...item, state: 'to_clean', assignedStaffId: null };
-              }
-              if (item.state === 'carried_dirty') {
-                return (recovered.tables || []).some(table => table.id === item.tableId)
-                  ? { ...item, state: 'dirty_at_table', assignedStaffId: null }
-                  : {
-                    ...item, state: 'queued_for_wash', washStationId: null,
-                    washStartedAt: null, assignedStaffId: null,
-                  };
-              }
-            }
-            if (item.assignedStaffId === action.id && item.kind === 'dish'
-              && ['ordered', 'preparing', 'ready'].includes(item.state)) {
-              return {
-                ...item, state: 'ordered', stationId: null, serviceTableId: null,
-                serviceSlotIndex: null, assignedStaffId: null,
-                preparationStartedAt: null, readyAt: null,
-              };
-            }
-            if (item.assignedStaffId === action.id && item.kind === 'drink'
-              && ['ordered', 'preparing'].includes(item.state)) {
-              return {
-                ...item, serviceTableId: null, serviceSlotIndex: null,
-                assignedStaffId: null, preparationStartedAt: null,
-              };
-            }
-            if (firedTask?.type === 'wash_item' && item.id === firedTask.serviceItemId
-              && ['queued_for_wash', 'washing'].includes(item.state)) {
-              return { ...item, state: 'queued_for_wash', washStartedAt: null };
-            }
-            return item;
-          }),
-          cashierStations: (recovered.cashierStations || []).map(station => {
-            if (station.assignedStaffId !== action.id) return station;
-            const { assignedStaffId, ...unassigned } = station;
-            return unassigned;
-          }),
-        }, action.id);
-      }
+    case 'SET_STAFF_SCHEDULE': {
+      const worker = state.staff.find(candidate => candidate.id === action.id);
+      const validation = validateStaffSchedule(action.schedule);
+      if (!worker || !validation.valid) return state;
+      return {
+        ...state,
+        staff: state.staff.map(candidate => candidate.id === worker.id
+          ? { ...candidate, schedule: [...action.schedule] }
+          : candidate),
+      };
+    }
+    case 'FIRE_STAFF': {
+      const fired = state.staff.find(staff => staff.id === action.id);
+      if (!fired) return state;
+      const now = state.restaurant?.gameTime;
+      let released = releaseStaffWork(state, action.id, 'fired', now);
+      released = releaseAmenitySlot(released, action.id, now, { reason: 'fired', force: true });
+      released = {
+        ...released,
+        serviceItems: (released.serviceItems || []).map(item => {
+          if (item.assignedStaffId !== action.id) return item;
+          if (item.kind === 'dish' && ['ordered', 'preparing', 'ready'].includes(item.state)) {
+            return {
+              ...item, state: 'ordered', stationId: null, serviceTableId: null,
+              serviceSlotIndex: null, assignedStaffId: null,
+              preparationStartedAt: null, readyAt: null,
+            };
+          }
+          if (item.kind === 'drink' && ['ordered', 'preparing'].includes(item.state)) {
+            return {
+              ...item, serviceTableId: null, serviceSlotIndex: null,
+              assignedStaffId: null, preparationStartedAt: null,
+            };
+          }
+          return item;
+        }),
+        staff: released.staff.filter(staff => staff.id !== action.id),
+        cashierStations: (released.cashierStations || []).map(station => {
+          if (station.assignedStaffId !== action.id) return station;
+          const { assignedStaffId, ...unassigned } = station;
+          return unassigned;
+        }),
+      };
+      return invalidateMovementRuntime(released, action.id);
+    }
     case 'RENAME_STAFF':
       return {
         ...state,
@@ -448,10 +742,11 @@ function gameReducer(state, action) {
       const cost = getStaffTrainingCost(staff);
       if (!staff || !Number.isFinite(staff.skill) || staff.skill >= 10
         || cost == null || !canAfford(state, cost)) return state;
+      const settled = settleStaffWorkBeforeRateChange(state, staff);
       return {
-        ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - cost },
-        staff: state.staff.map(s =>
+        ...settled,
+        restaurant: { ...settled.restaurant, funds: settled.restaurant.funds - cost },
+        staff: settled.staff.map(s =>
           s.id === action.id
             ? {
               ...s,
@@ -466,10 +761,11 @@ function gameReducer(state, action) {
       const staff = state.staff.find(candidate => candidate.id === action.id);
       if (!staff || !Number.isFinite(staff.morale) || staff.morale >= 100
         || !canAfford(state, BONUS_COST)) return state;
+      const settled = settleStaffWorkBeforeRateChange(state, staff);
       return {
-        ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - BONUS_COST },
-        staff: state.staff.map(s =>
+        ...settled,
+        restaurant: { ...settled.restaurant, funds: settled.restaurant.funds - BONUS_COST },
+        staff: settled.staff.map(s =>
           s.id === action.id ? { ...s, morale: Math.min(s.morale + 20, 100) } : s
         ),
       };
@@ -525,38 +821,8 @@ function gameReducer(state, action) {
       return moveFixtures(state, action.items);
     case 'COPY_FIXTURES':
       return copyFixtures(state, action.items);
-    case 'SELL_ITEMS': {
-      const selectedTableIds = new Set(action.items
-        .filter(item => item.type === 'table')
-        .map(item => item.id)
-        .filter(id => state.tables.some(table => table.id === id && table.status === 'empty')));
-      const selectedChairIds = new Set(action.items
-        .filter(item => item.type === 'chair')
-        .map(item => item.id)
-        .filter(id => {
-          const chair = state.chairs.find(candidate => candidate.id === id);
-          const table = chair && state.tables.find(candidate => candidate.id === chair.tableId);
-           return chair && table?.status === 'empty' && !state.customers.some(customer => customer.chairId === id);
-         }));
-      const selectedWashIds = new Set(action.items
-        .filter(item => item.type === 'washStation')
-        .map(item => item.id)
-        .filter(id => {
-          const station = (state.washStations || []).find(candidate => candidate.id === id);
-          return station?.type === 'automatic' && !(state.serviceItems || []).some(item =>
-            item.washStationId === id && ['queued_for_wash', 'washing'].includes(item.state));
-        }));
-      const removedChairs = state.chairs.filter(chair => selectedChairIds.has(chair.id) || selectedTableIds.has(chair.tableId));
-      const refund = Math.round((selectedTableIds.size * ITEM_PRICES.table + removedChairs.length * ITEM_PRICES.chair
-        + selectedWashIds.size * ITEM_PRICES.automaticDishwasher) * ITEM_SELL_RATIO);
-      return {
-        ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds + refund },
-        tables: state.tables.filter(table => !selectedTableIds.has(table.id)),
-        chairs: state.chairs.filter(chair => !selectedChairIds.has(chair.id) && !selectedTableIds.has(chair.tableId)),
-        washStations: (state.washStations || []).filter(station => !selectedWashIds.has(station.id)),
-      };
-    }
+    case 'SELL_ITEMS':
+      return sellFixtures(state, action.items);
     case 'MOVE_CHAIR':
       return moveFixtures(state, [{
         type: 'chair', id: action.id, x: action.x, y: action.y,
@@ -571,12 +837,14 @@ function gameReducer(state, action) {
         { type: 'washStation', id: action.id, x: action.x, y: action.y },
       ]);
     case 'DELETE_TABLE':
+      if (!isFixtureSaleSafe(state, getFixture(state, 'table', action.id))) return state;
       return {
         ...state,
         tables: state.tables.filter(t => t.id !== action.id),
         chairs: state.chairs.filter(ch => ch.tableId !== action.id),
       };
     case 'DELETE_CHAIR':
+      if (!isFixtureSaleSafe(state, getFixture(state, 'chair', action.id))) return state;
       return {
         ...state,
         chairs: state.chairs.filter(ch => ch.id !== action.id),
@@ -599,12 +867,9 @@ function gameReducer(state, action) {
       ]);
     case 'DELETE_SERVICE_TABLE': {
       const serviceTable = state.serviceTables.find(table => table.id === action.id);
-      if (!serviceTable) return state;
-      const hasItems = (state.serviceItems || []).some(item => item.state === 'on_service'
-        && item.serviceTableId === serviceTable.id);
-      const hasReservation = (state.serviceItems || []).some(item =>
-        item.serviceTableId === serviceTable.id && hasValidDrinkReservation(state, item));
-      if (hasItems || hasReservation) return state;
+      if (!isFixtureSaleSafe(state, serviceTable
+        ? { type: 'serviceTable', id: serviceTable.id, data: serviceTable }
+        : null)) return state;
       return {
         ...state,
         serviceTables: state.serviceTables.filter(st => st.id !== action.id),

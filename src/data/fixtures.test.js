@@ -20,8 +20,13 @@ describe('fixture catalogue', () => {
       'cashierTable',
       'kitchenStation',
       'washStation',
+      'staffAmenity',
     ];
-    const fixtures = listFixtures(createInitialState());
+    const state = {
+      ...createInitialState(),
+      staffAmenities: [{ id: 'amenity-1', type: 'couch', x: 500, y: 300 }],
+    };
+    const fixtures = listFixtures(state);
 
     expect(Object.keys(FIXTURE_TYPES)).toEqual(expected);
     expect(fixtures.map(item => item.type)).toEqual(expect.arrayContaining(expected));
@@ -85,6 +90,23 @@ describe('fixture catalogue', () => {
     expect(getFixtureRect(state, washFixtures[1])).toEqual({ x: 80, y: 40, w: 60, h: 20 });
     expect(getFixtureLabel(state, washFixtures[0])).toBe('Sink');
     expect(getFixtureLabel(state, washFixtures[1])).toBe('Automatic dishwasher');
+  });
+
+  it('enumerates staff amenities once and derives rotated fixture geometry from their data type', () => {
+    const state = {
+      ...createInitialState(),
+      staffAmenities: [
+        { id: 'couch-1', type: 'couch', x: 500, y: 300, rotation: 0 },
+        { id: 'bed-1', type: 'bed', x: 600, y: 300, rotation: 1 },
+      ],
+    };
+    const amenities = listFixtures(state).filter(fixture => fixture.type === 'staffAmenity');
+
+    expect(amenities.map(fixture => fixture.id)).toEqual(['couch-1', 'bed-1']);
+    expect(getFixtureRect(state, amenities[0])).toEqual({ x: 500, y: 300, w: 40, h: 20 });
+    expect(getFixtureRect(state, amenities[1])).toEqual({ x: 600, y: 300, w: 40, h: 20 });
+    expect(getFixtureLabel(state, amenities[0])).toBe('Couch');
+    expect(getFixtureLabel(state, amenities[1])).toBe('Bed');
   });
 
   it('returns null when a fixture type or id is unknown', () => {

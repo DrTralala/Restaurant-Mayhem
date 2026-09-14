@@ -38,6 +38,24 @@ describe('createInitialState', () => {
       && staff.carryingServiceItemIds.length === 0)).toBe(true);
   });
 
+  it('starts with empty staff amenities and independent complete duty defaults', () => {
+    const state = createInitialState();
+    const anotherState = createInitialState();
+
+    expect(state.staffAmenities).toEqual([]);
+    expect(state.staff.every(staff => staff.effectiveDuty === 'work'
+      && staff.dutyPhase === 'available'
+      && staff.amenityUse === null
+      && staff.ptoSession === null
+      && staff.wellRestedUntil === 0
+      && staff.amenityWaitingSince === null
+      && staff.lastRestActivityType === null
+      && staff.schedule.length === 48
+      && staff.schedule.every(mode => mode === 'work'))).toBe(true);
+    expect(state.staff[0].schedule).not.toBe(state.staff[1].schedule);
+    expect(state.staff[0].schedule).not.toBe(anotherState.staff[0].schedule);
+  });
+
   it('gives starter staff distinct names', () => {
     const names = createInitialState().staff.map(staff => staff.name);
 

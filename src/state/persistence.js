@@ -23,6 +23,7 @@ import {
   normalisePartyReviewHistory,
   normalisePendingPartyReviews,
 } from '../simulation/partyReviews';
+import { validateSavedState } from './saveValidation';
 
 export function saveState(state) {
   try {
@@ -41,6 +42,7 @@ export function loadState() {
     if (saved?.version !== SAVE_VERSION) return null;
     validateSavedNavigationGeometry(saved);
     validateSavedServiceItemInventory(saved);
+    validateSavedState(saved);
     return saved;
   } catch (e) {
     console.warn('Failed to load state:', e);
@@ -67,7 +69,7 @@ function rawCarriedServiceItemIds(worker) {
 }
 
 function invalidSavedServiceItemInventory(reason) {
-  throw new Error(`Invalid saved service-item inventory: ${reason}`);
+  throw new Error(`Invalid saved state: service-item inventory: ${reason}`);
 }
 
 // Save validation is deliberately narrow: reject contradictory inventory rather
@@ -181,7 +183,9 @@ export function hydrateState(saved, fresh) {
   if (saved.version != null && saved.version !== SAVE_VERSION) {
     throw new Error('Saved game is incompatible with the current game version');
   }
+  validateSavedNavigationGeometry(saved);
   validateSavedServiceItemInventory(saved);
+  validateSavedState(saved);
   const staff = (saved.staff || fresh.staff || []).map(character => ({
     ...withCarriedServiceItemIds(character, getCarriedServiceItemIds(character)),
     gender: inferGender(character),

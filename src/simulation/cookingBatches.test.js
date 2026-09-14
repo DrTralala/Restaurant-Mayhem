@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { processKitchen } from './kitchen';
 import { updateStaff } from './staff';
-import { getCookingBatchCapacity, normaliseCookingBatches } from './cookingBatches';
+import {
+  getCookingBatchCapacity,
+  getEligibleCookingItems,
+  normaliseCookingBatches,
+} from './cookingBatches';
 
 function kitchenState({ skill = 3, gameTime = 0, serviceItems = [], customers = [], staffTask = null,
   serviceTables = [{ id: 'st1', x: 140, y: 120 }], counterItems = [] } = {}) {
@@ -470,5 +474,125 @@ describe('cooking batches', () => {
       type: 'prepare_dish', stationId: 'k2',
     });
     expect(result.staff.find(worker => worker.id === 'cook-b').task.stationId).not.toBe('k1');
+  });
+
+  it('does not dispatch cancelled food back into a cook batch', () => {
+    const state = kitchenState({
+      customers: [
+        { id: 'cancelled', state: 'seated', foodOutcome: 'cancelled' },
+        waitingCustomer('live', 20),
+      ],
+      serviceItems: [
+        { ...orderedDish('cancelled-item', 'cancelled'), foodCancelled: true },
+        orderedDish('live-item', 'live'),
+      ],
+    });
+
+    const eligible = getEligibleCookingItems(
+      state,
+      state.staff[0],
+      state.kitchenStations[0],
+    );
+
+    expect(eligible.map(item => item.id)).toEqual(['live-item']);
+  });
+
+  it('drops a cancelled member while retaining the live batch remainder', () => {
+    const state = kitchenState({
+      customers: [
+        { id: 'cancelled', state: 'seated', foodOutcome: 'cancelled' },
+        waitingCustomer('live', 20),
+      ],
+      serviceItems: [
+        {
+          ...orderedDish('cancelled-item', 'cancelled'), state: 'preparing',
+          batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'cook',
+          preparationStartedAt: 0, foodCancelled: true,
+        },
+        {
+          ...orderedDish('live-item', 'live'), state: 'preparing',
+          batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'cook',
+          preparationStartedAt: 0,
+        },
+      ],
+      staffTask: {
+        type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'cancelled-item',
+        serviceItemIds: ['cancelled-item', 'live-item'], stationId: 'k1',
+      },
+    });
+    const result = normaliseCookingBatches({
+      ...state,
+      cookingBatches: [{
+        id: 'batch-1', cookId: 'cook', stationId: 'k1',
+        serviceItemIds: ['cancelled-item', 'live-item'], status: 'preparing', startedAt: 0,
+      }],
+    });
+
+    expect(result.serviceItems.find(item => item.id === 'cancelled-item')).toBeUndefined();
+    expect(result.cookingBatches[0].serviceItemIds).toEqual(['live-item']);
+    expect(result.staff[0].task).toMatchObject({
+      serviceItemId: 'live-item', serviceItemIds: ['live-item'],
+    });
+  });
+
+  it('keeps cancelled food in a cook load when its batch is released', () => {
+    const state = kitchenState({
+      customers: [{ id: 'cancelled', state: 'seated', foodOutcome: 'cancelled' }],
+      serviceItems: [{
+        ...orderedDish('cancelled-item', 'cancelled'), state: 'carried',
+        batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'cook',
+        foodCancelled: true,
+      }],
+      staffTask: {
+        type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'cancelled-item',
+        serviceItemIds: ['cancelled-item'], stationId: 'k1',
+      },
+    });
+    const result = normaliseCookingBatches({
+      ...state,
+      staff: [{ ...state.staff[0], carryingServiceItemIds: ['cancelled-item'] }],
+      cookingBatches: [{
+        id: 'batch-1', cookId: 'cook', stationId: 'k1',
+        serviceItemIds: ['cancelled-item'], status: 'delivering', startedAt: 0,
+      }],
+    });
+
+    expect(result.cookingBatches).toEqual([]);
+    expect(result.serviceItems[0]).toMatchObject({
+      id: 'cancelled-item', state: 'carried', foodCancelled: true,
+    });
+    expect(result.serviceItems[0]).not.toHaveProperty('batchId');
+    expect(result.staff[0].carryingServiceItemIds).toEqual(['cancelled-item']);
+    expect(result.staff[0].task).toBeNull();
+  });
+
+  it('honours terminal customer cancellation IDs for a legacy carried batch item', () => {
+    const state = kitchenState({
+      customers: [{
+        id: 'cancelled', state: 'seated', foodOutcome: 'cancelled',
+        cancelledServiceItemIds: ['cancelled-item'],
+      }],
+      serviceItems: [{
+        ...orderedDish('cancelled-item', 'cancelled'), state: 'carried',
+        batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'cook',
+      }],
+      staffTask: {
+        type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'cancelled-item',
+        serviceItemIds: ['cancelled-item'], stationId: 'k1',
+      },
+    });
+    const result = normaliseCookingBatches({
+      ...state,
+      staff: [{ ...state.staff[0], carryingServiceItemIds: ['cancelled-item'] }],
+      cookingBatches: [{
+        id: 'batch-1', cookId: 'cook', stationId: 'k1',
+        serviceItemIds: ['cancelled-item'], status: 'delivering', startedAt: 0,
+      }],
+    });
+
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'carried', foodCancelled: true, deliveryProhibited: true,
+    });
+    expect(result.staff[0].carryingServiceItemIds).toEqual(['cancelled-item']);
   });
 });

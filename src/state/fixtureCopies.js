@@ -3,6 +3,8 @@ import {
   getFixtureDescriptor,
   listFixtures,
 } from '../data/fixtures';
+import { ITEM_PRICES } from '../data/items';
+import { createEmptyAmenitySlots } from '../data/staffAmenities';
 import { getPlaceable } from '../data/placeables';
 import {
   getNextNumericId,
@@ -104,6 +106,13 @@ function copyPlacementType(fixture) {
     : descriptor?.placementType;
 }
 
+function copyPrice(fixture) {
+  const placementType = copyPlacementType(fixture);
+  return Number.isFinite(ITEM_PRICES[placementType])
+    ? ITEM_PRICES[placementType]
+    : getPlaceable(placementType)?.price;
+}
+
 function getEligibilityReason(fixture) {
   const placementType = copyPlacementType(fixture);
   if (fixture.type === 'kitchenStation') {
@@ -159,7 +168,7 @@ export function getFixtureCopyEligibility(state = {}, selectedItems = []) {
     if (sourceIsMalformed(state, fixture)) {
       return reasonResult(COPY_REASONS.MALFORMED_SOURCE, { items: expanded.items });
     }
-    price += getPlaceable(copyPlacementType(fixture)).price;
+    price += copyPrice(fixture);
   }
 
   return {
@@ -228,10 +237,22 @@ function getCopyRecord(source, copy, id, copiedTableIds) {
     return {
       id,
       type: 'automatic',
+      level: 1,
       x: copy.x,
       y: copy.y,
       w: Number.isFinite(source.data.w) ? source.data.w : 40,
       h: Number.isFinite(source.data.h) ? source.data.h : 40,
+    };
+  }
+
+  if (source.type === 'staffAmenity') {
+    return {
+      id,
+      type: source.data.type,
+      x: copy.x,
+      y: copy.y,
+      rotation: normaliseRotation(copy.rotation ?? source.data.rotation),
+      slots: createEmptyAmenitySlots(source.data.type),
     };
   }
 
@@ -256,6 +277,8 @@ function allocateIds(state, copies) {
             ? 'st'
             : copy.type === 'cashierTable'
               ? 'cashier'
+              : copy.type === 'staffAmenity'
+                ? 'amenity'
               : 'wash');
     records.push({ id });
     generated.set(collection, records);

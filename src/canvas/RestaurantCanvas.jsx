@@ -3,21 +3,24 @@ import { useGameState, useDispatch } from '../state/GameContext';
 import { useRenderState, useRuntimeFault } from '../state/SimulationRuntime';
 import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } from './camera';
 import { loadSprites } from './sprites';
-import { drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer, drawSelectionLayer } from './layers';
+import { drawFloorLayer, drawFurnitureLayer, drawObjectLabel, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer, drawSelectionLayer } from './layers';
 import { findClickedEntity } from './interaction';
 import { getDefaultStaffPosition, getMissingDoorWarnings, getRestaurantWorld } from '../simulation/world';
 import StaffDetailsPanel from '../components/StaffDetailsPanel';
 import { expandFurnitureSelection, normaliseSelectionRect, selectFurnitureInRect } from './selection';
 import { getFixture, getFixtureDescriptor, getFixtureLabel, getFixtureRect } from '../data/fixtures';
 import { getPlaceable } from '../data/placeables';
+import { isAmenityInUse } from '../data/staffAmenities';
 import { snapPlacement, validateFixtureCopies, validateFixtureMoves, validatePlacement } from '../simulation/placement';
 import { getServiceSlotPosition } from '../simulation/serviceItems';
+import { getDishwasherStats } from '../simulation/dishwasherProgression';
+import { getWashStationOccupancy } from '../simulation/dishwashing';
 import { validateStaffMove } from '../state/staffMoves';
 import {
   getFixtureCopyEligibility,
   getFixtureCopyReasonMessage,
 } from '../state/fixtureCopies';
-import { getCanvasFont, humaniseIdentifier, TYPOGRAPHY } from '../typography';
+import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 
 function buildPlacement(state, request, point, rotation = 0) {
   const placementRequest = typeof request === 'string' ? { itemType: request } : request;
@@ -126,7 +129,7 @@ function copyValidation(state, items) {
   };
 }
 
-function drawCustomCashierPreview(ctx, camera, item, valid, width, height) {
+export function drawCustomCashierPreview(ctx, camera, item, valid, width, height) {
   ctx.save();
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
@@ -135,13 +138,13 @@ function drawCustomCashierPreview(ctx, camera, item, valid, width, height) {
   ctx.lineWidth = 2 / camera.zoom;
   ctx.fillRect(item.x, item.y, width, height);
   ctx.strokeRect(item.x, item.y, width, height);
-  ctx.fillStyle = '#eee';
-  ctx.font = getCanvasFont('compact');
-  ctx.fillText('Cashier', item.x + 12, item.y + 23);
+  drawObjectLabel(ctx, 'Cashier', { x: item.x, y: item.y, w: width, h: height }, {
+    background: 'rgba(0,0,0,0.58)',
+  });
   ctx.restore();
 }
 
-function drawCopyPreview(ctx, state, camera, copy) {
+export function drawCopyPreview(ctx, state, camera, copy) {
   const valid = copy.validation?.valid === true;
   for (const item of copy.items || []) {
     const fixture = getFixture(state, item.type, item.id);
@@ -332,7 +335,61 @@ function canSellItem(state, item) {
       && !(state.serviceItems || []).some(serviceItem => serviceItem.washStationId === item.id
         && ['queued_for_wash', 'washing'].includes(serviceItem.state)));
   }
+  if (item?.type === 'staffAmenity') {
+    const amenity = (state.staffAmenities || []).find(candidate => candidate.id === item.id);
+    return Boolean(amenity && !isAmenityInUse(amenity));
+  }
   return false;
+}
+
+function formatNominalSeconds(seconds) {
+  if (!Number.isFinite(seconds)) return '—';
+  return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(1);
+}
+
+function DishwasherControls({ state, station, dispatch }) {
+  if (!station || station.type !== 'automatic') return null;
+  const level = Number.isInteger(station.level) && station.level >= 1 && station.level <= 10
+    ? station.level : 1;
+  const stats = getDishwasherStats(level);
+  if (!stats) return null;
+  const occupancy = getWashStationOccupancy(state, station);
+  const nextCost = stats.nextUpgradeCost;
+  const maxed = nextCost == null;
+  const funds = state.restaurant?.funds;
+  const insufficientFunds = !Number.isFinite(funds) || funds < nextCost;
+  const disabled = maxed || insufficientFunds;
+  const buttonLabel = maxed
+    ? 'Dishwasher max level'
+    : `Upgrade dishwasher ($${nextCost})`;
+
+  return (
+    <div style={{
+      borderTop: '1px solid #333', marginTop: 2, padding: '6px 8px 4px',
+      ...TYPOGRAPHY.secondary, color: '#ccc',
+    }}>
+      <div style={{ color: '#f0a500' }}>Dishwasher controls</div>
+      <div>Level {level} / 10</div>
+      <div>Occupancy {occupancy} / {stats.capacity}</div>
+      <div>Nominal {formatNominalSeconds(stats.secondsPerDish)} seconds per dish</div>
+      <div>{maxed ? 'Maximum level' : `Next upgrade $${nextCost}`}</div>
+      <button
+        type="button"
+        onClick={() => dispatch({ type: 'UPGRADE_DISHWASHER', id: station.id })}
+        disabled={disabled}
+        style={{
+          ...menuBtn,
+          marginTop: 5,
+          color: disabled ? '#666' : '#111',
+          background: disabled ? '#333' : '#f0a500',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+        }}
+        aria-label={buttonLabel}
+      >
+        {buttonLabel}
+      </button>
+    </div>
+  );
 }
 
 export default function RestaurantCanvas({
@@ -921,6 +978,9 @@ export default function RestaurantCanvas({
   }));
   const sellableSelectedItems = selectedItems.filter(item => canSellItem(state, item));
   const currentCopy = copyRef.current;
+  const selectedDishwasher = menu?.type === 'washStation' && menu.data?.type === 'automatic'
+    ? (state.washStations || []).find(station => station.id === menu.data.id) || menu.data
+    : null;
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -945,6 +1005,7 @@ export default function RestaurantCanvas({
           <div style={{ ...TYPOGRAPHY.secondary, color: '#888', padding: '2px 8px' }}>
             {getFixtureLabel(state, { type: menu.type, data: menu.data }) || humaniseIdentifier(menu.type)}
           </div>
+          <DishwasherControls state={state} station={selectedDishwasher} dispatch={dispatch} />
           {menuDoor && (
             <>
               {canMoveMenuEntity && (

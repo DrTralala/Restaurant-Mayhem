@@ -4,6 +4,17 @@ function interpolateCollection(previous = [], current = [], alpha = 1) {
   return current.map(entity => {
     const prior = priorById.get(entity.id);
     if (![prior?.x, prior?.y, entity.x, entity.y].every(Number.isFinite)) return entity;
+    // The wellbeing controller commits couch/bed residency at an interior
+    // geometry anchor. Interpolating the approach point to that anchor would
+    // visibly walk a worker through the solid furniture for one render frame.
+    // Pose transitions are discrete presentation changes, not movement paths.
+    const residencyTransition = prior?.movementResidency?.kind === 'staff_amenity'
+      || entity?.movementResidency?.kind === 'staff_amenity';
+    const amenityPhaseTransition = Boolean(
+      prior?.amenityUse?.phase !== entity?.amenityUse?.phase
+      && (prior?.amenityUse || entity?.amenityUse),
+    );
+    if (residencyTransition || amenityPhaseTransition) return entity;
     return {
       ...entity,
       x: prior.x + (entity.x - prior.x) * ratio,

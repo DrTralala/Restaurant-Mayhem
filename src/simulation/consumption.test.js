@@ -14,7 +14,10 @@ const items = [
 
 it('starts every delivered order item together and records exact IDs', () => {
   const started = startCustomerConsumption(
-    { id: 'c1', state: 'waiting_for_items', dishId: 'toast', drinkId: 'water' },
+    {
+      id: 'c1', state: 'waiting_for_items', dishId: 'toast', drinkId: 'water',
+      foodOutcome: 'pending',
+    },
     items,
     100,
   );
@@ -22,6 +25,64 @@ it('starts every delivered order item together and records exact IDs', () => {
     state: 'eating', orderedServiceItemIds: ['dish', 'drink'], consumedServiceItemIds: [],
   });
   expect(started.serviceItems.map(item => item.consumptionStartedAt)).toEqual([100, 100]);
+  expect(started.customer.foodOutcome).toBe('delivered');
+});
+
+it('treats a cancelled food ID as complete without consuming or billing it', () => {
+  const result = advanceConsumption({
+    customers: [{
+      id: 'c1', partyId: 'p1', state: 'seated', menuOutcome: 'ordered',
+      dishId: null, drinkId: null, orderedServiceItemIds: ['cancelled-dish'],
+      consumedServiceItemIds: [], cancelledServiceItemIds: ['cancelled-dish'],
+      foodOutcome: 'cancelled',
+    }],
+    serviceItems: [],
+    restaurant: { gameTime: 100 },
+  });
+
+  expect(result.customers[0].state).toBe('checkout_queued');
+  expect(result.customers[0].consumedServiceItemIds).toEqual([]);
+  expect(result.customers[0].cancelledServiceItemIds).toEqual(['cancelled-dish']);
+});
+
+it('settles a cancelled order whose physical food record was already removed', () => {
+  const result = advanceConsumption({
+    customers: [{
+      id: 'c1', state: 'seated', menuOutcome: 'ordered',
+      dishId: null, drinkId: null, orderedServiceItemIds: [],
+      consumedServiceItemIds: [], cancelledServiceItemIds: [],
+      foodOutcome: 'cancelled',
+    }],
+    serviceItems: [],
+    restaurant: { gameTime: 100 },
+  });
+
+  expect(result.customers[0].state).toBe('checkout_queued');
+});
+
+it('keeps a valid drink on the table after food cancellation and waits seated for its party', () => {
+  const result = advanceConsumption({
+    customers: [{
+      id: 'c1', partyId: 'p1', state: 'eating', menuOutcome: 'ordered',
+      dishId: null, drinkId: 'water', orderedServiceItemIds: ['dish', 'drink'],
+      consumedServiceItemIds: [], cancelledServiceItemIds: ['dish'],
+      foodOutcome: 'cancelled',
+    }, {
+      id: 'c2', partyId: 'p1', state: 'eating', menuOutcome: 'ordered',
+      dishId: 'toast', drinkId: null, orderedServiceItemIds: ['other-dish'],
+      consumedServiceItemIds: [],
+    }],
+    serviceItems: [
+      { id: 'drink', kind: 'drink', customerId: 'c1', state: 'delivered', consumptionStartedAt: 0 },
+      { id: 'other-dish', kind: 'dish', customerId: 'c2', state: 'delivered', consumptionStartedAt: 0 },
+    ],
+    restaurant: { gameTime: 180 },
+  });
+
+  expect(result.customers.find(customer => customer.id === 'c1')).toMatchObject({
+    state: 'seated', consumedServiceItemIds: ['drink'],
+  });
+  expect(result.customers.find(customer => customer.id === 'c2').state).toBe('eating');
 });
 
 it('finishes a combined drink at 180 and food at 480 before entering checkout', () => {

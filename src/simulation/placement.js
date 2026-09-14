@@ -1,12 +1,21 @@
 import { getPlaceable, getPlaceableDimensions } from '../data/placeables';
 import {
+  createEmptyAmenitySlots,
+  getAmenityGeometry,
+  isAmenityInUse,
+} from '../data/staffAmenities';
+import {
   getFixture,
   getFixtureDescriptor,
   getFixtureRect,
   listFixtures,
 } from '../data/fixtures';
-import { findPath, worldToCell } from './pathfinding';
-import { buildBlockedCells, cellKey } from './movement/navigationWorkspace';
+import { findPath, isInsideWorld, worldToCell } from './pathfinding';
+import {
+  buildBlockedCells,
+  cellKey,
+  createNavigationWorkspace,
+} from './movement/navigationWorkspace';
 import { GRID_SIZE, getCashierWorkPosition, getDoorPosition, getDoors, getRestaurantWorld } from './world';
 
 function invalid(reason) {
@@ -44,42 +53,177 @@ function getGridCellRect(point) {
   };
 }
 
-function getExistingFurnitureRects(state) {
-  const rects = [];
-  const tables = Array.isArray(state?.tables) ? state.tables : [];
-  const chairs = Array.isArray(state?.chairs) ? state.chairs : [];
-  const kitchenStations = Array.isArray(state?.kitchenStations) ? state.kitchenStations : [];
-  const serviceTables = Array.isArray(state?.serviceTables) ? state.serviceTables : [];
-  const cashierStations = Array.isArray(state?.cashierStations) ? state.cashierStations : [];
-  const washStations = Array.isArray(state?.washStations) ? state.washStations : [];
+function getExistingFurnitureRects(state, excludedFixture = null) {
+  return listFixtures(state)
+    .filter(fixture => fixture.type !== 'door'
+      && !fixtureIdentityMatches(fixture, excludedFixture))
+    .map(fixture => getFixtureRect(state, fixture))
+    .filter(rect => rect && rect.w > 0 && rect.h > 0);
+}
 
-  for (const table of tables) {
-    const rect = getRecordRect(table, 40, 40);
-    if (rect) rects.push(rect);
+function getAmenityAccessCellRects(geometry) {
+  if (!geometry) return [];
+  const points = [...geometry.approachPoints, ...geometry.exitCandidates];
+  const seen = new Set();
+  return points.map(point => {
+    const cell = worldToCell(point);
+    const key = cellKey(cell);
+    if (seen.has(key)) return null;
+    seen.add(key);
+    return {
+      x: cell.x * GRID_SIZE,
+      y: cell.y * GRID_SIZE,
+      w: GRID_SIZE,
+      h: GRID_SIZE,
+    };
+  }).filter(Boolean);
+}
+
+function getAmenityAccessRects(state, excludedFixture = null) {
+  return listFixtures(state)
+    .filter(fixture => fixture.type === 'staffAmenity'
+      && !fixtureIdentityMatches(fixture, excludedFixture))
+    .flatMap(fixture => getAmenityAccessCellRects(getAmenityGeometry(fixture.data)));
+}
+
+function isPointInsideFloor(world, point) {
+  return point.x >= world.floorX
+    && point.x < world.floorX + world.floorW
+    && point.y >= world.kitchenY
+    && point.y < world.kitchenY + world.floorH;
+}
+
+function isFloorCell(world, cell) {
+  const point = { x: cell.x * GRID_SIZE, y: cell.y * GRID_SIZE };
+  return isPointInsideFloor(world, point);
+}
+
+function pathAvoidsFootprint(path, start, footprint) {
+  return [start, ...path].every(cell => !rectangleIntersects(
+    getGridCellRect({ x: cell.x * GRID_SIZE, y: cell.y * GRID_SIZE }),
+    footprint,
+  ));
+}
+
+function blockFootprint(blocked, footprint) {
+  const start = worldToCell(footprint);
+  const end = worldToCell({
+    x: footprint.x + footprint.w - 1,
+    y: footprint.y + footprint.h - 1,
+  });
+  for (let y = start.y; y <= end.y; y += 1) {
+    for (let x = start.x; x <= end.x; x += 1) blocked.add(cellKey({ x, y }));
   }
-  for (const chair of chairs) {
-    const rect = getRecordRect(chair, 20, 20);
-    if (rect) rects.push(rect);
+}
+
+function createAmenityNavigationWorkspace(state, footprint) {
+  const base = createNavigationWorkspace(state);
+  const blocked = new Set(base.blockedCellKeys);
+  for (const fixture of listFixtures(state).filter(candidate => candidate.type === 'staffAmenity')) {
+    const geometry = getAmenityGeometry(fixture.data);
+    if (geometry) blockFootprint(blocked, geometry.footprint);
   }
-  for (const station of kitchenStations) {
-    const rect = getRecordRect(station, 40, 40);
-    if (rect) rects.push(rect);
-  }
-  for (const serviceTable of serviceTables) {
-    const dimensions = getPlaceableDimensions('serviceTable', serviceTable.rotation);
-    const rect = getRecordRect(serviceTable, dimensions.width, dimensions.height);
-    if (rect) rects.push(rect);
-  }
-  for (const cashier of cashierStations) {
-    const rect = getRecordRect(cashier, 80, 40);
-    if (rect) rects.push(rect);
-  }
-  for (const station of washStations) {
-    const rect = getRecordRect(station, 40, 40);
-    if (rect) rects.push(rect);
+  blockFootprint(blocked, footprint);
+  const blockedCellKeys = Object.freeze([...blocked].sort());
+  return Object.freeze({
+    ...base,
+    blockedCells: Object.freeze({
+      has: key => blocked.has(key),
+      size: blocked.size,
+    }),
+    blockedCellKeys,
+    topologyFingerprint: `${base.topologyFingerprint}:amenity:${blockedCellKeys.join('|')}`,
+  });
+}
+
+function amenityAccessIsReachable(state, targetCell, footprint, workspace) {
+  if (!isInsideWorld(state, targetCell)) return false;
+  return getDoors(state).some(door => {
+    const position = getDoorPosition(state, door);
+    if (!position) return false;
+    const start = worldToCell(position.inside);
+    if (start.x === targetCell.x && start.y === targetCell.y) {
+      return pathAvoidsFootprint([], start, footprint);
+    }
+    const path = findPath(state, start, targetCell, { workspace });
+    return path.length > 0 && pathAvoidsFootprint(path, start, footprint);
+  });
+}
+
+function validateAmenityAccess(
+  state,
+  amenity,
+  geometry,
+  furnitureRects = [],
+  protectedAccessRects = [],
+) {
+  if (!geometry) return invalid('malformed-amenity');
+  const world = getRestaurantWorld(state?.restaurant || {});
+  const accessPoints = [...geometry.approachPoints, ...geometry.exitCandidates];
+  const accessRects = getAmenityAccessCellRects(geometry);
+  const navigationWorkspace = createAmenityNavigationWorkspace(state, geometry.footprint);
+
+  if (accessPoints.some(point => !isPointInsideFloor(world, point)
+    || !isPointOutsideFootprint(point, geometry.footprint))) {
+    return invalid('amenity-access');
   }
 
-  return rects;
+  const blocked = buildBlockedCells(state);
+  for (const accessRect of accessRects) {
+    const targetCell = worldToCell({ x: accessRect.x, y: accessRect.y });
+    if (!isFloorCell(world, targetCell)
+      || blocked.has(cellKey(targetCell))
+      || furnitureRects.some(rect => rectangleIntersects(accessRect, rect))
+      || protectedAccessRects.some(rect => rectangleIntersects(accessRect, rect))) {
+      return invalid('amenity-access');
+    }
+    if (!amenityAccessIsReachable(
+      state,
+      targetCell,
+      geometry.footprint,
+      navigationWorkspace,
+    )) {
+      return invalid('amenity-access');
+    }
+  }
+
+  return { valid: true, reason: null };
+}
+
+function isPointOutsideFootprint(point, footprint) {
+  return point.x < footprint.x
+    || point.x >= footprint.x + footprint.w
+    || point.y < footprint.y
+    || point.y >= footprint.y + footprint.h;
+}
+
+function validateAmenityLayout(state, candidateFixtures, allFixtures) {
+  const allAccessRects = getAmenityAccessRects(state);
+  for (const fixture of candidateFixtures) {
+    const rect = getFixtureRect(state, fixture);
+    if (!rect) return invalid('malformed-amenity');
+    if (fixture.type !== 'staffAmenity') {
+      if (allAccessRects.some(accessRect => rectangleIntersects(rect, accessRect))) {
+        return invalid('amenity-access');
+      }
+      continue;
+    }
+
+    const geometry = getAmenityGeometry(fixture.data);
+    const accessResult = validateAmenityAccess(
+      state,
+      fixture.data,
+      geometry,
+      allFixtures
+        .filter(candidate => candidate.type !== 'door'
+          && !fixtureIdentityMatches(candidate, fixture))
+        .map(candidate => getFixtureRect(state, candidate))
+        .filter(Boolean),
+      getAmenityAccessRects(state, fixture),
+    );
+    if (!accessResult.valid) return accessResult;
+  }
+  return { valid: true, reason: null };
 }
 
 function clamp(value, minimum, maximum) {
@@ -161,6 +305,11 @@ export function validatePlacement(state = {}, placement = {}) {
   const item = getPlaceable(requestedPlacement.itemType);
   if (!item) return invalid('unknown-item-type');
   if (!isFinitePoint(requestedPlacement)) return invalid('non-finite-coordinate');
+  if (item.rotatable && Object.prototype.hasOwnProperty.call(requestedPlacement, 'rotation')
+    && (!Number.isInteger(requestedPlacement.rotation)
+      || requestedPlacement.rotation < 0 || requestedPlacement.rotation > 3)) {
+    return invalid('malformed-rotation');
+  }
 
   const rect = getPlacementRect(
     requestedPlacement.itemType,
@@ -177,6 +326,29 @@ export function validatePlacement(state = {}, placement = {}) {
   const existingFurniture = getExistingFurnitureRects(currentState);
   if (existingFurniture.some(existing => rectangleIntersects(rect, existing))) {
     return invalid('overlap');
+  }
+
+  const existingAmenityAccess = getAmenityAccessRects(currentState);
+  if (existingAmenityAccess.some(accessRect => rectangleIntersects(rect, accessRect))) {
+    return invalid('amenity-access');
+  }
+
+  if (item.staffAmenity) {
+    const amenity = {
+      type: requestedPlacement.itemType,
+      x: requestedPlacement.x,
+      y: requestedPlacement.y,
+      rotation: requestedPlacement.rotation,
+    };
+    const geometry = getAmenityGeometry(amenity);
+    const accessResult = validateAmenityAccess(
+      currentState,
+      amenity,
+      geometry,
+      existingFurniture,
+      existingAmenityAccess,
+    );
+    if (!accessResult.valid) return accessResult;
   }
 
   if (requestedPlacement.itemType === 'cashierTable') {
@@ -215,7 +387,7 @@ export function validatePlacement(state = {}, placement = {}) {
 }
 
 function fixtureIdentityMatches(first, second) {
-  return first.type === second.type && first.id === second.id;
+  return Boolean(first && second && first.type === second.type && first.id === second.id);
 }
 
 function getFixturePlacementType(fixture) {
@@ -288,6 +460,9 @@ export function validateFixtureMoves(state = {}, moves = []) {
       && (!Number.isInteger(move.rotation) || move.rotation < 0 || move.rotation > 3)) {
       return invalid('malformed-rotation');
     }
+    if (move.type === 'staffAmenity' && isAmenityInUse(fixture.data)) {
+      return invalid('amenity-in-use');
+    }
     if (move.type === 'door' && move.x !== world.doorX) return invalid('door-wall');
 
     if (!clonedCollections.has(descriptor.collection)) {
@@ -351,6 +526,9 @@ export function validateFixtureMoves(state = {}, moves = []) {
     });
     if (overlapsFixture) return invalid('overlap');
   }
+
+  const movedAmenityLayout = validateAmenityLayout(finalState, movedFixtures, finalFixtures);
+  if (!movedAmenityLayout.valid) return movedAmenityLayout;
 
   if (movesStrandAnActor(currentState, finalState, normalisedMoves)) {
     return invalid('door-occupied');
@@ -444,6 +622,11 @@ function getCopyCandidateData(source, copy, id, tableIds) {
   if (Object.prototype.hasOwnProperty.call(copy, 'rotation')
     && !['chair', 'serviceTable'].includes(source.type)) {
     data.rotation = copy.rotation;
+  }
+  if (source.type === 'staffAmenity') {
+    data.slots = createEmptyAmenitySlots(source.data.type);
+    delete data.amenityUse;
+    delete data.ptoSession;
   }
   if (source.type === 'chair') {
     const copiedTableId = tableIds.get(fixtureCopyKey('table', source.data.tableId));
@@ -602,6 +785,9 @@ export function validateFixtureCopies(state = {}, requestedCopies = []) {
     });
     if (overlapsFixture) return invalid('overlap');
   }
+
+  const copiedAmenityLayout = validateAmenityLayout(finalState, candidateFixtures, finalFixtures);
+  if (!copiedAmenityLayout.valid) return copiedAmenityLayout;
 
   if (movesStrandAnActor(currentState, finalState, copies)) {
     return invalid('door-occupied');

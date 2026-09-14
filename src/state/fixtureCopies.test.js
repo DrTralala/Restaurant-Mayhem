@@ -29,6 +29,7 @@ function makeState(overrides = {}) {
     washStations: [{
       id: 'wash1', type: 'automatic', x: 300, y: 120, w: 40, h: 40,
     }],
+    staffAmenities: [],
     staff: [{ id: 'waiter-1', role: 'waiter' }],
     customers: [{ id: 'customer-1', state: 'eating', tableId: 't1', chairId: 'ch1' }],
     serviceItems: [
@@ -59,7 +60,7 @@ describe('fixture copy eligibility', () => {
       { type: 'washStation', id: 'wash1' },
     ]);
 
-    expect(result).toMatchObject({ valid: true, price: 2000, totalPrice: 2000 });
+    expect(result).toMatchObject({ valid: true, price: 3400, totalPrice: 3400 });
     expect(result.items).toEqual([
       { type: 'table', id: 't1' },
       { type: 'chair', id: 'ch1' },
@@ -139,11 +140,49 @@ describe('copyFixtures', () => {
       { type: 'washStation', id: 'wash1', x: 500, y: 260 },
     ]);
 
-    expect(result.restaurant.funds).toBe(3400);
+    expect(result.restaurant.funds).toBe(2000);
     expect(result.doors[1]).toEqual({ id: 'door2', y: 80, role: 'exit' });
     expect(result.serviceTables[1]).toEqual({ id: 'st2', x: 500, y: 120, rotation: 1 });
     expect(result.cashierStations[1]).toEqual({ id: 'cashier2', x: 600, y: 300, w: 80, h: 40 });
-    expect(result.washStations[1]).toEqual({ id: 'wash2', type: 'automatic', x: 500, y: 260, w: 60, h: 20 });
+    expect(result.washStations[1]).toEqual({
+      id: 'wash2', type: 'automatic', level: 1, x: 500, y: 260, w: 60, h: 20,
+    });
+  });
+
+  it('copies amenities with fresh empty slots and resets automatic dishwashers to level one', () => {
+    const state = makeState({
+      restaurant: { expansionLevel: 1, funds: 2400 },
+      tables: [], chairs: [], serviceTables: [], cashierStations: [], kitchenStations: [],
+      washStations: [{ id: 'wash1', type: 'automatic', level: 4, x: 300, y: 120, w: 40, h: 40 }],
+      staffAmenities: [{
+        id: 'amenity1', type: 'couch', x: 500, y: 300, rotation: 1,
+        slots: [
+          { index: 0, reservedBy: 'staff-1', occupiedBy: 'staff-1' },
+          { index: 1, reservedBy: null, occupiedBy: null },
+        ],
+      }],
+      serviceItems: [],
+    });
+
+    const result = copyFixtures(state, [
+      { type: 'staffAmenity', id: 'amenity1', x: 700, y: 300, rotation: 2 },
+      { type: 'washStation', id: 'wash1', x: 300, y: 200 },
+    ]);
+
+    expect(result.restaurant.funds).toBe(0);
+    expect(result.staffAmenities).toEqual([
+      state.staffAmenities[0],
+      {
+        id: 'amenity2', type: 'couch', x: 700, y: 300, rotation: 2,
+        slots: [
+          { index: 0, reservedBy: null, occupiedBy: null },
+          { index: 1, reservedBy: null, occupiedBy: null },
+        ],
+      },
+    ]);
+    expect(result.washStations[1]).toEqual({
+      id: 'wash2', type: 'automatic', level: 1, x: 300, y: 200, w: 40, h: 40,
+    });
   });
 
   it.each([

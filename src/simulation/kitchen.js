@@ -6,6 +6,7 @@ import {
   getStaffTaskSource,
 } from './staffPerformance';
 import { getBatchServiceItemIds, normaliseCookingBatches } from './cookingBatches';
+import { expireFoodPatience } from './foodPatience';
 
 const PHYSICAL_ITEM_STATES = new Set(['on_service', 'carried', 'delivered']);
 const DIRTY_ITEM_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
@@ -15,6 +16,8 @@ function isActiveCustomer(customers, customerId) {
 }
 
 function canProgressDish(state, item) {
+  const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
+  if (item.foodCancelled === true || customer?.foodOutcome === 'cancelled') return null;
   const dish = (state.dishes || []).find(candidate => candidate.id === item.menuItemId);
   const station = (state.kitchenStations || []).find(candidate => candidate.id === item.stationId);
   const cook = (state.staff || []).find(candidate =>
@@ -31,9 +34,10 @@ function canProgressDish(state, item) {
 }
 
 export function processKitchen(state) {
-  const consumption = advanceConsumption(state);
+  const expired = expireFoodPatience(state, state.restaurant?.gameTime);
+  const consumption = advanceConsumption(expired);
   const reconciled = normaliseCookingBatches({
-    ...state,
+    ...expired,
     customers: consumption.customers,
     serviceItems: consumption.serviceItems,
   });
@@ -46,6 +50,9 @@ export function processKitchen(state) {
     if (item.kind !== 'dish') return item;
 
     const orphan = item.customerId != null && !isActiveCustomer(customers, item.customerId);
+    if (item.foodCancelled === true && ['ordered', 'preparing'].includes(item.state)) {
+      return null;
+    }
     if (orphan && ['ordered', 'preparing'].includes(item.state)) {
       return null;
     }
@@ -100,7 +107,7 @@ export function processKitchen(state) {
     return {
       ...item,
       state: 'ready',
-      readyAt: state.restaurant.gameTime,
+      readyAt: expired.restaurant.gameTime,
       x: preparation.station.x + 20,
       y: preparation.station.y + 20,
     };
@@ -131,5 +138,5 @@ export function processKitchen(state) {
       } }
       : worker;
   });
-  return normaliseCookingBatches({ ...state, customers, serviceItems, staff });
+  return normaliseCookingBatches({ ...expired, customers, serviceItems, staff });
 }
