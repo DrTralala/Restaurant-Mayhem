@@ -108,7 +108,35 @@ describe('releaseStaffWork', () => {
     expect(releaseStaffWork(first, 'w1', 'break', 100)).toEqual(first);
   });
 
-  it('keeps a cancelled carried-dirty load on a handoff task when no station exists', () => {
+  it('routes a cancelled carried-dirty load through waiter delivery when a station exists', () => {
+    const state = baseState({
+      restaurant: { gameTime: 100 },
+      staff: [{
+        id: 'w1', role: 'waiter', x: 180, y: 220,
+        carryingServiceItemIds: ['waste'],
+        task: { type: 'deliver_dirty_item', serviceItemId: 'waste', washStationId: 'wash1' },
+      }],
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1', foodOutcome: 'cancelled' }],
+      serviceItems: [{
+        id: 'waste', kind: 'dish', customerId: 'c1', state: 'carried_dirty',
+        foodCancelled: true, deliveryProhibited: true, x: 180, y: 220,
+      }],
+      washStations: [{ id: 'wash1', type: 'manual', x: 180, y: 220, w: 40, h: 40 }],
+    });
+
+    const released = releaseStaffWork(state, 'w1', 'break', 100);
+
+    expect(released.staff[0]).toMatchObject({
+      task: { type: 'deliver_dirty_item', serviceItemId: 'waste', washStationId: 'wash1' },
+      carryingServiceItemIds: ['waste'],
+    });
+    expect(released.staff[0].task.type).not.toBe('handoff_cancelled_waste');
+    expect(released.serviceItems[0]).toMatchObject({
+      id: 'waste', state: 'carried_dirty', foodCancelled: true,
+    });
+  });
+
+  it('retains a cancelled carried-dirty load for a later retry when no station exists', () => {
     const state = baseState({
       restaurant: { gameTime: 100 },
       staff: [{
@@ -127,7 +155,7 @@ describe('releaseStaffWork', () => {
     const released = releaseStaffWork(state, 'w1', 'break', 100);
 
     expect(released.staff[0]).toMatchObject({
-      task: { type: 'handoff_cancelled_waste', serviceItemId: 'waste', washStationId: null },
+      task: null,
       carryingServiceItemIds: ['waste'],
     });
     expect(released.serviceItems[0]).toMatchObject({
@@ -135,19 +163,80 @@ describe('releaseStaffWork', () => {
     });
   });
 
-  it('assigns normal dirty work to a janitor rather than a waiter', () => {
+  it('requeues a malformed cancelled waiter clean load instead of delivering it', () => {
     const state = baseState({
-      staff: [
-        { id: 'w1', role: 'waiter', x: 180, y: 220, task: null },
-        { id: 'j1', role: 'janitor', x: 180, y: 220, task: null },
-      ],
+      staff: [{
+        id: 'w1', role: 'waiter', x: 180, y: 220,
+        carryingServiceItemIds: ['waste'],
+        task: { type: 'deliver_service_item', serviceItemId: 'waste', customerId: 'c1' },
+      }],
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1', foodOutcome: 'cancelled' }],
+      serviceItems: [{
+        id: 'waste', kind: 'dish', customerId: 'c1', tableId: 't1', state: 'carried',
+        foodCancelled: true, deliveryProhibited: true, assignedStaffId: 'w1',
+        x: 180, y: 220, washStationId: 'stale-sink', reservedWashStationId: 'stale-dishwasher',
+        washQueuedAt: 40, washStartedAt: 50,
+      }],
+    });
+
+    const released = releaseStaffWork(state, 'w1', 'break', 100);
+
+    expect(released.staff[0]).toMatchObject({ task: null, carryingServiceItemIds: [] });
+    expect(released.serviceItems[0]).toMatchObject({
+      id: 'waste', state: 'to_clean', assignedStaffId: null,
+      washStationId: null, reservedWashStationId: null,
+      washQueuedAt: null, washStartedAt: null,
+    });
+  });
+
+  it('repairs an expired malformed waiter clean load without creating a service delivery', () => {
+    const state = baseState({
+      staff: [{
+        id: 'w1', role: 'waiter', x: 180, y: 220,
+        carryingServiceItemIds: ['waste'], task: null,
+      }],
+      customers: [{
+        id: 'c1', state: 'seated', tableId: 't1', foodOutcome: 'pending', foodDeadlineAt: 50,
+      }],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+      serviceItems: [{
+        id: 'waste', kind: 'dish', customerId: 'c1', tableId: 't1', state: 'carried',
+        foodCancelled: false, assignedStaffId: 'w1', x: 180, y: 220,
+      }],
+    });
+
+    const repaired = resolveStaffAfterMovement(state, 0);
+
+    expect(repaired.serviceItems[0]).toMatchObject({
+      id: 'waste', state: 'carried_dirty', assignedStaffId: null,
+    });
+    expect(repaired.staff[0].carryingServiceItemIds).toEqual(['waste']);
+    expect(repaired.staff[0].task?.type).not.toBe('deliver_service_item');
+  });
+
+  it('assigns physical dirty-item collection to a waiter', () => {
+    const state = baseState({
+      staff: [{ id: 'w1', role: 'waiter', x: 180, y: 220, task: null }],
+      serviceItems: [{ id: 'i1', state: 'to_clean', x: 400, y: 300 }],
+    });
+
+    const assigned = updateStaff(state, 0);
+
+    expect(assigned.staff[0].task).toMatchObject({
+      type: 'collect_dirty_item', serviceItemId: 'i1',
+    });
+    expect(assigned.staff[0].task).not.toHaveProperty('tableId');
+  });
+
+  it('assigns table cleaning to a janitor once dirty items are gone', () => {
+    const state = baseState({
+      staff: [{ id: 'j1', role: 'janitor', x: 180, y: 220, task: null }],
       tables: [{ id: 't1', status: 'dirty', x: 200, y: 200 }],
     });
 
     const assigned = updateStaff(state, 0);
 
-    expect(assigned.staff.find(worker => worker.id === 'w1')?.task).toBeNull();
-    expect(assigned.staff.find(worker => worker.id === 'j1')?.task).toMatchObject({
+    expect(assigned.staff[0].task).toMatchObject({
       type: 'clean_table', tableId: 't1',
     });
   });

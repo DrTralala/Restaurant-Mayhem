@@ -1213,8 +1213,16 @@ describe('runTick', () => {
             stages.add(`deliver:${task.serviceItemId}`);
             deliveryTaskItemIds.add(task.serviceItemId);
           }
-          if (task.type === 'clean_service_item') {
-            stages.add(`clean:${task.serviceItemId}`);
+          if (task.type === 'collect_dirty_item' && staff.role === 'waiter') {
+            stages.add(`collect_dirty:${task.serviceItemId}`);
+            cleaningTasks.add(task.serviceItemId);
+          }
+          if (task.type === 'deliver_dirty_item' && staff.role === 'waiter') {
+            stages.add(`deliver_dirty:${task.serviceItemId}`);
+            cleaningTasks.add(task.serviceItemId);
+          }
+          if (task.type === 'wash_item' && staff.role === 'janitor') {
+            stages.add(`wash:${task.serviceItemId}`);
             cleaningTasks.add(task.serviceItemId);
           }
         }
@@ -1470,12 +1478,6 @@ describe('runTick', () => {
 
       const item = state.serviceItems.find(candidate => candidate.customerId === customerId);
       const customer = state.customers.find(candidate => candidate.id === customerId);
-      for (const staff of state.staff) {
-        const task = staff.task;
-        if (task?.type === 'clean_table' && task.tableId === 't1') {
-          observe('clean_table');
-        }
-      }
       if (state.staff.some(staff => staff.task?.type === 'take_order' && staff.task.customerId === customerId)) observe('take_order');
       if (state.staff.some(staff => staff.task?.type === 'prepare_dish' && staff.task.serviceItemId === item?.id)
         || item?.state === 'preparing') observe('prepare_dish');
@@ -1493,6 +1495,9 @@ describe('runTick', () => {
       if (item?.state === 'queued_for_wash') observe('queued_for_wash');
       if (item?.state === 'washing') observe('washing');
       if (previousItem?.state === 'washing' && !item) observe('washed');
+      if (state.staff.some(staff => staff.task?.type === 'clean_table' && staff.task.tableId === 't1')) {
+        observe('clean_table');
+      }
       if (customer?.state === 'leaving') observe('leaving');
 
       const lifecycleTable = state.tables.find(table => table.id === 't1');
@@ -1692,8 +1697,11 @@ describe('runTick', () => {
       }],
        staff: [{
          id: 'cleaner', role: 'janitor', morale: 80,
-        x: 180, y: 220, task: null, carryingServiceItemId: null,
-      }],
+         x: 600, y: 360, task: null, carryingServiceItemId: null,
+       }, {
+         id: 'waiter', role: 'waiter', morale: 80,
+         x: 180, y: 220, task: null, carryingServiceItemId: null,
+       }],
       washStations: [{
         id: 'sink', type: 'manual', x: 300, y: 200, w: 40, h: 40,
       }],

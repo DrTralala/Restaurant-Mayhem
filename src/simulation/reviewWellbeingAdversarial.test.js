@@ -212,14 +212,12 @@ it.each([
   ['clean table', 'janitor', { type: 'clean_table', tableId: 'missing-table' }],
   ['clean floor', 'janitor', { type: 'clean_floor', dirtId: 'missing-dirt' }],
   ['wash item', 'janitor', { type: 'wash_item', serviceItemId: 'missing-item', washStationId: 'missing-wash' }],
-  ['collect dirty item', 'janitor', { type: 'collect_dirty_item', serviceItemId: 'missing-item', tableId: 'missing-table' }],
-  ['clean service item', 'janitor', { type: 'clean_service_item', serviceItemId: 'missing-item' }],
-  ['transfer dirty item', 'janitor', {
+  ['collect dirty item', 'waiter', { type: 'collect_dirty_item', serviceItemId: 'missing-item', tableId: 'missing-table' }],
+  ['transfer dirty item', 'waiter', {
     type: 'transfer_dirty_item', serviceItemId: 'missing-item',
     washStationId: 'missing-wash', sourceWashStationId: 'missing-source',
   }],
-  ['deliver dirty item', 'janitor', { type: 'deliver_dirty_item', serviceItemId: 'missing-item', washStationId: 'missing-wash' }],
-  ['cancelled-waste handoff', 'waiter', { type: 'handoff_cancelled_waste', serviceItemId: 'missing-item' }],
+  ['deliver dirty item', 'waiter', { type: 'deliver_dirty_item', serviceItemId: 'missing-item', washStationId: 'missing-wash' }],
   ['pickup service item', 'waiter', { type: 'pickup_service_item', serviceItemId: 'missing-item' }],
   ['take order', 'waiter', { type: 'take_order', customerId: 'missing-customer' }],
   ['take payment', 'waiter', { type: 'take_payment', customerId: 'missing-customer', stationId: 'missing-cashier' }],
@@ -235,6 +233,15 @@ it.each([
   const state = liveState();
   state.staff[0] = { ...state.staff[0], role, task };
   expectRejectedSave(state, /task|missing|serviceItem|customer|table|station|dirt/i);
+});
+
+it.each([
+  ['clean service item', 'janitor', { type: 'clean_service_item', serviceItemId: 'missing-item' }],
+  ['cancelled-waste handoff', 'waiter', { type: 'handoff_cancelled_waste', serviceItemId: 'missing-item' }],
+])('rejects retired %s tasks as unsupported', (_name, role, task) => {
+  const state = liveState();
+  state.staff[0] = { ...state.staff[0], role, task };
+  expectRejectedSave(state, /unsupported/i);
 });
 
 it.each([

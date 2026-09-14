@@ -5,6 +5,7 @@ import {
   drawObjectLabel,
   drawPlacementPreview,
   drawSelectionLayer,
+  drawStickFigure,
   drawStaffLayer,
 } from './layers';
 import { findClickedEntity } from './interaction';
@@ -118,6 +119,7 @@ describe('canvas object labels', () => {
 
     drawObjectLabel(ctx, 'Kitchen station', { x: 100, y: 100, w: 40, h: 40 });
 
+    expect(ctx._calls.rects).toEqual([]);
     expect(ctx._calls.saves).toBe(1);
     expect(ctx._calls.restores).toBe(1);
     expect(ctx._calls.texts.map(call => call.text)).toEqual(['Kitchen', 'station']);
@@ -125,9 +127,30 @@ describe('canvas object labels', () => {
     expect(ctx._calls.texts.every(call => call.textAlign === 'center')).toBe(true);
     expect(ctx._calls.texts.every(call => call.textBaseline === 'middle')).toBe(true);
     expect(ctx._calls.texts.every(call => call.fillStyle === '#fff')).toBe(true);
-    expect(ctx._calls.rects.some(rect => String(rect.fillStyle).includes('rgba(0,0,0'))).toBe(true);
     expect(ctx.textAlign).toBe('left');
     expect(ctx.textBaseline).toBe('alphabetic');
+  });
+});
+
+describe('canvas stick-figure presentation', () => {
+  it.each([
+    ['standing', {}],
+    ['walking', { walking: true }],
+    ['seated', { seated: true }],
+    ['lying', { lying: true }],
+    ['cleaning', { cleaning: true }],
+  ])('draws a %s pose without hand endpoint rectangles', (_name, pose) => {
+    const ctx = makeContext();
+
+    drawStickFigure(ctx, 100, 100, '#fff', pose);
+
+    expect(ctx._calls.rects).toEqual([]);
+    if (pose.cleaning) {
+      expect(ctx._calls.lines.slice(-2)).toEqual([
+        { x: 102, y: 115 },
+        { x: 111, y: 115 },
+      ]);
+    }
   });
 });
 

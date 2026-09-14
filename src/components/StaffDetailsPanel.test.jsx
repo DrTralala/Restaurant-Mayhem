@@ -56,7 +56,7 @@ describe('StaffDetailsPanel', () => {
     ['prepare_drink', 'Preparing drink'],
     ['pickup_service_item', 'Collecting order'],
     ['deliver_service_item', 'Delivering order'],
-    ['clean_service_item', 'Clearing service item'],
+    ['transfer_dirty_item', 'Transferring dirty item'],
   ])('labels %s tasks', (type, label) => {
     render(<StaffDetailsPanel staff={{ ...staff, task: { type } }} dispatch={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByText(label)).toBeInTheDocument();
