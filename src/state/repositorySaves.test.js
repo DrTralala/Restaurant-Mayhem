@@ -23,7 +23,13 @@ describe('repository saves client', () => {
     const coordinator = createMovementCoordinator();
     coordinator.plans.set('a', []);
     coordinator.plans.set('b', []);
-    const state = { version: SAVE_VERSION, restaurant: { funds: 999 }, movementCoordinator: coordinator };
+    const initial = createInitialState();
+    const state = {
+      ...initial,
+      version: SAVE_VERSION,
+      restaurant: { ...initial.restaurant, funds: 999 },
+      movementCoordinator: coordinator,
+    };
     let body;
     const fetchImpl = async (_url, options) => {
       body = JSON.parse(options.body);

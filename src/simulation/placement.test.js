@@ -24,7 +24,7 @@ it('exposes canonical prices and footprints', () => {
   expect(getPlaceable('door')).toMatchObject({ price: 400, width: 6, height: 40 });
   expect(getPlaceable('serviceTable')).toMatchObject({ price: 300, width: 120, height: 40, rotatable: true });
   expect(getPlaceable('cashierTable')).toMatchObject({ price: 300, width: 80, height: 40 });
-  expect(getPlaceable('automaticDishwasher')).toMatchObject({ price: 600, width: 40, height: 40 });
+  expect(getPlaceable('automaticDishwasher')).toMatchObject({ price: 2000, width: 40, height: 40 });
 });
 
 it('uses the vertical footprint for a quarter-turned service counter', () => {
@@ -262,5 +262,103 @@ describe('fixture copy validation', () => {
     ])).toMatchObject({ valid: false, reason: 'duplicate-copy' });
     expect(validateFixtureCopies(state, [{ type: 'table', id: 't1', x: Number.NaN, y: 300 }]))
       .toMatchObject({ valid: false, reason: 'non-finite-coordinate' });
+  });
+});
+
+describe('staff amenity placement', () => {
+  function amenityState(overrides = {}) {
+    return {
+      restaurant: { expansionLevel: 1 },
+      tables: [],
+      chairs: [],
+      kitchenStations: [],
+      serviceTables: [],
+      cashierStations: [],
+      washStations: [],
+      staffAmenities: [],
+      doors: [{ id: 'door1', y: 340, role: 'entrance' }],
+      ...overrides,
+    };
+  }
+
+  it('exposes 20-pixel snapping and accepts every rotated amenity footprint', () => {
+    expect(snapPlacement('couch', { x: 137, y: 283 }, amenityState()))
+      .toEqual({ x: 140, y: 280 });
+
+    for (const [itemType, x, y] of [['couch', 500, 300], ['arcade', 600, 300], ['bed', 700, 300]]) {
+      for (const rotation of [0, 1, 2, 3]) {
+        expect(validatePlacement(amenityState(), {
+          itemType, x, y, rotation,
+        })).toMatchObject({ valid: true, reason: null });
+      }
+    }
+  });
+
+  it('rejects amenity footprint and required access-cell collisions', () => {
+    expect(validatePlacement(amenityState({
+      staffAmenities: [{ id: 'existing', type: 'couch', x: 500, y: 300, rotation: 0 }],
+    }), {
+      itemType: 'arcade', x: 500, y: 300, rotation: 0,
+    })).toMatchObject({ valid: false, reason: 'overlap' });
+
+    expect(validatePlacement(amenityState({
+      tables: [{ id: 'blocker', x: 500, y: 320 }],
+    }), {
+      itemType: 'couch', x: 500, y: 300, rotation: 0,
+    })).toMatchObject({ valid: false, reason: 'amenity-access' });
+  });
+
+  it('rejects an amenity outside the floor or without reachable access cells', () => {
+    expect(validatePlacement(amenityState(), {
+      itemType: 'bed', x: 40, y: 300, rotation: 0,
+    })).toMatchObject({ valid: false, reason: 'outside-floor' });
+
+    expect(validatePlacement(amenityState({
+      tables: [
+        { id: 'left', x: 460, y: 300 },
+        { id: 'right', x: 520, y: 300 },
+        { id: 'top', x: 500, y: 260 },
+        { id: 'bottom', x: 500, y: 320 },
+      ],
+    }), {
+      itemType: 'arcade', x: 500, y: 300, rotation: 0,
+    })).toMatchObject({ valid: false, reason: 'amenity-access' });
+  });
+
+  it('protects occupied amenities from atomic moves', () => {
+    const state = amenityState({
+      staffAmenities: [{
+        id: 'couch-1', type: 'couch', x: 500, y: 300, rotation: 0,
+        slots: [{ index: 0, reservedBy: 'staff-1', occupiedBy: null }, { index: 1, reservedBy: null, occupiedBy: null }],
+      }],
+    });
+
+    expect(validateFixtureMoves(state, [{
+      type: 'staffAmenity', id: 'couch-1', x: 600, y: 300, rotation: 0,
+    }])).toMatchObject({ valid: false, reason: 'amenity-in-use' });
+  });
+
+  it('validates free amenity moves and copy destinations without carrying occupancy', () => {
+    const state = amenityState({
+      restaurant: { expansionLevel: 1, funds: 10_000 },
+      staffAmenities: [{
+        id: 'couch-1', type: 'couch', x: 500, y: 300, rotation: 0,
+        slots: [{ index: 0, reservedBy: 'old-staff', occupiedBy: 'old-staff' }, { index: 1, reservedBy: null, occupiedBy: null }],
+      }],
+    });
+    const movable = {
+      ...state,
+      staffAmenities: [{ ...state.staffAmenities[0], slots: [
+        { index: 0, reservedBy: null, occupiedBy: null },
+        { index: 1, reservedBy: null, occupiedBy: null },
+      ] }],
+    };
+
+    expect(validateFixtureMoves(movable, [{
+      type: 'staffAmenity', id: 'couch-1', x: 600, y: 300, rotation: 1,
+    }])).toMatchObject({ valid: true, reason: null });
+    expect(validateFixtureCopies(state, [{
+      type: 'staffAmenity', id: 'couch-1', x: 700, y: 300, rotation: 2,
+    }])).toMatchObject({ valid: true, reason: null });
   });
 });

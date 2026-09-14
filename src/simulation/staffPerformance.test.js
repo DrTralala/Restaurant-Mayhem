@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   advanceStaffTaskProgress,
   getStaffPerformanceMultiplier,
+  getStaffTaskSource,
   getStaffTaskProgress,
   getStaffTaskRate,
+  settleStaffTaskProgress,
 } from './staffPerformance';
 
 describe('staff performance', () => {
@@ -34,6 +36,16 @@ describe('staff performance', () => {
     expect(repeated.task).toEqual(second.task);
   });
 
+  it('provides a pure boundary settlement helper for rate changes', () => {
+    const settled = settleStaffTaskProgress(
+      { accumulatedWork: 40, lastProgressAt: 10 },
+      20,
+      1,
+    );
+
+    expect(settled.task).toMatchObject({ accumulatedWork: 50, lastProgressAt: 20 });
+  });
+
   it('hydrates an old timestamp as legacy work before applying the new rate', () => {
     const result = advanceStaffTaskProgress({ startedAt: 10 }, 30, 0.5);
 
@@ -53,6 +65,75 @@ describe('staff performance', () => {
     };
 
     expect(getStaffTaskRate(state, worker)).toBe(1.25);
+  });
+
+  it('applies the approved skill thresholds only to the affected work', () => {
+    const waiter = skill => ({
+      role: 'waiter', skill, morale: 50, task: { type: 'take_order' },
+    });
+    const janitor = (skill, type = 'wash_item') => ({
+      role: 'janitor', skill, morale: 50, task: { type },
+    });
+
+    expect(getStaffTaskRate({}, waiter(1))).toBe(1);
+    expect(getStaffTaskRate({}, waiter(5))).toBe(2);
+    expect(getStaffTaskRate({}, janitor(4))).toBe(1);
+    expect(getStaffTaskRate({}, janitor(5))).toBe(1.5);
+    expect(getStaffTaskRate({}, janitor(9))).toBe(1.5);
+    expect(getStaffTaskRate({}, janitor(10))).toBe(2);
+    expect(getStaffTaskRate({}, janitor(10, 'clean_table'))).toBe(2);
+    expect(getStaffTaskRate({}, janitor(10, 'clean_floor'))).toBe(2);
+    expect(getStaffTaskRate({}, {
+      role: 'janitor', skill: 10, morale: 50, task: { type: 'take_payment' },
+    })).toBe(1);
+    expect(getStaffTaskRate({}, {
+      role: 'waiter', skill: 10, morale: 50, task: { type: 'clean_table' },
+    })).toBe(1);
+  });
+
+  it('keeps morale as the base for role work multipliers', () => {
+    expect(getStaffTaskRate({}, {
+      role: 'janitor', skill: 5, morale: 0, task: { type: 'wash_item' },
+    })).toBe(0.75);
+    expect(getStaffTaskRate({}, {
+      role: 'janitor', skill: 10, morale: 100, task: { type: 'wash_item' },
+    })).toBe(3);
+    expect(getStaffTaskRate({}, {
+      role: 'waiter', skill: 5, morale: 0, task: { type: 'take_order' },
+    })).toBe(1);
+  });
+
+  it('uses a target-owned cleaningAction as the progress source', () => {
+    const state = {
+      restaurant: { gameTime: 40 },
+      tables: [{
+        id: 'table',
+        cleaningAction: {
+          staffId: 'janitor', startedAt: 10, accumulatedWork: 20, lastProgressAt: 20,
+        },
+      }],
+      floorDirt: [{
+        id: 'dirt',
+        cleaningAction: {
+          staffId: 'janitor', startedAt: 5, accumulatedWork: 10, lastProgressAt: 15,
+        },
+      }],
+    };
+    const tableWorker = {
+      id: 'janitor', role: 'janitor', skill: 5, morale: 50,
+      task: { type: 'clean_table', tableId: 'table' },
+    };
+    const floorWorker = {
+      id: 'janitor', role: 'janitor', skill: 5, morale: 50,
+      task: { type: 'clean_floor', dirtId: 'dirt' },
+    };
+
+    expect(getStaffTaskSource(state, tableWorker)).toMatchObject({
+      staffId: 'janitor', startedAt: 10, accumulatedWork: 20, lastProgressAt: 20,
+    });
+    expect(getStaffTaskSource(state, floorWorker)).toMatchObject({
+      staffId: 'janitor', startedAt: 5, accumulatedWork: 10, lastProgressAt: 15,
+    });
   });
 
   it('reports the same accumulated-work progress used by simulation', () => {

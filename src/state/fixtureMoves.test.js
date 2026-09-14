@@ -126,7 +126,7 @@ describe('moveFixtures', () => {
     expect(result).toBe(state);
   });
 
-  it('preserves station equipment and relocates on-counter items without changing slots', () => {
+  it('preserves station equipment and blocks moving an occupied service counter', () => {
     const state = makeState({
       tables: [],
       chairs: [],
@@ -139,16 +139,20 @@ describe('moveFixtures', () => {
       customers: [{ id: 'c1', state: 'waiting_for_items' }],
     });
 
-    const result = moveFixtures(state, [
+    const kitchenResult = moveFixtures(state, [
       { type: 'kitchenStation', id: 'k1', x: 500, y: 120 },
+    ]);
+
+    expect(kitchenResult.kitchenStations[0]).toEqual({
+      id: 'k1', equipmentId: 'eq1', x: 500, y: 120,
+    });
+    const result = moveFixtures(kitchenResult, [
       { type: 'serviceTable', id: 'st1', x: 500, y: 300 },
     ]);
 
-    expect(result.kitchenStations[0]).toEqual({
-      id: 'k1', equipmentId: 'eq1', x: 500, y: 120,
-    });
+    expect(result.serviceTables[0]).toMatchObject({ x: 140, y: 120 });
     expect(result.serviceItems[0]).toMatchObject({
-      serviceTableId: 'st1', serviceSlotIndex: 2, x: 570, y: 310,
+      serviceTableId: 'st1', serviceSlotIndex: 2, x: 210, y: 130,
     });
   });
 
@@ -375,7 +379,7 @@ describe('moveFixtures', () => {
     expect(result.customers[1]).not.toHaveProperty('navigationGoal');
   });
 
-  it('requeues washing work without retaining a moved wash station', () => {
+  it('rejects moving a wash station with assigned washing work', () => {
     const state = makeState({
       tables: [],
       chairs: [],
@@ -390,10 +394,60 @@ describe('moveFixtures', () => {
       { type: 'washStation', id: 'wash1', x: 500, y: 120 },
     ]);
 
-    expect(result.serviceItems).toEqual([
-      { id: 'i1', state: 'queued_for_wash', washStationId: null, washStartedAt: null },
-      { id: 'i2', state: 'queued_for_wash', washStationId: null, washStartedAt: null },
-    ]);
+    expect(result).toBe(state);
+  });
+
+  it.each([
+    ['queued', { id: 'i1', state: 'queued_for_wash', washStationId: 'wash1' }, []],
+    ['washing', { id: 'i1', state: 'washing', washStationId: 'wash1' }, []],
+    ['carried', { id: 'i1', state: 'carried_dirty', washStationId: 'wash1' }, [
+      { id: 'worker', role: 'waiter', carryingServiceItemIds: ['i1'] },
+    ]],
+    ['inbound reservation', null, [
+      { id: 'worker', role: 'waiter', task: {
+        type: 'transfer_dirty_item', serviceItemId: 'i1', washStationId: 'wash1',
+      } },
+    ]],
+  ])('rejects moving a wash station with %s work without requeueing it',
+    (_label, serviceItem, staff) => {
+      const state = makeState({
+        tables: [], chairs: [],
+        washStations: [{ id: 'wash1', type: 'automatic', x: 300, y: 120, w: 40, h: 40 }],
+        serviceItems: serviceItem ? [serviceItem] : [], staff,
+      });
+
+      expect(moveFixtures(state, [{ type: 'washStation', id: 'wash1', x: 500, y: 120 }]))
+        .toBe(state);
+    });
+
+  it('moves a free amenity but rejects its reserved or occupied slots atomically', () => {
+    const free = makeState({
+      tables: [], chairs: [],
+      staffAmenities: [{
+        id: 'amenity1', type: 'couch', x: 500, y: 300, rotation: 0,
+        slots: [
+          { index: 0, reservedBy: null, occupiedBy: null },
+          { index: 1, reservedBy: null, occupiedBy: null },
+        ],
+      }],
+    });
+    const moved = moveFixtures(free, [{
+      type: 'staffAmenity', id: 'amenity1', x: 600, y: 300, rotation: 1,
+    }]);
+    expect(moved.staffAmenities[0]).toMatchObject({ x: 600, y: 300, rotation: 1 });
+
+    for (const slot of [
+      { index: 0, reservedBy: 'staff-1', occupiedBy: null },
+      { index: 0, reservedBy: null, occupiedBy: 'staff-1' },
+    ]) {
+      const state = { ...free, staffAmenities: [{ ...free.staffAmenities[0], slots: [
+        slot,
+        { index: 1, reservedBy: null, occupiedBy: null },
+      ] }] };
+      expect(moveFixtures(state, [{
+        type: 'staffAmenity', id: 'amenity1', x: 600, y: 300,
+      }])).toBe(state);
+    }
   });
 
   it('cancels payment routing when a cashier moves but preserves its assigned waiter', () => {
@@ -476,7 +530,7 @@ describe('moveFixtures', () => {
       serviceItems: [
         {
           id: 'i2', kind: 'drink', menuItemId: 'water', customerId: 'c2', state: 'ordered',
-          serviceTableId: 'st1', serviceSlotIndex: 1, assignedStaffId: 'w3',
+          serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null,
         },
         { id: 'i3', kind: 'dish', customerId: 'c1', tableId: 't1', state: 'carried' },
       ],
@@ -496,7 +550,7 @@ describe('moveFixtures', () => {
     expect(result.serviceItems[1]).toMatchObject({ id: 'i3', state: 'carried' });
   });
 
-  it('rotates a service counter and repositions its on-counter items', () => {
+  it('blocks rotating a service counter with an on-counter item', () => {
     const state = makeState({
       serviceTables: [{ id: 'st1', x: 400, y: 120 }],
       serviceItems: [{
@@ -509,8 +563,26 @@ describe('moveFixtures', () => {
       { type: 'serviceTable', id: 'st1', x: 400, y: 120, rotation: 1 },
     ]);
 
-    expect(result.serviceTables[0]).toMatchObject({ rotation: 1 });
-    expect(result.serviceItems[0]).toMatchObject({ x: 410, y: 160 });
+    expect(result.serviceTables[0]).toMatchObject({ x: 400, y: 120 });
+    expect(result.serviceItems[0]).toMatchObject({ x: 180, y: 130 });
+  });
+
+  it('blocks moving a counter with cancelled waste in an occupied slot', () => {
+    const state = makeState({
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      serviceItems: [{
+        id: 'waste', kind: 'dish', serviceTableId: 'st1', serviceSlotIndex: 0,
+        state: 'to_clean', foodCancelled: true, deliveryProhibited: true,
+        cancelledAt: 100, x: 150, y: 130,
+        wasteOrigin: { state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0,
+          x: 150, y: 130 },
+      }],
+    });
+
+    const result = moveFixtures(state, [{ type: 'serviceTable', id: 'st1', x: 400, y: 120 }]);
+
+    expect(result.serviceTables[0]).toMatchObject({ x: 140, y: 120 });
+    expect(result.serviceItems[0]).toMatchObject({ x: 150, y: 130 });
   });
 
   it('invalidates routed actors when a door moves and preserves self-seating reservations', () => {

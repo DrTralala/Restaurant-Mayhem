@@ -56,4 +56,22 @@ describe('replacement navigation save boundary', () => {
     expect(await screen.findByText(/incompatible/i)).toBeInTheDocument();
     expect(screen.getByTestId('funds')).toHaveTextContent('600');
   });
+
+  it('reports a same-version malformed repository save as incompatible without replacing the current game', async () => {
+    const fresh = createInitialState();
+    loadLatestRepositoryState.mockResolvedValue({ filename: 'malformed.json', state: {
+      ...fresh,
+      staff: fresh.staff.map(worker => worker.id === 'starter-cook'
+        ? { ...worker, effectiveDuty: 'holiday' }
+        : worker),
+      restaurant: { ...fresh.restaurant, funds: 9999 },
+    } });
+    function CurrentFunds() { return <output data-testid="funds">{useGameState().restaurant.funds}</output>; }
+    render(<GameProvider><CurrentFunds /><SettingsMenu isOpen onToggle={() => {}} /></GameProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+
+    expect(await screen.findByText(/incompatible/i)).toBeInTheDocument();
+    expect(screen.getByTestId('funds')).toHaveTextContent('600');
+  });
 });

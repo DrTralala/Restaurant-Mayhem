@@ -67,14 +67,21 @@ function ReducerHarness({ current }) {
 
 function renderReducer(overrides = {}) {
   const initial = createInitialState();
+  const hasExplicitVersion = Object.prototype.hasOwnProperty.call(overrides, 'version');
   const saved = {
     ...initial,
     ...overrides,
+    // Most reducer fixtures intentionally contain partial legacy-shaped records;
+    // inject those directly instead of making them pretend to be v10 saves.
+    ...(hasExplicitVersion ? {} : { version: undefined }),
     restaurant: { ...initial.restaurant, ...(overrides.restaurant || {}) },
   };
-  localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
+  if (hasExplicitVersion) localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
   const current = {};
   render(<GameProvider><ReducerHarness current={current} /></GameProvider>);
+  if (!hasExplicitVersion) {
+    act(() => current.dispatch({ type: 'LOAD_STATE', state: saved }));
+  }
   return {
     dispatch(action) {
       act(() => current.dispatch(action));
@@ -244,6 +251,63 @@ describe('GameProvider staff actions', () => {
     expect(game.state.staff.at(-1)).toMatchObject({ role: 'janitor', salary: 120 });
   });
 
+  it('gives every hire fresh all-work duty defaults instead of accepting caller runtime state', () => {
+    const game = renderReducer({ restaurant: { funds: 300 } });
+    const forgedSchedule = Array.from({ length: 48 }, () => 'rest');
+
+    game.dispatch({
+      type: 'HIRE_STAFF',
+      staff: {
+        id: 'hired-one', name: 'June', role: 'waiter', skill: 1, morale: 80,
+        schedule: forgedSchedule, effectiveDuty: 'rest', task: { type: 'fake' },
+      },
+    });
+    game.dispatch({
+      type: 'HIRE_STAFF',
+      staff: { id: 'hired-two', name: 'Jules', role: 'waiter', skill: 1, morale: 80 },
+    });
+
+    const first = game.state.staff.find(staff => staff.id === 'hired-one');
+    const second = game.state.staff.find(staff => staff.id === 'hired-two');
+    expect(first).toMatchObject({ salary: 150, effectiveDuty: 'work', dutyPhase: 'available', task: null });
+    expect(first.schedule).toEqual(Array.from({ length: 48 }, () => 'work'));
+    expect(first.schedule).not.toBe(second.schedule);
+    first.schedule[0] = 'rest';
+    expect(second.schedule[0]).toBe('work');
+  });
+
+  it('accepts only a complete cyclic staff schedule and copies the caller array', () => {
+    const game = renderReducer();
+    const validSchedule = Array.from({ length: 48 }, (_, index) =>
+      index >= 10 && index < 24 ? 'pto' : 'work');
+
+    game.dispatch({ type: 'SET_STAFF_SCHEDULE', id: 'starter-cook', schedule: validSchedule });
+
+    const worker = game.state.staff.find(staff => staff.id === 'starter-cook');
+    expect(worker.schedule).toEqual(validSchedule);
+    expect(worker.schedule).not.toBe(validSchedule);
+    expect(worker).toMatchObject({ effectiveDuty: 'work', dutyPhase: 'available' });
+    validSchedule[0] = 'rest';
+    expect(worker.schedule[0]).toBe('work');
+  });
+
+  it('rejects invalid staff schedules atomically', () => {
+    const game = renderReducer();
+    const before = game.state;
+    const short = Array.from({ length: 47 }, () => 'work');
+    const badMode = Array.from({ length: 48 }, () => 'work');
+    badMode[0] = 'break';
+    const shortPto = Array.from({ length: 48 }, (_, index) =>
+      index < 13 ? 'pto' : 'work');
+
+    for (const schedule of [short, badMode, shortPto]) {
+      game.dispatch({ type: 'SET_STAFF_SCHEDULE', id: 'starter-cook', schedule });
+      expect(game.state).toBe(before);
+    }
+    game.dispatch({ type: 'SET_STAFF_SCHEDULE', id: 'missing', schedule: badMode });
+    expect(game.state).toBe(before);
+  });
+
   it('moves staff through the guarded reducer action without accepting an invalid destination', () => {
     const game = renderReducer();
     const before = game.state;
@@ -312,7 +376,7 @@ describe('GameProvider furniture actions', () => {
     expect(game.state.washStations[0]).toMatchObject({ x: 500, y: 300 });
     game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'washStation', id: 'wash2' }] });
     expect(game.state.washStations).toEqual([]);
-    expect(game.state.restaurant.funds).toBe(900);
+    expect(game.state.restaurant.funds).toBe(1600);
   });
 
   it('blocks a manual wash station from being sold', () => {
@@ -338,18 +402,82 @@ describe('GameProvider furniture actions', () => {
     expect(game.state.restaurant.funds).toBe(600);
   });
 
-  it.each(['queued_for_wash', 'washing'])('moves a busy automatic wash station and requeues %s work', state => {
+  it.each(['queued_for_wash', 'washing'])('rejects moving a busy automatic wash station with %s work', state => {
     const game = renderReducer({
       washStations: [{ id: 'wash2', type: 'automatic', x: 300, y: 120, w: 40, h: 40 }],
       serviceItems: [{ id: 'dirty', washStationId: 'wash2', washStartedAt: 10, state }],
     });
+    const before = game.state;
 
     game.dispatch({ type: 'MOVE_WASH_STATION', id: 'wash2', x: 500, y: 300 });
 
-    expect(game.state.washStations[0]).toMatchObject({ x: 500, y: 300 });
-    expect(game.state.serviceItems[0]).toMatchObject({
-      state: 'queued_for_wash', washStationId: null, washStartedAt: null,
+    expect(game.state).toBe(before);
+  });
+
+  it.each([
+    ['couch', 400, [
+      { index: 0, reservedBy: null, occupiedBy: null },
+      { index: 1, reservedBy: null, occupiedBy: null },
+    ]],
+    ['arcade', 800, [{ index: 0, reservedBy: null, occupiedBy: null }]],
+    ['bed', 500, [{ index: 0, reservedBy: null, occupiedBy: null }]],
+  ])('sells an idle %s at its canonical half-price refund', (type, price, slots) => {
+    const amenity = { id: 'amenity1', type, x: 500, y: 300, rotation: 0, slots };
+    const game = renderReducer({ restaurant: { funds: 600 }, staffAmenities: [amenity] });
+
+    game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'staffAmenity', id: 'amenity1' }] });
+
+    expect(game.state.restaurant.funds).toBe(600 + Math.round(price * 0.5));
+    expect(game.state.staffAmenities).toEqual([]);
+  });
+
+  it('rejects a sale batch atomically when any selected fixture is protected or stale', () => {
+    const staff = createInitialState().staff.map(worker => worker.id === 'starter-cook'
+      ? {
+          ...worker,
+          amenityUse: { amenityId: 'amenity1', slotIndex: 0, phase: 'reserved' },
+        }
+      : worker);
+    const game = renderReducer({
+      restaurant: { funds: 600 },
+      staff,
+      washStations: [{ id: 'auto', type: 'automatic', level: 1, x: 500, y: 120 }],
+      staffAmenities: [{
+        id: 'amenity1', type: 'couch', x: 500, y: 300, rotation: 0,
+        slots: [
+          { index: 0, reservedBy: 'starter-cook', occupiedBy: null },
+          { index: 1, reservedBy: null, occupiedBy: null },
+        ],
+      }],
+      serviceItems: [{ id: 'dirty', state: 'queued_for_wash', washStationId: 'auto' }],
     });
+    const before = game.state;
+
+    game.dispatch({ type: 'SELL_ITEMS', items: [
+      { type: 'washStation', id: 'auto' },
+      { type: 'staffAmenity', id: 'amenity1' },
+    ] });
+    expect(game.state).toBe(before);
+
+    game.dispatch({ type: 'SELL_ITEMS', items: [
+      { type: 'staffAmenity', id: 'amenity1' },
+      { type: 'staffAmenity', id: 'missing' },
+    ] });
+    expect(game.state).toBe(before);
+  });
+
+  it('protects occupied furniture from direct deletion actions', () => {
+    const game = renderReducer({
+      tables: [{ id: 'table', seats: 1, status: 'occupied', x: 500, y: 300 }],
+      chairs: [{ id: 'chair', tableId: 'table', x: 510, y: 280, rotation: 2 }],
+      customers: [{ id: 'customer', tableId: 'table', chairId: 'chair', state: 'eating' }],
+    });
+    const before = game.state;
+
+    game.dispatch({ type: 'DELETE_TABLE', id: 'table' });
+    expect(game.state).toBe(before);
+    game.dispatch({ type: 'DELETE_CHAIR', id: 'chair' });
+    expect(game.state).toBe(before);
   });
 
   it('buys an additional door and deducts its item price', () => {
@@ -370,6 +498,44 @@ describe('GameProvider furniture actions', () => {
     game.dispatch({ type: 'SET_DOOR_ROLE', id: 'door1', role: 'exit' });
     expect(game.state.doors.find(door => door.id === 'door1')).toMatchObject({ role: 'exit' });
   });
+
+  it('protects doors referenced by active admissions and leavers from sale', () => {
+    const game = renderReducer({
+      doors: [
+        { id: 'door1', y: 340, role: 'entrance' },
+        { id: 'door2', y: 440, role: 'exit' },
+      ],
+      customers: [
+        { id: 'entering', state: 'entering', entryDoorId: 'door1', x: 973, y: 340 },
+        { id: 'leaving', state: 'leaving', exitPhase: 'to_door', exitDoorId: 'door2', x: 960, y: 460 },
+      ],
+      queueAdmissionGate: { partyId: 'party', customerIds: ['entering'], tableId: 't1', doorId: 'door1' },
+      doorAdmissions: {
+        nextSequence: 2,
+        requests: { leaving: { doorId: 'door2', sequence: 1 } },
+      },
+    });
+
+    const before = game.state;
+    game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'door', id: 'door1' }] });
+    expect(game.state).toBe(before);
+    game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'door', id: 'door2' }] });
+    expect(game.state).toBe(before);
+  });
+
+  it('allows a door sale when only a stale entry reference remains on a seated customer', () => {
+    const game = renderReducer({
+      doors: [
+        { id: 'door1', y: 340, role: 'entrance' },
+        { id: 'door2', y: 440, role: 'exit' },
+      ],
+      customers: [{ id: 'seated', state: 'seated', entryDoorId: 'door1', x: 220, y: 190 }],
+    });
+
+    game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'door', id: 'door1' }] });
+
+    expect(game.state.doors).toEqual([{ id: 'door2', y: 440, role: 'exit' }]);
+  });
 });
 
 describe('GameProvider authoritative placement actions', () => {
@@ -378,11 +544,12 @@ describe('GameProvider authoritative placement actions', () => {
   const authoritativePlacementCases = [
     {
       itemType: 'automaticDishwasher',
-      cost: 600,
+      cost: 2000,
+      overrides: { restaurant: { funds: 2500 } },
       action: { x: 500, y: 300, rotation: 0, cost: 1 },
       assertPlacement(state) {
         expect(state.washStations).toContainEqual(expect.objectContaining({
-          id: 'wash2', type: 'automatic', x: 500, y: 300, w: 40, h: 40,
+          id: 'wash2', type: 'automatic', level: 1, x: 500, y: 300, w: 40, h: 40,
         }));
       },
     },
@@ -449,10 +616,86 @@ describe('GameProvider authoritative placement actions', () => {
 
       game.dispatch({ type: 'PLACE_ITEM', itemType, ...action });
 
-      expect(game.state.restaurant.funds).toBe(600 - cost);
+    expect(game.state.restaurant.funds).toBe((overrides?.restaurant?.funds ?? 600) - cost);
       assertPlacement(game.state);
     });
   }
+
+  it.each([
+    ['couch', 400, 600, 300, 1],
+    ['arcade', 800, 700, 300, 2],
+    ['bed', 500, 600, 400, 3],
+  ])('places a %s with canonical pricing, rotation and empty slots',
+    (itemType, price, x, y, rotation) => {
+      const game = renderReducer({
+        restaurant: { funds: price },
+        tables: [], chairs: [], kitchenStations: [], serviceTables: [],
+        cashierStations: [], washStations: [], staffAmenities: [],
+      });
+
+      game.dispatch({ type: 'PLACE_ITEM', itemType, x, y, rotation, cost: 1 });
+
+      expect(game.state.restaurant.funds).toBe(0);
+      expect(game.state.staffAmenities).toContainEqual({
+        id: 'amenity1', type: itemType, x, y, rotation,
+        slots: itemType === 'couch'
+          ? [
+            { index: 0, reservedBy: null, occupiedBy: null },
+            { index: 1, reservedBy: null, occupiedBy: null },
+          ]
+          : [{ index: 0, reservedBy: null, occupiedBy: null }],
+      });
+    });
+
+  it('upgrades an automatic dishwasher at its authoritative cost after settling its old rate', () => {
+    const game = renderReducer({
+      restaurant: { funds: 100, gameTime: 100 },
+      washStations: [{ id: 'auto', type: 'automatic', level: 1, x: 500, y: 120, w: 40, h: 40 }],
+      serviceItems: [{
+        id: 'dirty', state: 'washing', washStationId: 'auto', washStartedAt: 0,
+        accumulatedWork: 0, lastProgressAt: 0,
+      }],
+    });
+
+    game.dispatch({ type: 'UPGRADE_DISHWASHER', id: 'auto', cost: 1 });
+
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.washStations[0]).toMatchObject({ id: 'auto', level: 2 });
+    expect(game.state.serviceItems[0]).toMatchObject({
+      state: 'washing', washStationId: 'auto', accumulatedWork: 100, lastProgressAt: 100,
+    });
+  });
+
+  it('rejects invalid, stale, manual, capped and repeated dishwasher upgrades atomically', () => {
+    const invalidCases = [
+      { id: 'missing', station: null, funds: 100 },
+      { id: 'manual', station: { id: 'manual', type: 'manual', x: 500, y: 120 }, funds: 100 },
+      { id: 'max', station: { id: 'max', type: 'automatic', level: 10, x: 500, y: 120 }, funds: 100_000 },
+      { id: 'fractional', station: { id: 'fractional', type: 'automatic', level: 1.5, x: 500, y: 120 }, funds: 100 },
+      { id: 'poor', station: { id: 'poor', type: 'automatic', level: 1, x: 500, y: 120 }, funds: 99 },
+    ];
+
+    for (const { id, station, funds } of invalidCases) {
+      const game = renderReducer({
+        restaurant: { funds }, washStations: station ? [station] : [], serviceItems: [],
+      });
+      const before = game.state;
+      game.dispatch({ type: 'UPGRADE_DISHWASHER', id, cost: -1000 });
+      expect(game.state).toBe(before);
+    }
+
+    const repeated = renderReducer({
+      restaurant: { funds: 100 },
+      washStations: [{ id: 'auto', type: 'automatic', level: 1, x: 500, y: 120 }],
+      serviceItems: [],
+    });
+    repeated.dispatch({ type: 'UPGRADE_DISHWASHER', id: 'auto', cost: 0 });
+    const afterFirst = repeated.state;
+    repeated.dispatch({ type: 'UPGRADE_DISHWASHER', id: 'auto', cost: 0 });
+    expect(repeated.state).toBe(afterFirst);
+    expect(repeated.state.restaurant.funds).toBe(0);
+    expect(repeated.state.washStations[0].level).toBe(2);
+  });
 
   it('rejects an overlapping placement without charging funds or adding the item', () => {
     const game = renderReducer({ restaurant: { funds: 300 } });
@@ -579,6 +822,33 @@ describe('GameProvider authoritative placement actions', () => {
     ]);
   });
 
+  it('forces a sleeping amenity release when firing without granting a recovery reward', () => {
+    const game = renderReducer({
+      restaurant: { gameTime: 100 },
+      staff: [{
+        id: 'sleeper', name: 'Pia', role: 'waiter', skill: 1, morale: 42, salary: 150,
+        x: 610, y: 520, effectiveDuty: 'pto', dutyPhase: 'active',
+        ptoSession: { sleepStartedAt: 100, minimumEndAt: 25_300, startingMorale: 42 },
+        amenityUse: {
+          amenityId: 'bed', slotIndex: 0, phase: 'occupied', activityStartedAt: 100,
+          activityEndsAt: 25_300, lastRecoveryAt: 100,
+        },
+      }],
+      cashierStations: [],
+      staffAmenities: [{
+        id: 'bed', type: 'bed', x: 600, y: 500, rotation: 0,
+        slots: [{ index: 0, reservedBy: null, occupiedBy: 'sleeper' }],
+      }],
+    });
+
+    game.dispatch({ type: 'FIRE_STAFF', id: 'sleeper' });
+
+    expect(game.state.staff).toEqual([]);
+    expect(game.state.staffAmenities[0].slots[0]).toEqual({
+      index: 0, reservedBy: null, occupiedBy: null,
+    });
+  });
+
   it('releases every member of a cooking batch when firing its cook', () => {
     const game = renderReducer({
       staff: [{ id: 'batch-cook', role: 'cook', skill: 5, morale: 80, x: 200, y: 200 }],
@@ -609,7 +879,7 @@ describe('GameProvider authoritative placement actions', () => {
     expect(game.state.cookingBatches).toEqual([]);
     expect(game.state.serviceItems).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'i1', state: 'ordered', assignedStaffId: null }),
-      expect.objectContaining({ id: 'i2', state: 'ordered', assignedStaffId: null }),
+      expect.objectContaining({ id: 'i2', state: 'ready', assignedStaffId: null }),
     ]));
     expect(game.state.serviceItems.find(item => item.id === 'i1')).not.toHaveProperty('batchId');
     expect(game.state.serviceItems.find(item => item.id === 'i2')).not.toHaveProperty('batchId');
@@ -878,6 +1148,61 @@ describe('GameProvider guarded economy actions', () => {
       .toMatchObject({ skill: 4, morale: 90 });
   });
 
+  it('settles target-owned work before training changes the worker rate', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      restaurant: { funds: 620, gameTime: 100 },
+      staff: initial.staff.map(staff => staff.id === 'starter-cook'
+        ? {
+          ...staff,
+          task: { type: 'clean_table', tableId: 't1', cleaningStartedAt: 0 },
+        }
+        : staff),
+      tables: initial.tables.map(table => table.id === 't1'
+        ? {
+          ...table,
+          status: 'dirty',
+          cleaningAction: {
+            staffId: 'starter-cook', startedAt: 0, cleaningStartedAt: 0,
+            accumulatedWork: 0, lastProgressAt: 0,
+          },
+        }
+        : table),
+    });
+
+    game.dispatch({ type: 'TRAIN_STAFF', id: 'starter-cook', cost: 1 });
+
+    expect(game.state.staff.find(staff => staff.id === 'starter-cook'))
+      .toMatchObject({ skill: 4, morale: 90 });
+    expect(game.state.tables.find(table => table.id === 't1').cleaningAction)
+      .toMatchObject({ staffId: 'starter-cook', accumulatedWork: 130, lastProgressAt: 100 });
+  });
+
+  it('settles service-item work before a bonus changes the worker rate', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      restaurant: { funds: 50, gameTime: 100 },
+      washStations: [{ id: 'wash1', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],
+      staff: initial.staff.map(staff => staff.id === 'starter-janitor'
+        ? {
+          ...staff,
+          task: { type: 'wash_item', serviceItemId: 'dirty', washStationId: 'wash1', washingStartedAt: 0 },
+        }
+        : staff),
+      serviceItems: [{
+        id: 'dirty', kind: 'dish', state: 'washing', washStationId: 'wash1',
+        assignedStaffId: 'starter-janitor', washStartedAt: 0,
+        accumulatedWork: 0, lastProgressAt: 0,
+      }],
+    });
+
+    game.dispatch({ type: 'GIVE_BONUS', id: 'starter-janitor' });
+
+    expect(game.state.serviceItems[0]).toMatchObject({ accumulatedWork: 130, lastProgressAt: 100 });
+    expect(game.state.staff.find(staff => staff.id === 'starter-janitor').task)
+      .toMatchObject({ accumulatedWork: 130, lastProgressAt: 100 });
+  });
+
   it('caps trained skill and morale without discarding an existing load', () => {
     const training = renderReducer({
       restaurant: { funds: 17600 },
@@ -1103,6 +1428,46 @@ describe('GameProvider service counter actions', () => {
     });
     game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
     expect(game.state.serviceTables).toHaveLength(1);
+  });
+
+  it('blocks deletion for a cancelled physical counter occupant', () => {
+    const game = renderReducer({
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      serviceItems: [{
+        id: 'waste', kind: 'dish', serviceTableId: 'st1', serviceSlotIndex: 0,
+        state: 'to_clean', foodCancelled: true, deliveryProhibited: true,
+        cancelledAt: 100, x: 150, y: 130,
+        wasteOrigin: { state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0,
+          x: 150, y: 130 },
+      }],
+    });
+
+    game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
+
+    expect(game.state.serviceTables).toEqual([{ id: 'st1', x: 140, y: 120 }]);
+  });
+
+  it('blocks deletion for a cook-carried dish reserved for a counter slot', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      staff: [
+        ...initial.staff.filter(worker => worker.id !== 'starter-cook'),
+        {
+          ...initial.staff.find(worker => worker.id === 'starter-cook'),
+          id: 'cook', x: 220, y: 220, carryingServiceItemIds: ['carried-dish'],
+        },
+      ],
+      serviceItems: [{
+        id: 'carried-dish', kind: 'dish', serviceTableId: 'st1', serviceSlotIndex: 0,
+        state: 'carried', assignedStaffId: 'cook', customerId: 'c1', x: 220, y: 220,
+      }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast' }],
+    });
+
+    game.dispatch({ type: 'DELETE_SERVICE_TABLE', id: 'st1' });
+
+    expect(game.state.serviceTables).toEqual([{ id: 'st1', x: 140, y: 120 }]);
   });
 
   it('allows deletion for a malformed drink reservation', () => {

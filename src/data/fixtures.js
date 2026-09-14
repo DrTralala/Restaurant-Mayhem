@@ -1,5 +1,5 @@
 import { getRestaurantWorld } from '../simulation/world';
-import { getPlaceableDimensions } from './placeables';
+import { getPlaceable, getPlaceableDimensions } from './placeables';
 
 export const FIXTURE_TYPES = {
   table: { collection: 'tables', width: 40, height: 40, placementType: 'table', label: () => 'Dining table' },
@@ -19,6 +19,11 @@ export const FIXTURE_TYPES = {
       : 'Kitchen station',
   },
   washStation: { collection: 'washStations', width: 40, height: 40, placementType: data => data.type === 'automatic' ? 'automaticDishwasher' : 'manualSink', label: (_state, data) => data.type === 'automatic' ? 'Automatic dishwasher' : 'Sink' },
+  staffAmenity: {
+    collection: 'staffAmenities', width: 20, height: 20,
+    placementType: data => data.type,
+    label: (_state, data) => getPlaceable(data.type)?.label || 'Staff amenity',
+  },
 };
 
 export function getFixtureDescriptor(type) {
@@ -59,12 +64,18 @@ export function getFixtureRect(state, fixture) {
       w: Number.isFinite(data.w) ? data.w : descriptor.width,
       h: Number.isFinite(data.h) ? data.h : descriptor.height,
     }
-    : fixture.type === 'serviceTable'
-      ? (() => {
-        const footprint = getPlaceableDimensions('serviceTable', data.rotation);
-        return { w: footprint.width, h: footprint.height };
-      })()
-      : { w: descriptor.width, h: descriptor.height };
+      : fixture.type === 'serviceTable'
+        ? (() => {
+          const footprint = getPlaceableDimensions('serviceTable', data.rotation);
+          return { w: footprint.width, h: footprint.height };
+        })()
+        : fixture.type === 'staffAmenity'
+          ? (() => {
+            const footprint = getPlaceableDimensions(data.type, data.rotation);
+            return footprint ? { w: footprint.width, h: footprint.height } : null;
+          })()
+        : { w: descriptor.width, h: descriptor.height };
+  if (!dimensions) return null;
   const world = getRestaurantWorld(state?.restaurant || {});
 
   return {

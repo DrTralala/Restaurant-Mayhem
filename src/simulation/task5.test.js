@@ -50,7 +50,7 @@ function arrivedDirtyPickupState(skill) {
     })),
     staff: [{
       id: 'waiter',
-      role: 'waiter',
+      role: 'janitor',
       skill,
       morale: 80,
       x: 180,
@@ -72,7 +72,7 @@ function carriedDirtyState({ stationItems = [], stations, workerOverrides = {}, 
     ],
     staff: [{
       id: 'waiter',
-      role: 'waiter',
+      role: 'janitor',
       skill: 10,
       morale: 80,
       x: 180,
@@ -254,22 +254,22 @@ describe('Task 5 dirty dishes and washing', () => {
       .toBe('carried_dirty');
   });
 
-  it('uses 600 game seconds for automatic washing and ignores morale', () => {
-    expect(ACTIVITY_DURATIONS.automaticWash).toBe(600);
+  it('uses 300 game seconds for automatic washing and ignores morale', () => {
+    expect(ACTIVITY_DURATIONS.manualWash).toBe(300);
     const station = { id: 'auto', type: 'automatic', x: 200, y: 200, w: 40, h: 40 };
     const item = { id: 'dirty', state: 'washing', washStationId: 'auto', washStartedAt: 0 };
-    const at599 = updateAutomaticDishwashers(makeState({
-      restaurant: { gameTime: 599 }, washStations: [station], serviceItems: [item],
+    const at299 = updateAutomaticDishwashers(makeState({
+      restaurant: { gameTime: 299 }, washStations: [station], serviceItems: [item],
       staff: [{ id: 'waiter', role: 'waiter', morale: 0 }],
     }));
-    const at600 = updateAutomaticDishwashers({
-      ...at599,
-      restaurant: { gameTime: 600 },
+    const at300 = updateAutomaticDishwashers({
+      ...at299,
+      restaurant: { gameTime: 300 },
       staff: [{ id: 'waiter', role: 'waiter', morale: 100 }],
     });
 
-    expect(at599.serviceItems).toHaveLength(1);
-    expect(at600.serviceItems).toEqual([]);
+    expect(at299.serviceItems).toHaveLength(1);
+    expect(at300.serviceItems).toEqual([]);
   });
 
   it('keeps manual washing morale-adjusted from its 300-work baseline', () => {
@@ -352,8 +352,8 @@ describe('Task 5 dirty dishes and washing', () => {
   it('accepts a legacy scalar dirty carrier during save recovery without mixing', () => {
     const fresh = createInitialState();
     const legacyWorker = {
-      ...fresh.staff.find(worker => worker.role === 'waiter'),
-      id: 'legacy-waiter',
+      ...fresh.staff.find(worker => worker.role === 'janitor'),
+      id: 'legacy-janitor',
       skill: 10,
       carryingServiceItemId: 'dirty',
     };

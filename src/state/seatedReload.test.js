@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInitialState } from './initialState';
 import { hydrateState, loadState, saveState } from './persistence';
+import { movementSaveSnapshot } from './movementPersistence';
 import { saveRepositoryState } from './repositorySaves';
 import { moveFixtures } from './fixtureMoves';
 import { runTick } from '../simulation/gameLoop';
@@ -11,6 +12,7 @@ import { createMovementCoordinator, getCharacterMovementStatus } from '../simula
 import { cellKey, worldToCell } from '../simulation/movement/navigationWorkspace';
 import { createCustomerOrder } from '../simulation/serviceItems';
 import { advanceConsumption } from '../simulation/consumption';
+import { createStaffDutyDefaults } from '../simulation/staffSchedules';
 
 afterEach(() => vi.restoreAllMocks());
 const point = actor => ({ x: actor.x, y: actor.y });
@@ -43,7 +45,10 @@ function checkout(state) {
   return { ...state,
     customers: [enterCheckout(state.customers[0], state.restaurant.gameTime)],
     cashierStations: [{ id: 'cashier', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier-waiter' }],
-    staff: [...state.staff, { id: 'cashier-waiter', role: 'waiter', x: 840, y: 100, task: null }],
+    staff: [...state.staff, {
+      id: 'cashier-waiter', role: 'waiter', x: 840, y: 100, task: null,
+      ...createStaffDutyDefaults(),
+    }],
   };
 }
 const advance = state => updateCustomers(state, { gameDt: 0, movementDt: 0.1 });
@@ -134,7 +139,7 @@ describe('durable domain seated residency', () => {
     // Assert genuine evidence before corruption; fabricated test-only authority cannot make this pass.
     expect(saved.customers[0].seatResidency).toBeTruthy();
     const actor = saved.customers[0];
-    if (variant === 'chair') saved.chairs[0].x += 1;
+    if (variant === 'chair') saved.chairs[0].x += 0.25;
     if (variant === 'table') saved.tables[0].x += 1;
     if (variant === 'generation') actor.seatingGeneration += 1;
     if (variant === 'actor') actor.id = 'reused-id';
@@ -171,7 +176,7 @@ describe('durable domain seated residency', () => {
 
   it('does not erase runtime revocation on save after a same-raster edit and stationary pause', () => {
     let state = partial();
-    state.chairs[0] = { ...state.chairs[0], x: 181 };
+    state.chairs[0] = { ...state.chairs[0], x: 180.25 };
     state = advance(state);
     expect(state.customers[0].seatResidency.phase).toBe('revoked');
     state.chairs[0] = { ...state.chairs[0], x: 180 };
@@ -210,21 +215,17 @@ describe('durable domain seated residency', () => {
     for (let tick = 0; tick < 6; tick++) state = advance(state);
     expect(state.customers[0].seatResidency.phase).toBe('clear');
     state = reload(state);
-    state.chairs[0] = { ...state.chairs[0], x: 181 };
+    state.chairs[0] = { ...state.chairs[0], x: 180.25 };
     state = advance(advance(state));
     expect(state.customers[0].seatResidency.phase).toBe('clear');
     const saved = reload(state);
     expect(saved.customers[0].seatResidency.phase).toBe('clear');
   });
 
-  it('rejects an unrelated fixture covering the original occupied source on reload', () => {
+  it('rejects an unrelated fixture overlapping the original occupied source before reload', () => {
     let state = partial();
-    const before = point(state.customers[0]);
     state.serviceTables = [{ id: 'foreign', x: 180, y: 200 }];
-    state = advance(reload(state));
-    expect(point(state.customers[0])).toEqual(before);
-    expect(state.customers[0].seatResidency.phase).toBe('revoked');
-    expect(state.movementCoordinator.statuses.get('departure').plan).toBe('unreachable');
+    expect(() => movementSaveSnapshot(state)).toThrow('Invalid saved navigation geometry');
   });
 
   it('survives repeated partial-connector replans and reloads without mutating previous plans or connector geometry', () => {

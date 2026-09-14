@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import {
   buildBlockedCells,
   createNavigationWorkspace,
+  navigationFixtureRectangles,
   isSafeSegment,
   isSafeWorldSegment,
   resolveNavigationBounds,
@@ -107,4 +108,39 @@ it('clips world movement and reuses the blocked lookup for static segments', () 
 it('no longer exports the removed world-segment clamp helper', async () => {
   const namespace = await import('./navigationWorkspace');
   expect('furthestWorldSegmentEndpoint' in namespace).toBe(false);
+});
+
+it('includes rotated staff-amenity footprints in the live collision workspace', () => {
+  const state = {
+    ...openState(),
+    staffAmenities: [{
+      id: 'couch-rotated', type: 'couch', x: 400, y: 300, rotation: 1,
+      slots: [{ index: 0, reservedBy: null, occupiedBy: null },
+        { index: 1, reservedBy: null, occupiedBy: null }],
+    }],
+  };
+
+  expect(navigationFixtureRectangles(state)).toContainEqual({
+    kind: 'staffAmenity', id: 'couch-rotated', x: 400, y: 300, w: 20, h: 40,
+  });
+  const workspace = createNavigationWorkspace(state);
+  expect(workspace.blockedCells.has('20,15')).toBe(true);
+  expect(workspace.blockedCells.has('20,16')).toBe(true);
+  expect(workspace.blockedCells.has('19,15')).toBe(false);
+});
+
+it('keeps staff-amenity collision authoritative for real movement segments', () => {
+  const state = {
+    ...openState(),
+    staffAmenities: [{
+      id: 'arcade', type: 'arcade', x: 400, y: 300, rotation: 0,
+      slots: [{ index: 0, reservedBy: null, occupiedBy: null }],
+    }],
+  };
+  const workspace = createNavigationWorkspace(state);
+
+  expect(isSafeSegment(state, { x: 380, y: 310 }, { x: 440, y: 310 }, { workspace }))
+    .toBe(false);
+  expect(isSafeSegment(state, { x: 380, y: 350 }, { x: 440, y: 350 }, { workspace }))
+    .toBe(true);
 });

@@ -7,7 +7,37 @@ const staff = {
   skill: 3, task: { type: 'take_order' },
 };
 
+const allWork = () => Array.from({ length: 48 }, () => 'work');
+
 describe('StaffDetailsPanel', () => {
+  it('shows effective and requested duty, handoff status, and authoritative timers', () => {
+    const schedule = allWork();
+    schedule[20] = 'rest';
+    render(
+      <StaffDetailsPanel
+        staff={{
+          ...staff,
+          schedule,
+          effectiveDuty: 'work',
+          dutyPhase: 'finishing_task',
+          task: { type: 'deliver_service_item' },
+          ptoSession: { minimumEndAt: 50_400 },
+          amenityUse: { activityEndsAt: 39_600 },
+        }}
+        gameTime={36_000}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const status = screen.getByTestId('staff-detail-status-s1');
+    expect(status).toHaveTextContent(/Effective duty: Work/);
+    expect(status).toHaveTextContent(/Requested duty: Rest/);
+    expect(status).toHaveTextContent(/finishing delivery/i);
+    expect(status).toHaveTextContent(/PTO minimum ends at 14:00/);
+    expect(status).toHaveTextContent(/Activity ends at 11:00/);
+  });
+
   it('shows rounded morale and staff details', () => {
     render(<StaffDetailsPanel staff={staff} dispatch={vi.fn()} onClose={vi.fn()} />);
 
@@ -56,8 +86,9 @@ describe('StaffDetailsPanel', () => {
       />,
     );
 
-    expect(screen.getByText('Available').parentElement)
-      .toHaveTextContent('Current task: Available');
+    expect(screen.getAllByText('Available').some(element => element.parentElement?.textContent === 'Current task: Available'))
+      .toBe(true);
+    expect(screen.getByTestId('staff-detail-status-s1')).toHaveTextContent('Effective duty: Work');
     expect(screen.queryByText('Staffing cashier')).not.toBeInTheDocument();
   });
 

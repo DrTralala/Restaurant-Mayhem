@@ -184,6 +184,21 @@ describe('spawnCustomers', () => {
     expect(result.queue[0].members[0]).toMatchObject({ dishId: null, drinkId: null });
   });
 
+  it('initialises the terminal food lifecycle fields before an order exists', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const result = spawnCustomers(baseState, 1);
+
+    expect(result.queue[0].members[0]).toMatchObject({
+      foodOrderedAt: null,
+      foodPatienceBudget: null,
+      foodDeadlineAt: null,
+      foodOutcome: null,
+      foodCancelledAt: null,
+      cancelledServiceItemIds: [],
+    });
+  });
+
   it('spawns couples as linked customers who queue together', () => {
     vi.spyOn(Math, 'random')
       .mockReturnValueOnce(0)
@@ -816,6 +831,24 @@ describe('stable fading goals', () => {
 });
 
 describe('customer lifecycle', () => {
+  it('expires food before staff can receive the same-timestamp delivery claim', () => {
+    const customer = {
+      id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: 'd1',
+      foodOrderedAt: 0, foodPatienceBudget: 100, foodDeadlineAt: 100,
+      foodOutcome: 'pending', patienceMax: 100, cancelledServiceItemIds: [],
+    };
+    const state = movementState({
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      customers: [customer],
+      serviceItems: [{ id: 'food', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'ordered' }],
+    });
+
+    const result = prepareCustomersForMovement(state, 0);
+
+    expect(result.customers[0].foodOutcome).toBe('cancelled');
+    expect(result.serviceItems).toEqual([]);
+  });
+
   it('prepares without draining indoor patience and without moving customer coordinates', () => {
     const state = movementState({
       customers: [{ id: 'c1', state: 'waiting', patience: 10, happiness: 50, x: 400, y: 300 }],

@@ -21,16 +21,50 @@ describe('ItemsPanel', () => {
     expect(screen.getByText('Cashier')).toBeInTheDocument();
   });
 
-  it('offers the automatic dishwasher at $600 with its catalogue description', () => {
+  it('offers the automatic dishwasher at $2000 with its level and capacity description', () => {
     useGameState.mockReturnValue({ restaurant: { funds: 1000 } });
     useDispatch.mockReturnValue(vi.fn());
 
     render(<ItemsPanel onStartPlacement={vi.fn()} />);
 
     expect(screen.getByText('Automatic dishwasher')).toBeInTheDocument();
-    expect(screen.getByText('$600')).toBeInTheDocument();
-    expect(screen.getByText('Washes queued dishes automatically in three in-game minutes.'))
+    expect(screen.getByText('$2000')).toBeInTheDocument();
+    expect(screen.getByText(/10 levels.*300 seconds.*12 items/i))
       .toBeInTheDocument();
+  });
+
+  it('offers the couch, arcade, and bed with their staff wellbeing policies', () => {
+    useGameState.mockReturnValue({ restaurant: { funds: 3000 } });
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<ItemsPanel onStartPlacement={vi.fn()} />);
+
+    expect(screen.getByText('Couch')).toBeInTheDocument();
+    expect(screen.getByText(/Two staff seats.*15 minutes.*\+6 morale per hour/i)).toBeInTheDocument();
+    expect(screen.getByText('Arcade')).toBeInTheDocument();
+    expect(screen.getByText(/One staff seat.*10 minutes.*\+8 morale per hour/i)).toBeInTheDocument();
+    expect(screen.getByText('Bed')).toBeInTheDocument();
+    expect(screen.getByText(/minimum 7 in-game hours.*full morale.*24 hours of reduced drain/i))
+      .toBeInTheDocument();
+  });
+
+  it('starts placement for each staff amenity without charging immediately', () => {
+    const startPlacement = vi.fn();
+    useGameState.mockReturnValue({ restaurant: { funds: 3000 } });
+    useDispatch.mockReturnValue(vi.fn());
+    render(<ItemsPanel onStartPlacement={startPlacement} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Buy Couch ($400)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Buy Arcade ($800)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Buy Bed ($500)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Buy Automatic dishwasher ($2000)' }));
+
+    expect(startPlacement.mock.calls).toEqual([
+      ['couch'],
+      ['arcade'],
+      ['bed'],
+      ['automaticDishwasher'],
+    ]);
   });
 
   it('starts chair placement without charging immediately', () => {

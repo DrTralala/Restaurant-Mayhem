@@ -228,6 +228,50 @@ describe('processKitchen', () => {
     expect(result.serviceItems).toEqual(items);
   });
 
+  it('does not complete a food preparation at its deadline', () => {
+    const customer = {
+      id: 'c1', state: 'waiting_for_items', dishId: 'toast', patienceMax: 100,
+      foodOrderedAt: 0, foodPatienceBudget: 100, foodDeadlineAt: 100,
+      foodOutcome: 'pending', cancelledServiceItemIds: [],
+    };
+    const result = processKitchen({
+      ...baseState,
+      restaurant: { gameTime: 100 },
+      customers: [customer],
+      serviceItems: [{
+        id: 'dish', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+        state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+        preparationStartedAt: 0,
+      }],
+      dishes: [{ id: 'toast', prepTime: 60 }],
+      kitchenStations: [{ id: 'k1' }],
+      staff: [{ id: 'cook1', role: 'cook', morale: 100,
+        task: { type: 'prepare_dish', serviceItemId: 'dish', stationId: 'k1' } }],
+    });
+
+    expect(result.customers[0].foodOutcome).toBe('cancelled');
+    expect(result.serviceItems).toEqual([]);
+    expect(result.staff[0].task).toBeNull();
+  });
+
+  it('marks food delivered rather than cancelling when the dish was already delivered', () => {
+    const result = processKitchen({
+      ...baseState,
+      restaurant: { gameTime: 100 },
+      customers: [{
+        id: 'c1', state: 'waiting_for_items', dishId: 'toast', patienceMax: 100,
+        foodOrderedAt: 0, foodPatienceBudget: 100, foodDeadlineAt: 100,
+        foodOutcome: 'pending', cancelledServiceItemIds: [],
+      }],
+      serviceItems: [{
+        id: 'dish', kind: 'dish', menuItemId: 'toast', customerId: 'c1', state: 'delivered',
+      }],
+    });
+
+    expect(result.customers[0].foodOutcome).toBe('delivered');
+    expect(result.serviceItems[0].state).toBe('delivered');
+  });
+
   it('does not automatically transfer ready dishes to service-counter slots', () => {
     const result = processKitchen({
       ...baseState,

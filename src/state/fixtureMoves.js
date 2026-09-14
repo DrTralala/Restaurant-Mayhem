@@ -1,11 +1,13 @@
 import { getFixture, getFixtureDescriptor } from '../data/fixtures';
 import { validateFixtureMoves } from '../simulation/placement';
 import {
+  getOccupiedServiceSlotKeys,
   getServiceSlotPosition,
   normaliseServiceItemOwnership,
 } from '../simulation/serviceItems';
 import { recoverCookingBatches } from '../simulation/cookingBatches';
 import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout';
+import { getWashStationOccupancy, isWashStationBusy } from '../simulation/dishwashing';
 import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
 import { createNavigationWorkspace } from '../simulation/movement/navigationWorkspace';
 import { reconcileFixtureResidencies } from '../simulation/movement/seatedDeparture';
@@ -106,9 +108,26 @@ function taskIsAffected(task, affected) {
     || intersectsIds(task.customerIds, affected.customerIds);
 }
 
+function hasProtectedWashStationMove(state, moves) {
+  return moves.some(move => {
+    if (move?.type !== 'washStation') return false;
+    const station = (state.washStations || []).find(candidate => candidate.id === move.id);
+    return station && (getWashStationOccupancy(state, station) > 0
+      || isWashStationBusy(state, station));
+  });
+}
+
+function hasProtectedServiceTableMove(state, moves) {
+  const occupiedSlots = getOccupiedServiceSlotKeys(state);
+  return moves.some(move => move?.type === 'serviceTable'
+    && [...occupiedSlots].some(key => key.startsWith(`${String(move.id)}:`)));
+}
+
 export function moveFixtures(state, requestedMoves) {
   const expandedMoves = expandFixtureMoves(state, requestedMoves);
   if (!expandedMoves || expandedMoves.length === 0) return state;
+  if (hasProtectedWashStationMove(state, expandedMoves)) return state;
+  if (hasProtectedServiceTableMove(state, expandedMoves)) return state;
 
   const validation = validateFixtureMoves(state, expandedMoves);
   if (!validation.valid) return state;

@@ -188,6 +188,17 @@ it('reduces morale by 0.01 per game minute without using movement time', () => {
   expect(result.staff[0]).toMatchObject({ x: 100, y: 100 });
 });
 
+it('leaves morale ownership to the wellbeing controller during movement preparation', () => {
+  const state = {
+    ...baseState,
+    staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 100, y: 100, task: null }],
+  };
+
+  const prepared = prepareStaffForMovement(state, 60);
+
+  expect(prepared.staff[0].morale).toBe(80);
+});
+
 function corridorWalls(endX) {
   return [20, 180].flatMap(y => Array.from(
     { length: (endX - 60) / 20 + 1 },
@@ -293,7 +304,8 @@ describe('updateStaff', () => {
       wash_item: { type, serviceItemId: 'item', washStationId: 'sink', washingStartedAt: 0 },
     };
     const staff = {
-      id: 'worker', role: type === 'clean_floor' || type === 'wash_item' ? 'janitor' : 'waiter',
+      id: 'worker', role: type === 'clean_floor' || type === 'wash_item' || type === 'clean_table'
+        ? 'janitor' : 'waiter',
       morale: 0, x: type === 'take_payment' ? 840 : 200,
       y: type === 'take_payment' ? 100 : 200, task: taskByType[type],
     };
@@ -1021,13 +1033,58 @@ describe('updateStaff', () => {
   it.each(['dish', 'drink'])('clears a used %s item through one generic task', kind => {
     const state = {
       ...baseState,
-      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 220, y: 220,
+      staff: [{ id: 'w1', role: 'janitor', morale: 80, x: 220, y: 220,
         task: { type: 'clean_service_item', serviceItemId: 'i1' } }],
       serviceItems: [{ id: 'i1', kind, state: 'to_clean', x: 220, y: 220 }],
     };
     const result = updateStaff(state, 0);
     expect(result.serviceItems).toEqual([]);
     expect(result.staff[0].task).toBeNull();
+  });
+
+  it.each(['clean_service_item', 'clean_table'])('does not let a waiter execute %s', type => {
+    const state = {
+      ...baseState,
+      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 220, y: 220,
+        task: type === 'clean_table'
+          ? { type, tableId: 't1' }
+          : { type, serviceItemId: 'i1' } }],
+      tables: type === 'clean_table'
+        ? [{ id: 't1', status: 'dirty', x: 200, y: 200 }]
+        : [],
+      serviceItems: type === 'clean_service_item'
+        ? [{ id: 'i1', kind: 'dish', state: 'to_clean', x: 220, y: 220 }]
+        : [],
+    };
+
+    const result = resolveStaffAfterMovement(state, 0);
+
+    expect(result.staff[0].task).toBeNull();
+    if (type === 'clean_table') expect(result.tables).toEqual(state.tables);
+    else expect(result.serviceItems).toEqual(state.serviceItems);
+  });
+
+  it('projects automatic washer workload using each level duration', () => {
+    const result = updateStaff({
+      ...baseState,
+      staff: [{
+        id: 'janitor', role: 'janitor', skill: 5, morale: 80,
+        x: 180, y: 220, carryingServiceItemIds: ['carried'], task: null,
+      }],
+      washStations: [
+        { id: 'near-slow', type: 'automatic', level: 1, x: 200, y: 200, w: 40, h: 40 },
+        { id: 'far-fast', type: 'automatic', level: 10, x: 400, y: 200, w: 40, h: 40 },
+      ],
+      serviceItems: [
+        { id: 'queued-slow', state: 'queued_for_wash', washStationId: 'near-slow' },
+        { id: 'queued-fast', state: 'queued_for_wash', washStationId: 'far-fast' },
+        { id: 'carried', state: 'carried_dirty', x: 180, y: 220 },
+      ],
+    }, 0);
+
+    expect(result.staff[0].task).toMatchObject({
+      type: 'deliver_dirty_item', washStationId: 'far-fast',
+    });
   });
 
   it('balances concurrent dirty deliveries across projected station workloads', () => {
@@ -1040,7 +1097,7 @@ describe('updateStaff', () => {
       id, kind: 'dish', customerId: `gone-${index}`, state: 'carried_dirty', washQueuedAt: null,
     }));
     const staff = serviceItems.map((item, index) => ({
-      id: `waiter-${index}`, role: 'waiter', morale: 80,
+      id: `janitor-${index}`, role: 'janitor', morale: 80,
       x: 100, y: 200 + index * 20, task: null, carryingServiceItemId: item.id,
     }));
 
@@ -1071,7 +1128,7 @@ describe('updateStaff', () => {
       id: `dirty-${index}`, state: 'carried_dirty', tableId: `table-${index}`,
     }));
     const staff = serviceItems.map((item, index) => ({
-      id: `waiter-${index}`, role: 'waiter', morale: 80,
+      id: `janitor-${index}`, role: 'janitor', morale: 80,
       x: 100, y: 100 + index * 20, task: null, carryingServiceItemId: item.id,
     }));
 
@@ -1114,7 +1171,7 @@ describe('updateStaff', () => {
       washStations: [{ id: 'sink', type: 'manual', x: 200, y: 200, w: 40, h: 40 }],
       serviceItems: [...queued, { id: 'dirty', state: 'carried_dirty' }],
       staff: [{
-        id: 'waiter', role: 'waiter', morale: 80, x: 180, y: 220,
+        id: 'janitor', role: 'janitor', morale: 80, x: 180, y: 220,
         task: { type: 'deliver_dirty_item', serviceItemId: 'dirty', washStationId: 'sink' },
         carryingServiceItemId: 'dirty',
       }],
@@ -1146,7 +1203,7 @@ describe('updateStaff', () => {
   it('replans dirty pickup when its table moves before arrival', () => {
     const result = updateStaff({
       ...baseState,
-      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220,
+      staff: [{ id: 'w1', role: 'janitor', morale: 80, x: 180, y: 220,
         task: { type: 'collect_dirty_item', serviceItemId: 'dirty', tableId: 't1' }, carryingServiceItemId: null }],
       tables: [{ id: 't1', status: 'dirty', x: 400, y: 200 }],
       serviceItems: [{ id: 'dirty', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'dirty_at_table' }],
@@ -1162,7 +1219,7 @@ describe('updateStaff', () => {
   it('replans dirty delivery when its station moves before arrival', () => {
     const result = updateStaff({
       ...baseState,
-      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220,
+      staff: [{ id: 'w1', role: 'janitor', morale: 80, x: 180, y: 220,
         task: { type: 'deliver_dirty_item', serviceItemId: 'dirty', washStationId: 'sink' }, carryingServiceItemId: 'dirty' }],
       washStations: [{ id: 'sink', type: 'manual', x: 400, y: 200, w: 40, h: 40 }],
       serviceItems: [{ id: 'dirty', kind: 'dish', customerId: 'gone', state: 'carried_dirty' }],
@@ -1183,7 +1240,7 @@ describe('updateStaff', () => {
     ].map(([x, y], index) => ({ id: `station-block-${index}`, x, y }));
     const result = updateStaff({
       ...baseState,
-      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220,
+      staff: [{ id: 'w1', role: 'janitor', morale: 80, x: 180, y: 220,
         task: { type: 'deliver_dirty_item', serviceItemId: 'dirty', washStationId: 'sink' }, carryingServiceItemId: 'dirty' }],
       chairs: blockers,
       washStations: [{ id: 'sink', type: 'manual', x: 400, y: 200, w: 40, h: 40 }],
@@ -1263,7 +1320,7 @@ describe('updateStaff', () => {
   it('collects and queues dirty service items, retaining ownership when no station is reachable', () => {
     const base = { ...baseState, restaurant: { gameTime: 100 }, customers: [{ id: 'c1', tableId: 't1', state: 'leaving' }],
       tables: [{ id: 't1', status: 'dirty', x: 200, y: 200 }], serviceItems: [{ id: 'i1', customerId: 'c1', tableId: 't1', kind: 'dish', state: 'dirty_at_table', dirtyAt: 1 }],
-      staff: [{ id: 'w1', role: 'waiter', x: 180, y: 220, task: { type: 'collect_dirty_item', serviceItemId: 'i1', tableId: 't1' }, carryingServiceItemId: null }] };
+      staff: [{ id: 'w1', role: 'janitor', x: 180, y: 220, task: { type: 'collect_dirty_item', serviceItemId: 'i1', tableId: 't1' }, carryingServiceItemId: null }] };
     const carried = updateStaff({ ...base, washStations: [] }, 0);
     expect(carried.serviceItems[0].state).toBe('carried_dirty');
     expect(carried.tables[0].status).toBe('dirty');
@@ -1283,7 +1340,7 @@ describe('updateStaff', () => {
       washStations: [{ id: 'wash1', type: 'manual', x: 200, y: 200, w: 40, h: 40 }],
       serviceItems: [{ id: 'i1', customerId: 'c1', tableId: 't1', kind: 'dish', state: 'dirty_at_table', dirtyAt: 1 }],
       staff: [{
-        id: 'w1', role: 'waiter', x: 180, y: 220,
+        id: 'w1', role: 'janitor', x: 180, y: 220,
         navigationGoal: { x: 180, y: 220 },
         task: { type: 'collect_dirty_item', serviceItemId: 'i1', tableId: 't1' },
       carryingServiceItemIds: [],
@@ -2004,7 +2061,7 @@ describe('updateStaff', () => {
   it('starts lower-priority cleaning when no queued party has a suitable table', () => {
     const state = {
       ...baseState,
-      staff: [{ id: 'w1', role: 'waiter', x: 860, y: 360, morale: 80 }],
+      staff: [{ id: 'w1', role: 'janitor', x: 860, y: 360, morale: 80 }],
       queue: [{ partyId: 'queued-party', members: [
         { id: 'queued1', partyId: 'queued-party', partySize: 2, state: 'queued', patience: 100 },
         { id: 'queued2', partyId: 'queued-party', partySize: 2, state: 'queued', patience: 100 },
@@ -2059,10 +2116,10 @@ describe('updateStaff', () => {
 
 
 
-  it('holds a waiter at a ready dirty table for the canonical wipe duration', () => {
+  it('holds a janitor at a ready dirty table for the canonical wipe duration', () => {
     const state = {
       ...baseState,
-      staff: [{ id: 'w1', role: 'waiter', x: 180, y: 220, task: { type: 'clean_table', tableId: 't1' } }],
+      staff: [{ id: 'w1', role: 'janitor', x: 180, y: 220, task: { type: 'clean_table', tableId: 't1' } }],
       tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
     };
@@ -2075,7 +2132,7 @@ describe('updateStaff', () => {
     expect(finished.staff[0].task).toBeNull();
   });
 
-  it('assigns an already-adjacent waiter one timed table wipe', () => {
+  it('assigns an already-adjacent janitor one timed table wipe', () => {
     const approachBlockers = [
       [9, 10], [9, 12], [9, 13],
       [12, 10], [12, 11], [12, 12], [12, 13],
@@ -2087,7 +2144,7 @@ describe('updateStaff', () => {
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 100 },
       staff: [{
-        id: 'w1', role: 'waiter', morale: 80,
+        id: 'w1', role: 'janitor', morale: 80,
         x: 180, y: 220, task: null,
       }],
       customers: [{ id: 'former', state: 'leaving', tableId: 't1' }],
@@ -2166,7 +2223,7 @@ describe('updateStaff', () => {
     const result = updateStaff({
       ...baseState,
       staff: [{
-        id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220,
+        id: 'w1', role: 'janitor', morale: 80, x: 180, y: 220,
         task: { type: 'clean_table', tableId: 't1', cleaningStartedAt: 100 },
       }],
       tables: [{
@@ -2209,7 +2266,7 @@ describe('updateStaff', () => {
     const state = {
       ...baseState,
       staff: [{
-        id: 'w1', role: 'waiter', x: 180, y: 220,
+        id: 'w1', role: 'janitor', x: 180, y: 220,
         task: { type: 'clean_table', tableId: 't1', cleaningStartedAt: 100 },
       }],
       tables,
@@ -2222,12 +2279,12 @@ describe('updateStaff', () => {
     expect(result.tables).toEqual(tables);
   });
 
-  it('allows only one idle waiter to claim a dirty table in one tick', () => {
+  it('allows only one idle janitor to claim a dirty table in one tick', () => {
     const state = {
       ...baseState,
       staff: [
-        { id: 'w1', role: 'waiter', morale: 80, x: 800, y: 500 },
-        { id: 'w2', role: 'waiter', morale: 80, x: 700, y: 500 },
+        { id: 'w1', role: 'janitor', morale: 80, x: 800, y: 500 },
+        { id: 'w2', role: 'janitor', morale: 80, x: 700, y: 500 },
       ],
       tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
     };
@@ -2310,9 +2367,9 @@ describe('updateStaff', () => {
       ...baseState,
       staff: [
         {
-          id: 'w1', role: 'waiter', morale: 80, x: 800, y: 500, task: { type: 'clean_table', tableId: 't1' },
+          id: 'w1', role: 'janitor', morale: 80, x: 800, y: 500, task: { type: 'clean_table', tableId: 't1' },
         },
-        { id: 'w2', role: 'waiter', morale: 80, x: 700, y: 500 },
+        { id: 'w2', role: 'janitor', morale: 80, x: 700, y: 500 },
       ],
       tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
     };
@@ -2607,7 +2664,7 @@ describe('updateStaff', () => {
     const state = {
       ...baseState,
       staff: [{
-        id: 'w1', role: 'waiter', skill: 5, morale: 80, x: 180, y: 220,
+        id: 'w1', role: 'janitor', skill: 5, morale: 80, x: 180, y: 220,
         task: { type: 'collect_dirty_item', serviceItemId: 'dirty-1', tableId: 't1' },
         carryingServiceItemIds: [],
       }],
@@ -2664,7 +2721,7 @@ describe('updateStaff', () => {
           carryingServiceItemIds: [],
         },
         {
-          id: 'carrier', role: 'waiter', skill: 5, x: 500, y: 300,
+          id: 'carrier', role: 'janitor', skill: 5, x: 500, y: 300,
           task: null, carryingServiceItemIds: ['real'],
         },
       ],
@@ -2861,6 +2918,38 @@ describe('updateStaff', () => {
     expect(result.staff[0]).toMatchObject({ task: null, carryingServiceItemIds: [] });
     expect(result.staff[0]).not.toHaveProperty('navigationGoal');
     expect(result.customers[0]).toMatchObject({ state: 'eating', eatTime: 100 });
+  });
+
+  it('marks a dish delivered before a pending drink completes the order', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      staff: [{
+        id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220,
+        task: { type: 'deliver_service_item', serviceItemId: 'dish-item', customerId: 'c1' },
+        carryingServiceItemId: 'dish-item',
+      }],
+      customers: [{
+        id: 'c1', state: 'waiting_for_items', dishId: 'd1', drinkId: 'water', tableId: 't1',
+        foodOutcome: 'pending', foodDeadlineAt: 200,
+        orderedServiceItemIds: ['dish-item', 'drink-item'],
+      }],
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+      serviceItems: [{
+        id: 'dish-item', kind: 'dish', menuItemId: 'd1', customerId: 'c1', tableId: 't1',
+        state: 'carried',
+      }, {
+        id: 'drink-item', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',
+        state: 'ordered',
+      }],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers[0]).toMatchObject({
+      state: 'waiting_for_items', foodOutcome: 'delivered',
+    });
+    expect(result.serviceItems[0].state).toBe('delivered');
   });
 
   it('adds dish quality, upgrade, and equipment quality only for a dish delivery', () => {
@@ -3103,9 +3192,9 @@ describe('updateStaff', () => {
 
   // --- Unified service-item cleanup ---
 
-  it('waiter cleans a to_clean service item on arrival', () => {
+  it('janitor cleans a to_clean service item on arrival', () => {
     const waiter = {
-      id: 's1', name: 'Anna', role: 'waiter', skill: 5, morale: 80, salary: 150,
+      id: 's1', name: 'Anna', role: 'janitor', skill: 5, morale: 80, salary: 150,
       x: 220, y: 220, task: { type: 'clean_service_item', serviceItemId: 'i1' },
     };
     const item = {
@@ -3117,8 +3206,31 @@ describe('updateStaff', () => {
     expect(result.staff[0].task).toBeNull();
   });
 
-  it('waiter starts cleaning a to_clean service item', () => {
-    const waiter = { id: 's1', name: 'Anna', role: 'waiter', skill: 5, morale: 80, salary: 150, x: 800, y: 500 };
+  it.each([
+    ['an ordered item', { state: 'ordered' }],
+    ['an item owned by another worker', { state: 'to_clean', assignedStaffId: 'other' }],
+    ['an item at another physical location', { state: 'to_clean', x: 500, y: 500 }],
+  ])('does not let a stale cleanup task delete %s', (_name, itemOverrides) => {
+    const item = {
+      id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', tableId: 't1',
+      state: 'to_clean', x: 220, y: 220, ...itemOverrides,
+    };
+    const state = {
+      ...baseState,
+      customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'd1' }],
+      staff: [{ id: 'janitor', role: 'janitor', morale: 80, x: 220, y: 220,
+        task: { type: 'clean_service_item', serviceItemId: 'i1' } }],
+      serviceItems: [item],
+    };
+
+    const result = updateStaff(state, 0);
+
+    expect(result.serviceItems).toEqual([item]);
+    expect(result.staff[0].task).toBeNull();
+  });
+
+  it('janitor starts cleaning a to_clean service item', () => {
+    const waiter = { id: 's1', name: 'Anna', role: 'janitor', skill: 5, morale: 80, salary: 150, x: 800, y: 500 };
     const item = {
       id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', tableId: 't1',
       state: 'to_clean', x: 220, y: 220,
@@ -3128,8 +3240,8 @@ describe('updateStaff', () => {
     expect(result.staff[0].navigationGoal).toEqual(cellToWorld({ x: 11, y: 11 }));
   });
 
-  it('waiter also cleans a to_clean service item after table work', () => {
-    const waiter = { id: 'w1', name: 'Luca', role: 'waiter', skill: 5, morale: 80, salary: 150, x: 800, y: 500 };
+  it('janitor also cleans a to_clean service item after table work', () => {
+    const waiter = { id: 'w1', name: 'Luca', role: 'janitor', skill: 5, morale: 80, salary: 150, x: 800, y: 500 };
     const item = {
       id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', tableId: 't1',
       state: 'to_clean', x: 220, y: 220,
@@ -3758,7 +3870,7 @@ describe('updateStaff', () => {
       ['wash station', () => ({
         ...baseState,
         staff: [{
-          id: 'w1', role: 'waiter', x: 180, y: 180, task: null,
+          id: 'w1', role: 'janitor', x: 180, y: 180, task: null,
           carryingServiceItemId: 'dirty1',
         }],
         washStations: [{ id: 'sink', type: 'manual', x: 200, y: 200, w: 40, h: 40 }],
@@ -3778,12 +3890,12 @@ describe('updateStaff', () => {
       }), { type: 'deliver_service_item', serviceItemId: 'item1', customerId: 'c1' }, { x: 9, y: 10 }],
       ['table cleaning', () => ({
         ...baseState,
-        staff: [{ id: 'w1', role: 'waiter', x: 180, y: 200, task: null }],
+        staff: [{ id: 'w1', role: 'janitor', x: 180, y: 200, task: null }],
         tables: [{ id: 't1', status: 'dirty', x: 200, y: 200 }],
       }), { type: 'clean_table', tableId: 't1' }, { x: 9, y: 10 }],
       ['service-item cleaning', () => ({
         ...baseState,
-        staff: [{ id: 'w1', role: 'waiter', x: 180, y: 200, task: null }],
+        staff: [{ id: 'w1', role: 'janitor', x: 180, y: 200, task: null }],
         serviceItems: [{ id: 'item1', state: 'to_clean', x: 200, y: 200 }],
       }), { type: 'clean_service_item', serviceItemId: 'item1' }, { x: 9, y: 10 }],
       ['drink preparation', () => ({
@@ -3798,7 +3910,7 @@ describe('updateStaff', () => {
       }), { type: 'prepare_drink', serviceItemId: 'drink1', serviceTableId: 'st1', serviceSlotIndex: 0 }, { x: 9, y: 11 }],
       ['dirty-item collection', () => ({
         ...baseState,
-        staff: [{ id: 'w1', role: 'waiter', x: 180, y: 200, task: null }],
+        staff: [{ id: 'w1', role: 'janitor', x: 180, y: 200, task: null }],
         tables: [{ id: 't1', status: 'dirty', x: 200, y: 200 }],
         washStations: [{ id: 'sink', type: 'manual', x: 400, y: 200, w: 40, h: 40 }],
         serviceItems: [{ id: 'dirty1', tableId: 't1', state: 'dirty_at_table', dirtyAt: 1 }],
@@ -3830,7 +3942,7 @@ describe('updateStaff', () => {
     it('assigns the same reachable target when two actors occupy its shortest route', () => {
       const makeState = includeOccupiers => ({
         ...baseState,
-        staff: [{ id: 'w1', role: 'waiter', x: 100, y: 220, task: null }],
+        staff: [{ id: 'w1', role: 'janitor', x: 100, y: 220, task: null }],
         customers: includeOccupiers ? [
           { id: 'c1', state: 'eating', x: 120, y: 220 },
           { id: 'c2', state: 'eating', x: 140, y: 220 },
@@ -3855,7 +3967,7 @@ describe('updateStaff', () => {
       const state = {
         ...baseState,
         staff: [{
-          id: 'w1', role: 'waiter', x: 300, y: 200, task: null,
+          id: 'w1', role: 'janitor', x: 300, y: 200, task: null,
           carryingServiceItemId: 'dirty1',
         }],
         washStations: [
@@ -3935,7 +4047,7 @@ describe('updateStaff', () => {
       const makeState = includeOccupiers => ({
         ...baseState,
         staff: [
-          { id: 'w1', role: 'waiter', x: 100, y: 220, task: null, carryingServiceItemId: 'dirty1' },
+          { id: 'w1', role: 'janitor', x: 100, y: 220, task: null, carryingServiceItemId: 'dirty1' },
           ...(includeOccupiers ? [
             { id: 'blocker-1', role: 'cook', x: 120, y: 220, task: null },
             { id: 'blocker-2', role: 'cook', x: 140, y: 220, task: null },
@@ -3973,7 +4085,7 @@ describe('updateStaff', () => {
       const state = {
         ...baseState,
         staff: [{
-          id: 'w1', role: 'waiter', x: 300, y: 200, task: null,
+          id: 'w1', role: 'janitor', x: 300, y: 200, task: null,
           carryingServiceItemId: 'dirty1',
         }],
         chairs: [{ id: 'block-right-centre', x: 240, y: 200 }],
@@ -4000,7 +4112,7 @@ describe('updateStaff', () => {
       const state = {
         ...baseState,
         staff: [{
-          id: 'w1', role: 'waiter', x: 180, y: 220, task: null,
+          id: 'w1', role: 'janitor', x: 180, y: 220, task: null,
           carryingServiceItemId: 'dirty1',
         }],
         washStations: [

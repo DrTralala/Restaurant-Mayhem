@@ -6,11 +6,15 @@ import * as staffDomain from './staff';
 import * as movementDomain from './movement';
 import { createInitialState } from '../state/initialState';
 import { hydrateState, loadState, saveState } from '../state/persistence';
+import { createEmptyAmenitySlots } from '../data/staffAmenities';
 import { recordSeatResidency } from './movement/seatedDeparture';
 import { buildCustomerQueueStressState } from './customerQueueStress';
 import { getQueueVisibleMembers, reconcileQueueSlots } from './customerQueue';
 import { getTipRate } from './balance';
 import { ACTIVITY_DURATIONS } from './activity';
+import { STAFF_WELLBEING_CONSTANTS } from './staffWellbeing';
+import * as foodPatienceDomain from './foodPatience';
+import * as wellbeingDomain from './staffWellbeing';
 
 const emptyState = {
   restaurant: { funds: 500, gameTime: 100, day: 1, openHour: 10, closeHour: 22, totalServed: 0, reputation: 2.0 },
@@ -35,6 +39,42 @@ const emptyState = {
   dailyHistory: [],
   notifications: [],
 };
+
+function isolatedRunState(overrides = {}) {
+  const initial = createInitialState();
+  return {
+    ...initial,
+    restaurant: {
+      ...initial.restaurant,
+      gameTime: 0,
+      openHour: 10,
+      closeHour: 22,
+    },
+    tables: [],
+    chairs: [],
+    doors: [],
+    cashierStations: [],
+    kitchenStations: [],
+    washStations: [],
+    serviceTables: [],
+    customers: [],
+    queue: [],
+    queueSlots: [],
+    queueDepartures: [],
+    serviceItems: [],
+    cookingBatches: [],
+    floorDirt: [],
+    staffAmenities: [],
+    staff: [],
+    ...overrides,
+  };
+}
+
+function scheduleWith(entries) {
+  const schedule = Array.from({ length: 48 }, () => 'work');
+  for (const [index, duty] of entries) schedule[index] = duty;
+  return schedule;
+}
 
 function deterministicMovementProjection(state, statuses) {
   const actors = [...state.staff, ...state.customers]
@@ -115,6 +155,297 @@ describe('runTick', () => {
     const state = { ...emptyState, speed: 2 };
     const result = runTick(state, { gameDt: 4, movementDt: 2 / 30 });
     expect(result.restaurant.gameTime).toBe(104);
+  });
+
+  it('splits a game interval at a staff schedule transition before settling the next phase', () => {
+    const schedule = scheduleWith([[1, 'rest']]);
+    const state = isolatedRunState({
+      staff: [{
+        id: 'scheduled', role: 'waiter', morale: 80, x: 100, y: 100,
+        schedule, effectiveDuty: 'work', dutyPhase: 'available', task: null,
+      }],
+    });
+    const calls = [];
+    const original = wellbeingDomain.advanceStaffWellbeing;
+    vi.spyOn(wellbeingDomain, 'advanceStaffWellbeing').mockImplementation((...args) => {
+      calls.push(args.slice(1));
+      return original(...args);
+    });
+
+    runTick(state, { gameDt: 3600, movementDt: 0 });
+
+    expect(calls).toContainEqual([0, 1800]);
+    expect(calls).toContainEqual([1800, 3600]);
+  });
+
+  it('divides movement time proportionally across chronological game segments', () => {
+    const state = isolatedRunState({
+      staff: [{
+        id: 'scheduled', role: 'waiter', morale: 80, x: 100, y: 100,
+        schedule: scheduleWith([[1, 'rest']]), effectiveDuty: 'work', dutyPhase: 'available', task: null,
+      }],
+    });
+    const movementDurations = [];
+    const original = movementDomain.advanceCharacterMovementBatch;
+    vi.spyOn(movementDomain, 'advanceCharacterMovementBatch').mockImplementation((...args) => {
+      movementDurations.push(args[2]);
+      return original(...args);
+    });
+
+    runTick(state, { gameDt: 3600, movementDt: 60 });
+
+    expect(movementDurations).toEqual([30, 30]);
+  });
+
+  it('runs rest travel through the shared movement batch and occupies only after endpoint arrival', () => {
+    const schedule = scheduleWith([[0, 'rest']]);
+    let state = isolatedRunState({
+      staffAmenities: [{
+        id: 'couch-1', type: 'couch', x: 500, y: 300, rotation: 0,
+        slots: createEmptyAmenitySlots('couch'),
+      }],
+      staff: [{
+        id: 'resting', role: 'waiter', morale: 80, x: 100, y: 100,
+        schedule, effectiveDuty: 'work', dutyPhase: 'available', task: null,
+      }],
+    });
+    let sawReserved = false;
+    let sawOccupied = false;
+
+    for (let tick = 0; tick < 20; tick += 1) {
+      state = runTick(state, { gameDt: 1, movementDt: 1 });
+      const worker = state.staff[0];
+      if (worker.amenityUse?.phase === 'reserved') {
+        sawReserved = true;
+        expect(worker.movementResidency).toBeUndefined();
+        expect(worker.x).not.toBe(510);
+      }
+      if (worker.amenityUse?.phase === 'occupied') {
+        sawOccupied = true;
+        break;
+      }
+    }
+
+    expect(sawReserved).toBe(true);
+    expect(sawOccupied).toBe(true);
+    expect(state.staff[0]).toMatchObject({
+      dutyPhase: 'active',
+      movementResidency: { kind: 'staff_amenity', amenityId: 'couch-1', slotIndex: 0 },
+      x: 510,
+      y: 310,
+    });
+    expect(state.staffAmenities[0].slots[0]).toMatchObject({ occupiedBy: 'resting', reservedBy: null });
+
+    state = runTick(state, {
+      gameDt: STAFF_WELLBEING_CONSTANTS.couchSessionSeconds,
+      movementDt: 0,
+    });
+    expect(state.staff[0]).toMatchObject({ dutyPhase: 'exiting' });
+    expect(state.staffAmenities[0].slots[0].occupiedBy).toBe('resting');
+  });
+
+  it('protects an actual seven-hour PTO sleep, then applies the waking buff across a runTick boundary', () => {
+    const minimumSleep = STAFF_WELLBEING_CONSTANTS.minimumSleepSeconds;
+    const schedule = scheduleWith(Array.from({ length: 14 }, (_, index) => [index, 'pto']));
+    let state = isolatedRunState({
+      staffAmenities: [{
+        id: 'bed-1', type: 'bed', x: 500, y: 300, rotation: 0,
+        slots: [{ index: 0, reservedBy: null, occupiedBy: 'sleeper' }],
+      }],
+      staff: [{
+        id: 'sleeper', role: 'waiter', morale: 40, x: 510, y: 320,
+        schedule, effectiveDuty: 'pto', dutyPhase: 'active', task: null,
+        amenityUse: {
+          amenityId: 'bed-1', slotIndex: 0, phase: 'occupied',
+          activityStartedAt: 0, activityEndsAt: minimumSleep, lastRecoveryAt: 0,
+        },
+        ptoSession: {
+          sleepStartedAt: 0, minimumEndAt: minimumSleep, startingMorale: 40,
+        },
+      }],
+    });
+
+    state = runTick(state, { gameDt: 1, movementDt: 0 });
+    expect(state.staff[0]).toMatchObject({ effectiveDuty: 'pto', dutyPhase: 'active' });
+    expect(state.staff[0].task).toBeNull();
+    expect(state.staff[0].morale).toBeGreaterThan(40);
+
+    state = runTick(state, { gameDt: minimumSleep - 1, movementDt: 0 });
+    expect(state.restaurant.gameTime).toBe(minimumSleep);
+    expect(state.staff[0]).toMatchObject({
+      effectiveDuty: 'work',
+      dutyPhase: 'exiting',
+      morale: 100,
+      wellRestedUntil: minimumSleep + STAFF_WELLBEING_CONSTANTS.wellRestedSeconds,
+    });
+    expect(state.staff[0].amenityUse.phase).toBe('occupied');
+  });
+
+  it('settles working morale on both sides of a waking-buff expiry inside one tick', () => {
+    const state = isolatedRunState({
+      cashierStations: [{ id: 'cashier', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'worker' }],
+      customers: [{
+        id: 'payer', state: 'checkout_processing', cashierStationId: 'cashier',
+        paymentReady: false, x: 840, y: 180,
+      }],
+      staff: [{
+        id: 'worker', role: 'waiter', morale: 80, x: 840, y: 100,
+        effectiveDuty: 'work', dutyPhase: 'working', activityPhase: 'working',
+        wellRestedUntil: 5,
+        task: {
+          type: 'take_payment', customerId: 'payer', stationId: 'cashier',
+          startedAt: 0, accumulatedWork: 0, lastProgressAt: 0,
+        },
+      }],
+    });
+    const calls = [];
+    const original = wellbeingDomain.advanceStaffWellbeing;
+    vi.spyOn(wellbeingDomain, 'advanceStaffWellbeing').mockImplementation((...args) => {
+      calls.push(args.slice(1));
+      return original(...args);
+    });
+
+    const result = runTick(state, { gameDt: 10, movementDt: 0 });
+
+    expect(calls).toContainEqual([0, 5]);
+    expect(calls).toContainEqual([5, 10]);
+    expect(result.staff[0].morale).toBeCloseTo(80 - (7.5 * 0.01) / 60, 8);
+  });
+
+  it('does not advertise new work while a schedule is off duty', () => {
+    const state = isolatedRunState({
+      tables: [{ id: 't1', status: 'occupied', seats: 2, x: 200, y: 200 }],
+      customers: [{ id: 'customer', state: 'seated', tableId: 't1', x: 210, y: 210 }],
+      staff: [{
+        id: 'off-duty', role: 'waiter', morale: 80, x: 180, y: 220,
+        schedule: scheduleWith([[0, 'rest']]), effectiveDuty: 'work', dutyPhase: 'available', task: null,
+      }],
+    });
+
+    const result = runTick(state, { gameDt: 0, movementDt: 0 });
+
+    expect(result.staff[0]).toMatchObject({ effectiveDuty: 'rest' });
+    expect(result.staff[0].task).toBeNull();
+  });
+
+  it('expires pending food before same-timestamp cooking completion at an internal deadline', () => {
+    const state = isolatedRunState({
+      restaurant: { ...createInitialState().restaurant, gameTime: 0, openHour: 10, closeHour: 22 },
+      customers: [{
+        id: 'late-food', state: 'waiting_for_items', tableId: 't1', dishId: 'dish',
+        foodOrderedAt: 0, foodPatienceBudget: 10, foodDeadlineAt: 10, foodOutcome: 'pending',
+        cancelledServiceItemIds: [],
+      }],
+      dishes: [{ id: 'dish', price: 10, prepTime: 5 }],
+      kitchenStations: [{ id: 'kitchen', equipmentId: null, x: 100, y: 100 }],
+      serviceItems: [{
+        id: 'late-dish', kind: 'dish', menuItemId: 'dish', customerId: 'late-food',
+        state: 'preparing', stationId: 'kitchen', assignedStaffId: 'cook',
+        preparationStartedAt: 0, accumulatedWork: 5, lastProgressAt: 0,
+      }],
+      staff: [{
+        id: 'cook', role: 'cook', morale: 0, x: 120, y: 120,
+        task: { type: 'prepare_dish', serviceItemId: 'late-dish', stationId: 'kitchen',
+          startedAt: 0, accumulatedWork: 5, lastProgressAt: 0 },
+      }],
+    });
+    const expirationTimes = [];
+    const original = foodPatienceDomain.expireFoodPatience;
+    vi.spyOn(foodPatienceDomain, 'expireFoodPatience').mockImplementation((...args) => {
+      expirationTimes.push(args[1]);
+      return original(...args);
+    });
+
+    const result = runTick(state, { gameDt: 20, movementDt: 0 });
+
+    expect(expirationTimes).toContain(10);
+    expect(result.customers[0].foodOutcome).toBe('cancelled');
+    expect(result.serviceItems).toEqual([]);
+  });
+
+  it('keeps a cancelled party on its zero-balance checkout path through runTick', () => {
+    let state = isolatedRunState({
+      restaurant: {
+        ...createInitialState().restaurant,
+        gameTime: 10 * 3600,
+        openHour: 10,
+        closeHour: 22,
+      },
+      tables: [{
+        id: 'party-table', seats: 2, status: 'occupied', x: 200, y: 200,
+        diningPartyId: 'party', diningCustomerIds: ['cancelled'],
+      }],
+      customers: [{
+        id: 'cancelled', partyId: 'party', partySize: 1, state: 'checkout_queued',
+        tableId: 'party-table', x: 210, y: 180, paymentQueuedAt: 10 * 3600,
+        cashierStationId: null, checkoutPosition: null, paymentReady: false,
+        happiness: 80, patience: 1000, dishId: 'dish', drinkId: null,
+        foodOrderedAt: 10 * 3600, foodPatienceBudget: 10, foodDeadlineAt: 10 * 3600 + 10,
+        cancelledServiceItemIds: [], orderSubtotal: 10, dishPriceAtOrder: 10,
+      }],
+      dishes: [{ id: 'dish', price: 10 }],
+    });
+
+    state = runTick(state, { gameDt: 20, movementDt: 0 });
+    expect(state.customers[0]).toMatchObject({
+      partyId: 'party', foodOutcome: 'cancelled', dishId: null, orderSubtotal: 0,
+    });
+    expect(state.restaurant.totalServed).toBe(0);
+
+    state = {
+      ...state,
+      cashierStations: [{
+        id: 'cashier', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
+      staff: [{
+        id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100, task: null,
+      }],
+    };
+    let paid = false;
+    for (let tick = 0; tick < 6000; tick += 1) {
+      state = runTick(state, { gameDt: 1 / 60, movementDt: 1 / 60 });
+      if (state.restaurant.totalServed > 0) {
+        paid = true;
+        break;
+      }
+    }
+    expect(paid).toBe(true);
+    expect(state.completedCustomers).toEqual([]);
+  });
+
+  it('does not duplicate payment accounting across repeated same-timestamp runTicks', () => {
+    const state = isolatedRunState({
+      restaurant: {
+        ...createInitialState().restaurant,
+        gameTime: 10 * 3600,
+        openHour: 10,
+        closeHour: 22,
+      },
+      cashierStations: [{
+        id: 'cashier', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
+      customers: [{
+        id: 'payer', state: 'checkout_processing', paymentReady: false,
+        cashierStationId: 'cashier', checkoutPosition: { x: 840, y: 180 },
+        x: 840, y: 180, happiness: 80, dishId: 'dish', drinkId: null,
+      }],
+      dishes: [{ id: 'dish', price: 12 }],
+      staff: [{
+        id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100,
+        task: {
+          type: 'take_payment', customerId: 'payer', stationId: 'cashier',
+          startedAt: 10 * 3600 - 60, accumulatedWork: 60, lastProgressAt: 10 * 3600,
+        },
+      }],
+    });
+
+    const first = runTick(state, { gameDt: 0, movementDt: 0 });
+    const second = runTick(first, { gameDt: 0, movementDt: 0 });
+
+    expect(first.restaurant.totalServed).toBe(1);
+    expect(second.restaurant.totalServed).toBe(1);
+    expect(second.completedCustomers).toEqual(first.completedCustomers);
+    expect(second.customers[0].departureReason).toBe('served');
   });
 
   it('persists one movement coordinator across ordered tick stages', () => {
@@ -287,6 +618,9 @@ describe('runTick', () => {
       }],
       staff: [{
         id: 'cashier', role: 'waiter', morale: 80, salary: 150, x: 840, y: 100, carryingServiceItemId: null,
+        schedule: Array.from({ length: 48 }, () => 'work'), effectiveDuty: 'work',
+        dutyPhase: 'available', dutyTransitionRequestedAt: null, amenityUse: null,
+        ptoSession: null, wellRestedUntil: 0, amenityWaitingSince: null, lastRestActivityType: null,
         task: {
           type: 'take_payment', customerId: 'legacy-checkout',
           stationId: 'cashier1', startedAt: 41,
@@ -1356,8 +1690,8 @@ describe('runTick', () => {
         id: 'dirty', kind: 'dish', menuItemId: 'd1', customerId: 'former',
         tableId: 't1', state: 'dirty_at_table', dirtyAt: 0, consumedAt: 0,
       }],
-      staff: [{
-        id: 'cleaner', role: 'waiter', morale: 80,
+       staff: [{
+         id: 'cleaner', role: 'janitor', morale: 80,
         x: 180, y: 220, task: null, carryingServiceItemId: null,
       }],
       washStations: [{
@@ -1472,6 +1806,10 @@ describe('runTick', () => {
 
     state = {
       ...state,
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40,
+        assignedStaffId: 'cashier',
+      }],
       staff: [...state.staff, {
         id: 'cashier', role: 'waiter', morale: 80, salary: 150,
         x: 840, y: 100, task: null, carryingServiceItemId: null,

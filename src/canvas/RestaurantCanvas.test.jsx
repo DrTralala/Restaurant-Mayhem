@@ -7,6 +7,7 @@ import { useDispatch, useGameState } from '../state/GameContext';
 import { useRenderState } from '../state/SimulationRuntime';
 import { findClickedEntity } from './interaction';
 import { getRestaurantWorld } from '../simulation/world';
+import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { FONT_FAMILY } from '../typography';
 
 vi.mock('../state/GameContext', () => ({
@@ -1118,5 +1119,60 @@ describe('RestaurantCanvas object movement', () => {
 
     expect(moveIndex).toBeLessThan(entranceIndex);
     expect(moveIndex).toBeLessThan(exitIndex);
+  });
+
+  it('shows authoritative dishwasher controls and dispatches only its id for an upgrade', () => {
+    const dispatch = vi.fn();
+    const station = {
+      id: 'wash1', type: 'automatic', level: 1, x: 300, y: 120, w: 40, h: 40,
+    };
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({
+      ...state,
+      restaurant: { expansionLevel: 1, funds: 5_000, gameTime: 10 },
+      washStations: [station],
+      serviceItems: [
+        { id: 'a', state: 'queued_for_wash', washStationId: 'wash1' },
+        { id: 'b', state: 'washing', washStationId: 'wash1' },
+      ],
+    });
+    findClickedEntity.mockReturnValue({
+      type: 'washStation', data: station, text: 'Automatic dishwasher',
+    });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 320, clientY: 140 });
+
+    expect(screen.getByText('Level 1 / 10')).toBeInTheDocument();
+    expect(screen.getByText('Occupancy 2 / 12')).toBeInTheDocument();
+    expect(screen.getByText('Nominal 300 seconds per dish')).toBeInTheDocument();
+    const nextUpgradeCost = getDishwasherStats(station.level).nextUpgradeCost;
+    expect(screen.getByText(`Next upgrade $${nextUpgradeCost}`)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: `Upgrade dishwasher ($${nextUpgradeCost})` }));
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'UPGRADE_DISHWASHER', id: 'wash1' });
+  });
+
+  it.each([
+    ['insufficient funds', 1, 50, true],
+    ['maximum level', 10, 100_000, true],
+  ])('disables dishwasher upgrade for %s', (_reason, level, funds, disabled) => {
+    const station = {
+      id: 'wash1', type: 'automatic', level, x: 300, y: 120, w: 40, h: 40,
+    };
+    useGameState.mockReturnValue({
+      ...state,
+      restaurant: { expansionLevel: 1, funds, gameTime: 10 },
+      washStations: [station],
+    });
+    findClickedEntity.mockReturnValue({
+      type: 'washStation', data: station, text: 'Automatic dishwasher',
+    });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    fireEvent.click(container.querySelector('canvas'), { clientX: 320, clientY: 140 });
+
+    const button = screen.getByRole('button', { name: level === 10 ? 'Dishwasher max level' : /Upgrade dishwasher/ });
+    expect(button).toBeDisabled();
+    expect(disabled).toBe(true);
   });
 });

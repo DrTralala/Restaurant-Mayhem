@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { getStaffCarryCapacity } from '../simulation/staffInventory';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
+import { useGameState } from '../state/GameContext';
+import {
+  formatDutyMode,
+  formatGameTime,
+  getStaffDutyPresentation,
+} from '../panels/StaffScheduleEditor';
 
 const taskLabels = {
   clean_table: 'Cleaning table',
@@ -10,6 +16,7 @@ const taskLabels = {
   prepare_drink: 'Preparing drink',
   pickup_service_item: 'Collecting order',
   deliver_service_item: 'Delivering order',
+  deliver_food_item: 'Delivering order',
   clean_service_item: 'Clearing service item',
   clean_floor: 'Cleaning floor',
   collect_dirty_item: 'Collecting dirty item',
@@ -23,8 +30,9 @@ const actionButton = {
   cursor: 'pointer',
 };
 
-export default function StaffDetailsPanel({ staff, cashierStations, dispatch, onMove, onClose }) {
+export default function StaffDetailsPanel({ staff, cashierStations, dispatch, onMove, onClose, gameTime }) {
   const [salary, setSalary] = useState(staff.salary);
+  const state = useGameState();
 
   useEffect(() => setSalary(staff.salary), [staff.id, staff.salary]);
 
@@ -32,6 +40,10 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
   const assignedStation = cashierStations?.find(station => station.assignedStaffId === staff.id);
   const task = taskLabels[staff.task?.type]
     || (staff.role === 'waiter' && assignedStation ? 'Staffing cashier' : 'Available');
+  const currentGameTime = Number.isFinite(Number(gameTime))
+    ? Number(gameTime)
+    : state?.restaurant?.gameTime ?? 0;
+  const duty = getStaffDutyPresentation(staff, currentGameTime);
 
   return (
     <aside style={{
@@ -68,6 +80,25 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
 
       <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 16 }}>
         Current task: <strong style={{ color: '#fff' }}>{task}</strong>
+      </div>
+
+      <div
+        data-testid={`staff-detail-status-${staff.id}`}
+        style={{ ...TYPOGRAPHY.secondary, color: '#aab8cf', background: '#121c35', borderRadius: 4, padding: '7px 9px', marginBottom: 16 }}
+      >
+        <div>Effective duty: <strong style={{ color: '#e8eef8' }}>{formatDutyMode(duty.effectiveDuty)}</strong></div>
+        <div>Duty phase: <strong style={{ color: '#e8eef8' }}>{humaniseIdentifier(duty.dutyPhase)}</strong></div>
+        <div>
+          Requested duty: <strong style={{ color: '#e8eef8' }}>{formatDutyMode(duty.requestedDuty)}</strong>
+          {duty.requestedDuty !== duty.effectiveDuty && ` (currently ${formatDutyMode(duty.effectiveDuty)})`}
+        </div>
+        {duty.reason && <div>Status: <strong style={{ color: '#f2d08a' }}>{duty.reason}</strong></div>}
+        {Number.isFinite(Number(duty.minimumEndAt)) && (
+          <div>PTO minimum ends at {formatGameTime(duty.minimumEndAt)} ({duty.minimumEndAt}s)</div>
+        )}
+        {Number.isFinite(Number(duty.activityEndsAt)) && (
+          <div>Activity ends at {formatGameTime(duty.activityEndsAt)} ({duty.activityEndsAt}s)</div>
+        )}
       </div>
 
       <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 16 }}>

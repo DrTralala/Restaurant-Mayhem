@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawQueueLayer } from './layers';
 import { updateStaff } from '../simulation/staff';
 import { processKitchen } from '../simulation/kitchen';
-import { ACTIVITY_DURATIONS } from '../simulation/activity';
+import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { getPlaceSettingPositions } from './tableGeometry';
 import { recordSeatResidency } from '../simulation/movement/seatedDeparture';
 
@@ -283,19 +283,21 @@ describe('drawFurnitureLayer', () => {
     }, { x: 0, y: 0, zoom: 1 });
 
     expect(ctx._calls.rects).toContainEqual({ x: 300, y: 120, w: 40, h: 120 });
-    expect(ctx._calls.rotations).toContain(Math.PI / 2);
+     expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
+       text: 'Service counter', x: 320, y: 180,
+     }));
   });
 
   it('draws dirt, sentence-case station labels, queue stacks, and exact half progress', () => {
     const ctx = recordCtx();
     drawFurnitureLayer(ctx, { tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
       floorDirt: [{ x: 100, y: 100 }, { x: Infinity, y: 20 }],
-      restaurant: { gameTime: ACTIVITY_DURATIONS.automaticWash / 2 },
+      restaurant: { gameTime: getDishwasherStats(1).secondsPerDish / 2 },
       washStations: [{ id: 'sink', type: 'manual', x: 20, y: 20 }, { id: 'auto', type: 'automatic', x: 100, y: 20 }],
       serviceItems: [{ id: 'a', washStationId: 'auto', state: 'washing', washStartedAt: 0 },
         { id: 'b', washStationId: 'auto', state: 'queued_for_wash' }] }, { x: 0, y: 0, zoom: 1 });
     expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining([
-      '💦', 'Sink', 'Dishwasher', '0 / 8', '2 / 12',
+      '💦', 'Sink', 'Dish', 'washer', '0 / 8', '2 / 12',
     ]));
     expect(ctx._calls.rects).toContainEqual(expect.objectContaining({ x: 143, y: 45, w: 1, h: 7 }));
   });
@@ -579,7 +581,7 @@ describe('drawFurnitureLayer', () => {
     }, { x: 0, y: 0, zoom: 1 });
 
     expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining([
-      'Kitchen station', 'Toaster',
+      'Kitchen', 'station', 'Toaster',
     ]));
     expect(ctx._calls.texts.map(call => call.text)).not.toContain('Kitchen equipment');
   });
@@ -648,7 +650,7 @@ describe('drawStaffLayer', () => {
     drawStaffLayer(ctx, state, camera);
     expect(ctx._calls.arcs.length).toBe(1);
     expect(ctx._calls.arcs[0].x).toBe(150);
-    expect(ctx._calls.arcs[0].y).toBe(200);
+    expect(ctx._calls.arcs[0].y).toBe(196);
   });
 
   it('renders staff as a stick figure with arms and hands', () => {
@@ -661,8 +663,8 @@ describe('drawStaffLayer', () => {
     drawStaffLayer(ctx, state, camera);
 
     expect(ctx._calls.lines.length).toBeGreaterThanOrEqual(5);
-    expect(ctx._calls.rects).toContainEqual({ x: 141, y: 210, w: 2, h: 2 });
-    expect(ctx._calls.rects).toContainEqual({ x: 157, y: 210, w: 2, h: 2 });
+    expect(ctx._calls.rects).toContainEqual({ x: 141, y: 206, w: 2, h: 2 });
+    expect(ctx._calls.rects).toContainEqual({ x: 157, y: 206, w: 2, h: 2 });
   });
 
   it('uses gender palettes for staff figures and their names', () => {
@@ -726,8 +728,8 @@ describe('drawStaffLayer', () => {
 
     const names = ctx._calls.texts.filter(call => ['Sofia', 'Anna'].includes(call.text));
     expect(names).toEqual([
-      expect.objectContaining({ text: 'Sofia', x: 200, y: 186 }),
-      expect.objectContaining({ text: 'Anna', x: 202, y: 176 }),
+      expect.objectContaining({ text: 'Sofia', x: 200, y: 182 }),
+      expect.objectContaining({ text: 'Anna', x: 202, y: 172 }),
     ]);
   });
 
@@ -742,7 +744,7 @@ describe('drawStaffLayer', () => {
     // getDefaultStaffPosition for cook index 0 at expansionLevel 1: world.floorX=50
     // x = 50 + 40 + 0*45 = 90, y = world.diningY = 100
     expect(ctx._calls.arcs[0].x).toBe(90);
-    expect(ctx._calls.arcs[0].y).toBe(100);
+    expect(ctx._calls.arcs[0].y).toBe(96);
   });
 
   it('falls back when x is not finite', () => {
@@ -753,7 +755,7 @@ describe('drawStaffLayer', () => {
     const ctx = recordCtx();
     drawStaffLayer(ctx, state, camera);
     expect(ctx._calls.arcs[0].x).toBe(90);
-    expect(ctx._calls.arcs[0].y).toBe(100);
+    expect(ctx._calls.arcs[0].y).toBe(96);
   });
 
   it('falls back to the assigned cashier position when waiter coordinates are missing', () => {
@@ -768,7 +770,7 @@ describe('drawStaffLayer', () => {
 
     drawStaffLayer(ctx, state, camera);
 
-    expect(ctx._calls.arcs[0]).toMatchObject({ x: 840, y: 100 });
+    expect(ctx._calls.arcs[0]).toMatchObject({ x: 840, y: 96 });
   });
 
   it('does not render staff task text on the main canvas', () => {
@@ -933,8 +935,8 @@ describe('drawStaffLayer', () => {
     const ctx = recordCtx();
     drawCustomerLayer(ctx, state, camera, { timeMs: 200, reducedMotion: true });
     expect(ctx._calls.arcs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ x: 500, y: 300, alpha: 0.6 }),
-      expect.objectContaining({ x: 700, y: 350, alpha: 1 }),
+      expect.objectContaining({ x: 500, y: 296, alpha: 0.6 }),
+      expect.objectContaining({ x: 700, y: 346, alpha: 1 }),
     ]));
     expect(ctx._calls.saves).toBe(5);
     expect(ctx._calls.restores).toBe(5);
@@ -951,8 +953,8 @@ describe('drawStaffLayer', () => {
     drawCustomerLayer(first, state, camera, { timeMs: 0, reducedMotion: true });
     drawCustomerLayer(second, state, camera, { timeMs: 200, reducedMotion: true });
     expect(first._calls.lines).toEqual(second._calls.lines);
-    expect(first._calls.arcs[0]).toMatchObject({ x: 500, y: 300, alpha: 0.6 });
-    expect(second._calls.arcs[0]).toMatchObject({ x: 500, y: 300, alpha: 0.6 });
+    expect(first._calls.arcs[0]).toMatchObject({ x: 500, y: 296, alpha: 0.6 });
+    expect(second._calls.arcs[0]).toMatchObject({ x: 500, y: 296, alpha: 0.6 });
   });
 
   it('uses the dish fallback when malformed truthy dishes accompany an item', () => {
@@ -999,8 +1001,8 @@ describe('drawCustomerLayer', () => {
         ...state,
         customers: [{ ...customer, x: 360, y: 300 }],
       }, camera);
-      expect(departed._calls.arcs[0]).toMatchObject({ x: 360, y: 300 });
-      expect(departed._calls.lines).toContainEqual({ x: 366, y: 322 });
+      expect(departed._calls.arcs[0]).toMatchObject({ x: 360, y: 296 });
+      expect(departed._calls.lines).toContainEqual({ x: 366, y: 318 });
     },
   );
 
@@ -1023,8 +1025,8 @@ describe('drawCustomerLayer', () => {
     ['eating', { state: 'eating', dishId: 'dish' }, { x: 110, y: 105 }],
     ['waiting_for_items', { state: 'waiting_for_items', dishId: 'dish' }, { x: 110, y: 105 }],
     ['waiting_for_party', { state: 'waiting_for_party', menuOutcome: 'unaffordable', dishId: null }, { x: 110, y: 105 }],
-    ['moving', { state: 'entering' }, { x: 800, y: 400 }],
-    ['paying', { state: 'paying' }, { x: 800, y: 400 }],
+    ['moving', { state: 'entering' }, { x: 800, y: 396 }],
+    ['paying', { state: 'paying' }, { x: 800, y: 396 }],
   ])('uses chair geometry only for seated visual states: %s', (_label, customer, expected) => {
     const ctx = recordCtx();
     drawCustomerLayer(ctx, {
@@ -1045,7 +1047,7 @@ describe('drawCustomerLayer', () => {
     drawCustomerLayer(ctx, state, camera);
     expect(ctx._calls.arcs.length).toBe(1);
     expect(ctx._calls.arcs[0].x).toBe(850);
-    expect(ctx._calls.arcs[0].y).toBe(370);
+    expect(ctx._calls.arcs[0].y).toBe(366);
   });
 
   it('animates a guided customer only while public movement status is traversing', () => {
@@ -1203,7 +1205,7 @@ describe('drawCustomerLayer', () => {
     expect(ctx._calls.arcs.length).toBe(1);
     // should use dynamic x/y, not table position
     expect(ctx._calls.arcs[0].x).toBe(850);
-    expect(ctx._calls.arcs[0].y).toBe(370);
+    expect(ctx._calls.arcs[0].y).toBe(366);
   });
 
   it('animates a fading customer only while movement status is traversing', () => {
@@ -1256,7 +1258,7 @@ describe('drawCustomerLayer', () => {
 
     drawCustomerLayer(ctx, state, camera);
 
-    expect(ctx._calls.arcs[0]).toMatchObject({ x: 780, y: 140 });
+    expect(ctx._calls.arcs[0]).toMatchObject({ x: 780, y: 136 });
   });
 
   it('skips customers with no position and no tableId', () => {
@@ -1300,7 +1302,7 @@ describe('drawQueueLayer', () => {
 
     expect(ctx._calls.arcs).toHaveLength(9);
     expect(ctx._calls.arcs.map(({ x }) => x)).toEqual(Array(9).fill(973));
-    expect(ctx._calls.arcs.map(({ y }) => y)).toEqual([390, 420, 450, 480, 510, 540, 570, 600, 630]);
+    expect(ctx._calls.arcs.map(({ y }) => y)).toEqual([386, 416, 446, 476, 506, 536, 566, 596, 626]);
     expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '+27', y: 660 }));
   });
 });

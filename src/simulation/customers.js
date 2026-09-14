@@ -37,6 +37,7 @@ import {
 } from './balance';
 import { createSpendingProfile } from './menuEconomy';
 import { cancelPendingPartyReviews } from './partyReviews';
+import { expireFoodPatience } from './foodPatience';
 
 let customerIdCounter = 0;
 let partyIdCounter = 0;
@@ -310,8 +311,14 @@ export function spawnCustomers(state, dt = 1) {
       happiness: 80 + getUpgradeEffect(state, 'happiness'),
       state: 'queued',
       dishId: null,
-      drinkId: null,
-      tableId: null,
+       drinkId: null,
+       foodOrderedAt: null,
+       foodPatienceBudget: null,
+       foodDeadlineAt: null,
+       foodOutcome: null,
+       foodCancelledAt: null,
+       cancelledServiceItemIds: [],
+       tableId: null,
       chairId: null,
       tipAmount: 0,
       seatTime: null,
@@ -722,6 +729,7 @@ function materialiseQueueDepartures(state, queue, queueSlots) {
 }
 
 export function prepareCustomersForMovement(state, gameDt) {
+  state = expireFoodPatience(state, state.restaurant?.gameTime);
   const customers = state.customers || [];
   const queue = normaliseCustomerQueue(state.queue || []);
   const restaurantOpen = isRestaurantOpen(state);

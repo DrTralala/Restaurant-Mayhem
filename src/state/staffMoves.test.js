@@ -100,6 +100,20 @@ describe('validateStaffMove', () => {
     expect(validateStaffMove(state, 'missing', { x: 500, y: 300 }))
       .toEqual({ valid: false, reason: 'missing-staff' });
   });
+
+  it('rejects relocation during protected PTO sleep before checking the destination', () => {
+    const state = makeState({
+      restaurant: { expansionLevel: 1, gameTime: 200 },
+      staff: [{
+        ...makeState().staff[0], effectiveDuty: 'pto', dutyPhase: 'active',
+        ptoSession: { sleepStartedAt: 100, minimumEndAt: 300 },
+        amenityUse: { amenityId: 'bed', slotIndex: 0, phase: 'occupied' },
+      }],
+    });
+
+    expect(validateStaffMove(state, 'worker', { x: 700, y: 300 }))
+      .toEqual({ valid: false, reason: 'protected-sleep' });
+  });
 });
 
 describe('moveStaff', () => {
@@ -287,6 +301,54 @@ describe('moveStaff', () => {
     expect(result.movementCoordinator.records.has('worker')).toBe(false);
     expect(result.movementCoordinator.plans.has('worker')).toBe(false);
     expect(result.movementCoordinator.claims.has('worker')).toBe(false);
+  });
+
+  it('releases a resident rest slot only through a legal exit before relocating', () => {
+    const state = makeState({
+      tables: [], chairs: [],
+      staffAmenities: [{
+        id: 'couch', type: 'couch', x: 500, y: 300, rotation: 0,
+        slots: [{ index: 0, reservedBy: null, occupiedBy: 'worker' }, { index: 1, reservedBy: null, occupiedBy: null }],
+      }],
+      staff: [{
+        ...makeState().staff[0], x: 510, y: 310, dutyPhase: 'active',
+        amenityUse: {
+          amenityId: 'couch', slotIndex: 0, phase: 'occupied',
+          activityStartedAt: 0, activityEndsAt: 900, lastRecoveryAt: 0,
+        },
+      }],
+    });
+
+    const result = moveStaff(state, 'worker', { x: 700, y: 300 });
+
+    expect(result.staff[0]).toMatchObject({ x: 700, y: 300, amenityUse: null });
+    expect(result.staffAmenities[0].slots[0]).toEqual({
+      index: 0, reservedBy: null, occupiedBy: null,
+    });
+  });
+
+  it('clears a reserved rest slot when relocating before arrival', () => {
+    const state = makeState({
+      tables: [], chairs: [],
+      staffAmenities: [{
+        id: 'couch', type: 'couch', x: 500, y: 300, rotation: 0,
+        slots: [{ index: 0, reservedBy: 'worker', occupiedBy: null }, { index: 1, reservedBy: null, occupiedBy: null }],
+      }],
+      staff: [{
+        ...makeState().staff[0], x: 200, y: 200, dutyPhase: 'travelling',
+        amenityUse: {
+          amenityId: 'couch', slotIndex: 0, phase: 'reserved',
+          activityStartedAt: null, activityEndsAt: null, lastRecoveryAt: null,
+        },
+      }],
+    });
+
+    const result = moveStaff(state, 'worker', { x: 700, y: 300 });
+
+    expect(result.staff[0]).toMatchObject({ x: 700, y: 300, amenityUse: null });
+    expect(result.staffAmenities[0].slots[0]).toEqual({
+      index: 0, reservedBy: null, occupiedBy: null,
+    });
   });
 
   it('repairs a staff overlap with a verified seat-origin customer without moving the customer', () => {

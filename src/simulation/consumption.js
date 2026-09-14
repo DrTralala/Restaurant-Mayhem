@@ -2,6 +2,7 @@ import { ACTIVITY_DURATIONS, getRemainingFraction } from './activity';
 import { enterCheckout, isCheckoutState } from './checkout';
 import { clearNavigationGoal } from './movement/navigationGoal';
 import { getPartyKey } from './partyReviews';
+import { markFoodDelivered } from './foodPatience';
 
 const DIRTY_STATES = new Set([
   'dirty_at_table',
@@ -26,15 +27,26 @@ export function getItemConsumptionDuration(kind) {
 }
 
 export function startCustomerConsumption(customer, serviceItems, gameTime) {
+  const cancelledIds = new Set((customer.cancelledServiceItemIds || []).map(id => String(id)));
   const orderedItems = serviceItems.filter(item =>
-    item.customerId === customer.id && item.state === 'delivered');
-  const orderedServiceItemIds = orderedItems.map(item => item.id);
+    item.customerId === customer.id
+      && item.state === 'delivered'
+      && !item.foodCancelled
+      && !cancelledIds.has(String(item.id)));
+  const orderedServiceItemIds = uniqueIds([
+    ...(Array.isArray(customer.orderedServiceItemIds) ? customer.orderedServiceItemIds : []),
+    ...(customer.cancelledServiceItemIds || []),
+    ...orderedItems.map(item => item.id),
+  ]);
   const orderedIds = new Set(orderedServiceItemIds);
   const consumedServiceItemIds = (customer.consumedServiceItemIds || [])
-    .filter(id => orderedIds.has(id));
+    .filter(id => orderedIds.has(id) && !cancelledIds.has(String(id)));
+  const nextCustomer = orderedItems.some(item => item.kind === 'dish')
+    ? markFoodDelivered(customer)
+    : customer;
   return {
     customer: {
-      ...customer,
+      ...nextCustomer,
       state: 'eating',
       eatTime: gameTime,
       orderedServiceItemIds,
@@ -94,38 +106,63 @@ export function normaliseConsumptionState(customers, serviceItems, gameTime) {
   });
 
   const normalisedCustomers = customerList.map(customer => {
-    if (customer.state !== 'eating' && !isCheckoutState(customer)) return customer;
+    if (customer.state !== 'eating' && !isCheckoutState(customer)
+      && customer.foodOutcome !== 'cancelled') return customer;
 
     const ownedItems = normalisedItems.filter(item => item.customerId === customer.id);
     const physicalItems = ownedItems.filter(isPhysicalItem);
+    const cancelledIds = new Set((customer.cancelledServiceItemIds || []).map(id => String(id)));
     const existingOrderedIds = Array.isArray(customer.orderedServiceItemIds)
       ? customer.orderedServiceItemIds
       : [];
+    const activePhysicalItems = physicalItems.filter(item =>
+      !item.foodCancelled && !cancelledIds.has(String(item.id)));
     const physicalIds = existingOrderedIds.length > 0
-      ? physicalItems.map(item => item.id)
-      : getLegacyPhysicalIds(customer, physicalItems);
-    const orderedServiceItemIds = uniqueIds([...existingOrderedIds, ...physicalIds]);
+      ? activePhysicalItems.map(item => item.id)
+      : getLegacyPhysicalIds(customer, activePhysicalItems);
+    const orderedServiceItemIds = uniqueIds([
+      ...existingOrderedIds,
+      ...physicalIds,
+      ...(customer.cancelledServiceItemIds || []),
+    ]);
     const orderedIds = new Set(orderedServiceItemIds);
     const existingConsumedIds = Array.isArray(customer.consumedServiceItemIds)
       ? customer.consumedServiceItemIds
       : [];
-    const consumedServiceItemIds = uniqueIds(existingConsumedIds.filter(id => orderedIds.has(id)));
+    const consumedServiceItemIds = uniqueIds(existingConsumedIds.filter(id =>
+      orderedIds.has(id) && !cancelledIds.has(String(id))));
     const consumedIds = new Set(consumedServiceItemIds);
 
     for (const item of ownedItems) {
-      if (!isConsumedItem(item) || !orderedIds.has(item.id) || consumedIds.has(item.id)) continue;
+      if (!isConsumedItem(item) || item.foodCancelled
+        || !orderedIds.has(item.id) || consumedIds.has(item.id)
+        || cancelledIds.has(String(item.id))) continue;
       consumedIds.add(item.id);
       consumedServiceItemIds.push(item.id);
     }
 
-    return {
+    const next = {
       ...customer,
       orderedServiceItemIds,
       consumedServiceItemIds,
     };
+    const deliveredFood = ownedItems.some(item => item.kind === 'dish'
+      && isPhysicalItem(item) && !isCancelledItem(customer, item) && itemWasDelivered(item));
+    return deliveredFood ? markFoodDelivered(next) : next;
   });
 
   return { customers: normalisedCustomers, serviceItems: normalisedItems };
+}
+
+function isCancelledItem(customer, item) {
+  return item?.foodCancelled === true
+    || (customer?.cancelledServiceItemIds || []).some(id => String(id) === String(item?.id));
+}
+
+function itemWasDelivered(item) {
+  return item?.state === 'delivered'
+    || DIRTY_STATES.has(item?.state)
+    || Number.isFinite(item?.consumedAt);
 }
 
 function isDue(item, gameTime) {
@@ -170,14 +207,21 @@ export function advanceConsumption(state) {
   let serviceItems = normalised.serviceItems;
   const completeByCustomerId = new Map();
   const customersAfterConsumption = normalised.customers.map(customer => {
-    if (customer.state !== 'eating' && !isCheckoutState(customer)) return customer;
+    const cancellationLifecycle = customer.foodOutcome === 'cancelled';
+    if (customer.state !== 'eating' && !isCheckoutState(customer) && !cancellationLifecycle) {
+      return customer;
+    }
 
-    const orderedServiceItemIds = Array.isArray(customer.orderedServiceItemIds)
-      ? customer.orderedServiceItemIds
-      : [];
-    const consumedServiceItemIds = Array.isArray(customer.consumedServiceItemIds)
-      ? [...customer.consumedServiceItemIds]
-      : [];
+    const cancelledServiceItemIds = uniqueIds(customer.cancelledServiceItemIds);
+    const cancelledIds = new Set(cancelledServiceItemIds.map(id => String(id)));
+    const orderedServiceItemIds = uniqueIds([
+      ...(Array.isArray(customer.orderedServiceItemIds) ? customer.orderedServiceItemIds : []),
+      ...cancelledServiceItemIds,
+    ]);
+    const consumedServiceItemIds = uniqueIds(
+      (Array.isArray(customer.consumedServiceItemIds) ? customer.consumedServiceItemIds : [])
+        .filter(id => !cancelledIds.has(String(id))),
+    );
     const consumedIds = new Set(consumedServiceItemIds);
     const checkoutCustomer = isCheckoutState(customer);
 
@@ -185,7 +229,8 @@ export function advanceConsumption(state) {
       if (item.customerId !== customer.id
         || item.state !== 'delivered'
         || !orderedServiceItemIds.includes(item.id)
-        || consumedIds.has(item.id)) return item;
+        || consumedIds.has(item.id)
+        || isCancelledItem(customer, item)) return item;
 
       if (!checkoutCustomer && !isDue(item, gameTime)) return item;
 
@@ -199,8 +244,15 @@ export function advanceConsumption(state) {
       consumedServiceItemIds,
     };
     const complete = orderedServiceItemIds.length > 0
-      && orderedServiceItemIds.every(id => consumedIds.has(id));
-    completeByCustomerId.set(customer.id, complete);
+      && orderedServiceItemIds.every(id => consumedIds.has(id) || cancelledIds.has(String(id)));
+    const hasUnfinishedUncancelledItem = serviceItems.some(item =>
+      item.customerId === customer.id
+        && !isCancelledItem(customer, item)
+        && !isConsumedItem(item));
+    const removedOrderAlreadySettled = cancellationLifecycle
+      && orderedServiceItemIds.length === 0
+      && !hasUnfinishedUncancelledItem;
+    completeByCustomerId.set(customer.id, complete || removedOrderAlreadySettled);
     return updatedCustomer;
   });
 
@@ -235,7 +287,12 @@ export function advanceConsumption(state) {
     const complete = completeByCustomerId.get(customer.id) === true;
     const partyId = customer.partyId == null ? null : getPartyKey(customer);
     if (partyId != null && synchronisedPartyIds.has(partyId)) {
-      if (!readyPartyIds.has(partyId)) return customer;
+      if (!readyPartyIds.has(partyId)) {
+        return complete && customer.foodOutcome === 'cancelled'
+          && !isCheckoutState(customer) && customer.state !== 'leaving'
+          ? { ...customer, state: 'seated' }
+          : customer;
+      }
       if (customer.menuOutcome === 'unaffordable'
         && customer.state === 'waiting_for_party') {
         return beginUnaffordableDeparture(customer);
@@ -263,7 +320,8 @@ export function getCustomerConsumptionRemainingFraction(customer, serviceItems, 
   for (const item of normalised.serviceItems) {
     if (item.customerId !== customer.id
       || consumedIds.has(item.id)
-      || isConsumedItem(item)) continue;
+      || isConsumedItem(item)
+      || isCancelledItem(normalisedCustomer, item)) continue;
     const fraction = getRemainingFraction(
       gameTime,
       item.consumptionStartedAt,

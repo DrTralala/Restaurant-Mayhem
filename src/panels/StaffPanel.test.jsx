@@ -26,7 +26,121 @@ function makeState(overrides = {}) {
   };
 }
 
+function getStaffCard(id) {
+  return screen.getAllByTestId('staff-card').find(card => card.dataset.staffId === id);
+}
+
 describe('StaffPanel', () => {
+  it('renders four accessible role filters and sorts a copied list by skill then stable ID', () => {
+    const staff = [
+      { id: 'z-worker', name: 'Zed', role: 'cook', skill: 2, morale: 80, salary: 200 },
+      { id: 'a-worker', name: 'Ada', role: 'waiter', skill: 10, morale: 80, salary: 150 },
+      { id: 'm-worker', name: 'Mia', role: 'janitor', skill: 2, morale: 80, salary: 120 },
+      { id: 'b-worker', name: 'Bea', role: 'waiter', skill: 1, morale: 80, salary: 150 },
+    ];
+    const sourceOrder = [...staff];
+    useGameState.mockReturnValue(makeState({ staff }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    expect(screen.getAllByRole('button', { name: /^(All|Cooks|Waiters|Janitors)$/ })).toHaveLength(4);
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getAllByTestId('staff-card').map(card => card.dataset.staffId))
+      .toEqual(['a-worker', 'm-worker', 'z-worker', 'b-worker']);
+    expect(staff).toEqual(sourceOrder);
+    expect(staff).toEqual([
+      expect.objectContaining({ id: 'z-worker', skill: 2 }),
+      expect.objectContaining({ id: 'a-worker', skill: 10 }),
+      expect.objectContaining({ id: 'm-worker', skill: 2 }),
+      expect.objectContaining({ id: 'b-worker', skill: 1 }),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cooks' }));
+    expect(screen.getByRole('button', { name: 'Cooks' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getAllByTestId('staff-card').map(card => card.dataset.staffId)).toEqual(['z-worker']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Waiters' }));
+    expect(screen.getAllByTestId('staff-card').map(card => card.dataset.staffId))
+      .toEqual(['a-worker', 'b-worker']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Janitors' }));
+    expect(screen.getAllByTestId('staff-card').map(card => card.dataset.staffId)).toEqual(['m-worker']);
+  });
+
+  it('preserves a worker schedule draft when another worker training changes card order', () => {
+    let state = makeState({
+      restaurant: { funds: 2000 },
+      staff: [
+        { id: 'z-worker', name: 'Draft', role: 'cook', skill: 4, morale: 80, salary: 200 },
+        { id: 'a-worker', name: 'Trainer', role: 'waiter', skill: 3, morale: 80, salary: 150 },
+      ],
+    });
+    const dispatch = vi.fn(action => {
+      if (action.type !== 'TRAIN_STAFF') return;
+      state = {
+        ...state,
+        staff: state.staff.map(worker => worker.id === action.id
+          ? { ...worker, skill: worker.skill + 1 }
+          : worker),
+      };
+    });
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(dispatch);
+
+    const { rerender } = render(<StaffPanel />);
+    const draftCard = getStaffCard('z-worker');
+    fireEvent.click(within(draftCard).getByRole('button', { name: 'Edit schedule for Draft' }));
+    fireEvent.change(within(draftCard).getByRole('combobox', { name: '00:00 to 00:30' }), {
+      target: { value: 'rest' },
+    });
+
+    fireEvent.click(within(getStaffCard('a-worker')).getByRole('button', { name: /^Train/ }));
+    rerender(<StaffPanel />);
+
+    expect(screen.getAllByTestId('staff-card').map(card => card.dataset.staffId))
+      .toEqual(['a-worker', 'z-worker']);
+    expect(within(getStaffCard('z-worker'))
+      .getByRole('combobox', { name: '00:00 to 00:30' })).toHaveValue('rest');
+  });
+
+  it('cancels a schedule draft and restores the source schedule on the next edit', () => {
+    useGameState.mockReturnValue(makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit schedule for Marco' }));
+    fireEvent.change(within(card).getByRole('combobox', { name: '00:00 to 00:30' }), {
+      target: { value: 'rest' },
+    });
+    fireEvent.click(within(card).getByRole('button', { name: 'Cancel schedule' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit schedule for Marco' }));
+
+    expect(within(card).getByRole('combobox', { name: '00:00 to 00:30' })).toHaveValue('work');
+  });
+
+  it('keeps invalid schedule drafts open with a readable reason and does not dispatch', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit schedule for Marco' }));
+    fireEvent.change(within(card).getByRole('combobox', { name: '00:00 to 00:30' }), {
+      target: { value: 'pto' },
+    });
+    fireEvent.click(within(card).getByRole('button', { name: 'Apply schedule' }));
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/14 half-hour slots|7 in-game hours/i);
+  });
+
   it('does not disable hiring or show a legacy staff-slot denominator', () => {
     const state = makeState({
       staffSlots: 7,
@@ -207,7 +321,7 @@ describe('StaffPanel', () => {
     render(<StaffPanel />);
 
     expect(screen.getByText('Marco')).toBeInTheDocument();
-    expect(screen.getByText(/cook/i)).toBeInTheDocument();
+    expect(within(getStaffCard('s1')).getByText(/Cook/)).toBeInTheDocument();
   });
 
   it('rounds morale to the nearest whole percentage', () => {

@@ -1,5 +1,6 @@
 import { GRID_SIZE, getDoors, getRestaurantWorld } from '../world';
 import { getPlaceableDimensions } from '../../data/placeables';
+import { getAmenityGeometry } from '../../data/staffAmenities';
 
 export function cellKey(cell) {
   return `${cell.x},${cell.y}`;
@@ -51,8 +52,16 @@ export function navigationFixtureRectangles(state) {
     const dimensions = getPlaceableDimensions('serviceTable', service.rotation);
     add('service', service, dimensions.width, dimensions.height);
   }
-  for (const cashier of state.cashierStations || []) add('cashier', cashier, cashier.w, cashier.h);
+  for (const cashier of state.cashierStations || []) {
+    add('cashier', cashier, cashier.w || 80, cashier.h || 40);
+  }
   for (const station of state.washStations || []) add('wash', station, station.w || 40, station.h || 40);
+  for (const amenity of state.staffAmenities || []) {
+    const geometry = getAmenityGeometry(amenity);
+    if (geometry) rectangles.push({
+      kind: 'staffAmenity', id: amenity.id, ...geometry.footprint,
+    });
+  }
   return rectangles;
 }
 

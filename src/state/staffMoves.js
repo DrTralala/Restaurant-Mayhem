@@ -1,6 +1,6 @@
 import { getQueueVisibleMembers } from '../simulation/customerQueue';
 import { createGrid } from '../simulation/navigation/grid';
-import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
+import { clearNavigationGoal, setNavigationGoal } from '../simulation/movement/navigationGoal';
 import { createMovementCoordinator } from '../simulation/navigation/coordinator';
 import { CHARACTER_CLEARANCE } from '../simulation/navigation/destinations';
 import { findPath, worldToCell } from '../simulation/pathfinding';
@@ -8,6 +8,7 @@ import { getDefaultStaffPosition, getRestaurantWorld } from '../simulation/world
 import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { recoverCookingBatches } from '../simulation/cookingBatches';
+import { releaseAmenitySlot, selectStaffWellbeingExit } from '../simulation/staffWellbeing';
 
 const SEATED_CUSTOMER_STATES = new Set([
   'seated',
@@ -168,6 +169,11 @@ export function validateStaffMove(state = {}, id, point) {
   const movingStaff = workers.find(worker => sameId(worker?.id, id));
   if (!movingStaff) return invalid('missing-staff');
   if (!finitePoint(point)) return invalid('non-finite-coordinate');
+  if (Number.isFinite(currentState.restaurant?.gameTime)
+    && Number.isFinite(movingStaff.ptoSession?.minimumEndAt)
+    && currentState.restaurant.gameTime < movingStaff.ptoSession.minimumEndAt) {
+    return invalid('protected-sleep');
+  }
   if (!isOnRestaurantFloor(currentState, point)) return invalid('outside-floor');
 
   // The navigation grid is the shared source of truth for walls and fixture
@@ -284,11 +290,41 @@ function clearStaffRuntime(worker) {
   };
 }
 
+function releaseAmenityForRelocation(state, worker) {
+  if (!worker?.amenityUse) return state;
+  const now = state.restaurant?.gameTime;
+  if (!Number.isFinite(now)) return null;
+
+  let releaseState = state;
+  if (worker.amenityUse.phase === 'occupied') {
+    const exit = selectStaffWellbeingExit(state, worker.id);
+    if (!exit) return null;
+    const stagedWorker = setNavigationGoal({
+      ...worker,
+      x: exit.x,
+      y: exit.y,
+      dutyPhase: 'exiting',
+    }, exit);
+    releaseState = {
+      ...state,
+      staff: state.staff.map(candidate => candidate.id === worker.id
+        ? stagedWorker : candidate),
+    };
+  }
+
+  const released = releaseAmenitySlot(releaseState, worker.id, now, { reason: 'relocated' });
+  const releasedWorker = released.staff?.find(candidate => candidate.id === worker.id);
+  return releasedWorker?.amenityUse ? null : released;
+}
+
 export function moveStaff(state, id, point) {
   const validation = validateStaffMove(state, id, point);
   if (!validation.valid) return state;
 
-  const recovered = recoverCookingBatches(state, { cookIds: [id] });
+  const currentWorker = state.staff.find(candidate => sameId(candidate?.id, id));
+  const released = releaseAmenityForRelocation(state, currentWorker);
+  if (!released) return state;
+  const recovered = recoverCookingBatches(released, { cookIds: [id] });
   const worker = recovered.staff.find(candidate => sameId(candidate?.id, id));
   const work = resetStaffWork(recovered, worker);
   let next = invalidateMovementRuntime({

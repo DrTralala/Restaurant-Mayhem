@@ -53,10 +53,12 @@ function savedRecoveryState(fresh) {
     checkoutLineMember: false, checkoutLineGeometry: null, paymentReady: false,
   };
   const mario = {
+    ...fresh.staff.find(worker => worker.role === 'waiter'),
     id: 'mario', name: 'Mario', gender: 'male', role: 'waiter', skill: 2,
     morale: 73, salary: 150, x: 360, y: 400,
     task: { type: 'deliver_service_item', serviceItemId: 'carried-dish', customerId: c165.id },
     carryingServiceItemId: 'carried-dish', navigationGoal: { x: 260, y: 380 },
+    carryingServiceItemIds: undefined,
     activityPhase: 'task_assigned', idleUntil: null,
   };
   const cashier = {
@@ -134,8 +136,8 @@ describe('saveState', () => {
   it('hydrates fresh empty runtime plans through the LOCAL save transport', () => {
     const fresh = createInitialState();
     const staff = [
-      { id: 'a', x: 100, y: 100, navigationGoal: { x: 400, y: 100 } },
-      { id: 'b', x: 100, y: 300, navigationGoal: { x: 400, y: 300 } },
+      { ...fresh.staff[0], id: 'a', x: 100, y: 100, navigationGoal: { x: 400, y: 100 } },
+      { ...fresh.staff[1], id: 'b', x: 100, y: 300, navigationGoal: { x: 400, y: 300 } },
     ];
     const entry = character => ({
       character, speed: 20, ignoredIds: [], doorFlow: { doorId: null, direction: 'none' },
@@ -164,6 +166,7 @@ describe('loadState', () => {
       customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'recipe' }],
       dishes: [{ id: 'recipe', prepTime: 60 }],
       staff: [{
+        ...fresh.staff.find(worker => worker.role === 'cook'),
         id: 'cook', role: 'cook', skill: 5, morale: 80, x: 200, y: 200,
         task: {
           type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
@@ -264,7 +267,9 @@ describe('loadState', () => {
   });
 
   it('returns parsed state when save exists', () => {
-    const state = { version: SAVE_VERSION, restaurant: { funds: 500 } };
+    const fresh = createInitialState();
+    const { movementCoordinator: _movementCoordinator, ...withoutRuntime } = fresh;
+    const state = { ...withoutRuntime, restaurant: { ...fresh.restaurant, funds: 500 } };
     localStorage.setItem('restaurant-sim-save', JSON.stringify(state));
     expect(loadState()).toEqual(state);
   });
@@ -632,7 +637,6 @@ describe('hydrateState', () => {
       washStations: [],
     };
     const saved = {
-      version: SAVE_VERSION,
       restaurant: { funds: 999 },
       staff: [{ id: 'custom-cook' }],
     };
@@ -756,7 +760,7 @@ describe('hydrateState', () => {
 
   it('hydrates missing wash collections from fresh state and preserves populated saves', () => {
     const fresh = createInitialState();
-    const missing = hydrateState({ ...fresh, floorDirt: undefined, washStations: undefined }, fresh);
+    const missing = hydrateState({ ...fresh, version: undefined, floorDirt: undefined, washStations: undefined }, fresh);
     const saved = [{ id: 'd1' }];
     const stations = [{ id: 'wash9', type: 'automatic', x: 500, y: 300, w: 40, h: 40 }];
     const populated = hydrateState({ ...fresh, floorDirt: saved, washStations: stations }, fresh);
@@ -774,7 +778,6 @@ describe('hydrateState', () => {
       staff: [], customers: [], queue: [],
     };
     const saved = {
-      version: SAVE_VERSION,
       restaurant: { funds: 900 },
       staff: [{ id: 's1', name: 'Sofia' }],
       customers: [{ id: 'c1' }],
@@ -887,7 +890,6 @@ describe('hydrateState', () => {
       ],
     };
     const saved = {
-      version: SAVE_VERSION,
       restaurant: { funds: 900 },
       equipment: [
         { id: 'eq1', level: 4, speedMultiplier: 0.85, qualityBonus: null, owned: true },
@@ -939,7 +941,7 @@ describe('hydrateState', () => {
       id: `extra-${index}`,
       name: `Extra ${index}`,
     }))];
-    const crowded = hydrateState({ ...fresh, staff: crowdedStaff, staffSlots: 3 }, fresh);
+    const crowded = hydrateState({ ...fresh, version: undefined, staff: crowdedStaff, staffSlots: 3 }, fresh);
     const expanded = hydrateState({ ...fresh, staffSlots: 9 }, fresh);
 
     expect(legacy).not.toHaveProperty('staffSlots');
@@ -970,7 +972,6 @@ describe('hydrateState', () => {
 
   it('normalises drink overrides and defaults missing state', () => {
     const hydrated = hydrateState({
-      version: SAVE_VERSION,
       drinkOverrides: {
         water: { price: -10, quality: 22, popularity: 99 },
         tea: { price: 9.7, quality: 3 },
@@ -981,7 +982,7 @@ describe('hydrateState', () => {
       water: { price: 1, quality: 10 },
       tea: { price: 10, quality: 3 },
     });
-    expect(hydrateState({ version: SAVE_VERSION }, createInitialState()).drinkOverrides).toEqual({});
+    expect(hydrateState({}, createInitialState()).drinkOverrides).toEqual({});
   });
 
   it('round-trips valid sparse drink overrides', () => {
@@ -1028,7 +1029,7 @@ describe('hydrateState', () => {
 
   it('defaults missing party review state in the current save version', () => {
     const fresh = createInitialState();
-    const hydrated = hydrateState({ version: SAVE_VERSION }, fresh);
+    const hydrated = hydrateState({}, fresh);
     expect(hydrated.pendingPartyReviews).toEqual([]);
     expect(hydrated.partyReviewHistory).toEqual([]);
   });
@@ -1324,5 +1325,309 @@ describe('queue slot lease persistence across both transports', () => {
     await saveRepositoryState(saved, fetchImpl);
     const repositoryRestored = hydrateState(body, createInitialState());
     expect(repositoryRestored.queueSlots).toEqual(localRestored.queueSlots);
+  });
+});
+
+describe('version ten lifecycle save validation', () => {
+  function currentSave(overrides = {}) {
+    const fresh = createInitialState();
+    return { ...fresh, ...overrides, version: SAVE_VERSION };
+  }
+
+  it('increments the shared save version exactly once from the previous format', () => {
+    expect(SAVE_VERSION).toBe(10);
+    expect(createInitialState().version).toBe(10);
+  });
+
+  it('rejects an old autosave without deleting the evidence', () => {
+    const old = JSON.stringify({ version: 9, restaurant: { funds: 999 } });
+    localStorage.setItem('restaurant-sim-save', old);
+
+    expect(loadState()).toBeNull();
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(old);
+  });
+
+  it.each([0, 11, 1.5, '2', null])(
+    'rejects an automatic dishwasher with invalid level %s before hydration',
+    level => {
+      const saved = currentSave({
+        washStations: [{ id: 'auto', type: 'automatic', level, x: 500, y: 120, w: 40, h: 40 }],
+      });
+
+      expect(() => hydrateState(saved, createInitialState())).toThrow(/saved state|dishwasher/i);
+    },
+  );
+
+  it('rejects invalid cyclic schedules before a wellbeing default can repair them', () => {
+    const saved = currentSave({
+      staff: createInitialState().staff.map(worker => worker.id === 'starter-cook'
+        ? { ...worker, schedule: Array.from({ length: 48 }, (_mode, index) => index === 0 ? 'pto' : 'work') }
+        : worker),
+    });
+
+    expect(() => hydrateState(saved, createInitialState())).toThrow(/schedule/i);
+  });
+
+  it.each([
+    ['effective duty', { effectiveDuty: 'holiday' }],
+    ['duty phase', { dutyPhase: 'teleporting' }],
+    ['activity phase', { activityPhase: 'sleeping' }],
+    ['morale', { morale: Number.POSITIVE_INFINITY }],
+    ['well-rested buff', { wellRestedUntil: Number.NaN }],
+  ])('rejects malformed staff lifecycle field: %s', (_name, changes) => {
+    const saved = currentSave({
+      staff: createInitialState().staff.map(worker => worker.id === 'starter-cook'
+        ? { ...worker, ...changes }
+        : worker),
+    });
+
+    expect(() => hydrateState(saved, createInitialState())).toThrow(/staff|duty|activity|morale|buff/i);
+  });
+
+  it('round-trips a reserved couch and an occupied bed without converting either to walking state', () => {
+    const fresh = createInitialState();
+    const reserved = {
+      id: 'amenity-couch', type: 'couch', x: 600, y: 300, rotation: 0,
+      slots: [
+        { index: 0, reservedBy: 'resting', occupiedBy: null },
+        { index: 1, reservedBy: null, occupiedBy: null },
+      ],
+    };
+    const occupied = {
+      id: 'amenity-bed', type: 'bed', x: 700, y: 300, rotation: 1,
+      slots: [{ index: 0, reservedBy: null, occupiedBy: 'sleeping' }],
+    };
+    const sleeping = {
+      ...fresh.staff[0], id: 'sleeping', role: 'janitor', x: 720, y: 310,
+      effectiveDuty: 'pto', dutyPhase: 'active',
+      amenityUse: {
+        amenityId: 'amenity-bed', slotIndex: 0, phase: 'occupied',
+        activityStartedAt: 100, activityEndsAt: 25_300, lastRecoveryAt: 100,
+      },
+      ptoSession: {
+        sleepStartedAt: 100, minimumEndAt: 25_300, startingMorale: 40,
+      },
+      movementResidency: { kind: 'staff_amenity', amenityId: 'amenity-bed', slotIndex: 0 },
+      wellRestedUntil: 0,
+    };
+    const resting = {
+      ...fresh.staff[1], id: 'resting', role: 'waiter', x: 500, y: 300,
+      effectiveDuty: 'rest', dutyPhase: 'travelling',
+      navigationGoal: { x: 610, y: 330 },
+      amenityUse: {
+        amenityId: 'amenity-couch', slotIndex: 0, phase: 'reserved',
+        activityStartedAt: null, activityEndsAt: null, lastRecoveryAt: null,
+      },
+      ptoSession: null,
+      movementResidency: undefined,
+    };
+    const state = {
+      ...fresh,
+      staff: [resting, sleeping],
+      staffAmenities: [reserved, occupied],
+    };
+    delete state.staff[0].movementResidency;
+
+    saveState(state);
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.staff.find(worker => worker.id === 'resting')).toMatchObject({
+      effectiveDuty: 'rest', dutyPhase: 'travelling',
+      amenityUse: { amenityId: 'amenity-couch', slotIndex: 0, phase: 'reserved' },
+    });
+    expect(restored.staff.find(worker => worker.id === 'resting')).not.toHaveProperty('movementResidency');
+    expect(restored.staff.find(worker => worker.id === 'sleeping')).toMatchObject({
+      effectiveDuty: 'pto',
+      amenityUse: { amenityId: 'amenity-bed', slotIndex: 0, phase: 'occupied', activityStartedAt: 100 },
+      ptoSession: { sleepStartedAt: 100, minimumEndAt: 25_300, startingMorale: 40 },
+      movementResidency: { kind: 'staff_amenity', amenityId: 'amenity-bed', slotIndex: 0 },
+    });
+    expect(restored.staffAmenities).toEqual([reserved, occupied]);
+  });
+
+  it('round-trips an occupied arcade standing worker and a buff-expiry timestamp', () => {
+    const fresh = createInitialState();
+    const amenity = {
+      id: 'arcade-1', type: 'arcade', x: 600, y: 300, rotation: 0,
+      slots: [{ index: 0, reservedBy: null, occupiedBy: 'arcade-user' }],
+    };
+    const worker = {
+      ...fresh.staff[1], id: 'arcade-user', x: 610, y: 330,
+      effectiveDuty: 'rest', dutyPhase: 'active',
+      amenityUse: {
+        amenityId: 'arcade-1', slotIndex: 0, phase: 'occupied',
+        activityStartedAt: 100, activityEndsAt: 700, lastRecoveryAt: 100,
+      },
+      ptoSession: null,
+      wellRestedUntil: 86_500,
+      wellbeingWakeAt: 500,
+    };
+
+    saveState({ ...fresh, staff: [worker], staffAmenities: [amenity] });
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.staff[0]).toMatchObject({
+      amenityUse: { phase: 'occupied', activityEndsAt: 700 },
+      wellRestedUntil: 86_500,
+      wellbeingWakeAt: 500,
+    });
+    expect(restored.staff[0]).not.toHaveProperty('movementResidency');
+  });
+
+  it('round-trips active automatic washing progress at an upgraded level', () => {
+    const fresh = createInitialState();
+    const state = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 240 },
+      staff: [],
+      washStations: [{ id: 'auto', type: 'automatic', level: 2, x: 500, y: 120, w: 40, h: 40 }],
+      serviceItems: [{
+        id: 'dirty', kind: 'dish', state: 'washing', washStationId: 'auto',
+        washQueuedAt: 0, washStartedAt: 100, accumulatedWork: 120,
+        lastProgressAt: 200, x: 520, y: 140,
+      }],
+    };
+
+    saveState(state);
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.washStations[0]).toMatchObject({ type: 'automatic', level: 2 });
+    expect(restored.serviceItems[0]).toMatchObject({
+      state: 'washing', washStationId: 'auto', washStartedAt: 100,
+      accumulatedWork: 120, lastProgressAt: 200,
+    });
+  });
+
+  it('round-trips a resolved cleaning decision and durable target progress', () => {
+    const fresh = createInitialState();
+    const state = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 250 },
+      staff: fresh.staff.map(worker => worker.id === 'starter-janitor'
+        ? {
+          ...worker, x: 180, y: 220,
+          task: { type: 'clean_table', tableId: 't1', cleaningStartedAt: 100,
+            accumulatedWork: 75, lastProgressAt: 200 },
+        }
+        : worker),
+      tables: fresh.tables.map(table => table.id === 't1'
+        ? {
+          ...table, status: 'dirty', cleaningAction: {
+            id: 't1', eligibleAt: 50, staffId: 'starter-janitor',
+            startedAt: 100, cleaningStartedAt: 100,
+            accumulatedWork: 75, lastProgressAt: 200,
+            instantResolved: true, instantComplete: false,
+          },
+        }
+        : table),
+    };
+
+    saveState(state);
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.tables.find(table => table.id === 't1')).toMatchObject({
+      cleaningAction: {
+        id: 't1', staffId: 'starter-janitor', instantResolved: true,
+        instantComplete: false, accumulatedWork: 75, lastProgressAt: 200,
+      },
+    });
+    expect(restored.staff.find(worker => worker.id === 'starter-janitor').task)
+      .toMatchObject({ type: 'clean_table', tableId: 't1', accumulatedWork: 75 });
+  });
+
+  it('preserves occupied cancelled waste and terminal IDs after the removed item is gone', () => {
+    const fresh = createInitialState();
+    const counterCustomer = {
+      id: 'cancel-counter', partyId: 'cancel-party', state: 'seated',
+      tableId: 't1', dishId: null, drinkId: null,
+      foodOrderedAt: 100, foodPatienceBudget: 50, foodDeadlineAt: 150,
+      foodOutcome: 'cancelled', foodCancelledAt: 150,
+      foodCancellationReason: 'food-patience-expired', foodCancelledPrice: 12,
+      dishPriceAtOrder: null, drinkPriceAtOrder: null, orderSubtotal: 0,
+      orderedServiceItemIds: ['removed-dish', 'counter-waste'],
+      consumedServiceItemIds: [], cancelledServiceItemIds: ['removed-dish', 'counter-waste'],
+    };
+    const carriedCustomer = {
+      ...counterCustomer, id: 'cancel-carried', tableId: 't2',
+      orderedServiceItemIds: ['carried-waste'], cancelledServiceItemIds: ['carried-waste'],
+    };
+    const state = {
+      ...fresh,
+      staff: fresh.staff.map(worker => worker.id === 'starter-waiter'
+        ? {
+          ...worker, id: 'waste-carrier', x: 500, y: 300,
+          carryingServiceItemIds: ['carried-waste'],
+          task: { type: 'handoff_cancelled_waste', serviceItemId: 'carried-waste', washStationId: 'wash1' },
+        }
+        : worker).filter(worker => worker.id !== 'starter-janitor'),
+      customers: [counterCustomer, carriedCustomer],
+      serviceItems: [
+        {
+          id: 'counter-waste', kind: 'dish', menuItemId: 'toast', customerId: counterCustomer.id,
+          tableId: 't1', state: 'to_clean', foodCancelled: true, deliveryProhibited: true,
+          cancelledAt: 150, serviceTableId: 'st1', serviceSlotIndex: 0, x: 150, y: 130,
+          wasteOrigin: {
+            state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0,
+            stationId: null, tableId: 't1', x: 150, y: 130,
+          },
+        },
+        {
+          id: 'carried-waste', kind: 'dish', menuItemId: 'toast', customerId: carriedCustomer.id,
+          tableId: 't2', state: 'carried_dirty', foodCancelled: true, deliveryProhibited: true,
+          cancelledAt: 150, x: 500, y: 300,
+        },
+      ],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+    };
+
+    saveState(state);
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.customers[0].cancelledServiceItemIds).toEqual(['removed-dish', 'counter-waste']);
+    expect(restored.serviceItems.find(item => item.id === 'counter-waste')).toMatchObject({
+      state: 'to_clean', serviceTableId: 'st1', serviceSlotIndex: 0,
+    });
+    expect(restored.staff.find(worker => worker.id === 'waste-carrier').carryingServiceItemIds)
+      .toEqual(['carried-waste']);
+    expect(restored.serviceItems.find(item => item.id === 'carried-waste')).toMatchObject({
+      state: 'carried_dirty', foodCancelled: true,
+    });
+  });
+
+  it('rejects a contradictory incoming wash reservation instead of clearing it', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      washStations: [
+        { id: 'manual', type: 'manual', x: 300, y: 120, w: 40, h: 40 },
+        { id: 'auto', type: 'automatic', level: 1, x: 500, y: 120, w: 40, h: 40 },
+      ],
+      serviceItems: [{
+        id: 'dirty', kind: 'dish', state: 'queued_for_wash', washStationId: 'manual',
+        reservedWashStationId: 'auto', washQueuedAt: 10,
+      }],
+      staff: fresh.staff.map(worker => worker.id === 'starter-janitor'
+        ? { ...worker, task: null }
+        : worker),
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow(/reservation|inventory|wash/i);
+  });
+
+  it('rejects duplicate amenity occupants and one-sided worker reservations', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      staff: [fresh.staff[0]],
+      staffAmenities: [{
+        id: 'couch', type: 'couch', x: 600, y: 300, rotation: 0,
+        slots: [
+          { index: 0, reservedBy: 'starter-cook', occupiedBy: null },
+          { index: 1, reservedBy: 'starter-cook', occupiedBy: null },
+        ],
+      }],
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow(/amenity|reservation|occup/i);
   });
 });

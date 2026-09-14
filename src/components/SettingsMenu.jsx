@@ -3,6 +3,7 @@ import { useDispatch, useGameState } from '../state/GameContext';
 import { createInitialState } from '../state/initialState';
 import { hydrateState } from '../state/persistence';
 import { loadLatestRepositoryState, saveRepositoryState } from '../state/repositorySaves';
+import { isSaveValidationError } from '../state/saveValidation';
 import { TYPOGRAPHY } from '../typography';
 
 const buttonStyle = {
@@ -30,14 +31,16 @@ export default function SettingsMenu({ isOpen, onToggle, onClose }) {
     const fresh = createInitialState();
     try {
       const { state: saved, filename } = await loadLatestRepositoryState();
-      if (saved.version !== fresh.version) {
+      if (!saved || saved.version !== fresh.version) {
         setMessage('Saved game is incompatible');
         return;
       }
       dispatch({ type: 'LOAD_STATE', state: hydrateState(saved, fresh) });
       setMessage(`Loaded ${filename}`);
     } catch (error) {
-      setMessage(error.message);
+      setMessage(isSaveValidationError(error) || error.message === 'Invalid saved navigation geometry'
+        ? `Saved game is incompatible: ${error.message}`
+        : error.message);
     }
   };
 

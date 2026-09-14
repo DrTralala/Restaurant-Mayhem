@@ -8,6 +8,23 @@ import {
   getStaffCarryCapacity,
   withCarriedServiceItemIds,
 } from './staffInventory';
+import {
+  cancelCustomerFood,
+  expireFoodPatience,
+  getFoodPatienceFraction,
+  startFoodPatience,
+} from './foodPatience';
+
+function sameId(left, right) {
+  return left != null && right != null && String(left) === String(right);
+}
+
+export {
+  cancelCustomerFood,
+  expireFoodPatience,
+  getFoodPatienceFraction,
+  startFoodPatience,
+};
 
 export function selectOrderKinds(roll) {
   if (roll < 0.75) return ['dish'];
@@ -23,7 +40,7 @@ export function selectUnlockedDrinkId(unlockedDrinkIds, roll) {
 }
 
 export function hasDuplicateOwner(serviceItems, customerId, kind) {
-  return (serviceItems || []).some(item => item.customerId === customerId && item.kind === kind);
+  return (serviceItems || []).some(item => sameId(item.customerId, customerId) && item.kind === kind);
 }
 
 export function getNextServiceItemId(serviceItems) {
@@ -51,34 +68,52 @@ export function getServiceSlotPosition(serviceTable, serviceSlotIndex) {
 }
 
 export function getOccupiedServiceSlotKeys(state) {
-  const serviceTableIds = new Set((state.serviceTables || []).map(table => table.id));
+  const serviceTableIds = new Set((state.serviceTables || []).map(table => String(table.id)));
   const occupied = new Set();
 
   for (const item of state.serviceItems || []) {
+    const hasServiceTable = item.serviceTableId != null
+      && serviceTableIds.has(String(item.serviceTableId));
+    if (!hasServiceTable) continue;
     const validSlot = Number.isInteger(item.serviceSlotIndex)
       && item.serviceSlotIndex >= 0
       && item.serviceSlotIndex < 4
-      && serviceTableIds.has(item.serviceTableId);
-    if (!validSlot) continue;
+    const tableKey = String(item.serviceTableId);
+    const slotKey = validSlot ? `${tableKey}:${item.serviceSlotIndex}` : `${tableKey}:*`;
 
     if (item.state === 'on_service') {
-      occupied.add(`${item.serviceTableId}:${item.serviceSlotIndex}`);
+      occupied.add(slotKey);
       continue;
     }
 
-    const cook = (state.staff || []).find(worker => worker.id === item.assignedStaffId);
+    // A cancelled cooked item remains a physical counter occupant until a
+    // cleaner removes it. Its delivery claim is gone, but its waste origin is
+    // still authoritative for slot reuse.
+    if (isCancelledFoodForCustomer(
+      (state.customers || []).find(customer => sameId(customer.id, item.customerId)), item,
+    )
+      && item.state === 'to_clean') {
+      occupied.add(slotKey);
+      continue;
+    }
+
+    const cook = (state.staff || []).find(worker => sameId(worker.id, item.assignedStaffId));
     const hasCookDeliveryReservation = item.kind === 'dish'
       && item.state === 'carried'
       && cook?.role === 'cook'
-      && item.assignedStaffId === cook.id
-      && getCarriedServiceItemIds(cook).includes(item.id);
+      && sameId(item.assignedStaffId, cook.id)
+      && getCarriedServiceItemIds(cook).some(id => sameId(id, item.id));
     if (hasCookDeliveryReservation) {
-      occupied.add(`${item.serviceTableId}:${item.serviceSlotIndex}`);
+      if (!validSlot) {
+        occupied.add(`${tableKey}:*`);
+        continue;
+      }
+      occupied.add(slotKey);
       continue;
     }
 
     if (hasValidDrinkReservation(state, item)) {
-      occupied.add(`${item.serviceTableId}:${item.serviceSlotIndex}`);
+      occupied.add(slotKey);
     }
   }
 
@@ -89,7 +124,8 @@ export function findAvailableServiceSlot(state) {
   const occupied = getOccupiedServiceSlotKeys(state);
   for (const serviceTable of state.serviceTables || []) {
     for (let serviceSlotIndex = 0; serviceSlotIndex < 4; serviceSlotIndex += 1) {
-      if (occupied.has(`${serviceTable.id}:${serviceSlotIndex}`)) continue;
+      if (occupied.has(`${serviceTable.id}:*`)
+        || occupied.has(`${serviceTable.id}:${serviceSlotIndex}`)) continue;
       return {
         serviceTableId: serviceTable.id,
         serviceSlotIndex,
@@ -124,6 +160,9 @@ function createServiceItem(serviceItems, customer, kind, menuItemId) {
 }
 
 export function createCustomerOrder(state, customer, random = Math.random) {
+  if (customer?.foodOutcome === 'cancelled' || customer?.foodOutcome === 'delivered') {
+    return { customer, serviceItems: state.serviceItems || [] };
+  }
   const { customer: profiledCustomer, basket } = chooseAffordableBasket(state, customer, random);
   let serviceItems = [...(state.serviceItems || [])];
   const initialLength = serviceItems.length;
@@ -140,6 +179,12 @@ export function createCustomerOrder(state, customer, random = Math.random) {
         orderSubtotal: null,
         orderedServiceItemIds: [],
         consumedServiceItemIds: [],
+        foodOrderedAt: null,
+        foodPatienceBudget: null,
+        foodDeadlineAt: null,
+        foodOutcome: null,
+        foodCancelledAt: null,
+        cancelledServiceItemIds: [],
       },
       serviceItems,
     };
@@ -167,20 +212,32 @@ export function createCustomerOrder(state, customer, random = Math.random) {
   if (serviceItems.length === initialLength) return { customer: profiledCustomer, serviceItems };
 
   const customerItems = serviceItems.filter(item => item.customerId === profiledCustomer.id);
+  const orderCustomer = {
+    ...profiledCustomer,
+    state: 'waiting_for_items',
+    menuOutcome: 'ordered',
+    dishId: basket.dish?.id ?? null,
+    drinkId: basket.drink?.id ?? null,
+    dishPriceAtOrder: basket.dish?.price ?? null,
+    drinkPriceAtOrder: basket.drink?.price ?? null,
+    orderSubtotal: basket.price,
+    orderTime: state.restaurant?.gameTime ?? profiledCustomer.orderTime,
+    orderedServiceItemIds: customerItems.map(item => item.id),
+    consumedServiceItemIds: [],
+  };
+  const withFoodPatience = basket.dish
+    ? startFoodPatience(orderCustomer, state.restaurant?.gameTime)
+    : {
+        ...orderCustomer,
+        foodOrderedAt: null,
+        foodPatienceBudget: null,
+        foodDeadlineAt: null,
+        foodOutcome: null,
+        foodCancelledAt: null,
+        cancelledServiceItemIds: [],
+      };
   return {
-    customer: {
-      ...profiledCustomer,
-      state: 'waiting_for_items',
-      menuOutcome: 'ordered',
-      dishId: basket.dish?.id ?? null,
-      drinkId: basket.drink?.id ?? null,
-      dishPriceAtOrder: basket.dish?.price ?? null,
-      drinkPriceAtOrder: basket.drink?.price ?? null,
-      orderSubtotal: basket.price,
-      orderTime: state.restaurant?.gameTime ?? profiledCustomer.orderTime,
-      orderedServiceItemIds: customerItems.map(item => item.id),
-      consumedServiceItemIds: [],
-    },
+    customer: withFoodPatience,
     serviceItems,
   };
 }
@@ -191,7 +248,7 @@ export function allOrderedItemsDelivered(customer, serviceItems) {
     customer.drinkId ? 'drink' : null,
   ].filter(Boolean);
   return requiredKinds.length > 0 && requiredKinds.every(kind =>
-    serviceItems.some(item => item.customerId === customer.id
+    serviceItems.some(item => sameId(item.customerId, customer.id)
       && item.kind === kind
       && item.state === 'delivered'),
   );
@@ -207,19 +264,37 @@ function carriedInventoryKind(item) {
   return null;
 }
 
+function canCarryDirtyServiceItem(worker, item) {
+  return worker?.role === 'janitor'
+    || (worker?.role === 'waiter' && item?.foodCancelled === true);
+}
+
+function isCancelledFoodForCustomer(customer, item) {
+  return item?.foodCancelled === true
+    || (customer?.cancelledServiceItemIds || []).some(id => String(id) === String(item?.id));
+}
+
+function normaliseCancelledFoodItem(item) {
+  if (['ordered', 'preparing'].includes(item.state)) return null;
+  const marked = { ...item, foodCancelled: true, deliveryProhibited: true };
+  return ['ready', 'on_service', 'delivered'].includes(item.state)
+    ? { ...marked, state: 'to_clean', assignedStaffId: null }
+    : marked;
+}
+
 export function hasValidDrinkReservation(state, item) {
-  const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
-  const worker = (state.staff || []).find(staff => staff.id === item.assignedStaffId);
-  const counter = (state.serviceTables || []).some(table => table.id === item.serviceTableId);
+  const customer = (state.customers || []).find(candidate => sameId(candidate.id, item.customerId));
+  const worker = (state.staff || []).find(staff => sameId(staff.id, item.assignedStaffId));
+  const counter = (state.serviceTables || []).some(table => sameId(table.id, item.serviceTableId));
   return item.kind === 'drink'
     && ['ordered', 'preparing'].includes(item.state)
     && worker?.role === 'cook'
     && customer
     && customer.state !== 'leaving'
-    && customer.drinkId === item.menuItemId
+     && sameId(customer.drinkId, item.menuItemId)
     && worker.task?.type === 'prepare_drink'
-    && worker.task.serviceItemId === item.id
-    && worker.task.serviceTableId === item.serviceTableId
+     && sameId(worker.task.serviceItemId, item.id)
+     && sameId(worker.task.serviceTableId, item.serviceTableId)
     && worker.task.serviceSlotIndex === item.serviceSlotIndex
     && Number.isInteger(item.serviceSlotIndex)
     && item.serviceSlotIndex >= 0 && item.serviceSlotIndex < 4 && counter;
@@ -227,7 +302,7 @@ export function hasValidDrinkReservation(state, item) {
 
 export function normaliseServiceItemOwnership(state) {
   const customers = state.customers || [];
-  const customerIds = new Set(customers.map(customer => customer.id));
+  const customerIds = new Set(customers.map(customer => String(customer.id)));
   const seen = new Set();
   const kept = [];
   for (const item of state.serviceItems || []) {
@@ -237,8 +312,19 @@ export function normaliseServiceItemOwnership(state) {
        continue;
     }
     seen.add(key);
-    const owner = customers.find(customer => customer.id === item.customerId);
-    if (!customerIds.has(item.customerId) || owner.state === 'leaving') {
+    const owner = customers.find(customer => sameId(customer.id, item.customerId));
+    if (isCancelledFoodForCustomer(owner, item)) {
+       const cancelledItem = normaliseCancelledFoodItem(item);
+       if (cancelledItem) kept.push(cancelledItem);
+       continue;
+    }
+    if (!customerIds.has(String(item.customerId)) || owner.state === 'leaving') {
+       const canKeepCancelledCarrier = item.foodCancelled === true
+         && ['carried', 'carried_dirty'].includes(item.state);
+       if (canKeepCancelledCarrier) {
+         kept.push(item);
+         continue;
+       }
        if (isPhysicalServiceItem(item)) kept.push({ ...item, state: DIRTY_STATES.has(item.state) ? item.state : 'to_clean' });
       continue;
     }
@@ -262,9 +348,9 @@ export function normaliseServiceItemOwnership(state) {
   const carrierCandidates = new Map();
   for (const worker of state.staff || []) {
     for (const id of getCarriedServiceItemIds(worker)) {
-      const item = kept.find(candidate => candidate.id === id);
+       const item = kept.find(candidate => sameId(candidate.id, id));
       if (!item || !['carried', 'carried_dirty'].includes(item.state)
-        || (item.state === 'carried_dirty' && worker.role !== 'waiter')) continue;
+        || (item.state === 'carried_dirty' && !canCarryDirtyServiceItem(worker, item))) continue;
       const itemKey = String(item.id);
       const owners = carrierCandidates.get(itemKey) || [];
       carrierCandidates.set(itemKey, [...owners, worker.id]);
@@ -298,7 +384,7 @@ export function normaliseServiceItemOwnership(state) {
     const carrierId = acceptedCarrierByItem.get(String(item.id));
     if (carrierId == null && item.state === 'carried') return { ...item, state: 'to_clean' };
     if (carrierId == null && item.state === 'carried_dirty') {
-      return item.tableId != null && (state.tables || []).some(table => table.id === item.tableId)
+       return item.tableId != null && (state.tables || []).some(table => sameId(table.id, item.tableId))
         ? { ...item, state: 'dirty_at_table' }
         : { ...item, state: 'queued_for_wash', washStationId: null };
     }
@@ -376,12 +462,14 @@ export function normaliseServiceItemOwnership(state) {
 
   const finalCustomers = customers.map(customer => {
     const selectedKinds = [customer.dishId ? 'dish' : null, customer.drinkId ? 'drink' : null].filter(Boolean);
-    const represented = serviceItems.filter(item => item.customerId === customer.id);
+    const represented = serviceItems.filter(item => sameId(item.customerId, customer.id));
     const activeOrderState = ['waiting_for_items', 'eating'].includes(customer.state)
       || isCheckoutState(customer);
     const orderedIds = Array.isArray(customer.orderedServiceItemIds)
       ? customer.orderedServiceItemIds
       : [];
+    const cancelledIds = new Set((customer.cancelledServiceItemIds || []).map(id => String(id)));
+    const activeOrderedIds = orderedIds.filter(id => !cancelledIds.has(String(id)));
     const consumedIds = new Set(customer.consumedServiceItemIds || []);
     const activeItems = represented
       .filter(item => ['ordered', 'preparing', 'ready', 'on_service', 'carried', 'delivered'].includes(item.state)
@@ -390,8 +478,8 @@ export function normaliseServiceItemOwnership(state) {
       const menuItemId = kind === 'dish' ? customer.dishId : customer.drinkId;
       return !activeItems.some(item => item.kind === kind && item.menuItemId === menuItemId);
     });
-    const malformedTrackedOrder = orderedIds.length !== selectedKinds.length
-      || orderedIds.some((id, index) => {
+    const malformedTrackedOrder = activeOrderedIds.length !== selectedKinds.length
+      || activeOrderedIds.some((id, index) => {
         const item = activeItems.find(candidate => candidate.id === id);
         if (!item) return !consumedIds.has(id);
         const kind = selectedKinds[index];

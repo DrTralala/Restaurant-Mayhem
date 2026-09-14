@@ -39,7 +39,7 @@ describe('service item orders', () => {
     const rolls = [0.8, 0];
     const result = createCustomerOrder(state, {
       id: 'c1', partyId: 'p1', tableId: 't1', state: 'seated',
-      archetype: 'regular', spendingTier: 'value', spendingBudget: 20,
+      archetype: 'regular', patienceMax: 900, spendingTier: 'value', spendingBudget: 20,
     }, () => rolls.shift());
 
     expect(result.customer).toMatchObject({
@@ -56,6 +56,14 @@ describe('service item orders', () => {
       expect.objectContaining({ kind: 'dish', menuItemId: 'toast', customerId: 'c1' }),
       expect.objectContaining({ kind: 'drink', menuItemId: 'water', customerId: 'c1' }),
     ]);
+    expect(result.customer).toMatchObject({
+      foodOrderedAt: 42,
+      foodPatienceBudget: expect.any(Number),
+      foodDeadlineAt: expect.any(Number),
+      foodOutcome: 'pending',
+      foodCancelledAt: null,
+      cancelledServiceItemIds: [],
+    });
   });
 
   it('creates no service item when every basket is unaffordable', () => {
@@ -74,6 +82,27 @@ describe('service item orders', () => {
       dishId: null, drinkId: null, orderSubtotal: null,
     });
     expect(result.serviceItems).toEqual(expensiveState.serviceItems);
+    expect(result.customer).toMatchObject({
+      foodOrderedAt: null, foodPatienceBudget: null, foodDeadlineAt: null,
+      foodOutcome: null, foodCancelledAt: null, cancelledServiceItemIds: [],
+    });
+  });
+
+  it('does not start a food timer for a valid drinks-only order', () => {
+    const result = createCustomerOrder({
+      restaurant: { gameTime: 42, reputation: 3 },
+      dishes: [{ id: 'too-expensive', price: 100, quality: 1, popularity: 50 }],
+      unlockedDrinkIds: ['water'], drinkOverrides: {}, serviceItems: [],
+    }, {
+      id: 'c1', tableId: 't1', state: 'seated', patienceMax: 120,
+      spendingTier: 'budget', spendingBudget: 6,
+    }, () => 0);
+
+    expect(result.customer).toMatchObject({ drinkId: 'water', dishId: null });
+    expect(result.customer).toMatchObject({
+      foodOrderedAt: null, foodPatienceBudget: null, foodDeadlineAt: null,
+      foodOutcome: null, cancelledServiceItemIds: [],
+    });
   });
 
   it('assigns one lazy profile and preserves it on repeated order calls', () => {
@@ -176,6 +205,23 @@ describe('service item orders', () => {
     }, customer, () => 0.2);
 
     expect(result).toEqual({ customer, serviceItems: existing });
+  });
+
+  it('does not resurrect a food order after its terminal cancellation history is retained', () => {
+    const customer = {
+      id: 'c1', tableId: 't1', state: 'seated', patienceMax: 100,
+      foodOutcome: 'cancelled', cancelledServiceItemIds: ['service-item-1'],
+      dishId: null, drinkId: null,
+    };
+    const state = {
+      restaurant: { reputation: 3, gameTime: 50 },
+      dishes: [{ id: 'toast', price: 12, quality: 1, popularity: 50 }],
+      unlockedDrinkIds: [], serviceItems: [],
+    };
+
+    expect(createCustomerOrder(state, customer, () => 0)).toEqual({
+      customer, serviceItems: [],
+    });
   });
 
   it('rejects a partially duplicate basket instead of mismatching snapshots', () => {
@@ -317,6 +363,36 @@ describe('service item orders', () => {
     expect(findAvailableServiceSlot(state)).toBeNull();
   });
 
+  it('retains a cancelled counter waste slot until the physical item is removed', () => {
+    const state = {
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      serviceItems: [
+        {
+          id: 'waste', kind: 'dish', state: 'to_clean', customerId: 'c1',
+          serviceTableId: 'st1', serviceSlotIndex: 0,
+          foodCancelled: true,
+          wasteOrigin: { serviceTableId: 'st1', serviceSlotIndex: 0, x: 150, y: 130 },
+        },
+        { id: 'free', kind: 'dish', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 1 },
+      ],
+    };
+
+    expect(findAvailableServiceSlot(state)).toMatchObject({ serviceSlotIndex: 2 });
+  });
+
+  it('retains a legacy cancelled counter slot from customer history alone', () => {
+    const state = {
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [{ id: 'c1', foodOutcome: 'cancelled', cancelledServiceItemIds: ['waste'] }],
+      serviceItems: [{
+        id: 'waste', kind: 'dish', customerId: 'c1', state: 'to_clean',
+        serviceTableId: 'st1', serviceSlotIndex: 0,
+      }],
+    };
+
+    expect(findAvailableServiceSlot(state)).toMatchObject({ serviceSlotIndex: 1 });
+  });
+
   it('keeps the first owner-kind item and safely cancels duplicates', () => {
     const result = normaliseServiceItemOwnership({
       customers: [{ id: 'c1', state: 'waiting_for_items' }], staff: [], serviceTables: [],
@@ -384,14 +460,76 @@ describe('service item orders', () => {
     expect(result.serviceItems[0].state).toBe('to_clean');
   });
 
-  it('rejects a janitor or cook as carrier of a dirty item', () => {
-    for (const role of ['janitor', 'cook']) {
-      const result = normaliseServiceItemOwnership({ tables: [{ id: 't1' }], customers: [], serviceTables: [],
-        staff: [{ id: 'worker', role, carryingServiceItemId: 'i1' }],
-        serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried_dirty' }] });
-      expect(result.staff[0].carryingServiceItemIds).toEqual([]);
-      expect(result.serviceItems[0].state).toBe('dirty_at_table');
-    }
+  it('allows only janitors to carry normal dirty items', () => {
+    const janitor = normaliseServiceItemOwnership({
+      tables: [{ id: 't1' }], customers: [], serviceTables: [],
+      staff: [{ id: 'worker', role: 'janitor', carryingServiceItemId: 'i1' }],
+      serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried_dirty' }],
+    });
+    expect(janitor.staff[0].carryingServiceItemIds).toEqual(['i1']);
+    expect(janitor.serviceItems[0].state).toBe('carried_dirty');
+
+    const waiter = normaliseServiceItemOwnership({
+      tables: [{ id: 't1' }], customers: [], serviceTables: [],
+      staff: [{ id: 'worker', role: 'waiter', carryingServiceItemId: 'i1' }],
+      serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried_dirty' }],
+    });
+    expect(waiter.staff[0].carryingServiceItemIds).toEqual([]);
+    expect(waiter.serviceItems[0].state).toBe('dirty_at_table');
+
+    const cook = normaliseServiceItemOwnership({
+      tables: [{ id: 't1' }], customers: [], serviceTables: [],
+      staff: [{ id: 'worker', role: 'cook', carryingServiceItemId: 'i1' }],
+      serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried_dirty' }],
+    });
+    expect(cook.staff[0].carryingServiceItemIds).toEqual([]);
+    expect(cook.serviceItems[0].state).toBe('dirty_at_table');
+  });
+
+  it('allows a waiter to temporarily carry explicitly cancelled cooked waste', () => {
+    const result = normaliseServiceItemOwnership({
+      tables: [{ id: 't1' }], customers: [{ id: 'gone', state: 'seated' }], serviceTables: [],
+      staff: [{ id: 'worker', role: 'waiter', carryingServiceItemId: 'i1' }],
+      serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1',
+        state: 'carried_dirty', foodCancelled: true }],
+    });
+    expect(result.staff[0].carryingServiceItemIds).toEqual(['i1']);
+    expect(result.serviceItems[0].state).toBe('carried_dirty');
+  });
+
+  it('does not resurrect a lingering active item named by terminal cancellation history', () => {
+    const customer = {
+      id: 'c1', state: 'seated', dishId: null, drinkId: null,
+      foodOutcome: 'cancelled', cancelledServiceItemIds: ['dish-1'],
+    };
+    const result = normaliseServiceItemOwnership({
+      customers: [customer], staff: [], tables: [], serviceTables: [],
+      serviceItems: [{
+        id: 'dish-1', kind: 'dish', menuItemId: 'toast', customerId: 'c1', state: 'ordered',
+      }],
+    });
+
+    expect(result.customers[0]).toEqual(customer);
+    expect(result.serviceItems).toEqual([]);
+  });
+
+  it('converts a lingering cancelled counter item into retained cleanup waste', () => {
+    const result = normaliseServiceItemOwnership({
+      customers: [{
+        id: 'c1', state: 'seated', dishId: null, foodOutcome: 'cancelled',
+        cancelledServiceItemIds: ['dish-1'],
+      }],
+      staff: [], tables: [], serviceTables: [{ id: 'st1' }],
+      serviceItems: [{
+        id: 'dish-1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+        state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0,
+      }],
+    });
+
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'to_clean', foodCancelled: true, deliveryProhibited: true,
+      serviceTableId: 'st1', serviceSlotIndex: 0,
+    });
   });
 
   it('normalises a queued item that references a missing wash station', () => {
@@ -477,6 +615,22 @@ describe('service item orders', () => {
       staff: [{ id: 'w1', role: 'waiter', carryingServiceItemId: 'i1' }], serviceItems: [item] });
     expect(result.staff[0].carryingServiceItemIds).toEqual(['i1']);
     expect(result.serviceItems[0]).toEqual(item);
+  });
+
+  it('preserves ownership when legacy IDs use equivalent numeric and string forms', () => {
+    const item = {
+      id: 1, kind: 'dish', menuItemId: 'd1', customerId: '1', state: 'carried',
+      assignedStaffId: 'cook', x: 220, y: 220,
+    };
+    const result = normaliseServiceItemOwnership({
+      customers: [{ id: 1, dishId: 'd1', state: 'waiting_for_items' }],
+      serviceTables: [],
+      staff: [{ id: 'cook', role: 'cook', carryingServiceItemId: '1', x: 220, y: 220 }],
+      serviceItems: [item],
+    });
+
+    expect(result.serviceItems).toEqual([item]);
+    expect(result.staff[0].carryingServiceItemIds).toEqual(['1']);
   });
 
   it.each([
