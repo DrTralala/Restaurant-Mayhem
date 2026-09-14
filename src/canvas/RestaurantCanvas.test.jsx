@@ -33,7 +33,6 @@ vi.mock('./layers', () => ({
   drawFurnitureLayer: vi.fn(),
   drawStaffLayer: vi.fn(),
   drawCustomerLayer: vi.fn(),
-  drawOverlayLayer: vi.fn(),
   drawQueueLayer: vi.fn(),
   drawSelectionLayer: vi.fn(),
   drawPlacementPreview: vi.fn(),
@@ -582,6 +581,16 @@ describe('RestaurantCanvas object movement', () => {
     fireEvent.click(container.querySelector('canvas'), { clientX: 500, clientY: 500 });
 
     expect(onEmptySpaceClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not hit-test an idle pointer move', () => {
+    const { container } = render(<RestaurantCanvas />);
+    const canvas = container.querySelector('canvas');
+    findClickedEntity.mockClear();
+
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 500, buttons: 0 });
+
+    expect(findClickedEntity).not.toHaveBeenCalled();
   });
 
   it('does not report a furniture click as empty space', () => {

@@ -374,8 +374,20 @@ function requeueFiredItem(state, item, worker, loadIds) {
   };
   if (item.state === 'carried_dirty') {
     return item.tableId != null && (state.tables || []).some(table => sameId(table.id, item.tableId))
-      ? { ...base, state: 'dirty_at_table', washStationId: null }
-      : { ...base, state: 'queued_for_wash', washStationId: null, washStartedAt: null };
+      ? {
+        ...base,
+        state: 'dirty_at_table',
+        washStationId: null,
+        reservedWashStationId: null,
+        washStartedAt: null,
+      }
+      : {
+        ...base,
+        state: 'queued_for_wash',
+        washStationId: null,
+        reservedWashStationId: null,
+        washStartedAt: null,
+      };
   }
   return {
     ...base,
@@ -395,27 +407,16 @@ function safeCarriedTask(state, worker, serviceItems) {
     const foodExpired = finite(state.restaurant?.gameTime)
       && finite(customer?.foodDeadlineAt)
       && state.restaurant.gameTime >= customer.foodDeadlineAt;
-    // Cancellation takes precedence over the generic dirty-load route. Food
-    // cancellation deliberately clears station fields while preserving the
-    // waiter's physical load, so the handoff task may have no destination yet.
-    if (item.foodCancelled === true || foodExpired) {
-      const stationId = item.reservedWashStationId ?? item.washStationId;
-      return {
-        type: 'handoff_cancelled_waste',
-        serviceItemId: item.id,
-        washStationId: stationId != null
-          && (state.washStations || []).some(station => sameId(station.id, stationId))
-          ? stationId : null,
-      };
-    }
     if (item.state === 'carried_dirty') {
       const stationId = item.reservedWashStationId ?? item.washStationId
-        ?? (worker.task?.type === 'transfer_dirty_item' ? worker.task.washStationId : null);
+        ?? (['transfer_dirty_item', 'deliver_dirty_item'].includes(worker.task?.type)
+          ? worker.task.washStationId : null);
       if (stationId != null && (state.washStations || []).some(station => sameId(station.id, stationId))) {
         return { type: 'deliver_dirty_item', serviceItemId: item.id, washStationId: stationId };
       }
       continue;
     }
+    if (item.foodCancelled === true || foodExpired) continue;
     if (customer && customer.state !== 'leaving') {
       return { type: 'deliver_service_item', serviceItemId: item.id, customerId: item.customerId };
     }
@@ -497,7 +498,7 @@ function clearWorkerTask(state, worker, reason, fired) {
     retainedIds,
   );
   if (!fired) {
-    const safeTask = safeCarriedTask(state, nextWorker, nextServiceItems);
+    const safeTask = safeCarriedTask(state, worker, nextServiceItems);
     if (safeTask) nextWorker = { ...nextWorker, task: safeTask };
     else if (carried.length > 0) {
       const abandonedIds = new Set(
@@ -507,7 +508,13 @@ function clearWorkerTask(state, worker, reason, fired) {
       );
       if (abandonedIds.size > 0) {
         nextServiceItems = nextServiceItems.map(item => abandonedIds.has(String(item.id))
-          ? { ...item, state: 'to_clean', assignedStaffId: null, x: worker.x, y: worker.y }
+          ? {
+            ...item,
+            state: 'to_clean', assignedStaffId: null, x: worker.x, y: worker.y,
+            serviceTableId: null, serviceSlotIndex: null, stationId: null,
+            washStationId: null, reservedWashStationId: null,
+            washQueuedAt: null, washStartedAt: null,
+          }
           : item);
         nextWorker = withCarriedServiceItemIds(nextWorker,
           carried.filter(id => !abandonedIds.has(String(id))));

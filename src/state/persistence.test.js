@@ -1557,7 +1557,7 @@ describe('version ten lifecycle save validation', () => {
         ? {
           ...worker, id: 'waste-carrier', x: 500, y: 300,
           carryingServiceItemIds: ['carried-waste'],
-          task: { type: 'handoff_cancelled_waste', serviceItemId: 'carried-waste', washStationId: 'wash1' },
+          task: { type: 'deliver_dirty_item', serviceItemId: 'carried-waste', washStationId: 'wash1' },
         }
         : worker).filter(worker => worker.id !== 'starter-janitor'),
       customers: [counterCustomer, carriedCustomer],
@@ -1591,6 +1591,30 @@ describe('version ten lifecycle save validation', () => {
       .toEqual(['carried-waste']);
     expect(restored.serviceItems.find(item => item.id === 'carried-waste')).toMatchObject({
       state: 'carried_dirty', foodCancelled: true,
+    });
+  });
+
+  it('round-trips a waiter to_clean collection task without a table identity', () => {
+    const fresh = createInitialState();
+    const state = {
+      ...fresh,
+      serviceItems: [{ id: 'abandoned-dish', kind: 'dish', state: 'to_clean', x: 220, y: 220 }],
+      staff: fresh.staff.map(worker => worker.id === 'starter-waiter'
+        ? {
+          ...worker,
+          task: { type: 'collect_dirty_item', serviceItemId: 'abandoned-dish' },
+        }
+        : worker),
+    };
+
+    saveState(state);
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.staff.find(worker => worker.id === 'starter-waiter').task).toEqual({
+      type: 'collect_dirty_item', serviceItemId: 'abandoned-dish',
+    });
+    expect(restored.serviceItems[0]).toMatchObject({
+      id: 'abandoned-dish', state: 'to_clean', x: 220, y: 220,
     });
   });
 

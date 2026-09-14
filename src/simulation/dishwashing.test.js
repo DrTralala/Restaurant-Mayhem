@@ -24,8 +24,8 @@ describe('dishwashing lifecycle', () => {
         { id: 'queued', state: 'queued_for_wash', washStationId: 'sink' },
       ],
       staff: [
-        { id: 'w1', task: { type: 'deliver_dirty_item', serviceItemId: 'inbound', washStationId: 'sink' } },
-        { id: 'w2', task: { type: 'deliver_dirty_item', serviceItemId: 'inbound', washStationId: 'sink' } },
+        { id: 'w1', role: 'waiter', task: { type: 'deliver_dirty_item', serviceItemId: 'inbound', washStationId: 'sink' } },
+        { id: 'w2', role: 'waiter', task: { type: 'deliver_dirty_item', serviceItemId: 'inbound', washStationId: 'sink' } },
       ],
     };
 
@@ -44,11 +44,11 @@ describe('dishwashing lifecycle', () => {
       ],
       staff: [
         {
-          id: 'w1', carryingServiceItemIds: ['carried'],
+          id: 'w1', role: 'waiter', carryingServiceItemIds: ['carried'],
           task: { type: 'transfer_dirty_item', serviceItemId: 'dirty', washStationId: 'auto' },
         },
         {
-          id: 'w2',
+          id: 'w2', role: 'waiter',
           task: { type: 'deliver_dirty_item', serviceItemId: 'dirty', washStationId: 'auto' },
         },
       ],
@@ -184,7 +184,7 @@ describe('dishwashing lifecycle', () => {
       restaurant: { gameTime: 10 },
       serviceItems: [{ id: 'unassigned', state: 'queued_for_wash', washStationId: null, washQueuedAt: 1 }],
       staff: Array.from({ length: 12 }, (_, index) => ({
-        id: `w${index}`,
+        id: `w${index}`, role: 'waiter',
         task: { type: 'deliver_dirty_item', serviceItemId: `inbound-${index}`, washStationId: 'auto' },
       })),
     };

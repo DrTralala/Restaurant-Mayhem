@@ -27,8 +27,7 @@ const SERVICE_ITEM_STATES = new Set([
 ]);
 const TASK_TYPES = new Set([
   'clean_table', 'clean_floor', 'wash_item', 'collect_dirty_item',
-  'clean_service_item', 'transfer_dirty_item', 'deliver_dirty_item',
-  'handoff_cancelled_waste', 'pickup_service_item', 'take_order', 'take_payment',
+  'transfer_dirty_item', 'deliver_dirty_item', 'pickup_service_item', 'take_order', 'take_payment',
   'prepare_drink', 'prepare_dish', 'place_dish_on_service', 'deliver_service_item',
 ]);
 const CUSTOMER_STATES = new Set([
@@ -316,11 +315,9 @@ function validateTask(task, path, role = null) {
     clean_table: ['tableId'],
     clean_floor: ['dirtId'],
     wash_item: ['serviceItemId', 'washStationId'],
-    collect_dirty_item: ['serviceItemId', 'tableId'],
-    clean_service_item: ['serviceItemId'],
+    collect_dirty_item: ['serviceItemId'],
     transfer_dirty_item: ['serviceItemId', 'washStationId', 'sourceWashStationId'],
     deliver_dirty_item: ['serviceItemId', 'washStationId'],
-    handoff_cancelled_waste: ['serviceItemId'],
     pickup_service_item: ['serviceItemId'],
     take_order: ['customerId'],
     take_payment: ['customerId', 'stationId'],
@@ -335,9 +332,7 @@ function validateTask(task, path, role = null) {
   for (const key of [
     'customerId', 'stationId', 'washStationId', 'sourceWashStationId', 'serviceItemId',
     'serviceTableId', 'tableId', 'dirtId', 'batchId',
-  ]) validateOptionalId(task, key, path, {
-    nullable: task.type === 'handoff_cancelled_waste' && key === 'washStationId',
-  });
+  ]) validateOptionalId(task, key, path);
   if (has(task, 'customerIds')) validateUniqueIds(task.customerIds, `${path}.customerIds`);
   if (has(task, 'serviceItemIds')) validateUniqueIds(task.serviceItemIds, `${path}.serviceItemIds`);
   validateOptionalFinite(task, 'serviceSlotIndex', path, { minimum: 0, maximum: 3, integer: true });
@@ -833,9 +828,8 @@ function validateTaskForeignKeys(state, worker, task, fixtures, serviceItemHisto
     ],
     collect_dirty_item: [
       ['serviceItemId', serviceItems, 'service item'],
-      ['tableId', state.tables, 'table'],
+      ['tableId', state.tables, 'table', { nullable: true }],
     ],
-    clean_service_item: [['serviceItemId', serviceItems, 'service item']],
     transfer_dirty_item: [
       ['serviceItemId', serviceItems, 'service item'],
       ['washStationId', fixtures.washStations, 'wash station'],
@@ -844,10 +838,6 @@ function validateTaskForeignKeys(state, worker, task, fixtures, serviceItemHisto
     deliver_dirty_item: [
       ['serviceItemId', serviceItems, 'service item'],
       ['washStationId', fixtures.washStations, 'wash station'],
-    ],
-    handoff_cancelled_waste: [
-      ['serviceItemId', serviceItems, 'service item'],
-      ['washStationId', fixtures.washStations, 'wash station', { nullable: true }],
     ],
     pickup_service_item: [['serviceItemId', serviceItems, 'service item']],
     take_order: [['customerId', state.customers, 'customer']],
@@ -1085,8 +1075,7 @@ function validateCarriersAndReservations(state, serviceItems, fixtures) {
       if (!['carried', 'carried_dirty'].includes(item.state)) {
         fail(`staff.${String(worker.id)}.carryingServiceItemIds`, `item ${key} is not physically carried`);
       }
-      if (item.state === 'carried_dirty'
-        && !(worker.role === 'janitor' || (worker.role === 'waiter' && item.foodCancelled === true))) {
+      if (item.state === 'carried_dirty' && worker.role !== 'waiter') {
         fail(`staff.${String(worker.id)}.carryingServiceItemIds`, `worker cannot carry dirty item ${key}`);
       }
       if (carriers.has(key)) fail(`serviceItems.${key}`, 'has multiple carriers');
@@ -1132,17 +1121,6 @@ function validateCarriersAndReservations(state, serviceItems, fixtures) {
     transferReservations.set(itemKey, { worker, task });
   }
 
-  for (const worker of staff) {
-    const task = worker.task;
-    if (task?.type !== 'handoff_cancelled_waste') continue;
-    const item = itemsById.get(idKey(task.serviceItemId));
-    const itemKey = idKey(task.serviceItemId);
-    if (!item || item.foodCancelled !== true || !carriers.has(itemKey)
-      || !sameId(carriers.get(itemKey), worker.id)) {
-      fail(`staff.${String(worker.id)}.task`, 'cancelled-waste handoff must own a carried cancelled item');
-    }
-  }
-
   for (const item of serviceItems) {
     if (item.reservedWashStationId == null) continue;
     const key = idKey(item.id);
@@ -1164,8 +1142,8 @@ function validateCarriersAndReservations(state, serviceItems, fixtures) {
     for (const { task } of transferReservations.values()) {
       if (sameId(task.washStationId, station.id)) ids.add(idKey(task.serviceItemId));
     }
-      const capacity = station.type === 'manual'
-        ? 8 : getDishwasherStats(station.level ?? 1)?.capacity ?? 0;
+    const capacity = station.type === 'manual'
+      ? 8 : getDishwasherStats(station.level ?? 1)?.capacity ?? 0;
     if (ids.size > capacity) fail(`washStations.${String(station.id)}`, 'exceeds canonical physical occupancy');
   }
 

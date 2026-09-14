@@ -50,7 +50,7 @@ function arrivedDirtyPickupState(skill) {
     })),
     staff: [{
       id: 'waiter',
-      role: 'janitor',
+      role: 'waiter',
       skill,
       morale: 80,
       x: 180,
@@ -72,7 +72,7 @@ function carriedDirtyState({ stationItems = [], stations, workerOverrides = {}, 
     ],
     staff: [{
       id: 'waiter',
-      role: 'janitor',
+      role: 'waiter',
       skill: 10,
       morale: 80,
       x: 180,
@@ -139,7 +139,9 @@ describe('Task 5 dirty dishes and washing', () => {
 
     expect(getCarriedServiceItemIds(result.staff[0])).toEqual(['clean']);
     expect(result.serviceItems.filter(item => item.state === 'carried_dirty')).toHaveLength(0);
-    expect(result.staff[0].task).toBeNull();
+    expect(result.staff[0].task).toMatchObject({
+      type: 'deliver_service_item', serviceItemId: 'clean',
+    });
   });
 
   it('prefers a reachable automatic washer over a nearer, less-loaded sink', () => {
@@ -349,7 +351,7 @@ describe('Task 5 dirty dishes and washing', () => {
     });
   });
 
-  it('accepts a legacy scalar dirty carrier during save recovery without mixing', () => {
+  it('rejects a legacy scalar dirty carrier when its janitor role is invalid', () => {
     const fresh = createInitialState();
     const legacyWorker = {
       ...fresh.staff.find(worker => worker.role === 'janitor'),
@@ -365,12 +367,6 @@ describe('Task 5 dirty dishes and washing', () => {
       serviceItems: [dirtyItem('dirty')],
     };
 
-    const recovered = hydrateState(saved, fresh);
-
-    expect(recovered.staff[0].carryingServiceItemIds).toEqual(['dirty']);
-    expect(recovered.staff[0]).not.toHaveProperty('carryingServiceItemId');
-    expect(recovered.serviceItems[0]).toMatchObject({ id: 'dirty', state: 'carried_dirty' });
-    expect(recovered.staff[0].carryingServiceItemIds.every(id =>
-      recovered.serviceItems.find(item => item.id === id)?.state === 'carried_dirty')).toBe(true);
+    expect(() => hydrateState(saved, fresh)).toThrow(/worker cannot carry dirty item dirty/);
   });
 });

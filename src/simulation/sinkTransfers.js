@@ -174,7 +174,7 @@ function compareCandidates(left, right) {
  */
 export function selectSinkTransfer(state, staffId, now = state?.restaurant?.gameTime) {
   const worker = (state?.staff || []).find(candidate => sameId(candidate.id, staffId));
-  if (!worker || worker.role !== 'janitor' || worker.task || !finite(now)) return null;
+  if (!worker || worker.role !== 'waiter' || worker.task || !finite(now)) return null;
   const movementSpeed = getStaffMovementSpeed(worker);
   if (!(movementSpeed > 0)) return null;
   const manualStations = (state?.washStations || []).filter(station => station.type === 'manual');

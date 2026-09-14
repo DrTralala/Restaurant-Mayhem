@@ -460,30 +460,61 @@ describe('service item orders', () => {
     expect(result.serviceItems[0].state).toBe('to_clean');
   });
 
-  it('allows only janitors to carry normal dirty items', () => {
-    const janitor = normaliseServiceItemOwnership({
-      tables: [{ id: 't1' }], customers: [], serviceTables: [],
-      staff: [{ id: 'worker', role: 'janitor', carryingServiceItemId: 'i1' }],
-      serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried_dirty' }],
-    });
-    expect(janitor.staff[0].carryingServiceItemIds).toEqual(['i1']);
-    expect(janitor.serviceItems[0].state).toBe('carried_dirty');
-
+  it('allows only waiters to carry normal dirty items', () => {
     const waiter = normaliseServiceItemOwnership({
       tables: [{ id: 't1' }], customers: [], serviceTables: [],
       staff: [{ id: 'worker', role: 'waiter', carryingServiceItemId: 'i1' }],
       serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried_dirty' }],
     });
-    expect(waiter.staff[0].carryingServiceItemIds).toEqual([]);
-    expect(waiter.serviceItems[0].state).toBe('dirty_at_table');
+    expect(waiter.staff[0].carryingServiceItemIds).toEqual(['i1']);
+    expect(waiter.serviceItems[0].state).toBe('carried_dirty');
 
-    const cook = normaliseServiceItemOwnership({
+    const janitor = normaliseServiceItemOwnership({
       tables: [{ id: 't1' }], customers: [], serviceTables: [],
-      staff: [{ id: 'worker', role: 'cook', carryingServiceItemId: 'i1' }],
+      staff: [{ id: 'worker', role: 'janitor', carryingServiceItemId: 'i1' }],
       serviceItems: [{ id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried_dirty' }],
     });
-    expect(cook.staff[0].carryingServiceItemIds).toEqual([]);
-    expect(cook.serviceItems[0].state).toBe('dirty_at_table');
+    expect(janitor.staff[0].carryingServiceItemIds).toEqual([]);
+    expect(janitor.serviceItems[0].state).toBe('dirty_at_table');
+  });
+
+  it.each([
+    ['wrong role', { worker: { role: 'janitor' } }],
+    ['wrong task item ID', { task: { serviceItemId: 'other' } }],
+    ['wrong source identity', { task: { sourceWashStationId: 'other-sink' } }],
+    ['wrong source type', { source: { type: 'automatic' } }],
+    ['wrong destination identity', { task: { washStationId: 'other-machine' } }],
+    ['wrong destination type', { destination: { type: 'manual' } }],
+    ['wrong item state', { item: { state: 'washing' } }],
+    ['mismatched reservation', { item: { reservedWashStationId: 'other-machine' } }],
+  ])('clears an invalid transfer reservation for %s', (_reason, overrides) => {
+    const result = normaliseServiceItemOwnership({
+      customers: [], tables: [], serviceTables: [],
+      washStations: [
+        { id: 'sink', type: overrides.source?.type ?? 'manual' },
+        { id: 'machine', type: overrides.destination?.type ?? 'automatic' },
+        { id: 'other-machine', type: 'automatic' },
+      ],
+      staff: [{
+        id: 'waiter', role: overrides.worker?.role ?? 'waiter',
+        task: {
+          type: 'transfer_dirty_item', serviceItemId: overrides.task?.serviceItemId ?? 'dirty',
+          sourceWashStationId: overrides.task?.sourceWashStationId ?? 'sink',
+          washStationId: overrides.task?.washStationId ?? 'machine',
+        },
+      }],
+      serviceItems: [{
+        id: 'dirty', kind: 'dish', customerId: 'gone', state: overrides.item?.state ?? 'queued_for_wash',
+        washStationId: 'sink', reservedWashStationId: overrides.item?.reservedWashStationId ?? 'machine',
+        assignedStaffId: 'waiter',
+      }],
+    });
+
+    expect(result.staff[0].task).toBeNull();
+    expect(result.serviceItems[0]).toMatchObject({
+      state: 'queued_for_wash', washStationId: 'sink',
+      assignedStaffId: null, reservedWashStationId: null,
+    });
   });
 
   it('allows a waiter to temporarily carry explicitly cancelled cooked waste', () => {
@@ -495,6 +526,30 @@ describe('service item orders', () => {
     });
     expect(result.staff[0].carryingServiceItemIds).toEqual(['i1']);
     expect(result.serviceItems[0].state).toBe('carried_dirty');
+  });
+
+  it('normalises a malformed cancelled clean waiter load into dirty work', () => {
+    const result = normaliseServiceItemOwnership({
+      tables: [{ id: 't1' }], customers: [{
+        id: 'gone', state: 'seated', foodOutcome: 'cancelled', cancelledServiceItemIds: ['i1'],
+      }], serviceTables: [], washStations: [{ id: 'sink', type: 'manual' }],
+      staff: [{ id: 'worker', role: 'waiter', x: 220, y: 240, carryingServiceItemId: 'i1' }],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', customerId: 'gone', tableId: 't1', state: 'carried',
+        foodCancelled: true, deliveryProhibited: true, assignedStaffId: 'worker',
+        x: 220, y: 240, washStationId: 'sink', reservedWashStationId: 'sink',
+        washQueuedAt: 20, washStartedAt: 30,
+        wasteOrigin: { state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0 },
+      }],
+    });
+
+    expect(result.staff[0].carryingServiceItemIds).toEqual(['i1']);
+    expect(result.serviceItems[0]).toMatchObject({
+      id: 'i1', state: 'carried_dirty', foodCancelled: true,
+      assignedStaffId: null, washStationId: null, reservedWashStationId: null,
+      washQueuedAt: null, washStartedAt: null,
+      wasteOrigin: { state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0 },
+    });
   });
 
   it('does not resurrect a lingering active item named by terminal cancellation history', () => {

@@ -43,7 +43,10 @@ describe('staff task cancellation without arrival', () => {
     expect(result.serviceItems).toEqual(state.serviceItems);
     expect(result.customers).toEqual(state.customers);
     const reassigned = resolveStaffAfterMovement(prepareStaffForMovement(result, 2), 2);
-    expect(reassigned.staff.map(worker => worker.task)).toEqual([null, null]);
+    expect(reassigned.staff.map(worker => worker.task)).toEqual([
+      { type: 'collect_dirty_item', serviceItemId: 'abandoned-food' },
+      null,
+    ]);
   });
 
   it('does not execute valid order or delivery tasks before arrival', () => {

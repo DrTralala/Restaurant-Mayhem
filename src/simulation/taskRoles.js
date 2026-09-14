@@ -1,14 +1,13 @@
 const TASKS_BY_ROLE = Object.freeze({
   cook: new Set([
-    'prepare_drink', 'prepare_dish', 'place_dish_on_service', 'handoff_cancelled_waste',
+    'prepare_drink', 'prepare_dish', 'place_dish_on_service',
   ]),
   waiter: new Set([
     'take_order', 'take_payment', 'pickup_service_item', 'deliver_service_item',
-    'handoff_cancelled_waste',
+    'collect_dirty_item', 'deliver_dirty_item', 'transfer_dirty_item',
   ]),
   janitor: new Set([
-    'clean_table', 'clean_floor', 'wash_item', 'collect_dirty_item',
-    'clean_service_item', 'transfer_dirty_item', 'deliver_dirty_item',
+    'clean_table', 'clean_floor', 'wash_item',
   ]),
 });
 

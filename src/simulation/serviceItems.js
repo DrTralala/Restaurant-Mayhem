@@ -265,8 +265,7 @@ function carriedInventoryKind(item) {
 }
 
 function canCarryDirtyServiceItem(worker, item) {
-  return worker?.role === 'janitor'
-    || (worker?.role === 'waiter' && item?.foodCancelled === true);
+  return worker?.role === 'waiter' && item?.state === 'carried_dirty';
 }
 
 function isCancelledFoodForCustomer(customer, item) {
@@ -274,9 +273,33 @@ function isCancelledFoodForCustomer(customer, item) {
     || (customer?.cancelledServiceItemIds || []).some(id => String(id) === String(item?.id));
 }
 
-function normaliseCancelledFoodItem(item) {
+function carrierForItem(state, item) {
+  const carriers = (state.staff || []).filter(worker =>
+    getCarriedServiceItemIds(worker).some(id => sameId(id, item.id)));
+  return carriers.length === 1 ? carriers[0] : null;
+}
+
+function normaliseCancelledFoodItem(state, item) {
   if (['ordered', 'preparing'].includes(item.state)) return null;
   const marked = { ...item, foodCancelled: true, deliveryProhibited: true };
+  if (item.state === 'carried') {
+    const carrier = carrierForItem(state, item);
+    const retainedByWaiter = carrier?.role === 'waiter';
+    return {
+      ...marked,
+      state: retainedByWaiter ? 'carried_dirty' : 'to_clean',
+      ...(Number.isFinite(carrier?.x) && Number.isFinite(carrier?.y)
+        ? { x: carrier.x, y: carrier.y } : {}),
+      assignedStaffId: null,
+      serviceTableId: null,
+      serviceSlotIndex: null,
+      stationId: null,
+      washStationId: null,
+      reservedWashStationId: null,
+      washQueuedAt: null,
+      washStartedAt: null,
+    };
+  }
   return ['ready', 'on_service', 'delivered'].includes(item.state)
     ? { ...marked, state: 'to_clean', assignedStaffId: null }
     : marked;
@@ -314,7 +337,7 @@ export function normaliseServiceItemOwnership(state) {
     seen.add(key);
     const owner = customers.find(customer => sameId(customer.id, item.customerId));
     if (isCancelledFoodForCustomer(owner, item)) {
-       const cancelledItem = normaliseCancelledFoodItem(item);
+       const cancelledItem = normaliseCancelledFoodItem(state, item);
        if (cancelledItem) kept.push(cancelledItem);
        continue;
     }
@@ -410,49 +433,102 @@ export function normaliseServiceItemOwnership(state) {
 
   // Manual washing has an explicit worker/station boundary once it starts.
   // Recover malformed or abandoned reservations to the queue, and retain only
-  // the first valid task when a legacy save contains competing owners.
+  // the first valid task when a legacy save contains competing owners. A
+  // waiter transfer also owns a queued manual item until it reaches its
+  // automatic destination, so it must be validated before manual recovery.
   const validWashTaskByItem = new Map();
+  const validTransferTaskByItem = new Map();
+  const transferTaskItemIds = new Set();
   for (const worker of staff) {
     const task = worker.task;
-    if (task?.type !== 'wash_item') continue;
-    const item = serviceItems.find(candidate => String(candidate.id) === String(task.serviceItemId));
-    const station = (state.washStations || []).find(candidate =>
-      String(candidate.id) === String(item?.washStationId));
-    const valid = worker.role === 'janitor'
-      && item
-      && ['queued_for_wash', 'washing'].includes(item.state)
-      && station?.type === 'manual'
-      && String(task.washStationId) === String(item.washStationId)
-      && (item.assignedStaffId == null
-        || String(item.assignedStaffId) === String(worker.id));
-    if (valid && !validWashTaskByItem.has(String(item.id))) {
-      validWashTaskByItem.set(String(item.id), worker);
+    if (task?.type === 'wash_item') {
+      const item = serviceItems.find(candidate => String(candidate.id) === String(task.serviceItemId));
+      const station = (state.washStations || []).find(candidate =>
+        String(candidate.id) === String(item?.washStationId));
+      const valid = worker.role === 'janitor'
+        && item
+        && ['queued_for_wash', 'washing'].includes(item.state)
+        && station?.type === 'manual'
+        && String(task.washStationId) === String(item.washStationId)
+        && (item.assignedStaffId == null
+          || String(item.assignedStaffId) === String(worker.id));
+      if (valid && !validWashTaskByItem.has(String(item.id))) {
+        validWashTaskByItem.set(String(item.id), worker);
+      }
+      continue;
+    }
+    if (task?.type !== 'transfer_dirty_item') continue;
+    if (task.serviceItemId != null) transferTaskItemIds.add(String(task.serviceItemId));
+    const item = serviceItems.find(candidate => sameId(candidate.id, task.serviceItemId));
+    const source = (state.washStations || []).find(candidate =>
+      sameId(candidate.id, task.sourceWashStationId));
+    const destination = (state.washStations || []).find(candidate =>
+      sameId(candidate.id, task.washStationId));
+    const valid = worker.role === 'waiter'
+      && item?.kind === 'dish'
+      && item.state === 'queued_for_wash'
+      && sameId(item.assignedStaffId, worker.id)
+      && sameId(task.serviceItemId, item.id)
+      && source?.type === 'manual'
+      && sameId(task.sourceWashStationId, source.id)
+      && sameId(item.washStationId, source.id)
+      && destination?.type === 'automatic'
+      && !sameId(source.id, destination.id)
+      && sameId(task.washStationId, destination.id)
+      && sameId(item.reservedWashStationId, destination.id);
+    if (valid && !validTransferTaskByItem.has(String(item.id))) {
+      validTransferTaskByItem.set(String(item.id), worker);
     }
   }
 
   serviceItems = serviceItems.map(item => {
-    if (!['queued_for_wash', 'washing'].includes(item.state)) return item;
+    const transferOwner = validTransferTaskByItem.get(String(item.id));
+    const hasInvalidTransferTask = transferTaskItemIds.has(String(item.id)) && !transferOwner;
+    if (!['queued_for_wash', 'washing'].includes(item.state)) {
+      return hasInvalidTransferTask || (item.state !== 'carried_dirty'
+        && item.reservedWashStationId != null)
+        ? { ...item, assignedStaffId: null, reservedWashStationId: null }
+        : item;
+    }
     const station = (state.washStations || []).find(candidate =>
       String(candidate.id) === String(item.washStationId));
     if (!station) {
-      return item.assignedStaffId == null ? item : { ...item, assignedStaffId: null };
+      return item.assignedStaffId == null && item.reservedWashStationId == null
+        ? item
+        : { ...item, assignedStaffId: null, reservedWashStationId: null };
     }
-    if (station.type !== 'manual') return item;
+    if (transferOwner) return item;
+    if (station.type !== 'manual') {
+      return item.reservedWashStationId == null && item.assignedStaffId == null
+        ? item
+        : { ...item, assignedStaffId: null, reservedWashStationId: null };
+    }
     const owner = validWashTaskByItem.get(String(item.id));
-    if (!owner && (item.state === 'washing' || item.assignedStaffId != null)) {
+    if (!owner && (item.state === 'washing'
+      || item.assignedStaffId != null || item.reservedWashStationId != null)) {
       return {
         ...item,
         state: 'queued_for_wash',
         washStartedAt: null,
         assignedStaffId: null,
+        reservedWashStationId: null,
       };
     }
-    return owner && item.assignedStaffId == null
-      ? { ...item, assignedStaffId: owner.id }
-      : item;
+    if (!owner) return item;
+    return {
+      ...item,
+      ...(item.assignedStaffId == null ? { assignedStaffId: owner.id } : {}),
+      ...(item.reservedWashStationId != null ? { reservedWashStationId: null } : {}),
+    };
   });
   staff = staff.map(worker => {
     const task = worker.task;
+    if (task?.type === 'transfer_dirty_item') {
+      const owner = validTransferTaskByItem.get(String(task.serviceItemId));
+      return owner && sameId(owner.id, worker.id)
+        ? worker
+        : { ...clearNavigationGoal(worker), task: null };
+    }
     if (task?.type !== 'wash_item') return worker;
     const owner = validWashTaskByItem.get(String(task.serviceItemId));
     return owner && String(owner.id) === String(worker.id)

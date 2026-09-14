@@ -3,7 +3,7 @@ import { useGameState, useDispatch } from '../state/GameContext';
 import { useRenderState, useRuntimeFault } from '../state/SimulationRuntime';
 import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } from './camera';
 import { loadSprites } from './sprites';
-import { drawFloorLayer, drawFurnitureLayer, drawObjectLabel, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawOverlayLayer, drawQueueLayer, drawSelectionLayer } from './layers';
+import { drawFloorLayer, drawFurnitureLayer, drawObjectLabel, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawQueueLayer, drawSelectionLayer } from './layers';
 import { findClickedEntity } from './interaction';
 import { getDefaultStaffPosition, getMissingDoorWarnings, getRestaurantWorld } from '../simulation/world';
 import StaffDetailsPanel from '../components/StaffDetailsPanel';
@@ -138,9 +138,7 @@ export function drawCustomCashierPreview(ctx, camera, item, valid, width, height
   ctx.lineWidth = 2 / camera.zoom;
   ctx.fillRect(item.x, item.y, width, height);
   ctx.strokeRect(item.x, item.y, width, height);
-  drawObjectLabel(ctx, 'Cashier', { x: item.x, y: item.y, w: width, h: height }, {
-    background: 'rgba(0,0,0,0.58)',
-  });
+  drawObjectLabel(ctx, 'Cashier', { x: item.x, y: item.y, w: width, h: height });
   ctx.restore();
 }
 
@@ -402,7 +400,6 @@ export default function RestaurantCanvas({
   const canvasRef = useRef(null);
   const cameraRef = useRef(createCamera());
   const spritesRef = useRef(loadSprites());
-  const tooltipRef = useRef(null);
   const viewportRef = useRef({ w: 0, h: 0 });
   const reducedMotionRef = useRef(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
   const state = useGameState();
@@ -485,7 +482,6 @@ export default function RestaurantCanvas({
     drawCustomerLayer(ctx, renderState, camera, characterRenderOptions);
     drawQueueLayer(ctx, renderState, camera, characterRenderOptions);
     drawSelectionLayer(ctx, renderState, camera, selectedItems);
-    drawOverlayLayer(ctx, renderState, camera, sprites, tooltipRef.current);
   }, [state, simulationRenderState, selectedItems, placement]);
 
   useEffect(() => {
@@ -724,12 +720,6 @@ export default function RestaurantCanvas({
       }
       return;
     }
-    if (!moveRef.current && e.buttons === 0) {
-      const canvas = canvasRef.current;
-      const rect = canvas.getBoundingClientRect();
-      const hit = findClickedEntity(state, cameraRef.current, e.clientX - rect.left, e.clientY - rect.top);
-      tooltipRef.current = hit?.text || null;
-    }
   };
 
   const placeMovingEntity = () => {
@@ -825,7 +815,6 @@ export default function RestaurantCanvas({
       setMenu(null);
       setSelectedStaffId(hit.data.id);
       setSelectedItems([]);
-      tooltipRef.current = null;
     } else if (hit) {
       // Show context menu at click position
       setSelectedStaffId(null);
@@ -836,13 +825,11 @@ export default function RestaurantCanvas({
         type: hit.type,
         data: hit.data,
       });
-      tooltipRef.current = null;
     } else {
       // Clicked empty space — dismiss
       setMenu(null);
       setSelectedStaffId(null);
       setSelectedItems([]);
-      tooltipRef.current = hit?.text || null;
       if (!hit) onEmptySpaceClick?.();
     }
   };
