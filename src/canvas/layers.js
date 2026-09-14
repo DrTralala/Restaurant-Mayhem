@@ -81,9 +81,6 @@ export function drawObjectLabel(ctx, label, rect, options = {}) {
   const font = options.font || CANVAS_LABEL_FONT;
   const contrast = options.contrast === 'light';
   const textColour = options.color || options.textColor || (contrast ? '#111' : '#fff');
-  const background = options.background
-    || (contrast ? 'rgba(255,255,255,0.82)' : 'rgba(0,0,0,0.72)');
-
   ctx.save();
   ctx.font = font;
   const maxWidth = Number.isFinite(options.maxWidth)
@@ -100,8 +97,6 @@ export function drawObjectLabel(ctx, label, rect, options = {}) {
   const centreX = target.x + target.w / 2;
   const centreY = target.y + target.h / 2;
 
-  ctx.fillStyle = background;
-  ctx.fillRect(centreX - boxWidth / 2, centreY - boxHeight / 2, boxWidth, boxHeight);
   ctx.fillStyle = textColour;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -147,7 +142,7 @@ function animationOffset(id = '') {
   return [...String(id)].reduce((total, character) => total + character.charCodeAt(0), 0) * 0.17;
 }
 
-function drawStickFigure(ctx, x, y, color, {
+export function drawStickFigure(ctx, x, y, color, {
   seated = false,
   lying = false,
   walking = false,
@@ -208,10 +203,6 @@ function drawStickFigure(ctx, x, y, color, {
     ctx.lineTo(localX + 6, seated ? localY + 15 : localY + 22 + stride);
   }
   ctx.stroke();
-
-  // Hands remain visible at small canvas scales.
-  ctx.fillRect(leftHandX - 1, handY, 2, 2);
-  ctx.fillRect(rightHandX - 1, handY, 2, 2);
 
   if (cleaning) {
     ctx.strokeStyle = '#f3e6bd';
@@ -307,7 +298,6 @@ function drawStaffAmenity(ctx, amenity) {
 
   const labels = { couch: 'Couch', arcade: 'Arcade', bed: 'Bed' };
   drawObjectLabel(ctx, labels[amenity.type] || amenity.type, geometry.footprint, {
-    background: 'rgba(0,0,0,0.58)',
     allowOverflow: true,
   });
 }
@@ -367,7 +357,7 @@ export function drawFloorLayer(ctx, state, camera) {
       y: cashier.y,
       w: cashier.w,
       h: cashier.h,
-    }, { background: 'rgba(0,0,0,0.58)' });
+    });
   }
 
   // Queue area outside the door.
@@ -447,13 +437,10 @@ export function drawFurnitureLayer(ctx, state, camera) {
       ctx.fillStyle = '#888';
       ctx.fillRect(station.x + 5, station.y + 5, 30, 30);
       drawObjectLabel(ctx, eq.name, { x: station.x + 2, y: station.y + 2, w: 36, h: 36 }, {
-        background: 'rgba(0,0,0,0.58)',
         allowOverflow: true,
       });
     } else {
-      drawObjectLabel(ctx, 'Kitchen\nstation', { x: station.x, y: station.y, w: 40, h: 40 }, {
-        background: 'rgba(0,0,0,0.58)',
-      });
+      drawObjectLabel(ctx, 'Kitchen\nstation', { x: station.x, y: station.y, w: 40, h: 40 });
     }
   }
 
@@ -467,7 +454,7 @@ export function drawFurnitureLayer(ctx, state, camera) {
       y: st.y,
       w: dimensions.width,
       h: dimensions.height,
-    }, { background: 'rgba(0,0,0,0.58)' });
+    });
   }
 
   for (const amenity of state.staffAmenities || []) drawStaffAmenity(ctx, amenity);
@@ -487,7 +474,7 @@ export function drawFurnitureLayer(ctx, state, camera) {
     ctx.restore();
     drawObjectLabel(ctx, station.type === 'automatic' ? 'Dish\nwasher' : 'Sink', {
       x: station.x, y: station.y, w, h,
-    }, { background: 'rgba(0,0,0,0.58)' });
+    });
     const items = (state.serviceItems || []).filter(item => item.washStationId === station.id
       && ['queued_for_wash', 'washing'].includes(item.state));
     ctx.save();
@@ -581,26 +568,24 @@ export function drawPlacementPreview(ctx, state, camera, placement) {
     ctx.textBaseline = 'middle';
     ctx.fillText(arrows[rotation], rect.x + rect.w / 2, rect.y + rect.h / 2);
   } else if (placement.itemType === 'cashierTable') {
-    drawObjectLabel(ctx, 'Cashier', rect, { background: 'rgba(0,0,0,0.58)' });
+    drawObjectLabel(ctx, 'Cashier', rect);
   } else if (placement.itemType === 'serviceTable') {
-    drawObjectLabel(ctx, 'Service counter', rect, { background: 'rgba(0,0,0,0.58)' });
+    drawObjectLabel(ctx, 'Service counter', rect);
   } else if (placement.itemType === 'equipmentStation') {
     const equipment = (state.equipment || []).find(candidate => candidate.id === placement.equipmentId);
     if (equipment) {
       drawObjectLabel(ctx, equipment.name, rect, {
-        background: 'rgba(0,0,0,0.58)',
         allowOverflow: true,
       });
     }
   } else if (placement.itemType === 'kitchenStation') {
-    drawObjectLabel(ctx, 'Kitchen\nstation', rect, { background: 'rgba(0,0,0,0.58)' });
+    drawObjectLabel(ctx, 'Kitchen\nstation', rect);
   } else if (placement.itemType === 'automaticDishwasher') {
-    drawObjectLabel(ctx, 'Dish\nwasher', rect, { background: 'rgba(0,0,0,0.58)' });
+    drawObjectLabel(ctx, 'Dish\nwasher', rect);
   } else if (placement.itemType === 'manualSink') {
-    drawObjectLabel(ctx, 'Sink', rect, { background: 'rgba(0,0,0,0.58)' });
+    drawObjectLabel(ctx, 'Sink', rect);
   } else if (['couch', 'arcade', 'bed'].includes(placement.itemType)) {
     drawObjectLabel(ctx, placement.itemType[0].toUpperCase() + placement.itemType.slice(1), rect, {
-      background: 'rgba(0,0,0,0.58)',
       allowOverflow: true,
     });
   }
@@ -783,16 +768,4 @@ export function drawSelectionLayer(ctx, state, camera, selectedItems = []) {
     }
   }
   ctx.restore();
-}
-
-export function drawOverlayLayer(ctx, state, camera, sprites, tooltipText) {
-  if (!tooltipText) return;
-
-  ctx.fillStyle = 'rgba(0,0,0,0.85)';
-  const tipWidth = ctx.measureText(tooltipText).width + 16;
-  ctx.fillRect(10, ctx.canvas.height - 40, tipWidth, 30);
-
-  ctx.fillStyle = '#fff';
-  ctx.font = getCanvasFont('tooltip');
-  ctx.fillText(tooltipText, 18, ctx.canvas.height - 20);
 }

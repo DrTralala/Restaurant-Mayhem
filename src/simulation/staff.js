@@ -398,52 +398,42 @@ function janitorCleanupCandidates({ state, staff, allStaff, serviceItems, claime
     ) - 300);
   }
 
-  for (const item of serviceItems || []) {
-    if (item.state !== 'dirty_at_table'
-      || claimedServiceItemIds?.has(item.id)
-      || (item.assignedStaffId != null && item.assignedStaffId !== staff.id)) continue;
-    const table = (state.tables || []).find(candidate => candidate.id === item.tableId);
-    if (!table) continue;
-    add({
-      type: 'collect_dirty_item',
-      item,
-      table,
-      target: targetForTableOrCurrent(state, table, staff),
-    }, item.id, cleanupAge(item.dirtyAt ?? item.eligibleAt ?? item.createdAt, now));
-  }
-
-  for (const item of serviceItems || []) {
-    if (item.state !== 'to_clean'
-      || claimedServiceItemIds?.has(item.id)
-      || !Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
-    add({
-      type: 'clean_service_item',
-      item,
-      target: targetForRectOrCurrent(state, {
-        x: item.x - 10, y: item.y - 10, w: 20, h: 20,
-      }, staff),
-    }, item.id, cleanupAge(
-      item.wasteOrigin?.eligibleAt ?? item.wasteOrigin?.createdAt
-        ?? item.createdAt ?? item.dirtyAt,
-      now,
-    ));
-  }
-
-  if (Number(staff.skill) >= 5) {
-    const transfer = selectSinkTransfer(state, staff.id, now);
-    if (transfer) {
-      const source = (state.washStations || []).find(station => station.id === transfer.sourceWashStationId);
-      const item = serviceItems.find(candidate => candidate.id === transfer.serviceItemId);
-      const target = source ? targetForRectOrCurrent(state, source, staff) : null;
-      if (item && target) {
-        add({ type: 'transfer_dirty_item', item, transfer, target }, item.id,
-          cleanupAge(item.washQueuedAt ?? item.eligibleAt ?? item.createdAt, now));
-      }
-    }
-  }
-
   return candidates.sort((left, right) => left.age - right.age
     || String(left.id).localeCompare(String(right.id)));
+}
+
+function waiterDirtyDishCandidates({ state, staff, serviceItems, claimedServiceItemIds }) {
+  const candidates = [];
+  const timestamp = value => Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
+  for (const item of serviceItems || []) {
+    if (!['dirty_at_table', 'to_clean'].includes(item.state)
+      || claimedServiceItemIds?.has(item.id)
+      || anotherWorkerOwnsItem(state.staff, staff.id, item.id)
+      || (item.assignedStaffId != null && item.assignedStaffId !== staff.id)) continue;
+
+    let table = null;
+    let target;
+    if (item.state === 'dirty_at_table') {
+      table = (state.tables || []).find(candidate => candidate.id === item.tableId);
+      if (!table) continue;
+      target = targetForTableOrCurrent(state, table, staff);
+    } else {
+      if (!Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
+      target = targetForRectOrCurrent(state, {
+        x: item.x - 10, y: item.y - 10, w: 20, h: 20,
+      }, staff);
+    }
+    if (!target) continue;
+    candidates.push({ type: 'collect_dirty_item', item, table, target });
+  }
+
+  return candidates.sort((left, right) => timestamp(left.item.dirtyAt)
+    - timestamp(right.item.dirtyAt)
+    || timestamp(left.item.eligibleAt) - timestamp(right.item.eligibleAt)
+    || timestamp(left.item.wasteOrigin?.createdAt)
+      - timestamp(right.item.wasteOrigin?.createdAt)
+    || timestamp(left.item.createdAt) - timestamp(right.item.createdAt)
+    || String(left.item.id).localeCompare(String(right.item.id)));
 }
 
 function clearDrinkReservation(serviceItems, serviceItemId) {
@@ -505,28 +495,6 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       claimedDirtIds,
     })[0];
     if (!candidate) return null;
-    if (candidate.type === 'transfer_dirty_item') {
-      const { transfer } = candidate;
-      return {
-        staff: setNavigationGoal({
-          ...staff,
-          task: {
-            type: 'transfer_dirty_item',
-            serviceItemId: transfer.serviceItemId,
-            washStationId: transfer.washStationId,
-            sourceWashStationId: transfer.sourceWashStationId,
-          },
-        }, candidate.target.goal),
-        serviceItems: serviceItems.map(item => item.id === transfer.serviceItemId
-          ? {
-            ...item,
-            assignedStaffId: staff.id,
-            reservedWashStationId: transfer.washStationId,
-          }
-          : item),
-        claimedServiceItemId: transfer.serviceItemId,
-      };
-    }
     if (candidate.type === 'wash_item') {
       return {
         staff: setNavigationGoal(
@@ -557,28 +525,6 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
           candidate.target.goal,
         ),
         claimedTableId: candidate.table.id,
-      };
-    }
-    if (candidate.type === 'clean_service_item') {
-      return {
-        staff: setNavigationGoal(
-          { ...staff, task: { type: 'clean_service_item', serviceItemId: candidate.item.id } },
-          candidate.target.goal,
-        ),
-        claimedServiceItemId: candidate.item.id,
-      };
-    }
-    if (candidate.type === 'collect_dirty_item') {
-      return {
-        staff: setNavigationGoal({
-          ...staff,
-          task: {
-            type: 'collect_dirty_item',
-            serviceItemId: candidate.item.id,
-            tableId: candidate.table.id,
-          },
-        }, candidate.target.goal),
-        claimedServiceItemId: candidate.item.id,
       };
     }
     return null;
@@ -650,6 +596,53 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
             target.goal,
           ),
           claimedServiceItemId: readyServiceItem.id,
+        };
+      }
+    }
+
+    const dirtyDishCandidate = waiterDirtyDishCandidates({
+      state, staff, serviceItems, claimedServiceItemIds,
+    })[0];
+    if (dirtyDishCandidate) {
+      const task = {
+        type: 'collect_dirty_item',
+        serviceItemId: dirtyDishCandidate.item.id,
+        ...(dirtyDishCandidate.table ? { tableId: dirtyDishCandidate.table.id } : {}),
+      };
+      return {
+        staff: setNavigationGoal({ ...staff, task }, dirtyDishCandidate.target.goal),
+        claimedServiceItemId: dirtyDishCandidate.item.id,
+      };
+    }
+
+    const transfer = Number(staff.skill) >= 5
+      ? selectSinkTransfer(state, staff.id, state.restaurant?.gameTime)
+      : null;
+    if (transfer && !claimedServiceItemIds?.has(transfer.serviceItemId)) {
+      const source = (state.washStations || []).find(station =>
+        sameId(station.id, transfer.sourceWashStationId));
+      const item = serviceItems.find(candidate =>
+        sameId(candidate.id, transfer.serviceItemId));
+      const target = source ? targetForRectOrCurrent(state, source, staff) : null;
+      if (source && item && target) {
+        return {
+          staff: setNavigationGoal({
+            ...staff,
+            task: {
+              type: 'transfer_dirty_item',
+              serviceItemId: transfer.serviceItemId,
+              washStationId: transfer.washStationId,
+              sourceWashStationId: transfer.sourceWashStationId,
+            },
+          }, target.goal),
+          serviceItems: serviceItems.map(candidate => sameId(candidate.id, item.id)
+            ? {
+              ...candidate,
+              assignedStaffId: staff.id,
+              reservedWashStationId: transfer.washStationId,
+            }
+            : candidate),
+          claimedServiceItemId: transfer.serviceItemId,
         };
       }
     }
@@ -865,16 +858,32 @@ function hasObsoleteCustomerTask(staff, customers, tables, serviceItems, washSta
     const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
     const station = washStations.find(candidate => candidate.id === staff.task.washStationId);
     return !item
+      || staff.role !== 'waiter'
       || item.state !== 'carried_dirty'
       || !workerOwnsItem(staff, item.id)
       || !station;
+  }
+  if (staff.task?.type === 'collect_dirty_item') {
+    const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
+    const table = tables.find(candidate => candidate.id === item?.tableId);
+    const carriedIds = getCarriedServiceItemIds(staff);
+    const validTableItem = item?.state === 'dirty_at_table'
+      && sameId(table?.id, item.tableId)
+      && (staff.task.tableId == null || sameId(staff.task.tableId, item.tableId));
+    const validPhysicalItem = item?.state === 'to_clean'
+      && Number.isFinite(item.x) && Number.isFinite(item.y);
+    return staff.role !== 'waiter'
+      || carriedIds.length > 0
+      || !item
+      || (item.assignedStaffId != null && !sameId(item.assignedStaffId, staff.id))
+      || (!validTableItem && !validPhysicalItem);
   }
   if (staff.task?.type === 'transfer_dirty_item') {
     const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
     const source = washStations.find(candidate => candidate.id === staff.task.sourceWashStationId);
     const destination = washStations.find(candidate => candidate.id === staff.task.washStationId);
     return !item
-      || staff.role !== 'janitor'
+      || staff.role !== 'waiter'
       || item.state !== 'queued_for_wash'
       || item.assignedStaffId !== staff.id
       || item.washStationId !== source?.id
@@ -1615,74 +1624,6 @@ function resolveTask({
     };
   }
 
-  if (staff.task.type === 'handoff_cancelled_waste') {
-    const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
-    const station = (state.washStations || []).find(candidate =>
-      candidate.id === staff.task.washStationId);
-    const ownsItem = item && workerOwnsItem(staff, item.id);
-    const customer = (customers || []).find(candidate => candidate.id === item?.customerId);
-    const foodExpired = Number.isFinite(state.restaurant?.gameTime)
-      && Number.isFinite(customer?.foodDeadlineAt)
-      && state.restaurant.gameTime >= customer.foodDeadlineAt;
-    if (!item || !ownsItem || (item.foodCancelled !== true && !foodExpired)) {
-      return {
-        staff: withCarriedServiceItemIds(completedStaff,
-          getCarriedServiceItemIds(staff).filter(id => id !== staff.task.serviceItemId)),
-        queue, tables, customers, serviceItems,
-      };
-    }
-    if (!station) {
-      return { staff: clearNavigationGoal(staff), queue, tables, customers, serviceItems };
-    }
-    const target = targetForRectOrCurrent(state, station, staff);
-    if (!target) {
-      return { staff: clearNavigationGoal(staff), queue, tables, customers, serviceItems };
-    }
-    if (target.distance > 0) {
-      return { staff: setNavigationGoal(staff, target.goal), queue, tables, customers, serviceItems };
-    }
-    const capacity = getWashStationCapacity(station);
-    const occupied = getWashStationOccupancy(state, station, {
-      excludeServiceItemId: item.id,
-    });
-    if (occupied >= capacity) {
-      return { staff: clearNavigationGoal(staff), queue, tables, customers, serviceItems };
-    }
-    const wasteOrigin = item.wasteOrigin || {
-      x: item.x,
-      y: item.y,
-      tableId: item.tableId ?? null,
-      serviceTableId: item.serviceTableId ?? null,
-      serviceSlotIndex: item.serviceSlotIndex ?? null,
-      createdAt: item.foodCancelledAt ?? state.restaurant.gameTime,
-    };
-    const nextServiceItems = serviceItems.map(candidate => candidate.id === item.id
-      ? {
-        ...candidate,
-        state: 'to_clean',
-        x: staff.x,
-        y: staff.y,
-        assignedStaffId: null,
-        washStationId: null,
-        reservedWashStationId: null,
-        wasteOrigin,
-      }
-      : candidate);
-    const nextStaff = withCarriedServiceItemIds(completedStaff,
-      getCarriedServiceItemIds(staff).filter(id => id !== item.id));
-    const routed = staff.role === 'cook'
-      ? continueCarriedCookTask({ ...state, serviceItems: nextServiceItems }, nextStaff, nextServiceItems)
-      : continueCarriedTask(
-        { ...state, serviceItems: nextServiceItems, staff: state.staff || [] },
-        nextStaff, nextServiceItems, customers, tables, state.staff,
-      );
-    return {
-      staff: routed,
-      queue, tables, customers, serviceItems: nextServiceItems,
-      cookingBatches: state.cookingBatches,
-    };
-  }
-
   if (staff.task.type === 'place_dish_on_service') {
     const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
     const customer = customers.find(candidate => candidate.id === item?.customerId);
@@ -1787,13 +1728,38 @@ function resolveTask({
   }
 
   if (staff.task.type === 'collect_dirty_item') {
-    const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
-    const table = tables.find(candidate => candidate.id === item?.tableId);
+    const item = serviceItems.find(candidate => sameId(candidate.id, staff.task.serviceItemId));
     const carriedIds = getCarriedServiceItemIds(staff);
-    if (!item || item.state !== 'dirty_at_table' || !table || carriedIds.length > 0) {
-      return { staff: withCarriedServiceItemIds(completedStaff, carriedIds), queue, tables, customers, serviceItems };
+    const table = item?.state === 'dirty_at_table'
+      ? tables.find(candidate => sameId(candidate.id, item.tableId))
+      : null;
+    const validTableItem = item?.state === 'dirty_at_table'
+      && table
+      && sameId(table.id, item.tableId)
+      && (staff.task.tableId == null || sameId(staff.task.tableId, item.tableId));
+    const validPhysicalItem = item?.state === 'to_clean'
+      && Number.isFinite(item.x) && Number.isFinite(item.y);
+    const validTaskItem = staff.role === 'waiter'
+      && carriedIds.length === 0
+      && item
+      && (validTableItem || validPhysicalItem)
+      && (item.assignedStaffId == null || sameId(item.assignedStaffId, staff.id))
+      && !anotherWorkerOwnsItem(state.staff, staff.id, item.id);
+    if (!validTaskItem) {
+      const retainedStaff = withCarriedServiceItemIds(completedStaff, carriedIds);
+      return {
+        staff: carriedIds.length > 0
+          ? continueCarriedTask(state, retainedStaff, serviceItems, customers, tables, state.staff)
+          : retainedStaff,
+        queue, tables, customers, serviceItems,
+      };
     }
-    const target = targetForRectOrCurrent(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff);
+
+    const target = validTableItem
+      ? targetForRectOrCurrent(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff)
+      : targetForRectOrCurrent(state, {
+        x: item.x - 10, y: item.y - 10, w: 20, h: 20,
+      }, staff);
     if (target === null) {
       return { staff: withCarriedServiceItemIds(completedStaff, carriedIds), queue, tables, customers, serviceItems };
     }
@@ -1803,19 +1769,41 @@ function resolveTask({
     const capacity = getStaffCarryCapacity(staff);
     const candidates = serviceItems
       .map((candidate, index) => ({ candidate, index }))
-      .filter(({ candidate }) => candidate.state === 'dirty_at_table'
-        && candidate.tableId === table.id
-        && !anotherWorkerOwnsItem(state.staff, staff.id, candidate.id))
+      .filter(({ candidate }) => (validTableItem
+        ? candidate.state === 'dirty_at_table' && sameId(candidate.tableId, table.id)
+        : candidate.state === 'to_clean'
+          && Number.isFinite(candidate.x) && Number.isFinite(candidate.y)
+          && candidate.x === item.x && candidate.y === item.y)
+        && !anotherWorkerOwnsItem(state.staff, staff.id, candidate.id)
+        && (candidate.assignedStaffId == null || sameId(candidate.assignedStaffId, staff.id)))
       .sort((left, right) => (left.candidate.dirtyAt ?? 0) - (right.candidate.dirtyAt ?? 0)
+        || (left.candidate.eligibleAt ?? 0) - (right.candidate.eligibleAt ?? 0)
         || left.index - right.index
         || String(left.candidate.id).localeCompare(String(right.candidate.id)));
-    const pickedIds = candidates.slice(0, capacity).map(({ candidate }) => candidate.id);
-    if (!pickedIds.includes(item.id)) {
+    const pickedItems = [
+      item,
+      ...candidates
+        .filter(({ candidate }) => !sameId(candidate.id, item.id))
+        .map(({ candidate }) => candidate),
+    ].slice(0, capacity);
+    const pickedIds = pickedItems.map(candidate => candidate.id);
+    if (!pickedIds.some(id => sameId(id, item.id))) {
       return { staff: withCarriedServiceItemIds(completedStaff, []), queue, tables, customers, serviceItems };
     }
     const picked = new Set(pickedIds);
     const carriedItems = serviceItems.map(candidate => picked.has(candidate.id)
-      ? { ...candidate, state: 'carried_dirty', x: staff.x, y: staff.y }
+      ? {
+        ...candidate,
+        state: 'carried_dirty',
+        x: staff.x,
+        y: staff.y,
+        assignedStaffId: null,
+        stationId: null,
+        serviceTableId: null,
+        serviceSlotIndex: null,
+        washStationId: null,
+        reservedWashStationId: null,
+      }
       : candidate);
     const nextStaff = withCarriedServiceItemIds(completedStaff, pickedIds);
     const routedStaff = continueCarriedTask(
@@ -1840,7 +1828,7 @@ function resolveTask({
       candidate.id === staff.task.sourceWashStationId && candidate.type === 'manual');
     const destination = (state.washStations || []).find(candidate =>
       candidate.id === staff.task.washStationId && candidate.type === 'automatic');
-    const validTransfer = staff.role === 'janitor'
+    const validTransfer = staff.role === 'waiter'
       && item?.state === 'queued_for_wash'
       && item.assignedStaffId === staff.id
       && item.washStationId === source?.id
@@ -1871,7 +1859,17 @@ function resolveTask({
       return { staff: setNavigationGoal(staff, sourceTarget.goal), queue, tables, customers, serviceItems };
     }
     if (getCarriedServiceItemIds(staff).length > 0) {
-      return { staff: completedStaff, queue, tables, customers, serviceItems };
+      return {
+        staff: continueCarriedTask(
+          state,
+          withCarriedServiceItemIds(completedStaff, getCarriedServiceItemIds(staff)),
+          serviceItems,
+          customers,
+          tables,
+          state.staff,
+        ),
+        queue, tables, customers, serviceItems,
+      };
     }
     const carryingStaff = withCarriedServiceItemIds({
       ...staff,
@@ -1915,45 +1913,98 @@ function resolveTask({
   }
 
   if (staff.task.type === 'deliver_dirty_item') {
-    const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
-    const station = (state.washStations || []).find(candidate => candidate.id === staff.task.washStationId);
+    const item = serviceItems.find(candidate => sameId(candidate.id, staff.task.serviceItemId));
+    const station = (state.washStations || []).find(candidate =>
+      sameId(candidate.id, staff.task.washStationId));
     const carriedIds = getCarriedServiceItemIds(staff);
     const taskItemId = staff.task.serviceItemId;
-    const ownsTaskItem = item?.state === 'carried_dirty' && workerOwnsItem(staff, taskItemId);
+    const physicallyOwnsTaskItem = item?.state === 'carried_dirty'
+      && workerOwnsItem(staff, taskItemId);
+    const ownsTaskItem = staff.role === 'waiter' && physicallyOwnsTaskItem;
     const ownsTransferReservation = staff.task.sourceWashStationId == null
-      || item?.reservedWashStationId === staff.task.washStationId;
+      || sameId(item?.reservedWashStationId, staff.task.washStationId);
     const anotherWorkerOwnsTaskItem = anotherWorkerOwnsItem(state.staff, staff.id, taskItemId);
     if (!item || !ownsTaskItem || !ownsTransferReservation) {
       const nextIds = anotherWorkerOwnsTaskItem
         ? carriedIds
-        : carriedIds.filter(id => id !== taskItemId);
+        : item && physicallyOwnsTaskItem
+          ? carriedIds
+          : carriedIds.filter(id => !sameId(id, taskItemId));
       const nextStaff = withCarriedServiceItemIds(completedStaff, nextIds);
+      const nextServiceItems = item && physicallyOwnsTaskItem && staff.role === 'waiter'
+        ? serviceItems.map(candidate => sameId(candidate.id, taskItemId)
+          ? {
+            ...candidate,
+            washStationId: null,
+            reservedWashStationId: null,
+            assignedStaffId: null,
+          }
+          : candidate)
+        : serviceItems;
       const nextAllStaff = (state.staff || []).map(worker => worker.id === staff.id
         ? nextStaff
         : worker);
       return {
         staff: continueCarriedTask(
-          { ...state, staff: nextAllStaff },
+          { ...state, staff: nextAllStaff, serviceItems: nextServiceItems },
           nextStaff,
-          serviceItems,
+          nextServiceItems,
           customers,
           tables,
           nextAllStaff,
         ),
-        queue, tables, customers, serviceItems,
+        queue, tables, customers, serviceItems: nextServiceItems,
       };
     }
     if (!station) {
+      const nextServiceItems = serviceItems.map(candidate => sameId(candidate.id, taskItemId)
+        ? {
+          ...candidate,
+          washStationId: null,
+          reservedWashStationId: null,
+          assignedStaffId: null,
+        }
+        : candidate);
+      const nextStaff = withCarriedServiceItemIds(completedStaff, carriedIds);
+      const nextAllStaff = (state.staff || []).map(worker => worker.id === staff.id
+        ? nextStaff
+        : worker);
       return {
-        staff: continueCarriedTask(state, withCarriedServiceItemIds(completedStaff, carriedIds), serviceItems, customers, tables, state.staff),
-        queue, tables, customers, serviceItems,
+        staff: continueCarriedTask(
+          { ...state, staff: nextAllStaff, serviceItems: nextServiceItems },
+          nextStaff,
+          nextServiceItems,
+          customers,
+          tables,
+          nextAllStaff,
+        ),
+        queue, tables, customers, serviceItems: nextServiceItems,
       };
     }
     const target = targetForRectOrCurrent(state, station, staff);
     if (target === null) {
+      const nextServiceItems = serviceItems.map(candidate => sameId(candidate.id, taskItemId)
+        ? {
+          ...candidate,
+          washStationId: null,
+          reservedWashStationId: null,
+          assignedStaffId: null,
+        }
+        : candidate);
+      const nextStaff = withCarriedServiceItemIds(completedStaff, carriedIds);
+      const nextAllStaff = (state.staff || []).map(worker => worker.id === staff.id
+        ? nextStaff
+        : worker);
       return {
-        staff: continueCarriedTask(state, withCarriedServiceItemIds(completedStaff, carriedIds), serviceItems, customers, tables, state.staff),
-        queue, tables, customers, serviceItems,
+        staff: continueCarriedTask(
+          { ...state, staff: nextAllStaff, serviceItems: nextServiceItems },
+          nextStaff,
+          nextServiceItems,
+          customers,
+          tables,
+          nextAllStaff,
+        ),
+        queue, tables, customers, serviceItems: nextServiceItems,
       };
     }
     if (target.distance > 0) {
@@ -1961,15 +2012,34 @@ function resolveTask({
     }
 
     const carriedDirtyIds = carriedIds.filter(id => serviceItems.some(candidate =>
-      candidate.id === id && candidate.state === 'carried_dirty'));
+      sameId(candidate.id, id) && candidate.state === 'carried_dirty'));
     const occupied = getWashStationOccupancy(state, station, {
       excludeServiceItemIds: carriedDirtyIds,
     });
     const available = Math.max(0, getWashStationCapacity(station) - occupied);
     if (available === 0) {
+      const nextServiceItems = serviceItems.map(candidate => sameId(candidate.id, taskItemId)
+        ? {
+          ...candidate,
+          washStationId: null,
+          reservedWashStationId: null,
+          assignedStaffId: null,
+        }
+        : candidate);
+      const nextStaff = withCarriedServiceItemIds(completedStaff, carriedIds);
+      const nextAllStaff = (state.staff || []).map(worker => worker.id === staff.id
+        ? nextStaff
+        : worker);
       return {
-        staff: continueCarriedTask(state, withCarriedServiceItemIds(completedStaff, carriedIds), serviceItems, customers, tables, state.staff),
-        queue, tables, customers, serviceItems,
+        staff: continueCarriedTask(
+          { ...state, staff: nextAllStaff, serviceItems: nextServiceItems },
+          nextStaff,
+          nextServiceItems,
+          customers,
+          tables,
+          nextAllStaff,
+        ),
+        queue, tables, customers, serviceItems: nextServiceItems,
       };
     }
 
@@ -2153,18 +2223,6 @@ function resolveTask({
       customers: customers.map(candidate => candidate.id === customer.id
         ? started?.customer ?? deliveredCustomer
         : candidate),
-    };
-  }
-
-  if (staff.task.type === 'clean_service_item') {
-    const itemIndex = serviceItems.findIndex(item => sameId(item.id, staff.task.serviceItemId));
-    const item = itemIndex < 0 ? null : serviceItems[itemIndex];
-    if (!canCompleteServiceItemCleanup(state, staff, item)) {
-      return { staff: completedStaff, queue, tables, customers, serviceItems };
-    }
-    return {
-      staff: completedStaff, queue, tables, customers,
-      serviceItems: serviceItems.filter((_item, index) => index !== itemIndex),
     };
   }
 
@@ -2579,37 +2637,26 @@ function workerOwnsItem(worker, itemId) {
   return getCarriedServiceItemIds(worker).some(id => sameId(id, itemId));
 }
 
-function taskReferencesServiceItem(task, itemId) {
-  return sameId(task?.serviceItemId, itemId)
-    || (Array.isArray(task?.serviceItemIds)
-      && task.serviceItemIds.some(id => sameId(id, itemId)));
-}
-
-function canCompleteServiceItemCleanup(state, staff, item) {
-  if (staff?.role !== 'janitor' || item?.state !== 'to_clean') return false;
-  if (item.assignedStaffId != null && !sameId(item.assignedStaffId, staff.id)) return false;
-  if (!(Number.isFinite(item.x) && Number.isFinite(item.y)
-    && Number.isFinite(staff.x) && Number.isFinite(staff.y))) return false;
-
-  const anotherOwner = (state.staff || []).some(worker => !sameId(worker.id, staff.id)
-    && (workerOwnsItem(worker, item.id) || taskReferencesServiceItem(worker.task, item.id)));
-  if (anotherOwner) return false;
-
-  // The cleanup task targets a small physical item rectangle. Recompute the
-  // legal adjacent/current target so a stale arrival status cannot delete an
-  // item which moved after the task was assigned.
-  const target = targetForRectOrCurrent(state, {
-    x: item.x - 10, y: item.y - 10, w: 20, h: 20,
-  }, staff);
-  return target?.distance === 0;
-}
-
 function isStaffTaskExecutable(state, worker) {
   const task = worker?.task;
-  if (!task || !isStaffTaskRoleAllowed(task, worker.role)) return !task;
-  if (task.type !== 'handoff_cancelled_waste') return true;
-  const item = (state.serviceItems || []).find(candidate => candidate.id === task.serviceItemId);
-  return item?.foodCancelled === true && workerOwnsItem(worker, item.id);
+  return !task || isStaffTaskRoleAllowed(task, worker.role);
+}
+
+function requeueCancelledCarriedItem(item, worker, state) {
+  return {
+    ...item,
+    state,
+    x: Number.isFinite(worker?.x) ? worker.x : item.x,
+    y: Number.isFinite(worker?.y) ? worker.y : item.y,
+    assignedStaffId: null,
+    serviceTableId: null,
+    serviceSlotIndex: null,
+    stationId: null,
+    washStationId: null,
+    reservedWashStationId: null,
+    washQueuedAt: null,
+    washStartedAt: null,
+  };
 }
 
 function anotherWorkerOwnsItem(allStaff, staffId, itemId) {
@@ -2628,24 +2675,8 @@ function nextCarriedTask(state, staff, serviceItems, customers, tables, allStaff
     const foodExpired = Number.isFinite(state.restaurant?.gameTime)
       && Number.isFinite(customer?.foodDeadlineAt)
       && state.restaurant.gameTime >= customer.foodDeadlineAt;
-    if ((item.foodCancelled === true || foodExpired) && staff.role !== 'janitor') {
-      const stationChoice = selectWashStation(state, staff, serviceItems, allStaff);
-      if (stationChoice) {
-        return {
-          task: {
-            type: 'handoff_cancelled_waste',
-            serviceItemId: item.id,
-            washStationId: stationChoice.station.id,
-          },
-          goal: stationChoice.target.goal,
-        };
-      }
-      continue;
-    }
     if (item.state === 'carried_dirty') {
-      if (staff.role !== 'janitor') {
-        continue;
-      }
+      if (staff.role !== 'waiter') continue;
       const stationChoice = selectWashStation(state, staff, serviceItems, allStaff);
       if (stationChoice) {
         return {
@@ -2659,6 +2690,7 @@ function nextCarriedTask(state, staff, serviceItems, customers, tables, allStaff
       }
       continue;
     }
+    if (item.foodCancelled === true || foodExpired) continue;
     const table = tables.find(candidate => candidate.id === item.tableId);
     if (!customer || customer.state === 'leaving' || customer.tableId !== item.tableId || !table) continue;
     const target = targetForTable(state, table, staff);
@@ -2689,20 +2721,7 @@ function nextCarriedCookTask(state, staff, serviceItems) {
     const foodExpired = Number.isFinite(state.restaurant?.gameTime)
       && Number.isFinite(customer?.foodDeadlineAt)
       && state.restaurant.gameTime >= customer.foodDeadlineAt;
-    if (item?.foodCancelled === true || foodExpired) {
-      const stationChoice = selectWashStation(state, staff, serviceItems, state.staff);
-      if (stationChoice) {
-        return {
-          task: {
-            type: 'handoff_cancelled_waste',
-            serviceItemId: item.id,
-            washStationId: stationChoice.station.id,
-          },
-          goal: stationChoice.target.goal,
-        };
-      }
-      continue;
-    }
+    if (item?.foodCancelled === true || foodExpired) continue;
     const serviceTable = item
       ? (state.serviceTables || []).find(table => table.id === item.serviceTableId)
       : null;
@@ -2730,9 +2749,11 @@ function nextCarriedCookTask(state, staff, serviceItems) {
   return null;
 }
 
-function reconcileCarriedInventory(staff, serviceItems, customers, tables, serviceTables) {
+function reconcileCarriedInventory(staff, serviceItems, customers, tables, serviceTables, now = null) {
   const nextIds = [];
   const recoveredIds = new Set();
+  const cancelledCookIds = new Set();
+  const cancelledWaiterIds = new Set();
   let nextServiceItems = serviceItems;
   let inventoryKind = null;
   const capacity = getStaffCarryCapacity(staff);
@@ -2751,7 +2772,20 @@ function reconcileCarriedInventory(staff, serviceItems, customers, tables, servi
       && Number.isInteger(item.serviceSlotIndex)
       && item.serviceSlotIndex >= 0
       && item.serviceSlotIndex < 4;
-    const invalidCleanDestination = item.state === 'carried'
+    const foodExpired = Number.isFinite(now)
+      && Number.isFinite(customer?.foodDeadlineAt)
+      && now >= customer.foodDeadlineAt;
+    const cancelledWaiterLoad = staff.role === 'waiter'
+      && item.state === 'carried'
+      && (item.foodCancelled === true || foodExpired);
+    if (cancelledWaiterLoad) cancelledWaiterIds.add(item.id);
+    if (staff.role === 'cook' && item.state === 'carried'
+      && (item.foodCancelled === true || foodExpired)) {
+      recoveredIds.add(item.id);
+      cancelledCookIds.add(String(item.id));
+      continue;
+    }
+    const invalidCleanDestination = !cancelledWaiterLoad && item.state === 'carried'
       && item.foodCancelled !== true
       && !validCookDestination
       && (!customer || customer.state === 'leaving'
@@ -2760,13 +2794,11 @@ function reconcileCarriedInventory(staff, serviceItems, customers, tables, servi
       recoveredIds.add(item.id);
       continue;
     }
-    if (item.state === 'carried_dirty'
-      && !(staff.role === 'janitor'
-        || (staff.role === 'waiter' && item.foodCancelled === true))) {
+    if (item.state === 'carried_dirty' && staff.role !== 'waiter') {
       recoveredIds.add(item.id);
       continue;
     }
-    const itemKind = item.state === 'carried_dirty' ? 'dirty' : 'clean';
+    const itemKind = cancelledWaiterLoad || item.state === 'carried_dirty' ? 'dirty' : 'clean';
     if (inventoryKind == null) inventoryKind = itemKind;
     if (itemKind !== inventoryKind || nextIds.length >= capacity) {
       recoveredIds.add(item.id);
@@ -2774,16 +2806,34 @@ function reconcileCarriedInventory(staff, serviceItems, customers, tables, servi
     }
     nextIds.push(item.id);
   }
-  if (recoveredIds.size > 0) {
+  if (recoveredIds.size > 0 || cancelledWaiterIds.size > 0) {
     nextServiceItems = serviceItems.map(item => {
-      if (!recoveredIds.has(item.id)) return item;
+      const recovered = recoveredIds.has(item.id);
+      if (cancelledWaiterIds.has(item.id) && !recovered) {
+        return requeueCancelledCarriedItem(item, staff, 'carried_dirty');
+      }
+      if (!recovered) return item;
+      if (cancelledCookIds.has(String(item.id))) {
+        return requeueCancelledCarriedItem(item, staff, 'to_clean');
+      }
+      if (cancelledWaiterIds.has(item.id)) {
+        return requeueCancelledCarriedItem(item, staff, 'to_clean');
+      }
       if (item.state === 'carried_dirty') {
         return item.tableId != null && tables.some(table => table.id === item.tableId)
-          ? { ...item, state: 'dirty_at_table', assignedStaffId: null }
+          ? {
+            ...item,
+            state: 'dirty_at_table',
+            assignedStaffId: null,
+            washStationId: null,
+            reservedWashStationId: null,
+            washStartedAt: null,
+          }
           : {
             ...item,
             state: 'queued_for_wash',
             washStationId: null,
+            reservedWashStationId: null,
             washStartedAt: null,
             assignedStaffId: null,
           };
@@ -2877,7 +2927,7 @@ export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
 
   for (let i = 0; i < staff.length; i += 1) {
     const reconciledInventory = reconcileCarriedInventory(
-      staff[i], serviceItems, customers, tables, state.serviceTables || [],
+      staff[i], serviceItems, customers, tables, state.serviceTables || [], restaurant?.gameTime,
     );
     staff[i] = reconciledInventory.staff;
     serviceItems = reconciledInventory.serviceItems;

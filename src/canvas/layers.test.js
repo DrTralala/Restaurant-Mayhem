@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { drawOverlayLayer, drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawQueueLayer } from './layers';
+import { drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawQueueLayer } from './layers';
 import { updateStaff } from '../simulation/staff';
 import { processKitchen } from '../simulation/kitchen';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
@@ -604,25 +604,6 @@ describe('drawPlacementPreview', () => {
   });
 });
 
-describe('drawOverlayLayer', () => {
-  it('uses the tooltip argument when called with sprites before tooltip text', () => {
-    const calls = [];
-    const ctx = {
-      canvas: { height: 200 },
-      fillStyle: '',
-      font: '',
-      measureText: text => ({ width: String(text).length }),
-      fillRect: () => {},
-      fillText: text => calls.push(text),
-    };
-
-    drawOverlayLayer(ctx, {}, {}, {}, 'Station k1');
-
-    expect(calls).toContain('Station k1');
-    expect(calls).not.toContain('[object Object]');
-  });
-});
-
 describe('drawStaffLayer', () => {
   const camera = { x: 0, y: 0, zoom: 1 };
 
@@ -653,7 +634,7 @@ describe('drawStaffLayer', () => {
     expect(ctx._calls.arcs[0].y).toBe(196);
   });
 
-  it('renders staff as a stick figure with arms and hands', () => {
+  it('renders staff as a stick figure with arms and no hand endpoint rectangles', () => {
     const state = {
       staff: [{ id: 's1', name: 'Marco', role: 'cook', x: 150, y: 200, morale: 80 }],
       restaurant: { expansionLevel: 1 },
@@ -663,8 +644,7 @@ describe('drawStaffLayer', () => {
     drawStaffLayer(ctx, state, camera);
 
     expect(ctx._calls.lines.length).toBeGreaterThanOrEqual(5);
-    expect(ctx._calls.rects).toContainEqual({ x: 141, y: 206, w: 2, h: 2 });
-    expect(ctx._calls.rects).toContainEqual({ x: 157, y: 206, w: 2, h: 2 });
+    expect(ctx._calls.rects).toEqual([]);
   });
 
   it('uses gender palettes for staff figures and their names', () => {

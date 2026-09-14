@@ -277,8 +277,7 @@ function cancelledItemForState(state, item, carriersByItem, cancellationTime) {
   if (item.state === 'ordered' || item.state === 'preparing') return null;
 
   if (item.state === 'carried') {
-    // A waiter may carry cancelled cooked waste as a temporary dirty load. A
-    // cook keeps the clean physical item until a safe handoff is scheduled.
+    // A waiter may carry cancelled cooked waste as a temporary dirty load.
     if (carrier?.role === 'waiter') {
       return {
         ...base,
@@ -287,14 +286,25 @@ function cancelledItemForState(state, item, carriersByItem, cancellationTime) {
         serviceTableId: null,
         serviceSlotIndex: null,
         stationId: null,
+        washStationId: null,
+        reservedWashStationId: null,
+        washQueuedAt: null,
+        washStartedAt: null,
       };
     }
     return {
       ...base,
-      state: 'carried',
+      state: 'to_clean',
+      x: carriedPosition?.x ?? (Number.isFinite(item.x) ? item.x : origin.x),
+      y: carriedPosition?.y ?? (Number.isFinite(item.y) ? item.y : origin.y),
+      assignedStaffId: null,
       serviceTableId: null,
       serviceSlotIndex: null,
       stationId: null,
+      washStationId: null,
+      reservedWashStationId: null,
+      washQueuedAt: null,
+      washStartedAt: null,
     };
   }
 
@@ -433,10 +443,14 @@ export function cancelCustomerFood(state, customerId, now, reason = 'food-patien
   const nextState = { ...working, serviceItems: serviceItemsWithDrinkStart };
   const removedFromWorldIds = new Set([...itemIds]
     .filter(id => !serviceItemsWithDrinkStart.some(item => sameId(item.id, id))));
+  const requeuedForPickupIds = new Set(serviceItemsWithDrinkStart
+    .filter(item => itemIds.has(String(item.id)) && item.state === 'to_clean')
+    .map(item => String(item.id)));
   const staff = reconcileStaffTasks(nextState, itemIds, affectedBatchIds)
     .map(worker => withCarriedServiceItemIds(
       worker,
-      getCarriedServiceItemIds(worker).filter(id => !removedFromWorldIds.has(String(id))),
+      getCarriedServiceItemIds(worker).filter(id => !removedFromWorldIds.has(String(id))
+        && !requeuedForPickupIds.has(String(id))),
     ));
   const customers = (working.customers || []).map(candidate =>
     sameId(candidate.id, customer.id)

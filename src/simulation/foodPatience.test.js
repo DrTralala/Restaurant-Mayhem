@@ -42,7 +42,7 @@ function stateWith(itemState, overrides = {}) {
     }],
     staff: itemState === 'carried'
       ? [{
-        id: 'cook', role: 'cook', carryingServiceItemIds: ['dish-1'],
+        id: 'cook', role: 'cook', x: 180, y: 220, carryingServiceItemIds: ['dish-1'],
         task: { type: 'place_dish_on_service', serviceItemId: 'dish-1', batchId: 'batch-1' },
       }]
       : [{ id: 'cook', role: 'cook', carryingServiceItemIds: [], task: null }],
@@ -105,20 +105,61 @@ describe('food patience', () => {
       expect(repeated.customers[0].orderSubtotal).toBe(0);
     });
 
-  it('keeps a carried dish with its cook while invalidating its delivery claim', () => {
+  it('releases a carried cancelled dish at the cook position for waiter pickup', () => {
     const initial = stateWith('carried');
     const pending = {
       ...initial,
+      serviceItems: initial.serviceItems.map(item => ({
+        ...item,
+        washStationId: 'stale-sink', reservedWashStationId: 'stale-dishwasher',
+        washQueuedAt: 40, washStartedAt: 50,
+      })),
       customers: [startFoodPatience(initial.customers[0], 0)],
     };
     const cancelled = cancelCustomerFood(pending, 'c1', 100);
 
     expect(cancelled.serviceItems[0]).toMatchObject({
-      id: 'dish-1', state: 'carried', foodCancelled: true,
-      deliveryProhibited: true, assignedStaffId: 'cook',
+      id: 'dish-1', state: 'to_clean', foodCancelled: true,
+      deliveryProhibited: true, assignedStaffId: null,
+      x: 180, y: 220,
+    });
+    expect(cancelled.serviceItems[0]).toMatchObject({
+      serviceTableId: null, serviceSlotIndex: null, stationId: null,
+      washStationId: null, reservedWashStationId: null,
+      washQueuedAt: null, washStartedAt: null,
+    });
+    expect(cancelled.staff[0].carryingServiceItemIds).toEqual([]);
+    expect(cancelled.staff[0].task).toBeNull();
+  });
+
+  it('converts a waiter-carried cancelled dish to dirty work and clears stale wash metadata', () => {
+    const initial = stateWith('carried');
+    const pending = {
+      ...initial,
+      staff: [{
+        ...initial.staff[0], id: 'waiter', role: 'waiter',
+        carryingServiceItemIds: ['dish-1'],
+        task: { type: 'deliver_service_item', serviceItemId: 'dish-1', customerId: 'c1' },
+      }],
+      serviceItems: initial.serviceItems.map(item => ({
+        ...item,
+        assignedStaffId: 'waiter',
+        washStationId: 'stale-sink', reservedWashStationId: 'stale-dishwasher',
+        washQueuedAt: 40, washStartedAt: 50,
+      })),
+      customers: [startFoodPatience(initial.customers[0], 0)],
+    };
+
+    const cancelled = cancelCustomerFood(pending, 'c1', 100);
+
+    expect(cancelled.serviceItems[0]).toMatchObject({
+      id: 'dish-1', state: 'carried_dirty', foodCancelled: true,
+      deliveryProhibited: true, assignedStaffId: null,
+      serviceTableId: null, serviceSlotIndex: null, stationId: null,
+      washStationId: null, reservedWashStationId: null,
+      washQueuedAt: null, washStartedAt: null,
     });
     expect(cancelled.staff[0].carryingServiceItemIds).toEqual(['dish-1']);
-    expect(cancelled.staff[0].task).toBeNull();
   });
 
   it('removes a malformed load reference when cancellation removes a non-carried item', () => {
@@ -210,6 +251,7 @@ describe('food patience', () => {
       state: 'to_clean', x: 150, y: 130,
       wasteOrigin: { serviceTableId: 'st1', serviceSlotIndex: 0, x: 150, y: 130 },
     });
+    expect(result.serviceItems[0]).toHaveProperty('wasteOrigin');
   });
 
   it('uses the kitchen station origin for a ready item with missing coordinates', () => {
@@ -227,6 +269,7 @@ describe('food patience', () => {
       state: 'to_clean', x: 120, y: 140,
       wasteOrigin: { stationId: 'k1', x: 120, y: 140 },
     });
+    expect(result.serviceItems[0]).toHaveProperty('wasteOrigin');
   });
 
   it('lets a cancelled food order finish its valid drink before individual checkout', () => {
