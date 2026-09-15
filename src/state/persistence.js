@@ -3,7 +3,7 @@ import { inferGender } from '../canvas/characterAppearance';
 import { normaliseDrinkOverrides } from '../data/drinks';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { normaliseMilestones } from '../data/milestones';
-import { normaliseOperatingHour } from '../simulation/clock';
+import { DEFAULT_OPERATING_HOURS, normaliseOperatingHour } from '../simulation/clock';
 import { normaliseConsumptionState } from '../simulation/consumption';
 import { isCheckoutState } from '../simulation/checkout';
 import { normaliseCustomerQueue, normaliseQueueDepartures, normaliseQueueSlots, reconcileQueueSlots } from '../simulation/customerQueue';
@@ -260,13 +260,16 @@ export function hydrateState(saved, fresh) {
   if ('tables' in saved || 'tables' in fresh) {
     hydrated.tables = saved.tables || fresh.tables || [];
   }
+  const savedRestaurant = saved.restaurant && typeof saved.restaurant === 'object'
+    ? saved.restaurant
+    : {};
   hydrated.restaurant.openHour = normaliseOperatingHour(
-    hydrated.restaurant.openHour,
-    normaliseOperatingHour(fresh.restaurant.openHour, 10),
+    savedRestaurant.openHour,
+    DEFAULT_OPERATING_HOURS.openHour,
   );
   hydrated.restaurant.closeHour = normaliseOperatingHour(
-    hydrated.restaurant.closeHour,
-    normaliseOperatingHour(fresh.restaurant.closeHour, 22),
+    savedRestaurant.closeHour,
+    DEFAULT_OPERATING_HOURS.closeHour,
   );
 
   if (saved.dishes || fresh.dishes) {

@@ -3,6 +3,7 @@ import { UPGRADES } from '../data/upgrades';
 import { MILESTONES } from '../data/milestones';
 import { createMovementCoordinator } from '../simulation/navigation/coordinator';
 import { createStaffDutyDefaults } from '../simulation/staffSchedules';
+import { DEFAULT_OPERATING_HOURS } from '../simulation/clock';
 import { SAVE_VERSION } from './saveVersion';
 
 export function createInitialState() {
@@ -15,8 +16,8 @@ export function createInitialState() {
       day: 1,
       gameTime: 10 * 3600, // start at 10:00 AM
       totalServed: 0,
-      openHour: 10,
-      closeHour: 22,
+      openHour: DEFAULT_OPERATING_HOURS.openHour,
+      closeHour: DEFAULT_OPERATING_HOURS.closeHour,
       expansionLevel: 1,
     },
     tables: [

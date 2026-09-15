@@ -611,18 +611,32 @@ describe('hydrateState', () => {
 
   it('hydrates missing, malformed, and legacy operating hours safely', () => {
     const fresh = createInitialState();
-    const missing = hydrateState({ ...fresh, restaurant: { funds: 900 } }, fresh);
+    const fallbackFresh = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, openHour: 10, closeHour: 22 },
+    };
+    const missing = hydrateState({ ...fresh, restaurant: { funds: 900 } }, fallbackFresh);
     const malformed = hydrateState({
       ...fresh,
       restaurant: { ...fresh.restaurant, openHour: 10.25, closeHour: '22' },
-    }, fresh);
+    }, fallbackFresh);
+    const daytime = hydrateState({
+      ...fresh,
+      restaurant: { ...fresh.restaurant, openHour: 10, closeHour: 22 },
+    }, fallbackFresh);
+    const overnight = hydrateState({
+      ...fresh,
+      restaurant: { ...fresh.restaurant, openHour: 18, closeHour: 2 },
+    }, fallbackFresh);
     const legacy = hydrateState({
       ...fresh,
       restaurant: { ...fresh.restaurant, openHour: 0, closeHour: 24 },
-    }, fresh);
+    }, fallbackFresh);
 
-    expect(missing.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
-    expect(malformed.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
+    expect(missing.restaurant).toMatchObject({ openHour: 0, closeHour: 0 });
+    expect(malformed.restaurant).toMatchObject({ openHour: 0, closeHour: 0 });
+    expect(daytime.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
+    expect(overnight.restaurant).toMatchObject({ openHour: 18, closeHour: 2 });
     expect(legacy.restaurant).toMatchObject({ openHour: 0, closeHour: 0 });
   });
 
@@ -644,7 +658,7 @@ describe('hydrateState', () => {
     expect(hydrateState(saved, fresh)).toEqual({
       version: SAVE_VERSION,
       movementCoordinator: createMovementCoordinator(),
-      restaurant: { funds: 999, totalServed: 0, openHour: 10, closeHour: 22 },
+      restaurant: { funds: 999, totalServed: 0, openHour: 0, closeHour: 0 },
       staff: [{ id: 'custom-cook', gender: 'male', carryingServiceItemIds: [] }],
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       serviceItems: [],

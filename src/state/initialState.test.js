@@ -9,7 +9,7 @@ describe('createInitialState', () => {
 
     expect(state.restaurant.funds).toBe(600);
     expect(state.dishes[0].price).toBe(12);
-    expect(state.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
+    expect(state.restaurant).toMatchObject({ openHour: 0, closeHour: 0 });
   });
 
   it('starts the current save version with an empty derived coordinator and wash station state', () => {
