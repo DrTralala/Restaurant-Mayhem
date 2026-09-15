@@ -273,6 +273,23 @@ describe('loadState', () => {
     localStorage.setItem('restaurant-sim-save', JSON.stringify(state));
     expect(loadState()).toEqual(state);
   });
+
+  it('preserves the layout of a prior saved empty kitchen station', () => {
+    const fresh = createInitialState();
+    const priorSave = {
+      ...fresh,
+      kitchenStations: fresh.kitchenStations.map(station => station.id === 'k2'
+        ? { ...station, x: 200, y: 120 }
+        : station),
+    };
+
+    saveState(priorSave);
+    const loaded = loadState();
+    const restored = hydrateState(loaded, fresh);
+
+    expect(restored.kitchenStations.find(station => station.id === 'k2'))
+      .toMatchObject({ x: 200, y: 120 });
+  });
 });
 
 describe('hydrateState', () => {

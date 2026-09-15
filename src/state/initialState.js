@@ -53,7 +53,7 @@ export function createInitialState() {
     }],
     kitchenStations: [
       { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
-      { id: 'k2', equipmentId: null, x: 200, y: 120 },
+      { id: 'k2', equipmentId: null, x: 360, y: 120 },
     ],
     floorDirt: [],
     washStations: [{ id: 'wash1', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],

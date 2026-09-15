@@ -211,6 +211,27 @@ describe('fixture movement validation', () => {
 });
 
 describe('fixture copy validation', () => {
+  it('canonicalises runtime-rich dining candidates before validating them', () => {
+    const runtimeRichState = {
+      ...state,
+      tables: [{
+        id: 't1', x: 200, y: 200, status: 'occupied', seats: undefined,
+        diningPartyId: 'party-1',
+        diningCustomerIds: ['customer-1'],
+        seatingAssignments: [{ customerId: 'customer-1', chairId: 'ch1' }],
+        reservationOwnerStaffId: 'host',
+      }],
+      chairs: [{
+        id: 'ch1', tableId: 't1', x: 210, y: 180, rotation: 2,
+        reservedBy: 'party-1', occupiedBy: 'customer-1',
+      }],
+    };
+
+    expect(validateFixtureCopies(runtimeRichState, [
+      { type: 'table', id: 't1', x: 600, y: 300 },
+    ])).toMatchObject({ valid: true, reason: null });
+  });
+
   it('validates copied candidates against the originals and preserves table-chair links', () => {
     const result = validateFixtureCopies(state, [
       { type: 'table', id: 't1', x: 600, y: 300 },
