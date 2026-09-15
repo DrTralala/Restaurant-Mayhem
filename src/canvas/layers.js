@@ -16,6 +16,7 @@ import { getServiceItemProgress, getStaffTaskRemainingFraction } from '../simula
 import { getFoodPatienceFraction } from '../simulation/foodPatience';
 import { getAmenityGeometry } from '../data/staffAmenities';
 import { getCanvasFont } from '../typography';
+import { drawSprite } from './sprites';
 
 const CANVAS_LABEL_FONT = getCanvasFont('compact');
 
@@ -302,7 +303,7 @@ function drawStaffAmenity(ctx, amenity) {
   });
 }
 
-export function drawFloorLayer(ctx, state, camera) {
+export function drawFloorLayer(ctx, state, camera, sprites = {}) {
   const { restaurant } = state;
   const world = getRestaurantWorld(restaurant);
 
@@ -348,16 +349,21 @@ export function drawFloorLayer(ctx, state, camera) {
 
   // Cashier station at the top-right of the dining room.
   for (const cashier of state.cashierStations || []) {
-    ctx.fillStyle = '#5a4a3a';
-    ctx.fillRect(cashier.x, cashier.y, cashier.w, cashier.h);
-    ctx.strokeStyle = '#8a7a6a';
-    ctx.strokeRect(cashier.x, cashier.y, cashier.w, cashier.h);
-    drawObjectLabel(ctx, 'Cashier', {
-      x: cashier.x,
-      y: cashier.y,
-      w: cashier.w,
-      h: cashier.h,
-    });
+    const drewSprite = drawSprite(
+      ctx, sprites, 'cashier', cashier.x, cashier.y, cashier.w, cashier.h,
+    );
+    if (!drewSprite) {
+      ctx.fillStyle = '#5a4a3a';
+      ctx.fillRect(cashier.x, cashier.y, cashier.w, cashier.h);
+      ctx.strokeStyle = '#8a7a6a';
+      ctx.strokeRect(cashier.x, cashier.y, cashier.w, cashier.h);
+      drawObjectLabel(ctx, 'Cashier', {
+        x: cashier.x,
+        y: cashier.y,
+        w: cashier.w,
+        h: cashier.h,
+      });
+    }
   }
 
   // Queue area outside the door.
@@ -393,7 +399,7 @@ export function drawQueueLayer(ctx, state, camera, renderOptions = {}) {
   ctx.restore();
 }
 
-export function drawFurnitureLayer(ctx, state, camera) {
+export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
   ctx.save();
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
@@ -401,60 +407,103 @@ export function drawFurnitureLayer(ctx, state, camera) {
   for (const table of state.tables) {
     const tx = table.x;
     const ty = table.y;
-
-    // Table surface (2x2 = 40x40)
-    const tableColor = table.status === 'dirty' ? '#663333'
-      : table.status === 'occupied' ? '#4a6741' : '#6b5b3a';
-    ctx.fillStyle = tableColor;
-    ctx.fillRect(tx, ty, 40, 40);
-
+    const drewSprite = drawSprite(ctx, sprites, 'table', tx, ty, 40, 40);
+    if (!drewSprite) {
+      const tableColor = table.status === 'dirty' ? '#663333'
+        : table.status === 'occupied' ? '#4a6741' : '#6b5b3a';
+      ctx.fillStyle = tableColor;
+      ctx.fillRect(tx, ty, 40, 40);
+    } else if (table.status === 'dirty' || table.status === 'occupied') {
+      ctx.save();
+      ctx.fillStyle = table.status === 'dirty'
+        ? 'rgba(102,51,51,0.45)'
+        : 'rgba(74,103,65,0.35)';
+      ctx.fillRect(tx, ty, 40, 40);
+      ctx.restore();
+    }
   }
 
   // Chairs (drawn from chairs array — independently movable, rotatable)
   for (const chair of state.chairs) {
-    ctx.fillStyle = '#5a4a30';
-    ctx.fillRect(chair.x, chair.y, 20, 20);
-    // Direction indicator
+    const rot = Number.isInteger(chair.rotation)
+      ? ((chair.rotation % 4) + 4) % 4
+      : 0;
+    const drewSprite = drawSprite(
+      ctx, sprites, 'chair', chair.x, chair.y, 20, 20, rot,
+    );
+    if (!drewSprite) {
+      ctx.fillStyle = '#5a4a30';
+      ctx.fillRect(chair.x, chair.y, 20, 20);
+    }
+
+    // Direction indicator remains functional state, even with artwork.
     ctx.fillStyle = '#f0d080';
-    const rot = chair.rotation || 0;
     const cx = chair.x + 10, cy = chair.y + 10;
     const arrows = ['↑', '→', '↓', '←'];
     ctx.save();
     ctx.font = getCanvasFont('icon');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(arrows[rot] || arrows[0], cx, cy);
+    ctx.fillText(arrows[rot], cx, cy);
     ctx.restore();
   }
 
   for (const station of state.kitchenStations || []) {
-    ctx.fillStyle = '#555';
-    ctx.fillRect(station.x, station.y, 40, 40);
     const eq = station.equipmentId
       ? (state.equipment || []).find(e => e.id === station.equipmentId)
       : null;
-    if (eq) {
-      ctx.fillStyle = '#888';
-      ctx.fillRect(station.x + 5, station.y + 5, 30, 30);
-      drawObjectLabel(ctx, eq.name, { x: station.x + 2, y: station.y + 2, w: 36, h: 36 }, {
-        allowOverflow: true,
-      });
-    } else {
-      drawObjectLabel(ctx, 'Kitchen\nstation', { x: station.x, y: station.y, w: 40, h: 40 });
+    const serviceItems = Array.isArray(state.serviceItems) ? state.serviceItems : [];
+    const stationHasFood = serviceItems.some(item =>
+      item.kind === 'dish'
+      && item.stationId === station.id
+      && ['preparing', 'ready'].includes(item.state));
+    const spriteKey = eq?.type === 'toaster'
+      ? 'toaster'
+      : eq?.type === 'oven'
+        ? (stationHasFood ? 'ovenInUse' : 'oven')
+        : null;
+    const drewSprite = spriteKey
+      ? drawSprite(ctx, sprites, spriteKey, station.x, station.y, 40, 40)
+      : false;
+
+    if (!drewSprite) {
+      ctx.fillStyle = '#555';
+      ctx.fillRect(station.x, station.y, 40, 40);
+      if (eq) {
+        ctx.fillStyle = '#888';
+        ctx.fillRect(station.x + 5, station.y + 5, 30, 30);
+        drawObjectLabel(ctx, eq.name, { x: station.x + 2, y: station.y + 2, w: 36, h: 36 }, {
+          allowOverflow: true,
+        });
+      } else {
+        drawObjectLabel(ctx, 'Kitchen\nstation', { x: station.x, y: station.y, w: 40, h: 40 });
+      }
     }
   }
 
   // Service tables (long counter between kitchen and dining)
   for (const st of state.serviceTables || []) {
     const dimensions = getPlaceableDimensions('serviceTable', st.rotation);
-    ctx.fillStyle = '#4a6a4a';
-    ctx.fillRect(st.x, st.y, dimensions.width, dimensions.height);
-    drawObjectLabel(ctx, 'Service counter', {
-      x: st.x,
-      y: st.y,
-      w: dimensions.width,
-      h: dimensions.height,
-    });
+    const drewSprite = drawSprite(
+      ctx,
+      sprites,
+      'serviceCounter',
+      st.x,
+      st.y,
+      dimensions.width,
+      dimensions.height,
+      st.rotation,
+    );
+    if (!drewSprite) {
+      ctx.fillStyle = '#4a6a4a';
+      ctx.fillRect(st.x, st.y, dimensions.width, dimensions.height);
+      drawObjectLabel(ctx, 'Service counter', {
+        x: st.x,
+        y: st.y,
+        w: dimensions.width,
+        h: dimensions.height,
+      });
+    }
   }
 
   for (const amenity of state.staffAmenities || []) drawStaffAmenity(ctx, amenity);
@@ -465,18 +514,32 @@ export function drawFurnitureLayer(ctx, state, camera) {
   }
   for (const station of state.washStations || []) {
     const w = station.w || 40, h = station.h || 40;
-    ctx.fillStyle = station.type === 'automatic' ? '#536b75' : '#466b62';
-    ctx.fillRect(station.x, station.y, w, h);
-    ctx.save();
-    ctx.strokeStyle = '#9ab0aa';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(station.x + 0.5, station.y + 0.5, w - 1, h - 1);
-    ctx.restore();
-    drawObjectLabel(ctx, station.type === 'automatic' ? 'Dish\nwasher' : 'Sink', {
-      x: station.x, y: station.y, w, h,
-    });
-    const items = (state.serviceItems || []).filter(item => item.washStationId === station.id
+    const serviceItems = Array.isArray(state.serviceItems) ? state.serviceItems : [];
+    const items = serviceItems.filter(item => item.washStationId === station.id
       && ['queued_for_wash', 'washing'].includes(item.state));
+    const hasActiveWash = items.some(item => item.state === 'washing');
+    const spriteKey = station.type === 'automatic'
+      ? 'dishwasher'
+      : hasActiveWash
+        ? 'sinkWithDishes'
+        : items.length > 0
+          ? 'sinkWithDirtyDishes'
+          : 'sink';
+    const drewSprite = drawSprite(ctx, sprites, spriteKey, station.x, station.y, w, h);
+
+    if (!drewSprite) {
+      ctx.fillStyle = station.type === 'automatic' ? '#536b75' : '#466b62';
+      ctx.fillRect(station.x, station.y, w, h);
+      ctx.save();
+      ctx.strokeStyle = '#9ab0aa';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(station.x + 0.5, station.y + 0.5, w - 1, h - 1);
+      ctx.restore();
+      drawObjectLabel(ctx, station.type === 'automatic' ? 'Dish\nwasher' : 'Sink', {
+        x: station.x, y: station.y, w, h,
+      });
+    }
+
     ctx.save();
     ctx.fillStyle = '#fff';
     ctx.font = getCanvasFont('compact');
