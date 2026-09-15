@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { createInitialState } from './initialState';
 import { createMovementCoordinator } from '../simulation/movement';
 import { SAVE_VERSION } from './saveVersion';
+import { getFixtureRect, listFixtures } from '../data/fixtures';
+
+function rectanglesOverlap(first, second) {
+  return first.x < second.x + second.w
+    && second.x < first.x + first.w
+    && first.y < second.y + second.h
+    && second.y < first.y + first.h;
+}
 
 describe('createInitialState', () => {
   it('starts the balanced economy with $600 and a $12 toast', () => {
@@ -106,5 +114,27 @@ describe('createInitialState', () => {
       .toMatchObject({ role: 'waiter' });
     expect(state.staff.filter(staff => staff.role === 'host' || staff.role === 'cashier_waiter'))
       .toHaveLength(0);
+  });
+
+  it('keeps the starter empty kitchen station clear of the service counter and sink', () => {
+    const state = createInitialState();
+    const fixtures = listFixtures(state)
+      .filter(fixture => ['k2', 'st1', 'wash1'].includes(fixture.id))
+      .map(fixture => ({ ...fixture, rect: getFixtureRect(state, fixture) }));
+    const k2 = state.kitchenStations.find(station => station.id === 'k2');
+    const serviceTable = state.serviceTables.find(table => table.id === 'st1');
+    const washStation = state.washStations.find(station => station.id === 'wash1');
+
+    expect(k2).toMatchObject({ x: 360, y: 120 });
+    expect(serviceTable).toMatchObject({ x: 140, y: 120 });
+    expect(washStation).toMatchObject({ x: 300, y: 120 });
+    expect(fixtures).toHaveLength(3);
+    expect(fixtures.every(fixture => fixture.rect)).toBe(true);
+
+    for (let firstIndex = 0; firstIndex < fixtures.length; firstIndex += 1) {
+      for (let secondIndex = firstIndex + 1; secondIndex < fixtures.length; secondIndex += 1) {
+        expect(rectanglesOverlap(fixtures[firstIndex].rect, fixtures[secondIndex].rect)).toBe(false);
+      }
+    }
   });
 });

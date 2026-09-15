@@ -9,7 +9,7 @@ import { recordSeatResidency } from '../simulation/movement/seatedDeparture';
 function recordCtx(extraCanvas = {}) {
   const calls = {
     arcs: [], texts: [], rects: [], rectColours: [], strokeRects: [],
-    fills: [], moves: [], lines: [], strokes: [],
+    fills: [], moves: [], lines: [], strokes: [], images: [],
   };
   let alpha = 1;
   let offsetX = 0;
@@ -67,8 +67,15 @@ function recordCtx(extraCanvas = {}) {
         ...point(x, y), w: w * figureScale, h: h * figureScale, colour: this.strokeStyle,
       });
     },
+    drawImage(image, x, y, w, h) {
+      calls.images.push({ image, x, y, w, h });
+    },
     _calls: calls,
   };
+}
+
+function loadedSprite(name) {
+  return { name, complete: true, naturalWidth: 100, naturalHeight: 100 };
 }
 
 function withMovementStatuses(state, records) {
@@ -142,6 +149,19 @@ describe('drawFloorLayer', () => {
     expect(ctx._calls.rects).toContainEqual({ x: 800, y: 120, w: 80, h: 40 });
     expect(ctx._calls.texts.map(call => call.text)).toContain('Cashier');
   });
+
+  it('uses the supplied cashier sprite when it is loaded', () => {
+    const ctx = recordCtx();
+    const cashier = loadedSprite('cashier');
+    drawFloorLayer(ctx, {
+      restaurant: { expansionLevel: 1 },
+      doors: [{ id: 'door1', y: 340, role: 'entrance' }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+    }, { x: 0, y: 0, zoom: 1 }, { cashier });
+
+    expect(ctx._calls.images.map(call => call.image)).toContain(cashier);
+    expect(ctx._calls.texts.map(call => call.text)).not.toContain('Cashier');
+  });
 });
 
 describe('drawFurnitureLayer', () => {
@@ -165,6 +185,49 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.rects).toContainEqual({ x: 200, y: 100, w: 40, h: 40 });
     expect(ctx._calls.rects).toContainEqual({ x: 300, y: 100, w: 40, h: 40 });
     expect(ctx._calls.texts.some(call => /Table \d|Chair \d/.test(call.text))).toBe(false);
+  });
+
+  it('draws dining furniture and a rotated service counter from loaded sprites', () => {
+    const ctx = recordCtx();
+    const table = loadedSprite('table');
+    const chair = loadedSprite('chair');
+    const serviceCounter = loadedSprite('serviceCounter');
+
+    drawFurnitureLayer(ctx, {
+      tables: [{ id: 't1', x: 100, y: 100, status: 'empty' }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 110, y: 80, rotation: 2 }],
+      kitchenStations: [], equipment: [], serviceItems: [], washStations: [], dishes: [],
+      serviceTables: [{ id: 'st1', x: 300, y: 120, rotation: 1 }],
+    }, { x: 0, y: 0, zoom: 1 }, { table, chair, serviceCounter });
+
+    expect(ctx._calls.images.map(call => call.image)).toEqual(expect.arrayContaining([
+      table, chair, serviceCounter,
+    ]));
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '↓', x: 120, y: 90 }));
+  });
+
+  it('retains table state overlays and chair direction over loaded artwork', () => {
+    const ctx = recordCtx();
+    const table = loadedSprite('table');
+    const chair = loadedSprite('chair');
+
+    drawFurnitureLayer(ctx, {
+      tables: [
+        { id: 'dirty', x: 100, y: 100, status: 'dirty' },
+        { id: 'occupied', x: 200, y: 100, status: 'occupied' },
+      ],
+      chairs: [{ id: 'ch1', tableId: 'dirty', x: 110, y: 80, rotation: 3 }],
+      kitchenStations: [], serviceTables: [], serviceItems: [], equipment: [], dishes: [],
+    }, { x: 0, y: 0, zoom: 1 }, { table, chair });
+
+    expect(ctx._calls.images.map(call => call.image)).toEqual(expect.arrayContaining([
+      table, chair,
+    ]));
+    expect(ctx._calls.rectColours).toEqual(expect.arrayContaining([
+      expect.objectContaining({ x: 100, y: 100, w: 40, h: 40, colour: 'rgba(102,51,51,0.45)' }),
+      expect.objectContaining({ x: 200, y: 100, w: 40, h: 40, colour: 'rgba(74,103,65,0.35)' }),
+    ]));
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '←', x: 120, y: 90 }));
   });
 
   it('draws on-service items at stored positions and skips delivered items without ownership geometry', () => {
@@ -200,6 +263,138 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
       text: '🍞', x: 120, y: 140, textAlign: 'center', textBaseline: 'middle',
     }));
+  });
+
+  it('selects stateful oven and manual-sink sprites from simulation state', () => {
+    const oven = loadedSprite('oven');
+    const ovenInUse = loadedSprite('ovenInUse');
+    const sink = loadedSprite('sink');
+    const sinkWithDirtyDishes = loadedSprite('sinkWithDirtyDishes');
+    const sinkWithDishes = loadedSprite('sinkWithDishes');
+    const sprites = { oven, ovenInUse, sink, sinkWithDirtyDishes, sinkWithDishes };
+    const base = {
+      tables: [], chairs: [], serviceTables: [], dishes: [],
+      equipment: [{ id: 'eq2', name: 'Oven', type: 'oven' }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq2', x: 100, y: 120 }],
+      washStations: [{ id: 'wash1', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],
+      restaurant: { gameTime: 0 },
+    };
+
+    const idle = recordCtx();
+    drawFurnitureLayer(idle, { ...base, serviceItems: [] },
+      { x: 0, y: 0, zoom: 1 }, sprites);
+    expect(idle._calls.images.map(call => call.image)).toEqual(expect.arrayContaining([oven, sink]));
+
+    const queued = recordCtx();
+    drawFurnitureLayer(queued, { ...base, serviceItems: [
+      { id: 'dirty', washStationId: 'wash1', state: 'queued_for_wash' },
+    ] }, { x: 0, y: 0, zoom: 1 }, sprites);
+    expect(queued._calls.images.map(call => call.image)).toContain(sinkWithDirtyDishes);
+
+    const active = recordCtx();
+    drawFurnitureLayer(active, { ...base, serviceItems: [
+      { id: 'dish', kind: 'dish', stationId: 'k1', state: 'preparing', x: 120, y: 140 },
+      { id: 'dirty', washStationId: 'wash1', state: 'washing', washStartedAt: 0 },
+    ] }, { x: 0, y: 0, zoom: 1 }, sprites);
+    expect(active._calls.images.map(call => call.image)).toEqual(expect.arrayContaining([
+      ovenInUse, sinkWithDishes,
+    ]));
+
+    const ready = recordCtx();
+    drawFurnitureLayer(ready, { ...base, serviceItems: [
+      { id: 'dish-ready', kind: 'dish', stationId: 'k1', state: 'ready', x: 120, y: 140 },
+    ] }, { x: 0, y: 0, zoom: 1 }, sprites);
+    expect(ready._calls.images.map(call => call.image)).toContain(ovenInUse);
+  });
+
+  it('requires a dish assigned to the station before selecting an in-use oven', () => {
+    const oven = loadedSprite('oven');
+    const ovenInUse = loadedSprite('ovenInUse');
+    const sprites = { oven, ovenInUse };
+    const state = {
+      tables: [], chairs: [], serviceTables: [], washStations: [], dishes: [],
+      equipment: [{ id: 'eq2', name: 'Oven', type: 'oven' }],
+      kitchenStations: [
+        { id: 'k1', equipmentId: 'eq2', x: 100, y: 120 },
+        { id: 'k2', equipmentId: 'eq2', x: 160, y: 120 },
+      ],
+      serviceItems: [
+        { id: 'drink', kind: 'drink', stationId: 'k1', state: 'preparing' },
+        { id: 'other-station', kind: 'dish', stationId: 'k2', state: 'ready' },
+      ],
+    };
+
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 }, sprites);
+
+    expect(ctx._calls.images.map(call => call.image)).toEqual([oven, ovenInUse]);
+  });
+
+  it('uses active-wash artwork in preference to queued dirty artwork at the same station', () => {
+    const dirty = loadedSprite('dirty');
+    const active = loadedSprite('active');
+    const sink = loadedSprite('sink');
+    const ctx = recordCtx();
+
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
+      washStations: [
+        { id: 'wash1', type: 'manual', x: 100, y: 120, w: 40, h: 40 },
+        { id: 'wash2', type: 'manual', x: 160, y: 120, w: 40, h: 40 },
+      ],
+      serviceItems: [
+        { id: 'queued', washStationId: 'wash1', state: 'queued_for_wash' },
+        { id: 'washing', washStationId: 'wash1', state: 'washing' },
+        { id: 'other', washStationId: 'wash2', state: 'queued_for_wash' },
+      ],
+    }, { x: 0, y: 0, zoom: 1 }, { sink, sinkWithDirtyDishes: dirty, sinkWithDishes: active });
+
+    expect(ctx._calls.images.map(call => call.image)).toEqual([active, dirty]);
+  });
+
+  it('uses toaster and automatic-dishwasher sprites for matching fixtures', () => {
+    const toaster = loadedSprite('toaster');
+    const dishwasher = loadedSprite('dishwasher');
+    const ctx = recordCtx();
+
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], serviceTables: [], serviceItems: [], dishes: [],
+      equipment: [{ id: 'eq1', name: 'Toaster', type: 'toaster' }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
+      washStations: [{ id: 'auto', type: 'automatic', level: 1, x: 300, y: 120, w: 40, h: 40 }],
+      restaurant: { gameTime: 0 },
+    }, { x: 0, y: 0, zoom: 1 }, { toaster, dishwasher });
+
+    expect(ctx._calls.images.map(call => call.image)).toEqual(expect.arrayContaining([
+      toaster, dishwasher,
+    ]));
+  });
+
+  it('keeps unsupported equipment and bare kitchen stations on the primitive fallback', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], serviceTables: [], serviceItems: [], dishes: [], washStations: [],
+      equipment: [
+        { id: 'fryer', name: 'Fryer', type: 'fryer' },
+        { id: 'empty', name: 'Empty station', type: null },
+      ],
+      kitchenStations: [
+        { id: 'unsupported', equipmentId: 'fryer', x: 100, y: 120 },
+        { id: 'bare', equipmentId: null, x: 160, y: 120 },
+      ],
+    }, { x: 0, y: 0, zoom: 1 }, {
+      toaster: loadedSprite('toaster'),
+      oven: loadedSprite('oven'),
+    });
+
+    expect(ctx._calls.images).toEqual([]);
+    expect(ctx._calls.rects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ x: 100, y: 120, w: 40, h: 40 }),
+      expect.objectContaining({ x: 160, y: 120, w: 40, h: 40 }),
+    ]));
+    expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining([
+      'Fryer', 'Kitchen', 'station',
+    ]));
   });
 
   it('does not render ordered or unpositioned service items', () => {

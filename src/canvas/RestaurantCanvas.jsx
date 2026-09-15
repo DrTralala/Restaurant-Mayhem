@@ -399,7 +399,8 @@ export default function RestaurantCanvas({
 }) {
   const canvasRef = useRef(null);
   const cameraRef = useRef(createCamera());
-  const spritesRef = useRef(loadSprites());
+  const spritesRef = useRef(null);
+  if (spritesRef.current === null) spritesRef.current = loadSprites();
   const viewportRef = useRef({ w: 0, h: 0 });
   const reducedMotionRef = useRef(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
   const state = useGameState();
@@ -739,9 +740,16 @@ export default function RestaurantCanvas({
     setMoveRevision(revision => revision + 1);
   };
 
-  const placeCopy = () => {
+  const placeCopy = (world = null) => {
     const copying = copyRef.current;
     if (!copying) return;
+
+    if (world && copying.originalItems.length > 0) {
+      const primary = copying.originalItems[0];
+      const anchor = copying.anchor || { x: primary.x, y: primary.y };
+      copying.anchor = anchor;
+      copying.items = buildCopyItems(state, copying.originalItems, anchor, world);
+    }
 
     const validation = copyValidation(state, copying.items);
     copying.validation = validation;
@@ -800,7 +808,7 @@ export default function RestaurantCanvas({
       return;
     }
     if (copyRef.current) {
-      placeCopy();
+      placeCopy(getWorldPos(e));
       return;
     }
     if (staffMoveRef.current) {

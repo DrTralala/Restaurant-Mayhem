@@ -611,6 +611,31 @@ function uniqueTemporaryId(collection, index, usedIds) {
 }
 
 function getCopyCandidateData(source, copy, id, tableIds) {
+  if (source.type === 'table') {
+    return {
+      id,
+      seats: Number.isFinite(source.data.seats) ? source.data.seats : 4,
+      status: 'empty',
+      x: copy.x,
+      y: copy.y,
+    };
+  }
+
+  if (source.type === 'chair') {
+    const copiedTableId = tableIds.get(fixtureCopyKey('table', source.data.tableId));
+    return {
+      id,
+      tableId: copiedTableId ?? source.data.tableId,
+      x: copy.x,
+      y: copy.y,
+      rotation: Number.isInteger(source.data.rotation)
+        && source.data.rotation >= 0
+        && source.data.rotation <= 3
+        ? source.data.rotation
+        : 0,
+    };
+  }
+
   const data = { ...source.data, id };
   if (source.type === 'door') {
     delete data.x;
@@ -627,10 +652,6 @@ function getCopyCandidateData(source, copy, id, tableIds) {
     data.slots = createEmptyAmenitySlots(source.data.type);
     delete data.amenityUse;
     delete data.ptoSession;
-  }
-  if (source.type === 'chair') {
-    const copiedTableId = tableIds.get(fixtureCopyKey('table', source.data.tableId));
-    data.tableId = copiedTableId ?? source.data.tableId;
   }
   return data;
 }

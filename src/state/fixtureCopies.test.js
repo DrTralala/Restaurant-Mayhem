@@ -3,6 +3,7 @@ import {
   copyFixtures,
   getFixtureCopyEligibility,
 } from './fixtureCopies';
+import { createInitialState } from './initialState';
 
 function makeState(overrides = {}) {
   return {
@@ -99,6 +100,25 @@ describe('fixture copy eligibility', () => {
 });
 
 describe('copyFixtures', () => {
+  it('copies the actual starter two-chair table as pristine dining furniture', () => {
+    const state = createInitialState();
+    const result = copyFixtures(state, [
+      { type: 'table', id: 't1', x: 600, y: 300 },
+    ]);
+
+    expect(result).not.toBe(state);
+    expect(result.restaurant.funds).toBe(200);
+    expect(result.tables.at(-1)).toEqual({
+      id: 't5', seats: 2, status: 'empty', x: 600, y: 300,
+    });
+    expect(result.chairs.slice(-2)).toEqual([
+      { id: 'ch13', tableId: 't5', x: 610, y: 280, rotation: 2 },
+      { id: 'ch14', tableId: 't5', x: 610, y: 340, rotation: 0 },
+    ]);
+    expect(result.tables.at(-1)).not.toHaveProperty('diningPartyId');
+    expect(result.tables.at(-1)).not.toHaveProperty('seatingAssignments');
+  });
+
   it('clones a table and linked chairs with fresh IDs, relative positions, and pristine runtime state', () => {
     const state = makeState({ restaurant: { expansionLevel: 1, funds: 700 } });
     const result = copyFixtures(state, [{ type: 'table', id: 't1', x: 600, y: 300 }]);

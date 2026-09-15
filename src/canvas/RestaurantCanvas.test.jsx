@@ -9,6 +9,7 @@ import { findClickedEntity } from './interaction';
 import { getRestaurantWorld } from '../simulation/world';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { FONT_FAMILY } from '../typography';
+import { loadSprites } from './sprites';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
@@ -27,7 +28,7 @@ vi.mock('./camera', () => ({
   screenToWorld: (_camera, x, y) => ({ x, y }),
 }));
 
-vi.mock('./sprites', () => ({ loadSprites: () => ({}) }));
+vi.mock('./sprites', () => ({ loadSprites: vi.fn(() => ({})) }));
 vi.mock('./layers', () => ({
   drawFloorLayer: vi.fn(),
   drawFurnitureLayer: vi.fn(),
@@ -141,6 +142,15 @@ describe('RestaurantCanvas object movement', () => {
     useRenderState.mockImplementation(() => useGameState());
     useDispatch.mockReturnValue(vi.fn());
     findClickedEntity.mockReturnValue({ type: 'chair', data: chair, text: 'Chair' });
+  });
+
+  it('initialises sprites once per mounted canvas across rerenders', () => {
+    loadSprites.mockClear();
+    const { rerender } = render(<RestaurantCanvas managementOpen={false} />);
+
+    expect(loadSprites).toHaveBeenCalledTimes(1);
+    rerender(<RestaurantCanvas managementOpen />);
+    expect(loadSprites).toHaveBeenCalledTimes(1);
   });
 
   it.each(fixtureMovementCases)('moves a %s with one generic fixture transaction', (type, id, label) => {
@@ -918,7 +928,7 @@ describe('RestaurantCanvas object movement', () => {
     expect(screen.getByText(/\$350/)).toBeInTheDocument();
   });
 
-  it('dispatches one atomic copy for a table and its linked chair only after a valid click', () => {
+  it('dispatches one atomic table copy at the clicked destination without requiring mousemove', () => {
     const dispatch = vi.fn();
     useDispatch.mockReturnValue(dispatch);
     useGameState.mockReturnValue({
@@ -935,9 +945,9 @@ describe('RestaurantCanvas object movement', () => {
     fireEvent.mouseMove(canvas, { clientX: 95, clientY: 95, buttons: 1 });
     fireEvent.mouseUp(canvas, { clientX: 95, clientY: 95 });
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
-    fireEvent.mouseMove(canvas, { clientX: 300, clientY: 300, buttons: 0 });
-    fireEvent.click(canvas, { clientX: 300, clientY: 300 });
+    fireEvent.click(canvas, { clientX: 307, clientY: 303 });
 
+    expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({
       type: 'COPY_FIXTURES',
       items: [
@@ -945,6 +955,60 @@ describe('RestaurantCanvas object movement', () => {
         { type: 'chair', id: 'ch1', x: 340, y: 310, rotation: 0 },
       ],
     });
+  });
+
+  it('uses the clicked destination after a stale copy preview', () => {
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({
+      ...state,
+      restaurant: { expansionLevel: 1, funds: 1000 },
+      tables: [{ id: 't1', seats: 2, x: 60, y: 60, status: 'empty' }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 70, rotation: 0 }],
+    });
+    findClickedEntity.mockReturnValue(null);
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.mouseDown(canvas, { clientX: 10, clientY: 10, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 95, clientY: 95, buttons: 1 });
+    fireEvent.mouseUp(canvas, { clientX: 95, clientY: 95 });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 300, buttons: 0 });
+    fireEvent.click(canvas, { clientX: 307, clientY: 303 });
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'COPY_FIXTURES',
+      items: [
+        { type: 'table', id: 't1', x: 300, y: 300 },
+        { type: 'chair', id: 'ch1', x: 340, y: 310, rotation: 0 },
+      ],
+    });
+  });
+
+  it('keeps an invalid copy click rejected and shows validation feedback', () => {
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({
+      ...state,
+      restaurant: { expansionLevel: 1, funds: 1000 },
+      tables: [{ id: 't1', seats: 2, x: 60, y: 60, status: 'empty' }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 70, rotation: 0 }],
+    });
+    findClickedEntity.mockReturnValue(null);
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.mouseDown(canvas, { clientX: 10, clientY: 10, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 95, clientY: 95, buttons: 1 });
+    fireEvent.mouseUp(canvas, { clientX: 95, clientY: 95 });
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 300, buttons: 0 });
+    fireEvent.click(canvas, { clientX: 60, clientY: 60 });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(screen.getByText('Invalid: The copy overlaps existing furniture.')).toBeInTheDocument();
   });
 
   it('keeps a copy rejected with a clear reason and cancels without dispatching', () => {
