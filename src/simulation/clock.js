@@ -1,6 +1,11 @@
 const SECONDS_PER_DAY = 86400;
 const HOURS_PER_DAY = 24;
 
+export const DEFAULT_OPERATING_HOURS = Object.freeze({
+  openHour: 0,
+  closeHour: 0,
+});
+
 export function advanceClock(state, dt) {
   const newGameTime = state.restaurant.gameTime + dt;
   const crossedMidnights = Math.max(0, Math.floor(newGameTime / SECONDS_PER_DAY)
@@ -54,8 +59,14 @@ export function normaliseOperatingHour(value, fallback) {
 
 export function isRestaurantOpen(state) {
   const restaurant = state?.restaurant || {};
-  const openHour = normaliseOperatingHour(restaurant.openHour, 10);
-  const closeHour = normaliseOperatingHour(restaurant.closeHour, 22);
+  const openHour = normaliseOperatingHour(
+    restaurant.openHour,
+    DEFAULT_OPERATING_HOURS.openHour,
+  );
+  const closeHour = normaliseOperatingHour(
+    restaurant.closeHour,
+    DEFAULT_OPERATING_HOURS.closeHour,
+  );
   if (openHour === closeHour) return true;
   const seconds = ((Number(restaurant.gameTime) || 0) % SECONDS_PER_DAY + SECONDS_PER_DAY)
     % SECONDS_PER_DAY;
