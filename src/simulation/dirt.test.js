@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getNextDirtId, isRestaurantFloorPoint, updateDirt } from './dirt';
-import { buildBlockedCells, worldToCell } from './pathfinding';
+import { buildBlockedCells, cellToWorld, worldToCell } from './pathfinding';
 
 const baseState = {
   floorDirt: [],
@@ -10,6 +10,35 @@ const baseState = {
   kitchenStations: [], serviceTables: [], cashierStations: [],
   restaurant: { gameTime: 1000, reputation: 3 },
 };
+
+function cellCentre(cell) {
+  const point = cellToWorld(cell);
+  return { x: point.x + 10, y: point.y + 10 };
+}
+
+function dirtAtCell(id, cell) {
+  return { id, ...cellCentre(cell) };
+}
+
+function dirtGenerationState(overrides = {}) {
+  return {
+    ...baseState,
+    tables: [],
+    chairs: [],
+    staff: [],
+    customers: [{
+      id: 'generator', state: 'moving', x: 200, y: 200,
+      dirtFactor: 10, happiness: 80,
+    }],
+    ...overrides,
+  };
+}
+
+const generationCandidates = [
+  { x: 8, y: 8 }, { x: 8, y: 9 }, { x: 8, y: 10 },
+  { x: 10, y: 8 }, { x: 10, y: 9 }, { x: 10, y: 10 },
+  { x: 9, y: 8 }, { x: 9, y: 10 },
+];
 
 describe('updateDirt', () => {
   it('generates the next dirt id after existing ids', () => {
@@ -35,6 +64,88 @@ describe('updateDirt', () => {
       tables: [{ id: 't1', x: 220, y: 180 }],
     }, 0, () => 0);
     expect(Math.hypot(result.floorDirt[0].x - 210, result.floorDirt[0].y - 210)).toBeLessThanOrEqual(40);
+  });
+
+  it('does not place new dirt in a staff-occupied candidate cell', () => {
+    const occupiedCell = { x: 8, y: 8 };
+    const result = updateDirt(dirtGenerationState({
+      staff: [{ id: 'staff', x: 170, y: 170 }],
+    }), 0, () => 0);
+
+    expect(result.floorDirt).toHaveLength(1);
+    expect(worldToCell(result.floorDirt[0])).not.toEqual(occupiedCell);
+  });
+
+  it('does not place new dirt in a standing-customer candidate cell', () => {
+    const occupiedCell = { x: 8, y: 8 };
+    const result = updateDirt(dirtGenerationState({
+      customers: [
+        { id: 'generator', state: 'moving', x: 200, y: 200, dirtFactor: 10, happiness: 80 },
+        { id: 'standing', state: 'moving', x: 170, y: 170, dirtFactor: 0, happiness: 80 },
+      ],
+    }), 0, () => 0);
+
+    expect(result.floorDirt).toHaveLength(1);
+    expect(worldToCell(result.floorDirt[0])).not.toEqual(occupiedCell);
+  });
+
+  it('uses the assigned seated chair position instead of stale customer coordinates', () => {
+    const occupiedCell = { x: 8, y: 8 };
+    const result = updateDirt(dirtGenerationState({
+      tables: [{ id: 'occupied-table', x: 500, y: 500 }],
+      chairs: [{ id: 'occupied-chair', tableId: 'occupied-table', x: 160, y: 160 }],
+      customers: [
+        { id: 'generator', state: 'moving', x: 200, y: 200, dirtFactor: 10, happiness: 80 },
+        {
+          id: 'seated', state: 'seated', chairId: 'occupied-chair', tableId: 'occupied-table',
+          x: 700, y: 700, dirtFactor: 0, happiness: 80,
+        },
+      ],
+    }), 0, () => 0);
+
+    expect(result.floorDirt).toHaveLength(1);
+    expect(worldToCell(result.floorDirt[0])).not.toEqual(occupiedCell);
+  });
+
+  it.each([
+    ['same cell', { x: 8, y: 8 }, false],
+    ['cardinal neighbour', { x: 8, y: 9 }, false],
+    ['diagonal cell', { x: 9, y: 9 }, true],
+  ])('applies the approved %s dirt spacing rule', (_name, existingCell, targetAllowed) => {
+    const result = updateDirt(dirtGenerationState({
+      floorDirt: [dirtAtCell('existing', existingCell)],
+    }), 0, () => 0);
+    const generated = result.floorDirt.find(dirt => dirt.id !== 'existing');
+
+    expect(generated).toBeDefined();
+    if (targetAllowed) {
+      expect(worldToCell(generated)).toEqual({ x: 8, y: 8 });
+    } else {
+      expect(worldToCell(generated)).not.toEqual({ x: 8, y: 8 });
+    }
+  });
+
+  it('retains the dirt threshold when every candidate is unsafe', () => {
+    const floorDirt = generationCandidates.map((cell, index) =>
+      dirtAtCell(`existing-${index}`, cell));
+    const result = updateDirt(dirtGenerationState({ floorDirt }), 0, () => 0);
+
+    expect(result.floorDirt).toEqual(floorDirt);
+    expect(result.customers[0].dirtFactor).toBe(10);
+  });
+
+  it('checks dirt generated earlier in the same update before placing the next spot', () => {
+    const result = updateDirt(dirtGenerationState({
+      customers: [
+        { id: 'first', state: 'moving', x: 200, y: 200, dirtFactor: 10, happiness: 80 },
+        { id: 'second', state: 'moving', x: 220, y: 200, dirtFactor: 10, happiness: 80 },
+      ],
+    }), 0, () => 0);
+    const cells = result.floorDirt.map(worldToCell);
+    const distance = Math.abs(cells[0].x - cells[1].x) + Math.abs(cells[0].y - cells[1].y);
+
+    expect(result.floorDirt).toHaveLength(2);
+    expect(distance).toBeGreaterThan(1);
   });
 
   it('retains the threshold when every adjacent interior dirt cell is blocked', () => {

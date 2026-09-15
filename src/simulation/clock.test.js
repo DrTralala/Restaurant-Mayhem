@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  DEFAULT_OPERATING_HOURS,
   advanceClock, getClockHandAngles, getRushHourMultiplier,
   formatOperatingHour, isRestaurantOpen, normaliseOperatingHour, secondsToGameTime,
 } from './clock';
@@ -103,10 +104,11 @@ describe('isRestaurantOpen', () => {
     expect(isRestaurantOpen({ restaurant: { gameTime, openHour, closeHour } })).toBe(expected);
   });
 
-  it('uses the default schedule when stored hours are malformed or missing', () => {
-    expect(isRestaurantOpen({ restaurant: { gameTime: 9 * 3600 } })).toBe(false);
+  it('uses the 24/7 default when stored hours are malformed or missing', () => {
+    expect(DEFAULT_OPERATING_HOURS).toEqual({ openHour: 0, closeHour: 0 });
+    expect(isRestaurantOpen({ restaurant: { gameTime: 9 * 3600 } })).toBe(true);
     expect(isRestaurantOpen({ restaurant: {
-      gameTime: 12 * 3600, openHour: 10.25, closeHour: Number.NaN,
+      gameTime: 23 * 3600, openHour: 10.25, closeHour: Number.NaN,
     } })).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { findAdjacentOpenCells, cellToWorld } from './pathfinding';
+import { findAdjacentOpenCells, cellKey, cellToWorld, worldToCell } from './pathfinding';
 import { clampReputation } from './balance';
 import { getRestaurantWorld } from './world';
 
@@ -54,6 +54,27 @@ function customerPosition(state, customer) {
     : null;
 }
 
+function occupiedCharacterCells(state) {
+  const occupied = new Set();
+  const add = point => {
+    if (![point?.x, point?.y].every(Number.isFinite)) return;
+    occupied.add(cellKey(worldToCell(point)));
+  };
+
+  for (const staff of state.staff || []) add(staff);
+  for (const customer of state.customers || []) add(customerPosition(state, customer));
+  return occupied;
+}
+
+function isDirtCellAvailable(cell, floorDirt, occupiedCells) {
+  if (occupiedCells.has(cellKey(cell))) return false;
+  return !floorDirt.some(dirt => {
+    if (![dirt?.x, dirt?.y].every(Number.isFinite)) return false;
+    const dirtCell = worldToCell(dirt);
+    return Math.abs(dirtCell.x - cell.x) + Math.abs(dirtCell.y - cell.y) <= 1;
+  });
+}
+
 function cellCentre(cell) {
   const point = cellToWorld(cell);
   return { x: point.x + 10, y: point.y + 10 };
@@ -63,6 +84,7 @@ export function updateDirt(state, gameDt, random = Math.random) {
   const boundedDt = Math.min(60, Math.max(0, gameDt));
   let floorDirt = [...(state.floorDirt || [])];
   let customers = (state.customers || []).map(customer => ({ ...customer }));
+  const occupiedCells = occupiedCharacterCells(state);
   for (const customer of customers) {
     if (customer.state === 'leaving' || customer.state === 'queued' || customer.state === 'waiting') continue;
     const rect = customerRect(state, customer);
@@ -72,7 +94,8 @@ export function updateDirt(state, gameDt, random = Math.random) {
     let dirtFactor = Math.max(0, Number(customer.dirtFactor) || 0) + increment;
     if (dirtFactor >= 10) {
       const candidates = findAdjacentOpenCells(state, rect)
-        .filter(cell => isRestaurantFloorPoint(state, cellCentre(cell)));
+        .filter(cell => isRestaurantFloorPoint(state, cellCentre(cell)))
+        .filter(cell => isDirtCellAvailable(cell, floorDirt, occupiedCells));
       if (candidates.length) {
         const cell = candidates[Math.min(candidates.length - 1, Math.floor(Math.max(0, random()) * candidates.length))];
         const point = cellCentre(cell);
