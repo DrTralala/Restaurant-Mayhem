@@ -150,14 +150,8 @@ export function drawCopyPreview(ctx, state, camera, copy) {
     if (!itemType) continue;
     if (itemType === 'cashierTable') {
       const placeable = getPlaceable(itemType);
-      const width = Number.isFinite(fixture.data.w) && fixture.data.w > 0
-        ? fixture.data.w : placeable.width;
-      const height = Number.isFinite(fixture.data.h) && fixture.data.h > 0
-        ? fixture.data.h : placeable.height;
-      if (width !== placeable.width || height !== placeable.height) {
-        drawCustomCashierPreview(ctx, camera, item, valid, width, height);
-        continue;
-      }
+      drawCustomCashierPreview(ctx, camera, item, valid, placeable.width, placeable.height);
+      continue;
     }
     drawPlacementPreview(ctx, state, camera, {
       itemType,

@@ -1036,7 +1036,7 @@ describe('RestaurantCanvas object movement', () => {
     expect(screen.queryByText(/Click to place copy/)).not.toBeInTheDocument();
   });
 
-  it('draws a custom cashier copy preview at its committed dimensions', () => {
+  it('draws a cashier copy preview at the canonical dimensions', () => {
     useDispatch.mockReturnValue(vi.fn());
     useGameState.mockReturnValue({
       ...state,
@@ -1070,7 +1070,7 @@ describe('RestaurantCanvas object movement', () => {
     fireEvent.mouseMove(canvas, { clientX: 500, clientY: 300, buttons: 0 });
     requestAnimationFrame.mock.calls.at(-1)[0](1000);
 
-    expect(context.fillRect).toHaveBeenCalledWith(500, 300, 100, 60);
+    expect(context.fillRect).toHaveBeenCalledWith(500, 300, 40, 40);
   });
 
   it('moves a selected wash station through the canvas action', () => {

@@ -297,13 +297,14 @@ export function advanceConsumption(state) {
         && customer.state === 'waiting_for_party') {
         return beginUnaffordableDeparture(customer);
       }
-      if (customer.menuOutcome === 'ordered' && complete && !isCheckoutState(customer)) {
+      if (customer.menuOutcome === 'ordered' && complete
+        && !isCheckoutState(customer) && customer.state !== 'leaving') {
         return enterCheckout(customer, gameTime);
       }
       return customer;
     }
 
-    return complete && !isCheckoutState(customer)
+    return complete && !isCheckoutState(customer) && customer.state !== 'leaving'
       ? enterCheckout(customer, gameTime)
       : customer;
   });

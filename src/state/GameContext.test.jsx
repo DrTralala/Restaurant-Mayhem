@@ -604,7 +604,7 @@ describe('GameProvider authoritative placement actions', () => {
       action: { x: 600, y: 300, rotation: 0, cost: 1 },
       assertPlacement(state) {
         expect(state.cashierStations.at(-1)).toMatchObject({
-          id: 'cashier2', x: 600, y: 300, w: 80, h: 40,
+          id: 'cashier2', x: 600, y: 300, w: 40, h: 40,
         });
       },
     },
@@ -732,7 +732,7 @@ describe('GameProvider authoritative placement actions', () => {
       id: 'cashier2',
       x: 600,
       y: 300,
-      w: 80,
+      w: 40,
       h: 40,
       assignedStaffId: 'starter-waiter',
     });

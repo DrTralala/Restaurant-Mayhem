@@ -163,7 +163,7 @@ describe('copyFixtures', () => {
     expect(result.restaurant.funds).toBe(2000);
     expect(result.doors[1]).toEqual({ id: 'door2', y: 80, role: 'exit' });
     expect(result.serviceTables[1]).toEqual({ id: 'st2', x: 500, y: 120, rotation: 1 });
-    expect(result.cashierStations[1]).toEqual({ id: 'cashier2', x: 600, y: 300, w: 80, h: 40 });
+    expect(result.cashierStations[1]).toEqual({ id: 'cashier2', x: 600, y: 300, w: 40, h: 40 });
     expect(result.washStations[1]).toEqual({
       id: 'wash2', type: 'automatic', level: 1, x: 500, y: 260, w: 60, h: 20,
     });
@@ -250,7 +250,7 @@ describe('copyFixtures', () => {
     });
 
     expect(copyFixtures(state, [
-      { type: 'cashierTable', id: 'cashier1', x: 500, y: 300 },
+      { type: 'cashierTable', id: 'cashier1', x: 570, y: 300 },
     ])).toBe(state);
   });
 

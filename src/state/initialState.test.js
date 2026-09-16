@@ -109,7 +109,7 @@ describe('createInitialState', () => {
     expect(state.version).toBe(SAVE_VERSION);
     expect(state.staff.map(staff => staff.role)).toEqual(['cook', 'waiter', 'waiter', 'waiter', 'janitor']);
     expect(state.cashierStations).toHaveLength(1);
-    expect(state.cashierStations[0]).toMatchObject({ id: 'cashier1' });
+    expect(state.cashierStations[0]).toMatchObject({ id: 'cashier1', x: 800, y: 120, w: 40, h: 40 });
     expect(state.staff.find(staff => staff.id === state.cashierStations[0].assignedStaffId))
       .toMatchObject({ role: 'waiter' });
     expect(state.staff.filter(staff => staff.role === 'host' || staff.role === 'cashier_waiter'))

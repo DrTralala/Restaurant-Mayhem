@@ -228,8 +228,8 @@ function getCopyRecord(source, copy, id, copiedTableIds) {
       id,
       x: copy.x,
       y: copy.y,
-      w: Number.isFinite(source.data.w) ? source.data.w : 80,
-      h: Number.isFinite(source.data.h) ? source.data.h : 40,
+      w: getPlaceable('cashierTable').width,
+      h: getPlaceable('cashierTable').height,
     };
   }
 

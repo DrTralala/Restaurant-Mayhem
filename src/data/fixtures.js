@@ -11,7 +11,7 @@ export const FIXTURE_TYPES = {
       : 'Door',
   },
   serviceTable: { collection: 'serviceTables', width: 120, height: 40, placementType: 'serviceTable', label: () => 'Service counter' },
-  cashierTable: { collection: 'cashierStations', width: 80, height: 40, placementType: 'cashierTable', label: () => 'Cashier' },
+  cashierTable: { collection: 'cashierStations', width: 40, height: 40, placementType: 'cashierTable', label: () => 'Cashier' },
   kitchenStation: {
     collection: 'kitchenStations', width: 40, height: 40, placementType: 'kitchenStation',
     label: (state, data) => data.equipmentId

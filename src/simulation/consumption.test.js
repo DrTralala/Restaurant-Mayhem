@@ -60,6 +60,44 @@ it('settles a cancelled order whose physical food record was already removed', (
   expect(result.customers[0].state).toBe('checkout_queued');
 });
 
+it('does not requeue a cancelled order after payment has started departure', () => {
+  const result = advanceConsumption({
+    customers: [{
+      id: 'c1', state: 'leaving', menuOutcome: 'ordered',
+      dishId: null, drinkId: null, orderedServiceItemIds: [],
+      consumedServiceItemIds: [], cancelledServiceItemIds: [],
+      foodOutcome: 'cancelled', departureReason: 'served',
+    }],
+    serviceItems: [],
+    restaurant: { gameTime: 100 },
+  });
+
+  expect(result.customers[0]).toMatchObject({
+    state: 'leaving', departureReason: 'served',
+  });
+  expect(result.customers[0]).not.toHaveProperty('paymentQueuedAt');
+});
+
+it('does not requeue a leaving ordered member during party checkout synchronisation', () => {
+  const result = advanceConsumption({
+    customers: [{
+      id: 'payer', partyId: 'p1', state: 'leaving', menuOutcome: 'ordered',
+      dishId: null, drinkId: null, orderedServiceItemIds: [],
+      consumedServiceItemIds: [], cancelledServiceItemIds: [],
+      foodOutcome: 'cancelled', departureReason: 'served',
+    }, {
+      id: 'non-payer', partyId: 'p1', state: 'waiting_for_party',
+      menuOutcome: 'unaffordable',
+    }],
+    serviceItems: [],
+    restaurant: { gameTime: 100 },
+  });
+
+  expect(result.customers.find(customer => customer.id === 'payer')).toMatchObject({
+    state: 'leaving', departureReason: 'served',
+  });
+});
+
 it('keeps a valid drink on the table after food cancellation and waits seated for its party', () => {
   const result = advanceConsumption({
     customers: [{

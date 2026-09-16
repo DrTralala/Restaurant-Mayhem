@@ -448,6 +448,69 @@ describe('runTick', () => {
     expect(second.customers[0].departureReason).toBe('served');
   });
 
+  it('keeps a paid cancelled leaver out of checkout while a later payer finishes once', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const station = {
+      id: 'cashier', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+    };
+    const state = {
+      ...emptyState,
+      restaurant: {
+        ...emptyState.restaurant, gameTime: 100, funds: 500, dailyRevenue: 0, totalServed: 1,
+      },
+      cashierStations: [station],
+      dishes: [{ id: 'dish', price: 10 }],
+      staff: [{
+        id: 'cashier', role: 'waiter', morale: 80, x: 840, y: 100,
+        task: {
+          type: 'take_payment', customerId: 'later', stationId: station.id,
+          startedAt: 100, accumulatedWork: 0, lastProgressAt: 100,
+        },
+      }],
+      customers: [
+        {
+          id: 'paid-cancelled', state: 'leaving', departureReason: 'served',
+          menuOutcome: 'ordered', foodOutcome: 'cancelled', dishId: null, drinkId: null,
+          orderedServiceItemIds: [], consumedServiceItemIds: [], cancelledServiceItemIds: [],
+          x: 760, y: 180,
+        },
+        {
+          id: 'later', state: 'checkout_processing', menuOutcome: 'ordered',
+          cashierStationId: station.id, paymentReady: false,
+          checkoutPosition: { x: 840, y: 180 }, x: 840, y: 180,
+          happiness: 80, dishId: 'dish', drinkId: null, tableId: null,
+        },
+      ],
+      completedCustomers: [{ customerId: 'paid-cancelled', revenue: 11 }],
+    };
+
+    const first = runTick(state, { gameDt: 0, movementDt: 0 });
+    expect(first.customers.find(customer => customer.id === 'paid-cancelled')).toMatchObject({
+      state: 'leaving', departureReason: 'served',
+    });
+    expect(first.customers.find(customer => customer.id === 'later')).toMatchObject({
+      state: 'checkout_processing',
+    });
+    expect(first.restaurant).toMatchObject({ funds: 511, dailyRevenue: 11, totalServed: 1 });
+    expect(first.completedCustomers).toEqual([]);
+
+    const second = runTick(first, { gameDt: 60, movementDt: 0 });
+    expect(second.customers.find(customer => customer.id === 'paid-cancelled')).toMatchObject({
+      state: 'leaving', departureReason: 'served',
+    });
+    expect(second.customers.find(customer => customer.id === 'later')).toMatchObject({
+      state: 'leaving', departureReason: 'served',
+    });
+    expect(second.restaurant).toMatchObject({ funds: 524, dailyRevenue: 24, totalServed: 2 });
+    expect(second.completedCustomers).toEqual([]);
+
+    const repeated = runTick(second, { gameDt: 0, movementDt: 0 });
+    expect(repeated.restaurant).toEqual(second.restaurant);
+    expect(repeated.customers.find(customer => customer.id === 'paid-cancelled')).toMatchObject({
+      state: 'leaving', departureReason: 'served',
+    });
+  });
+
   it('persists one movement coordinator across ordered tick stages', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     const state = {
@@ -1363,7 +1426,7 @@ describe('runTick', () => {
       ...initial,
       restaurant: { ...initial.restaurant, gameTime: 479 },
       tables: initial.tables.map(t => t.id === 't1' ? { ...t, status: 'occupied' } : t),
-      staff: [{ ...initial.staff.find(s => s.id === 'starter-cashier-waiter'), x: 840, y: 100, task: null }],
+      staff: [{ ...initial.staff.find(s => s.id === 'starter-cashier-waiter'), x: 820, y: 100, task: null }],
       customers: [{
         id: 'departure', partyId: 'solo', partySize: 1, state: 'eating',
         tableId: 't1', chairId: 'ch1', x: 220, y: 190, patience: 5000,
@@ -1388,11 +1451,11 @@ describe('runTick', () => {
       state = runTick(state, { gameDt: 0, movementDt: 0.1 });
       const customer = state.customers[0];
       expect(Math.hypot(customer.x - before.x, customer.y - before.y)).toBeLessThanOrEqual(6.2 + 1e-6);
-      if (customer.x !== 840 || customer.y !== 180) expect(customer.paymentReady).toBe(false);
+      if (customer.x !== 820 || customer.y !== 180) expect(customer.paymentReady).toBe(false);
       if (customer.paymentReady) { arrived = true; break; }
     }
     expect(arrived).toBe(true);
-    expect(state.customers[0]).toMatchObject({ x: 840, y: 180 });
+    expect(state.customers[0]).toMatchObject({ x: 820, y: 180 });
   });
 
   it('completes one deterministic full-service lifecycle and its independent cleanup path', () => {

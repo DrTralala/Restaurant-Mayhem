@@ -67,8 +67,14 @@ function recordCtx(extraCanvas = {}) {
         ...point(x, y), w: w * figureScale, h: h * figureScale, colour: this.strokeStyle,
       });
     },
-    drawImage(image, x, y, w, h) {
-      calls.images.push({ image, x, y, w, h });
+    drawImage(image, ...args) {
+      if (args.length === 4) {
+        const [x, y, w, h] = args;
+        calls.images.push({ image, x, y, w, h });
+      } else {
+        const [sourceX, sourceY, sourceWidth, sourceHeight, x, y, w, h] = args;
+        calls.images.push({ image, sourceX, sourceY, sourceWidth, sourceHeight, x, y, w, h });
+      }
     },
     _calls: calls,
   };
@@ -146,7 +152,7 @@ describe('drawFloorLayer', () => {
       cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
     }, { x: 0, y: 0, zoom: 1 });
 
-    expect(ctx._calls.rects).toContainEqual({ x: 800, y: 120, w: 80, h: 40 });
+    expect(ctx._calls.rects).toContainEqual({ x: 800, y: 120, w: 40, h: 40 });
     expect(ctx._calls.texts.map(call => call.text)).toContain('Cashier');
   });
 
@@ -270,8 +276,7 @@ describe('drawFurnitureLayer', () => {
     const ovenInUse = loadedSprite('ovenInUse');
     const sink = loadedSprite('sink');
     const sinkWithDirtyDishes = loadedSprite('sinkWithDirtyDishes');
-    const sinkWithDishes = loadedSprite('sinkWithDishes');
-    const sprites = { oven, ovenInUse, sink, sinkWithDirtyDishes, sinkWithDishes };
+    const sprites = { oven, ovenInUse, sink, sinkWithDirtyDishes };
     const base = {
       tables: [], chairs: [], serviceTables: [], dishes: [],
       equipment: [{ id: 'eq2', name: 'Oven', type: 'oven' }],
@@ -297,7 +302,7 @@ describe('drawFurnitureLayer', () => {
       { id: 'dirty', washStationId: 'wash1', state: 'washing', washStartedAt: 0 },
     ] }, { x: 0, y: 0, zoom: 1 }, sprites);
     expect(active._calls.images.map(call => call.image)).toEqual(expect.arrayContaining([
-      ovenInUse, sinkWithDishes,
+      ovenInUse, sinkWithDirtyDishes,
     ]));
 
     const ready = recordCtx();
@@ -330,9 +335,8 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.images.map(call => call.image)).toEqual([oven, ovenInUse]);
   });
 
-  it('uses active-wash artwork in preference to queued dirty artwork at the same station', () => {
+  it('uses the same dirty artwork for queued and washing manual sinks', () => {
     const dirty = loadedSprite('dirty');
-    const active = loadedSprite('active');
     const sink = loadedSprite('sink');
     const ctx = recordCtx();
 
@@ -347,9 +351,32 @@ describe('drawFurnitureLayer', () => {
         { id: 'washing', washStationId: 'wash1', state: 'washing' },
         { id: 'other', washStationId: 'wash2', state: 'queued_for_wash' },
       ],
-    }, { x: 0, y: 0, zoom: 1 }, { sink, sinkWithDirtyDishes: dirty, sinkWithDishes: active });
+    }, { x: 0, y: 0, zoom: 1 }, { sink, sinkWithDirtyDishes: dirty });
 
-    expect(ctx._calls.images.map(call => call.image)).toEqual([active, dirty]);
+    expect(ctx._calls.images.map(call => call.image)).toEqual([dirty, dirty]);
+  });
+
+  it('rotates chair artwork without changing its logical direction and rotates cashier artwork twice', () => {
+    const ctx = recordCtx();
+    const chair = loadedSprite('chair');
+    const cashier = loadedSprite('cashier');
+
+    drawFurnitureLayer(ctx, {
+      tables: [],
+      chairs: [{ id: 'chair-1', tableId: 'table-1', x: 100, y: 120, rotation: 1 }],
+      kitchenStations: [], serviceTables: [], serviceItems: [], equipment: [], dishes: [],
+    }, { x: 0, y: 0, zoom: 1 }, { chair });
+    drawFloorLayer(ctx, {
+      restaurant: { expansionLevel: 1 },
+      doors: [],
+      cashierStations: [{ id: 'cashier-1', x: 500, y: 120, w: 80, h: 40 }],
+    }, { x: 0, y: 0, zoom: 1 }, { cashier });
+
+    expect(ctx._calls.rotations).toEqual([3 * Math.PI / 2, Math.PI]);
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '→', x: 110, y: 130 }));
+    expect(ctx._calls.images.find(call => call.image === cashier)).toMatchObject({
+      x: -20, y: -20, w: 40, h: 40,
+    });
   });
 
   it('uses toaster and automatic-dishwasher sprites for matching fixtures', () => {

@@ -75,6 +75,15 @@ describe('fixture catalogue', () => {
     })).toBe('Toaster');
   });
 
+  it('uses the canonical cashier footprint even for an old-width record', () => {
+    const state = createInitialState();
+    const legacy = { ...state.cashierStations[0], w: 80, h: 40 };
+
+    expect(getFixtureRect(state, {
+      type: 'cashierTable', id: legacy.id, data: legacy,
+    })).toEqual({ x: 800, y: 120, w: 40, h: 40 });
+  });
+
   it('uses one public wash-station type for manual and automatic stations', () => {
     const state = {
       ...createInitialState(),

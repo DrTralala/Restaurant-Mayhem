@@ -644,6 +644,11 @@ function getCopyCandidateData(source, copy, id, tableIds) {
     data.x = copy.x;
     data.y = copy.y;
   }
+  if (source.type === 'cashierTable') {
+    const dimensions = getPlaceableDimensions('cashierTable');
+    data.w = dimensions.width;
+    data.h = dimensions.height;
+  }
   if (Object.prototype.hasOwnProperty.call(copy, 'rotation')
     && !['chair', 'serviceTable'].includes(source.type)) {
     data.rotation = copy.rotation;

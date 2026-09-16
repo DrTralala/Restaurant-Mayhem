@@ -1120,41 +1120,47 @@ describe('hydrateState', () => {
     const fresh = createInitialState();
     const departure = {
       stationId: fresh.cashierStations[0].id,
-      position: { x: 840, y: 180 },
+      position: { x: 820, y: 180 },
     };
     const state = {
       ...fresh,
-      customers: [{ id: 'departing', state: 'leaving', x: 840, y: 180,
+      customers: [{ id: 'departing', state: 'leaving', x: 820, y: 180,
         checkoutDeparture: departure }],
     };
 
     saveState(state);
     const restored = hydrateState(loadState(), fresh);
-    expect(restored.customers[0].checkoutDeparture).toEqual(departure);
+    expect(restored.customers[0].checkoutDeparture).toEqual({
+      stationId: departure.stationId,
+      position: { x: 820, y: 180 },
+    });
 
     const holdState = {
       ...fresh,
       customers: [
-        { id: 'departing', state: 'leaving', x: 840, y: 180,
+        { id: 'departing', state: 'leaving', x: 820, y: 180,
           checkoutDeparture: departure },
         { id: 'next', state: 'checkout_moving', cashierStationId: fresh.cashierStations[0].id,
-          paymentQueuedAt: 2, x: 840, y: 200 },
+          paymentQueuedAt: 2, x: 820, y: 200 },
       ],
     };
     saveState(holdState);
     const resumed = prepareCustomersForMovement(hydrateState(loadState(), fresh), 0);
     expect(resumed.customers.find(customer => customer.id === 'next')).toMatchObject({
-      checkoutPosition: { x: 840, y: 200 }, paymentReady: false,
+      checkoutPosition: { x: 820, y: 200 }, paymentReady: false,
     });
 
     const reconstructed = hydrateState({
       ...fresh,
-      customers: [{ id: 'legacy-paid', state: 'checkout_processing', x: 840, y: 180,
+      customers: [{ id: 'legacy-paid', state: 'checkout_processing', x: 820, y: 180,
         cashierStationId: fresh.cashierStations[0].id,
-        checkoutPosition: { x: 840, y: 180 } }],
+        checkoutPosition: { x: 820, y: 180 } }],
       completedCustomers: [{ customerId: 'legacy-paid' }],
     }, fresh);
-    expect(reconstructed.customers[0].checkoutDeparture).toEqual(departure);
+    expect(reconstructed.customers[0].checkoutDeparture).toEqual({
+      stationId: departure.stationId,
+      position: { x: 820, y: 180 },
+    });
   });
 
   it('preserves checkout line membership through a save round trip', () => {
@@ -1163,8 +1169,8 @@ describe('hydrateState', () => {
       ...fresh,
       customers: [{
         id: 'line-member', state: 'checkout_moving', cashierStationId: 'cashier1',
-        checkoutQueueIndex: 0, checkoutPosition: { x: 840, y: 180 },
-        checkoutLineMember: true, x: 840, y: 200,
+        checkoutQueueIndex: 0, checkoutPosition: { x: 820, y: 180 },
+        checkoutLineMember: true, x: 820, y: 200,
       }],
     };
 
@@ -1172,6 +1178,129 @@ describe('hydrateState', () => {
     const restored = hydrateState(loadState(), fresh);
 
     expect(restored.customers[0].checkoutLineMember).toBe(true);
+  });
+
+  it('canonicalises legacy cashier geometry and active checkout routes during hydration', () => {
+    const fresh = createInitialState();
+    const legacyStation = { ...fresh.cashierStations[0], w: 80, h: 40 };
+    const cashier = {
+      ...fresh.staff.find(worker => worker.id === legacyStation.assignedStaffId),
+      x: 840,
+      y: 100,
+      task: {
+        type: 'take_payment', customerId: 'legacy-customer', stationId: legacyStation.id,
+      },
+      activityPhase: 'task_assigned',
+      navigationGoal: { x: 840, y: 100 },
+    };
+    const customer = {
+      id: 'legacy-customer',
+      partyId: 'legacy-party',
+      partySize: 1,
+      state: 'checkout_moving',
+      cashierStationId: legacyStation.id,
+      paymentQueuedAt: 10,
+      checkoutQueueIndex: 0,
+      checkoutPosition: { x: 840, y: 180 },
+      checkoutLineMember: true,
+      checkoutLineGeometry: {
+        stationId: legacyStation.id, x: legacyStation.x, y: legacyStation.y,
+        w: legacyStation.w, h: legacyStation.h,
+      },
+      paymentReady: true,
+      x: 840,
+      y: 180,
+    };
+    const departing = {
+      id: 'legacy-departing',
+      state: 'leaving',
+      x: 840,
+      y: 220,
+      checkoutDeparture: {
+        stationId: legacyStation.id,
+        position: { x: 840, y: 180 },
+      },
+    };
+    const saved = {
+      ...fresh,
+      version: undefined,
+      cashierStations: [legacyStation],
+      staff: [cashier],
+      customers: [customer, departing],
+    };
+
+    const restored = hydrateState(saved, fresh);
+
+    expect(saved.cashierStations[0]).toMatchObject({ w: 80, h: 40 });
+    expect(restored.cashierStations[0]).toMatchObject({
+      id: legacyStation.id, x: 800, y: 120, w: 40, h: 40,
+    });
+    expect(restored.customers[0]).toMatchObject({
+      state: 'checkout_moving',
+      checkoutPosition: { x: 820, y: 180 },
+      navigationGoal: { x: 820, y: 180 },
+      checkoutLineGeometry: { stationId: legacyStation.id, w: 40, h: 40 },
+      paymentReady: false,
+      checkoutLineMember: false,
+    });
+    expect(restored.customers[1].checkoutDeparture).toEqual({
+      stationId: legacyStation.id,
+      position: { x: 820, y: 180 },
+    });
+    expect(restored.staff[0]).toMatchObject({ navigationGoal: { x: 820, y: 100 } });
+  });
+
+  function legacyDepartureState(position) {
+    const fresh = createInitialState();
+    const legacyStation = { ...fresh.cashierStations[0], w: 80, h: 40 };
+    return {
+      ...fresh,
+      version: SAVE_VERSION,
+      cashierStations: [legacyStation],
+      customers: [
+        {
+          id: 'legacy-departing', state: 'leaving', x: position.x, y: position.y,
+          checkoutDeparture: { stationId: legacyStation.id, position },
+        },
+        {
+          id: 'next-customer', state: 'checkout_moving',
+          cashierStationId: legacyStation.id, paymentQueuedAt: 2,
+          x: position.x, y: position.y,
+        },
+      ],
+    };
+  }
+
+  it('clears an invalid finite departure claim instead of upgrading it during hydration', () => {
+    const saved = legacyDepartureState({ x: 700, y: 700 });
+    const restored = hydrateState(saved, createInitialState());
+    const prepared = prepareCustomersForMovement(restored, 0);
+
+    expect(restored.customers[0].checkoutDeparture).toEqual({
+      stationId: 'cashier1', position: { x: 700, y: 700 },
+    });
+    expect(prepared.customers[0].checkoutDeparture).toBeNull();
+    expect(prepared.customers[1]).toMatchObject({
+      checkoutQueueIndex: 0,
+      checkoutPosition: { x: 820, y: 180 },
+    });
+  });
+
+  it('reanchors a valid legacy departure payment point after cashier normalisation', () => {
+    const saved = legacyDepartureState({ x: 840, y: 180 });
+    const restored = hydrateState(saved, createInitialState());
+    const prepared = prepareCustomersForMovement(restored, 0);
+
+    expect(restored.customers[0].checkoutDeparture).toEqual({
+      stationId: 'cashier1', position: { x: 820, y: 180 },
+    });
+    expect(prepared.customers[0].checkoutDeparture).toEqual({
+      stationId: 'cashier1', position: { x: 820, y: 180 },
+    });
+    expect(prepared.customers[1]).toMatchObject({
+      checkoutQueueIndex: 1,
+      checkoutPosition: { x: 820, y: 200 },
+    });
   });
 });
 

@@ -41,7 +41,7 @@ export const PLACEABLES = {
     type: 'cashierTable',
     label: 'Cashier',
     price: ITEM_PRICES.cashierTable,
-    width: 80,
+    width: 40,
     height: 40,
     grid: 20,
     rotatable: false,

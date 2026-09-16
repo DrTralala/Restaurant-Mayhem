@@ -450,7 +450,7 @@ function placeItem(state, action) {
   if (action.itemType === 'cashierTable') {
     const cashierStations = state.cashierStations || [];
     const id = getNextNumericId(cashierStations, 'cashier');
-    const station = { id, x: placement.x, y: placement.y, w: 80, h: 40 };
+    const station = { id, x: placement.x, y: placement.y, w: item.width, h: item.height };
     return {
       ...nextState,
       cashierStations: assignWaiterToStation(

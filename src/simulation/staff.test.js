@@ -12,6 +12,7 @@ import { advanceCharacterMovementBatch } from './movement';
 import { minimumSweptDistance } from './movement/trajectory';
 import { updateAutomaticDishwashers } from './dishwashing';
 import { getDoorPosition, getDoors, getRestaurantWorld } from './world';
+import { ACTIVITY_DURATIONS } from './activity';
 
 const baseState = {
   staff: [],
@@ -2199,6 +2200,54 @@ describe('updateStaff', () => {
     expect(finished.staff[0].task).toBeNull();
   });
 
+  it('keeps the table cleaning task identity and target ledger across incomplete ticks', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      staff: [{
+        id: 'j1', role: 'janitor', skill: 1, morale: 50, x: 180, y: 220,
+        task: { type: 'clean_table', tableId: 't1' },
+      }],
+      tables: [{ id: 't1', status: 'dirty', x: 200, y: 200 }],
+    };
+
+    const started = updateStaff(state, 0);
+    const first = updateStaff({
+      ...started,
+      restaurant: { ...started.restaurant, gameTime: 110 },
+    }, 0);
+    const second = updateStaff({
+      ...first,
+      restaurant: { ...first.restaurant, gameTime: 120 },
+    }, 0);
+
+    expect(first.staff[0].task).toMatchObject({
+      type: 'clean_table', tableId: 't1', accumulatedWork: 10, lastProgressAt: 110,
+    });
+    expect(second.staff[0].task).toMatchObject({
+      type: 'clean_table', tableId: 't1', accumulatedWork: 20, lastProgressAt: 120,
+    });
+    expect(second.staff[0].task.accumulatedWork)
+      .toBeGreaterThan(first.staff[0].task.accumulatedWork);
+    expect(first.tables[0].cleaningAction).toMatchObject({ staffId: 'j1', accumulatedWork: 10 });
+    expect(second.tables[0].cleaningAction).toMatchObject({ staffId: 'j1', accumulatedWork: 20 });
+
+    const completed = updateStaff({
+      ...second,
+      restaurant: {
+        ...second.restaurant,
+        gameTime: 100 + ACTIVITY_DURATIONS.wipeFloor,
+      },
+    }, 0);
+    expect(completed.tables[0]).toMatchObject({ status: 'empty' });
+    expect(completed.tables[0].cleaningAction).toBeUndefined();
+    expect(completed.staff[0].task).toBeNull();
+
+    const repeated = updateStaff(completed, 0);
+    expect(repeated.tables[0]).toEqual(completed.tables[0]);
+    expect(repeated.staff[0].task).toBeNull();
+  });
+
   it('assigns an already-adjacent janitor one timed table wipe', () => {
     const approachBlockers = [
       [9, 10], [9, 12], [9, 13],
@@ -2385,6 +2434,53 @@ describe('updateStaff', () => {
       .toHaveLength(1);
     expect(updateStaff({ ...started, restaurant: { ...started.restaurant, gameTime: 192.308 } }, 0).floorDirt)
       .toHaveLength(0);
+  });
+
+  it('keeps the floor cleaning task identity and target ledger across incomplete ticks', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      floorDirt: [{ id: 'dirt-1', x: 200, y: 200 }],
+      staff: [{
+        id: 'j1', role: 'janitor', skill: 1, morale: 50, x: 200, y: 180,
+        task: { type: 'clean_floor', dirtId: 'dirt-1' },
+      }],
+    };
+
+    const started = updateStaff(state, 0);
+    const first = updateStaff({
+      ...started,
+      restaurant: { ...started.restaurant, gameTime: 110 },
+    }, 0);
+    const second = updateStaff({
+      ...first,
+      restaurant: { ...first.restaurant, gameTime: 120 },
+    }, 0);
+
+    expect(first.staff[0].task).toMatchObject({
+      type: 'clean_floor', dirtId: 'dirt-1', accumulatedWork: 10, lastProgressAt: 110,
+    });
+    expect(second.staff[0].task).toMatchObject({
+      type: 'clean_floor', dirtId: 'dirt-1', accumulatedWork: 20, lastProgressAt: 120,
+    });
+    expect(second.staff[0].task.accumulatedWork)
+      .toBeGreaterThan(first.staff[0].task.accumulatedWork);
+    expect(first.floorDirt[0].cleaningAction).toMatchObject({ staffId: 'j1', accumulatedWork: 10 });
+    expect(second.floorDirt[0].cleaningAction).toMatchObject({ staffId: 'j1', accumulatedWork: 20 });
+
+    const completed = updateStaff({
+      ...second,
+      restaurant: {
+        ...second.restaurant,
+        gameTime: 100 + ACTIVITY_DURATIONS.wipeFloor,
+      },
+    }, 0);
+    expect(completed.floorDirt).toHaveLength(0);
+    expect(completed.staff[0].task).toBeNull();
+
+    const repeated = updateStaff(completed, 0);
+    expect(repeated.floorDirt).toEqual(completed.floorDirt);
+    expect(repeated.staff[0].task).toBeNull();
   });
 
   it('prevents two janitors from claiming the same dirt item', () => {
