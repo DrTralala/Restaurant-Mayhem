@@ -49,7 +49,7 @@ export function createInitialState() {
       { id: 'door2', y: 440, role: 'exit' },
     ],
     cashierStations: [{
-      id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'starter-cashier-waiter',
+      id: 'cashier1', x: 800, y: 120, w: 40, h: 40, assignedStaffId: 'starter-cashier-waiter',
     }],
     kitchenStations: [
       { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },

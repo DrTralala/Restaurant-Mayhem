@@ -44,17 +44,17 @@ describe('restaurant world geometry', () => {
   });
 
   it('places an assigned waiter one grid cell behind the cashier station', () => {
-    const station = { x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'w1' };
+    const station = { x: 800, y: 120, w: 40, h: 40, assignedStaffId: 'w1' };
     const state = { cashierStations: [station] };
 
-    expect(getCashierWorkPosition(station)).toEqual({ x: 840, y: 100 });
-    expect(getDefaultStaffPosition('waiter', 0, state, 'w1')).toEqual({ x: 840, y: 100 });
+    expect(getCashierWorkPosition(station)).toEqual({ x: 820, y: 100 });
+    expect(getDefaultStaffPosition('waiter', 0, state, 'w1')).toEqual({ x: 820, y: 100 });
   });
 
   it('places customers below the public side of a cashier station', () => {
-    const station = { x: 800, y: 120, w: 80, h: 40 };
-    expect(getCashierCustomerPosition(station)).toEqual({ x: 840, y: 180 });
-    expect(getCashierCustomerPosition(station, 1)).toEqual({ x: 840, y: 200 });
+    const station = { x: 800, y: 120, w: 40, h: 40 };
+    expect(getCashierCustomerPosition(station)).toEqual({ x: 820, y: 180 });
+    expect(getCashierCustomerPosition(station, 1)).toEqual({ x: 820, y: 200 });
   });
 
   it('keeps physical doors intact while selecting only the requested flow role', () => {

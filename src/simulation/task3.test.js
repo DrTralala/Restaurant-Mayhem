@@ -36,7 +36,7 @@ function lifecycleStaff(initial) {
   const positions = {
     'starter-cook': { x: 80, y: 100 },
     'starter-waiter': { x: 180, y: 180 },
-    'starter-cashier-waiter': { x: 840, y: 100 },
+    'starter-cashier-waiter': { x: 820, y: 100 },
     'starter-janitor': { x: 600, y: 360 },
   };
   return initial.staff

@@ -349,19 +349,20 @@ export function drawFloorLayer(ctx, state, camera, sprites = {}) {
 
   // Cashier station at the top-right of the dining room.
   for (const cashier of state.cashierStations || []) {
+    const dimensions = getPlaceableDimensions('cashierTable');
     const drewSprite = drawSprite(
-      ctx, sprites, 'cashier', cashier.x, cashier.y, cashier.w, cashier.h,
+      ctx, sprites, 'cashier', cashier.x, cashier.y, dimensions.width, dimensions.height, 2,
     );
     if (!drewSprite) {
       ctx.fillStyle = '#5a4a3a';
-      ctx.fillRect(cashier.x, cashier.y, cashier.w, cashier.h);
+      ctx.fillRect(cashier.x, cashier.y, dimensions.width, dimensions.height);
       ctx.strokeStyle = '#8a7a6a';
-      ctx.strokeRect(cashier.x, cashier.y, cashier.w, cashier.h);
+      ctx.strokeRect(cashier.x, cashier.y, dimensions.width, dimensions.height);
       drawObjectLabel(ctx, 'Cashier', {
         x: cashier.x,
         y: cashier.y,
-        w: cashier.w,
-        h: cashier.h,
+        w: dimensions.width,
+        h: dimensions.height,
       });
     }
   }
@@ -429,7 +430,7 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
       ? ((chair.rotation % 4) + 4) % 4
       : 0;
     const drewSprite = drawSprite(
-      ctx, sprites, 'chair', chair.x, chair.y, 20, 20, rot,
+      ctx, sprites, 'chair', chair.x, chair.y, 20, 20, rot + 2,
     );
     if (!drewSprite) {
       ctx.fillStyle = '#5a4a30';
@@ -517,14 +518,9 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
     const serviceItems = Array.isArray(state.serviceItems) ? state.serviceItems : [];
     const items = serviceItems.filter(item => item.washStationId === station.id
       && ['queued_for_wash', 'washing'].includes(item.state));
-    const hasActiveWash = items.some(item => item.state === 'washing');
     const spriteKey = station.type === 'automatic'
       ? 'dishwasher'
-      : hasActiveWash
-        ? 'sinkWithDishes'
-        : items.length > 0
-          ? 'sinkWithDirtyDishes'
-          : 'sink';
+      : items.length > 0 ? 'sinkWithDirtyDishes' : 'sink';
     const drewSprite = drawSprite(ctx, sprites, spriteKey, station.x, station.y, w, h);
 
     if (!drewSprite) {

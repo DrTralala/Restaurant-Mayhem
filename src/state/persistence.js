@@ -3,14 +3,15 @@ import { inferGender } from '../canvas/characterAppearance';
 import { normaliseDrinkOverrides } from '../data/drinks';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { normaliseMilestones } from '../data/milestones';
+import { getPlaceableDimensions } from '../data/placeables';
 import { DEFAULT_OPERATING_HOURS, normaliseOperatingHour } from '../simulation/clock';
 import { normaliseConsumptionState } from '../simulation/consumption';
 import { isCheckoutState } from '../simulation/checkout';
 import { normaliseCustomerQueue, normaliseQueueDepartures, normaliseQueueSlots, reconcileQueueSlots } from '../simulation/customerQueue';
 import { reconcileSelfSeatingState } from '../simulation/selfSeating';
-import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
+import { clearNavigationGoal, setNavigationGoal } from '../simulation/movement/navigationGoal';
 import { createMovementCoordinator } from '../simulation/navigation/coordinator';
-import { getCashierCustomerPosition } from '../simulation/world';
+import { getCashierCustomerPosition, getCashierWorkPosition } from '../simulation/world';
 import { SAVE_VERSION } from './saveVersion';
 import { normaliseDoorAdmissions } from './doorAdmissions';
 import { hydrateMovementResidencies, movementSaveSnapshot, validateSavedNavigationGeometry } from './movementPersistence';
@@ -70,6 +71,156 @@ function rawCarriedServiceItemIds(worker) {
 
 function invalidSavedServiceItemInventory(reason) {
   throw new Error(`Invalid saved state: service-item inventory: ${reason}`);
+}
+
+function sameId(left, right) {
+  return left != null && right != null && String(left) === String(right);
+}
+
+function finitePoint(point) {
+  return Number.isFinite(point?.x) && Number.isFinite(point?.y);
+}
+
+function samePoint(left, right) {
+  return finitePoint(left) && finitePoint(right)
+    && left.x === right.x && left.y === right.y;
+}
+
+function isValidCashierPaymentPosition(position, station, savedStation) {
+  if (!finitePoint(position) || !station) return false;
+  if (samePoint(position, getCashierCustomerPosition(station, 0))) return true;
+  return savedStation
+    && [savedStation.x, savedStation.y, savedStation.w, savedStation.h].every(Number.isFinite)
+    && samePoint(position, getCashierCustomerPosition(savedStation, 0));
+}
+
+function cashierLineGeometry(station) {
+  return station && [station.x, station.y, station.w, station.h].every(Number.isFinite)
+    ? {
+        stationId: String(station.id),
+        x: station.x,
+        y: station.y,
+        w: station.w,
+        h: station.h,
+      }
+    : null;
+}
+
+function sameCashierLineGeometry(left, right) {
+  return left?.stationId === right?.stationId
+    && left?.x === right?.x
+    && left?.y === right?.y
+    && left?.w === right?.w
+    && left?.h === right?.h;
+}
+
+function normaliseCashierStations(stations) {
+  if (!Array.isArray(stations)) return stations;
+  const dimensions = getPlaceableDimensions('cashierTable');
+  return stations.map(station => ({
+    ...station,
+    w: dimensions.width,
+    h: dimensions.height,
+  }));
+}
+
+function reconcileCashierRoutes(state, savedCashierStations = state.cashierStations) {
+  const stations = Array.isArray(state.cashierStations) ? state.cashierStations : [];
+  const savedStations = Array.isArray(savedCashierStations) ? savedCashierStations : [];
+  const stationById = new Map(stations.map(station => [String(station.id), station]));
+
+  const customers = Array.isArray(state.customers)
+    ? state.customers.map(customer => {
+      let next = customer;
+      const departureStation = stationById.get(String(customer.checkoutDeparture?.stationId));
+      const savedDepartureStation = savedStations.find(station =>
+        String(station?.id) === String(customer.checkoutDeparture?.stationId));
+      if (departureStation
+        && isValidCashierPaymentPosition(
+          customer.checkoutDeparture?.position, departureStation, savedDepartureStation,
+        )) {
+        next = {
+          ...next,
+          checkoutDeparture: {
+            stationId: departureStation.id,
+            position: getCashierCustomerPosition(departureStation, 0),
+          },
+        };
+      }
+
+      if (!['checkout_moving', 'checkout_processing'].includes(customer.state)) return next;
+      const station = stationById.get(String(customer.cashierStationId));
+      if (!station) return next;
+
+      if (customer.state === 'checkout_processing') {
+        const checkoutPosition = getCashierCustomerPosition(station, 0);
+        const processing = clearNavigationGoal({
+          ...next,
+          // A processing checkout has already passed the arrival gate. Move the
+          // saved actor onto the canonical point instead of leaving it stranded
+          // at the old 80-wide centre after the station is normalised.
+          x: checkoutPosition.x,
+          y: checkoutPosition.y,
+          checkoutPosition,
+        });
+        return Object.hasOwn(processing, 'checkoutLineGeometry')
+          ? { ...processing, checkoutLineGeometry: null }
+          : processing;
+      }
+
+      const queueIndex = Number.isInteger(customer.checkoutQueueIndex)
+        && customer.checkoutQueueIndex >= 0
+        ? customer.checkoutQueueIndex
+        : 0;
+      const checkoutPosition = getCashierCustomerPosition(station, queueIndex);
+      const geometry = cashierLineGeometry(station);
+      const geometryChanged = customer.checkoutLineGeometry != null
+        && !sameCashierLineGeometry(customer.checkoutLineGeometry, geometry);
+      const arrivedAtSlot = finitePoint(customer)
+        && Math.hypot(customer.x - checkoutPosition.x, customer.y - checkoutPosition.y) <= 2;
+      return setNavigationGoal({
+        ...next,
+        checkoutPosition,
+        checkoutLineGeometry: geometry,
+        checkoutLineMember: geometryChanged
+          ? false
+          : customer.checkoutLineMember === true || arrivedAtSlot,
+        paymentReady: false,
+      }, checkoutPosition);
+    })
+    : state.customers;
+
+  const staff = Array.isArray(state.staff)
+    ? state.staff.map(worker => {
+      const taskStation = worker.task?.type === 'take_payment'
+        ? stationById.get(String(worker.task.stationId))
+        : null;
+      const assignedStation = worker.role === 'waiter'
+        ? stations.find(station => sameId(station.assignedStaffId, worker.id))
+        : null;
+      const station = taskStation || assignedStation;
+      if (!station) return worker;
+      if (!taskStation && worker.task) return worker;
+
+      const goal = getCashierWorkPosition(station);
+      const taskCustomer = taskStation
+        ? customers.find(customer => sameId(customer.id, worker.task.customerId)
+          && customer.state === 'checkout_processing')
+        : null;
+      if (taskCustomer) {
+        return clearNavigationGoal({ ...worker, x: goal.x, y: goal.y });
+      }
+      if (taskStation) return setNavigationGoal(worker, goal);
+      if (!finitePoint(worker) && !finitePoint(worker.navigationGoal)) return worker;
+      if (finitePoint(worker)
+        && Math.hypot(worker.x - goal.x, worker.y - goal.y) <= 2) {
+        return clearNavigationGoal(worker);
+      }
+      return setNavigationGoal({ ...worker, activityPhase: 'stationed', idleUntil: null }, goal);
+    })
+    : state.staff;
+
+  return { ...state, customers, staff };
 }
 
 // Save validation is deliberately narrow: reject contradictory inventory rather
@@ -137,27 +288,40 @@ function validateSavedServiceItemInventory(saved) {
 
 }
 
-function getCheckoutDeparture(customer, cashierStations) {
+function getCheckoutDeparture(customer, cashierStations, savedCashierStations) {
+  const departureStation = (cashierStations || []).find(candidate =>
+    String(candidate?.id) === String(customer.checkoutDeparture?.stationId));
+  const savedDepartureStation = (savedCashierStations || []).find(candidate =>
+    String(candidate?.id) === String(customer.checkoutDeparture?.stationId));
   if (customer.checkoutDeparture?.stationId != null
     && Number.isFinite(customer.checkoutDeparture.position?.x)
     && Number.isFinite(customer.checkoutDeparture.position?.y)) {
+    const position = { ...customer.checkoutDeparture.position };
     return {
-      stationId: customer.checkoutDeparture.stationId,
-      position: { ...customer.checkoutDeparture.position },
+      stationId: departureStation?.id ?? customer.checkoutDeparture.stationId,
+      position: departureStation
+        && isValidCashierPaymentPosition(position, departureStation, savedDepartureStation)
+        ? getCashierCustomerPosition(departureStation, 0)
+        : position,
     };
   }
   const station = (cashierStations || []).find(candidate =>
     String(candidate?.id) === String(customer.cashierStationId));
-  const position = Number.isFinite(customer.checkoutPosition?.x)
+  const savedStation = (savedCashierStations || []).find(candidate =>
+    String(candidate?.id) === String(customer.cashierStationId));
+  const savedPosition = Number.isFinite(customer.checkoutPosition?.x)
     && Number.isFinite(customer.checkoutPosition?.y)
-    ? customer.checkoutPosition
-    : station ? getCashierCustomerPosition(station, 0) : null;
+    ? { ...customer.checkoutPosition }
+    : null;
+  const position = station && isValidCashierPaymentPosition(savedPosition, station, savedStation)
+    ? getCashierCustomerPosition(station, 0)
+    : savedPosition || (station ? getCashierCustomerPosition(station, 0) : null);
   return station?.id != null && Number.isFinite(position?.x) && Number.isFinite(position?.y)
     ? { stationId: station.id, position: { x: position.x, y: position.y } }
     : null;
 }
 
-function finishCompletedCheckout(customer, completedCustomerIds, cashierStations) {
+function finishCompletedCheckout(customer, completedCustomerIds, cashierStations, savedCashierStations) {
   if (!completedCustomerIds.has(customer.id) || !isCheckoutState(customer)) return customer;
   return clearNavigationGoal({
     ...customer,
@@ -170,7 +334,7 @@ function finishCompletedCheckout(customer, completedCustomerIds, cashierStations
     cashierStationId: null,
     checkoutPosition: null,
     checkoutQueueIndex: null,
-    checkoutDeparture: getCheckoutDeparture(customer, cashierStations),
+    checkoutDeparture: getCheckoutDeparture(customer, cashierStations, savedCashierStations),
     checkoutLineMember: false,
     checkoutLineGeometry: null,
     paymentReady: false,
@@ -209,6 +373,8 @@ export function hydrateState(saved, fresh) {
   const settledPartyIds = new Set(partyReviewHistory.map(review => review.partyId));
   const pendingPartyReviews = normalisePendingPartyReviews(saved.pendingPartyReviews)
     .filter(record => !settledPartyIds.has(record.partyId));
+  const savedCashierStations = saved.cashierStations ?? fresh.cashierStations;
+  const cashierStations = normaliseCashierStations(savedCashierStations);
   const { staffSlots: _savedStaffSlots, ...savedWithoutStaffSlots } = saved;
   const { staffSlots: _freshStaffSlots, ...freshWithoutStaffSlots } = fresh;
   const hasMilestones = 'milestones' in saved || 'milestones' in fresh;
@@ -220,11 +386,12 @@ export function hydrateState(saved, fresh) {
       ...(saved.restaurant || {}),
     },
     staff,
+    ...(Array.isArray(cashierStations) ? { cashierStations } : {}),
     customers: (saved.customers || fresh.customers || []).map(character =>
       finishCompletedCheckout(normaliseCustomerEconomy({
       ...character,
       gender: inferGender(character),
-    }), completedCustomerIds, saved.cashierStations ?? fresh.cashierStations)),
+    }), completedCustomerIds, cashierStations, savedCashierStations)),
     queue,
     queueDepartures,
     queueAdmissionGate: saved.queueAdmissionGate ?? fresh.queueAdmissionGate ?? null,
@@ -320,8 +487,9 @@ export function hydrateState(saved, fresh) {
   const residencies = hydrateMovementResidencies(normaliseDoorAdmissions(hydrated));
   const reconciled = reconcileSelfSeatingState(residencies);
   const repaired = repairInvalidStaffOverlaps(reconciled);
+  const routeReconciled = reconcileCashierRoutes(repaired, savedCashierStations);
   return {
-    ...repaired,
+    ...routeReconciled,
     version: fresh.version,
     movementCoordinator: createMovementCoordinator(),
   };

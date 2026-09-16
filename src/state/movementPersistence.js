@@ -36,6 +36,13 @@ export function validateSavedNavigationGeometry(state) {
       }
     }
   }
+  for (const cashier of state.cashierStations || []) {
+    for (const key of ['w', 'h']) {
+      if (cashier[key] != null
+        && (!Number.isFinite(cashier[key]) || cashier[key] <= 0
+          || cashier[key] > (key === 'w' ? world.floorW : world.floorH))) invalid();
+    }
+  }
   const rectangles = [
     ...navigationFixtureRectangles(state),
     { x: world.doorX, y: world.kitchenY, w: 6, h: world.floorH },

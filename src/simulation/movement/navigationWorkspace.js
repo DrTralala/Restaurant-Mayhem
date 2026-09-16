@@ -53,7 +53,8 @@ export function navigationFixtureRectangles(state) {
     add('service', service, dimensions.width, dimensions.height);
   }
   for (const cashier of state.cashierStations || []) {
-    add('cashier', cashier, cashier.w || 80, cashier.h || 40);
+    const dimensions = getPlaceableDimensions('cashierTable');
+    add('cashier', cashier, dimensions.width, dimensions.height);
   }
   for (const station of state.washStations || []) add('wash', station, station.w || 40, station.h || 40);
   for (const amenity of state.staffAmenities || []) {

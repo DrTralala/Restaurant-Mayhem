@@ -1512,7 +1512,14 @@ function resolveTask({
     }
     const tableCleaning = cleaningProgress(state, staff);
     const tableCleaningProgress = tableCleaning.progress;
-    const progressedStaff = { ...staff, task: tableCleaningProgress.task };
+    const progressedStaff = {
+      ...staff,
+      task: {
+        ...staff.task,
+        accumulatedWork: tableCleaningProgress.accumulatedWork,
+        lastProgressAt: tableCleaningProgress.lastProgressAt,
+      },
+    };
     if (tableCleaningProgress.accumulatedWork < ACTIVITY_DURATIONS.wipeFloor) {
       const progressedState = tableCleaning.action
         ? updateCleaningActionProgress(state, staff.id, staff.task, tableCleaningProgress)
@@ -1546,7 +1553,14 @@ function resolveTask({
     }
     const floorCleaning = cleaningProgress(state, staff);
     const floorCleaningProgress = floorCleaning.progress;
-    const progressedStaff = { ...staff, task: floorCleaningProgress.task };
+    const progressedStaff = {
+      ...staff,
+      task: {
+        ...staff.task,
+        accumulatedWork: floorCleaningProgress.accumulatedWork,
+        lastProgressAt: floorCleaningProgress.lastProgressAt,
+      },
+    };
     if (floorCleaningProgress.accumulatedWork < ACTIVITY_DURATIONS.wipeFloor) {
       const progressedState = floorCleaning.action
         ? updateCleaningActionProgress(state, staff.id, staff.task, floorCleaningProgress)

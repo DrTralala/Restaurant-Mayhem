@@ -44,9 +44,9 @@ function seated() {
 function checkout(state) {
   return { ...state,
     customers: [enterCheckout(state.customers[0], state.restaurant.gameTime)],
-    cashierStations: [{ id: 'cashier', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier-waiter' }],
+    cashierStations: [{ id: 'cashier', x: 800, y: 120, w: 40, h: 40, assignedStaffId: 'cashier-waiter' }],
     staff: [...state.staff, {
-      id: 'cashier-waiter', role: 'waiter', x: 840, y: 100, task: null,
+      id: 'cashier-waiter', role: 'waiter', x: 820, y: 100, task: null,
       ...createStaffDutyDefaults(),
     }],
   };
@@ -100,10 +100,10 @@ describe('durable domain seated residency', () => {
     state = reload(state);
     if (phase === 'seated') state = checkout(state);
     if (phase === 'queued') state.cashierStations = [{ id: 'cashier', x: 800, y: 120,
-      w: 80, h: 40, assignedStaffId: 'cashier-waiter' }];
+      w: 40, h: 40, assignedStaffId: 'cashier-waiter' }];
     state = advance(state);
     expect(state.customers[0]).toMatchObject({ paymentReady: false,
-      navigationGoal: { x: 840, y: 180 } });
+      navigationGoal: { x: 820, y: 180 } });
     expect(getCharacterMovementStatus(state, 'departure').plan).toBe('scheduled');
     expect(Math.hypot(state.customers[0].x - before.x, state.customers[0].y - before.y)).toBeLessThanOrEqual(6.2 + 1e-6);
     state = advance(state);
@@ -185,7 +185,7 @@ describe('durable domain seated residency', () => {
     state = advance(state);
     const before = point(state.customers[0]);
     state = reload(state);
-    state.cashierStations = [{ id: 'cashier', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier-waiter' }];
+    state.cashierStations = [{ id: 'cashier', x: 800, y: 120, w: 40, h: 40, assignedStaffId: 'cashier-waiter' }];
     state = advance(state);
     expect(point(state.customers[0])).toEqual(before);
     expect(state.customers[0].seatResidency.phase).toBe('revoked');
@@ -269,14 +269,14 @@ describe('durable domain seated residency', () => {
         expect(Math.hypot(actor.x - worker.x, actor.y - worker.y)).toBeGreaterThanOrEqual(16);
       }
       if (actor.paymentReady) {
-        expect(point(actor)).toEqual({ x: 840, y: 180 });
+        expect(point(actor)).toEqual({ x: 820, y: 180 });
         expect(state.movementCoordinator.statuses.get('departure').plan).toBe('arrived');
         reached = true;
         break;
       }
       if (state.movementCoordinator.statuses.get('departure').plan === 'arrived') {
         // Checkout preparation observes the prior batch, so readiness follows on the next tick.
-        expect(point(actor)).toEqual({ x: 840, y: 180 });
+        expect(point(actor)).toEqual({ x: 820, y: 180 });
       }
     }
     expect(reached).toBe(true);

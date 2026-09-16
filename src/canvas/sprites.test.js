@@ -15,6 +15,19 @@ function loadedImage() {
   return { complete: true, naturalWidth: 300, naturalHeight: 100 };
 }
 
+function stubCanvasReadback(context) {
+  const scratchCanvas = {
+    width: 0,
+    height: 0,
+    getContext: vi.fn(() => context),
+  };
+  const originalCreateElement = document.createElement.bind(document);
+  const createElement = vi.spyOn(document, 'createElement').mockImplementation(tagName => (
+    tagName === 'canvas' ? scratchCanvas : originalCreateElement(tagName)
+  ));
+  return { scratchCanvas, createElement };
+}
+
 describe('loadSprites', () => {
   it('maps every supplied asset to a newly created image', () => {
     const images = [];
@@ -30,9 +43,9 @@ describe('loadSprites', () => {
 
       expect(Object.keys(sprites)).toEqual([
         'cashier', 'chair', 'dishwasher', 'oven', 'ovenInUse', 'serviceCounter',
-        'sinkWithDirtyDishes', 'sinkWithDishes', 'sink', 'table', 'toaster',
+        'sinkWithDirtyDishes', 'sink', 'table', 'toaster',
       ]);
-      expect(ImageMock).toHaveBeenCalledTimes(11);
+      expect(ImageMock).toHaveBeenCalledTimes(10);
       expect(Object.values(sprites)).toEqual(images);
       const sourceFragments = {
         cashier: 'cashier-station',
@@ -42,7 +55,6 @@ describe('loadSprites', () => {
         ovenInUse: 'oven_in_use',
         serviceCounter: 'service',
         sinkWithDirtyDishes: 'sink-with-dirty-dishes',
-        sinkWithDishes: 'sink-with-dishes',
         sink: 'sink',
         table: 'table',
         toaster: 'toaster',
@@ -84,8 +96,80 @@ describe('drawSprite', () => {
 
     expect(ctx.translate).toHaveBeenCalledWith(30, 40);
     expect(ctx.rotate).toHaveBeenCalledWith(0);
-    expect(ctx.drawImage).toHaveBeenCalledWith(image, -20, -20, 40, 40);
+    expect(ctx.drawImage).toHaveBeenCalledWith(image, 0, 0, 300, 100, -20, -20, 40, 40);
     expect(ctx.restore).toHaveBeenCalledTimes(1);
+  });
+
+  it('crops transparent source margins once while preserving destination geometry', () => {
+    const ctx = makeCtx();
+    const image = { complete: true, naturalWidth: 6, naturalHeight: 5 };
+    const pixels = new Uint8ClampedArray(6 * 5 * 4);
+    for (const [x, y] of [
+      [1, 1], [2, 1], [3, 1], [4, 1],
+      [1, 2], [2, 2], [3, 2], [4, 2],
+      [1, 3], [2, 3], [3, 3], [4, 3],
+    ]) pixels[(y * 6 + x) * 4 + 3] = 255;
+    const readback = {
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({ data: pixels })),
+    };
+    const { createElement } = stubCanvasReadback(readback);
+
+    try {
+      expect(drawSprite(ctx, { table: image }, 'table', 10, 20, 40, 60)).toBe(true);
+      expect(drawSprite(ctx, { table: image }, 'table', 10, 20, 40, 60, 1)).toBe(true);
+
+      expect(ctx.drawImage).toHaveBeenNthCalledWith(
+        1, image, 1, 1, 4, 3, -20, -30, 40, 60,
+      );
+      expect(ctx.drawImage).toHaveBeenNthCalledWith(
+        2, image, 1, 1, 4, 3, -30, -20, 60, 40,
+      );
+      expect(createElement).toHaveBeenCalledTimes(1);
+      expect(readback.drawImage).toHaveBeenCalledTimes(1);
+      expect(readback.getImageData).toHaveBeenCalledWith(0, 0, 6, 5);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('falls back to the full source when alpha readback fails and caches that result', () => {
+    const ctx = makeCtx();
+    const image = { complete: true, naturalWidth: 8, naturalHeight: 4 };
+    const readback = {
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => { throw new Error('readback unavailable'); }),
+    };
+    const { createElement } = stubCanvasReadback(readback);
+
+    try {
+      expect(drawSprite(ctx, { table: image }, 'table', 0, 0, 32, 16)).toBe(true);
+      expect(drawSprite(ctx, { table: image }, 'table', 0, 0, 32, 16)).toBe(true);
+
+      expect(ctx.drawImage).toHaveBeenNthCalledWith(1, image, 0, 0, 8, 4, -16, -8, 32, 16);
+      expect(ctx.drawImage).toHaveBeenNthCalledWith(2, image, 0, 0, 8, 4, -16, -8, 32, 16);
+      expect(createElement).toHaveBeenCalledTimes(1);
+      expect(readback.getImageData).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('falls back to the full source when readback finds no visible pixels', () => {
+    const ctx = makeCtx();
+    const image = { complete: true, naturalWidth: 5, naturalHeight: 7 };
+    const readback = {
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(5 * 7 * 4) })),
+    };
+    stubCanvasReadback(readback);
+
+    try {
+      expect(drawSprite(ctx, { table: image }, 'table', 0, 0, 20, 30)).toBe(true);
+      expect(ctx.drawImage).toHaveBeenCalledWith(image, 0, 0, 5, 7, -10, -15, 20, 30);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it('returns false without drawing for invalid destination dimensions', () => {
@@ -107,7 +191,7 @@ describe('drawSprite', () => {
 
     expect(ctx.translate).toHaveBeenCalledWith(320, 180);
     expect(ctx.rotate).toHaveBeenCalledWith(Math.PI / 2);
-    expect(ctx.drawImage).toHaveBeenCalledWith(image, -60, -20, 120, 40);
+    expect(ctx.drawImage).toHaveBeenCalledWith(image, 0, 0, 300, 100, -60, -20, 120, 40);
     expect(ctx.restore).toHaveBeenCalledTimes(1);
   });
 
@@ -119,8 +203,8 @@ describe('drawSprite', () => {
     expect(drawSprite(ctx, { table: image }, 'table', 0, 0, 20, 30, 1.5)).toBe(true);
 
     expect(ctx.rotate).toHaveBeenNthCalledWith(1, 3 * Math.PI / 2);
-    expect(ctx.drawImage).toHaveBeenNthCalledWith(1, image, -15, -10, 30, 20);
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(1, image, 0, 0, 300, 100, -15, -10, 30, 20);
     expect(ctx.rotate).toHaveBeenNthCalledWith(2, 0);
-    expect(ctx.drawImage).toHaveBeenNthCalledWith(2, image, -10, -15, 20, 30);
+    expect(ctx.drawImage).toHaveBeenNthCalledWith(2, image, 0, 0, 300, 100, -10, -15, 20, 30);
   });
 });

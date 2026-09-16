@@ -14,7 +14,7 @@ const state = {
   chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180, rotation: 2 }],
   kitchenStations: [{ id: 'k1', x: 100, y: 120, equipmentId: 'eq1' }],
   serviceTables: [{ id: 'st1', x: 140, y: 120 }],
-  cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 80, h: 40 }],
+  cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 40, h: 40 }],
   doors: [{ id: 'door1', y: 340, role: 'entrance' }],
 };
 
@@ -23,7 +23,7 @@ it('exposes canonical prices and footprints', () => {
   expect(getPlaceable('chair')).toMatchObject({ price: 50, width: 20, height: 20, rotatable: true });
   expect(getPlaceable('door')).toMatchObject({ price: 400, width: 6, height: 40 });
   expect(getPlaceable('serviceTable')).toMatchObject({ price: 300, width: 120, height: 40, rotatable: true });
-  expect(getPlaceable('cashierTable')).toMatchObject({ price: 300, width: 80, height: 40 });
+  expect(getPlaceable('cashierTable')).toMatchObject({ price: 300, width: 40, height: 40 });
   expect(getPlaceable('automaticDishwasher')).toMatchObject({ price: 2000, width: 40, height: 40 });
 });
 
@@ -73,7 +73,7 @@ it('rejects a cashier table whose work cell is blocked by adjacent furniture', (
     ...state,
     chairs: [
       ...state.chairs,
-      { id: 'work-blocker', tableId: 't1', x: 640, y: 280, rotation: 0 },
+      { id: 'work-blocker', tableId: 't1', x: 620, y: 280, rotation: 0 },
     ],
   };
 
@@ -166,9 +166,13 @@ describe('fixture movement validation', () => {
   it('rejects a cashier whose final work cell is blocked', () => {
     const blocked = {
       ...state,
+      tables: [
+        ...state.tables,
+        { id: 'work-table', x: 620, y: 240, status: 'empty', seats: 1 },
+      ],
       chairs: [
         ...state.chairs,
-        { id: 'work-blocker', tableId: 't1', x: 640, y: 280, rotation: 0 },
+        { id: 'work-blocker', tableId: 'work-table', x: 620, y: 280, rotation: 0 },
       ],
     };
 
@@ -266,7 +270,7 @@ describe('fixture copy validation', () => {
       ...state,
       chairs: [
         ...state.chairs,
-        { id: 'blocker', tableId: 't1', x: 640, y: 280 },
+        { id: 'blocker', tableId: 't1', x: 620, y: 280 },
       ],
     };
     expect(validateFixtureCopies(blockedCashier, [
