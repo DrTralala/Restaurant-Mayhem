@@ -32,7 +32,7 @@ const COPY_REASON_MESSAGES = Object.freeze({
   [COPY_REASONS.MISSING_FIXTURE]: 'A selected fixture no longer exists.',
   [COPY_REASONS.DUPLICATE_COPY]: 'A fixture can only be copied once.',
   [COPY_REASONS.UNIQUE_EQUIPMENT]: 'Unique kitchen equipment cannot be copied.',
-  [COPY_REASONS.UNPRICED_KITCHEN_STATION]: 'Unpriced kitchen stations cannot be copied.',
+  [COPY_REASONS.UNPRICED_KITCHEN_STATION]: 'Unpriced drinks dispensers cannot be copied.',
   [COPY_REASONS.UNPRICED_MANUAL_SINK]: 'Manual sinks cannot be copied.',
   [COPY_REASONS.MALFORMED_SOURCE]: 'A selected fixture has invalid geometry.',
   [COPY_REASONS.INSUFFICIENT_FUNDS]: 'There are not enough funds to copy this selection.',

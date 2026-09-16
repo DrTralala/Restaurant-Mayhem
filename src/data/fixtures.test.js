@@ -69,10 +69,13 @@ describe('fixture catalogue', () => {
     })).toBe('Cashier');
     expect(getFixtureLabel(state, {
       type: 'kitchenStation', id: 'k2', data: state.kitchenStations[1],
-    })).toBe('Kitchen station');
+    })).toBe('Drinks Dispenser');
     expect(getFixtureLabel(state, {
       type: 'kitchenStation', id: 'k1', data: state.kitchenStations[0],
     })).toBe('Toaster');
+    expect(getFixtureLabel(state, {
+      type: 'kitchenStation', id: 'missing', data: { equipmentId: 'missing' },
+    })).toBe('Equipment station');
   });
 
   it('uses the canonical cashier footprint even for an old-width record', () => {
@@ -127,7 +130,7 @@ describe('fixture catalogue', () => {
 
   it('provides non-shop geometry for existing stations and equipment placement', () => {
     expect(getPlaceable('kitchenStation')).toMatchObject({
-      price: null, width: 40, height: 40, grid: 20, label: 'Kitchen station',
+      price: null, width: 40, height: 40, grid: 20, label: 'Drinks Dispenser',
     });
     expect(getPlaceable('manualSink')).toMatchObject({
       price: null, width: 40, height: 40, grid: 20, label: 'Sink',

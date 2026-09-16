@@ -15,8 +15,8 @@ export const FIXTURE_TYPES = {
   kitchenStation: {
     collection: 'kitchenStations', width: 40, height: 40, placementType: 'kitchenStation',
     label: (state, data) => data.equipmentId
-      ? state?.equipment?.find(equipment => equipment.id === data.equipmentId)?.name || 'Kitchen station'
-      : 'Kitchen station',
+      ? state?.equipment?.find(equipment => equipment.id === data.equipmentId)?.name || 'Equipment station'
+      : 'Drinks Dispenser',
   },
   washStation: { collection: 'washStations', width: 40, height: 40, placementType: data => data.type === 'automatic' ? 'automaticDishwasher' : 'manualSink', label: (_state, data) => data.type === 'automatic' ? 'Automatic dishwasher' : 'Sink' },
   staffAmenity: {

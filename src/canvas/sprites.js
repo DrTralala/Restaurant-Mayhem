@@ -1,24 +1,28 @@
 import cashierUrl from '../../images/cashier-station.png';
 import chairUrl from '../../images/chair.png';
 import dishwasherUrl from '../../images/dishwasher.png';
+import drinksDispenserUrl from '../../images/drinks-dispenser.png';
 import ovenUrl from '../../images/oven.png';
-import ovenInUseUrl from '../../images/oven_in_use.png';
-import serviceCounterUrl from '../../images/service counter.png';
+import ovenInUseUrl from '../../images/oven-in-use.png';
+import serviceCounterUrl from '../../images/service-counter.png';
 import sinkWithDirtyDishesUrl from '../../images/sink-with-dirty-dishes.png';
 import sinkUrl from '../../images/sink.png';
 import tableUrl from '../../images/table.png';
+import tableDirtyUrl from '../../images/table-dirty.png';
 import toasterUrl from '../../images/toaster.png';
 
 const SPRITE_URLS = Object.freeze({
   cashier: cashierUrl,
   chair: chairUrl,
   dishwasher: dishwasherUrl,
+  drinksDispenser: drinksDispenserUrl,
   oven: ovenUrl,
   ovenInUse: ovenInUseUrl,
   serviceCounter: serviceCounterUrl,
   sinkWithDirtyDishes: sinkWithDirtyDishesUrl,
   sink: sinkUrl,
   table: tableUrl,
+  tableDirty: tableDirtyUrl,
   toaster: toasterUrl,
 });
 

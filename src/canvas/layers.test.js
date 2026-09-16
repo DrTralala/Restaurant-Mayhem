@@ -209,12 +209,13 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.images.map(call => call.image)).toEqual(expect.arrayContaining([
       table, chair, serviceCounter,
     ]));
-    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '↓', x: 120, y: 90 }));
+    expect(ctx._calls.texts.some(call => /^[↑→↓←]$/.test(call.text))).toBe(false);
   });
 
-  it('retains table state overlays and chair direction over loaded artwork', () => {
+  it('uses dirty table artwork without a red overlay and retains the occupied overlay', () => {
     const ctx = recordCtx();
     const table = loadedSprite('table');
+    const tableDirty = loadedSprite('tableDirty');
     const chair = loadedSprite('chair');
 
     drawFurnitureLayer(ctx, {
@@ -224,16 +225,53 @@ describe('drawFurnitureLayer', () => {
       ],
       chairs: [{ id: 'ch1', tableId: 'dirty', x: 110, y: 80, rotation: 3 }],
       kitchenStations: [], serviceTables: [], serviceItems: [], equipment: [], dishes: [],
-    }, { x: 0, y: 0, zoom: 1 }, { table, chair });
+    }, { x: 0, y: 0, zoom: 1 }, { table, tableDirty, chair });
 
-    expect(ctx._calls.images.map(call => call.image)).toEqual(expect.arrayContaining([
-      table, chair,
-    ]));
-    expect(ctx._calls.rectColours).toEqual(expect.arrayContaining([
-      expect.objectContaining({ x: 100, y: 100, w: 40, h: 40, colour: 'rgba(102,51,51,0.45)' }),
+    expect(ctx._calls.images.map(call => call.image)).toEqual([tableDirty, table, chair]);
+    expect(ctx._calls.rectColours).toEqual([
       expect.objectContaining({ x: 200, y: 100, w: 40, h: 40, colour: 'rgba(74,103,65,0.35)' }),
-    ]));
-    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '←', x: 120, y: 90 }));
+    ]);
+    expect(ctx._calls.texts.some(call => /^[↑→↓←]$/.test(call.text))).toBe(false);
+  });
+
+  it('keeps dirty tables drawable when their artwork is unavailable', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [{ id: 'dirty', x: 100, y: 100, status: 'dirty' }],
+      chairs: [], kitchenStations: [], serviceTables: [], equipment: [], serviceItems: [], dishes: [],
+    }, { x: 0, y: 0, zoom: 1 }, { table: loadedSprite('table') });
+
+    expect(ctx._calls.images).toEqual([]);
+    expect(ctx._calls.rectColours).toContainEqual({
+      x: 100, y: 100, w: 40, h: 40, colour: '#663333',
+    });
+  });
+
+  it('rotates bare-station drinks dispenser artwork by 180 degrees', () => {
+    const ctx = recordCtx();
+    const drinksDispenser = loadedSprite('drinksDispenser');
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], serviceTables: [], serviceItems: [], equipment: [], dishes: [],
+      kitchenStations: [{ id: 'bare', equipmentId: null, x: 100, y: 120 }],
+    }, { x: 0, y: 0, zoom: 1 }, { drinksDispenser });
+
+    expect(ctx._calls.images).toEqual([expect.objectContaining({ image: drinksDispenser, w: 40, h: 40 })]);
+    expect(ctx._calls.rotations).toEqual([Math.PI]);
+    expect(ctx._calls.texts).toEqual([]);
+  });
+
+  it.each([
+    [undefined, Math.PI], [0, Math.PI], [1, 3 * Math.PI / 2], [2, 0], [3, Math.PI / 2],
+  ])('corrects service counter artwork at rotation %s without changing dimensions', (rotation, radians) => {
+    const ctx = recordCtx();
+    const serviceCounter = loadedSprite('serviceCounter');
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [], equipment: [], dishes: [], serviceItems: [],
+      serviceTables: [{ id: 'counter', x: 300, y: 120, rotation }],
+    }, { x: 0, y: 0, zoom: 1 }, { serviceCounter });
+
+    expect(ctx._calls.rotations).toEqual([radians]);
+    expect(ctx._calls.images).toEqual([expect.objectContaining({ image: serviceCounter, w: 120, h: 40 })]);
   });
 
   it('draws on-service items at stored positions and skips delivered items without ownership geometry', () => {
@@ -373,7 +411,7 @@ describe('drawFurnitureLayer', () => {
     }, { x: 0, y: 0, zoom: 1 }, { cashier });
 
     expect(ctx._calls.rotations).toEqual([3 * Math.PI / 2, Math.PI]);
-    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '→', x: 110, y: 130 }));
+    expect(ctx._calls.texts.some(call => /^[↑→↓←]$/.test(call.text))).toBe(false);
     expect(ctx._calls.images.find(call => call.image === cashier)).toMatchObject({
       x: -20, y: -20, w: 40, h: 40,
     });
@@ -397,7 +435,7 @@ describe('drawFurnitureLayer', () => {
     ]));
   });
 
-  it('keeps unsupported equipment and bare kitchen stations on the primitive fallback', () => {
+  it('uses primitive fallbacks for unsupported equipment and unavailable dispenser artwork', () => {
     const ctx = recordCtx();
     drawFurnitureLayer(ctx, {
       tables: [], chairs: [], serviceTables: [], serviceItems: [], dishes: [], washStations: [],
@@ -420,7 +458,7 @@ describe('drawFurnitureLayer', () => {
       expect.objectContaining({ x: 160, y: 120, w: 40, h: 40 }),
     ]));
     expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining([
-      'Fryer', 'Kitchen', 'station',
+      'Fryer', 'Drinks', 'Dispenser',
     ]));
   });
 
@@ -437,11 +475,11 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.texts).toEqual([]);
   });
 
-  it('shows an arrow for a chair direction', () => {
+  it.each([0, 1, 2, 3])('draws a fallback chair without an arrow at rotation %s', rotation => {
     const ctx = recordCtx();
     const state = {
       tables: [],
-      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 120, rotation: 1 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 120, rotation }],
       kitchenStations: [],
       serviceTables: [],
       serviceItems: [],
@@ -451,7 +489,8 @@ describe('drawFurnitureLayer', () => {
 
     drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
 
-    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '→', x: 110, y: 130 }));
+    expect(ctx._calls.rects).toContainEqual({ x: 100, y: 120, w: 20, h: 20 });
+    expect(ctx._calls.texts).toEqual([]);
   });
 
   it('keeps the sink outline inside its four-cell footprint', () => {
@@ -792,7 +831,7 @@ describe('drawFurnitureLayer', () => {
     expect(completed.serviceItems[0]).toMatchObject({ state: 'ready', x: 120, y: 120 });
   });
 
-  it('labels empty kitchen stations and preserves the installed equipment name', () => {
+  it('labels drinks dispensers and preserves the installed equipment name', () => {
     const ctx = recordCtx();
 
     drawFurnitureLayer(ctx, {
@@ -803,13 +842,32 @@ describe('drawFurnitureLayer', () => {
     }, { x: 0, y: 0, zoom: 1 });
 
     expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining([
-      'Kitchen', 'station', 'Toaster',
+      'Drinks', 'Dispenser', 'Toaster',
     ]));
     expect(ctx._calls.texts.map(call => call.text)).not.toContain('Kitchen equipment');
   });
 });
 
 describe('drawPlacementPreview', () => {
+  it.each([0, 1, 2, 3])('draws the chair footprint without an arrow at rotation %s', rotation => {
+    const ctx = recordCtx();
+    drawPlacementPreview(ctx, {}, { x: 0, y: 0, zoom: 1 }, {
+      itemType: 'chair', x: 100, y: 120, rotation, valid: true,
+    });
+
+    expect(ctx._calls.rects).toContainEqual({ x: 100, y: 120, w: 20, h: 20 });
+    expect(ctx._calls.texts).toEqual([]);
+  });
+
+  it('labels a bare-station preview as a drinks dispenser', () => {
+    const ctx = recordCtx();
+    drawPlacementPreview(ctx, {}, { x: 0, y: 0, zoom: 1 }, {
+      itemType: 'kitchenStation', x: 100, y: 120, rotation: 0, valid: true,
+    });
+
+    expect(ctx._calls.texts.map(call => call.text)).toEqual(['Drinks', 'Dispenser']);
+  });
+
   it('labels an equipment-station preview with the selected equipment name', () => {
     const ctx = recordCtx();
 

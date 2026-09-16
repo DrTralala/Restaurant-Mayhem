@@ -408,17 +408,16 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
   for (const table of state.tables) {
     const tx = table.x;
     const ty = table.y;
-    const drewSprite = drawSprite(ctx, sprites, 'table', tx, ty, 40, 40);
+    const spriteKey = table.status === 'dirty' ? 'tableDirty' : 'table';
+    const drewSprite = drawSprite(ctx, sprites, spriteKey, tx, ty, 40, 40);
     if (!drewSprite) {
       const tableColor = table.status === 'dirty' ? '#663333'
         : table.status === 'occupied' ? '#4a6741' : '#6b5b3a';
       ctx.fillStyle = tableColor;
       ctx.fillRect(tx, ty, 40, 40);
-    } else if (table.status === 'dirty' || table.status === 'occupied') {
+    } else if (table.status === 'occupied') {
       ctx.save();
-      ctx.fillStyle = table.status === 'dirty'
-        ? 'rgba(102,51,51,0.45)'
-        : 'rgba(74,103,65,0.35)';
+      ctx.fillStyle = 'rgba(74,103,65,0.35)';
       ctx.fillRect(tx, ty, 40, 40);
       ctx.restore();
     }
@@ -436,17 +435,6 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
       ctx.fillStyle = '#5a4a30';
       ctx.fillRect(chair.x, chair.y, 20, 20);
     }
-
-    // Direction indicator remains functional state, even with artwork.
-    ctx.fillStyle = '#f0d080';
-    const cx = chair.x + 10, cy = chair.y + 10;
-    const arrows = ['↑', '→', '↓', '←'];
-    ctx.save();
-    ctx.font = getCanvasFont('icon');
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(arrows[rot], cx, cy);
-    ctx.restore();
   }
 
   for (const station of state.kitchenStations || []) {
@@ -462,9 +450,10 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
       ? 'toaster'
       : eq?.type === 'oven'
         ? (stationHasFood ? 'ovenInUse' : 'oven')
-        : null;
+        : !eq ? 'drinksDispenser' : null;
     const drewSprite = spriteKey
-      ? drawSprite(ctx, sprites, spriteKey, station.x, station.y, 40, 40)
+      ? drawSprite(ctx, sprites, spriteKey, station.x, station.y, 40, 40,
+        spriteKey === 'drinksDispenser' ? 2 : 0)
       : false;
 
     if (!drewSprite) {
@@ -477,7 +466,7 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
           allowOverflow: true,
         });
       } else {
-        drawObjectLabel(ctx, 'Kitchen\nstation', { x: station.x, y: station.y, w: 40, h: 40 });
+        drawObjectLabel(ctx, 'Drinks\nDispenser', { x: station.x, y: station.y, w: 40, h: 40 });
       }
     }
   }
@@ -493,7 +482,7 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
       st.y,
       dimensions.width,
       dimensions.height,
-      st.rotation,
+      (Number.isInteger(st.rotation) ? st.rotation : 0) + 2,
     );
     if (!drewSprite) {
       ctx.fillStyle = '#4a6a4a';
@@ -618,15 +607,7 @@ export function drawPlacementPreview(ctx, state, camera, placement) {
   ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
   ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
 
-  if (placement.itemType === 'chair') {
-    const arrows = ['↑', '→', '↓', '←'];
-    const rotation = ((placement.rotation || 0) % 4 + 4) % 4;
-    ctx.fillStyle = '#f3e6bd';
-    ctx.font = getCanvasFont('icon');
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(arrows[rotation], rect.x + rect.w / 2, rect.y + rect.h / 2);
-  } else if (placement.itemType === 'cashierTable') {
+  if (placement.itemType === 'cashierTable') {
     drawObjectLabel(ctx, 'Cashier', rect);
   } else if (placement.itemType === 'serviceTable') {
     drawObjectLabel(ctx, 'Service counter', rect);
@@ -638,7 +619,7 @@ export function drawPlacementPreview(ctx, state, camera, placement) {
       });
     }
   } else if (placement.itemType === 'kitchenStation') {
-    drawObjectLabel(ctx, 'Kitchen\nstation', rect);
+    drawObjectLabel(ctx, 'Drinks\nDispenser', rect);
   } else if (placement.itemType === 'automaticDishwasher') {
     drawObjectLabel(ctx, 'Dish\nwasher', rect);
   } else if (placement.itemType === 'manualSink') {
