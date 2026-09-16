@@ -19,6 +19,14 @@ describe('ItemsPanel', () => {
     expect(screen.getByText('Dining chair')).toBeInTheDocument();
     expect(screen.getByText('Additional door')).toBeInTheDocument();
     expect(screen.getByText('Cashier')).toBeInTheDocument();
+    expect(screen.getByText('A four-seat dining table. Add chairs separately before seating guests.'))
+      .toBeInTheDocument();
+    expect(screen.getByText('Adds one movable chair next to a table with an available seat.'))
+      .toBeInTheDocument();
+    expect(screen.getByText('Adds a new entrance door. Change its role from the canvas when needed.'))
+      .toBeInTheDocument();
+    expect(screen.getByText('A cashier station assigned to an available waiter when placed.'))
+      .toBeInTheDocument();
   });
 
   it('offers the automatic dishwasher at $2000 with its level and capacity description', () => {
@@ -44,8 +52,39 @@ describe('ItemsPanel', () => {
     expect(screen.getByText('Arcade')).toBeInTheDocument();
     expect(screen.getByText(/One staff seat.*10 minutes.*\+8 morale per hour/i)).toBeInTheDocument();
     expect(screen.getByText('Bed')).toBeInTheDocument();
-    expect(screen.getByText(/minimum 7 in-game hours.*full morale.*24 hours of reduced drain/i))
+    expect(screen.getByText(/minimum 7 in-game hours.*restores full morale.*reduces morale drain during recovery/i))
       .toBeInTheDocument();
+  });
+
+  it('starts placement for every shop item without charging immediately', () => {
+    const startPlacement = vi.fn();
+    useGameState.mockReturnValue({ restaurant: { funds: 3000 } });
+    useDispatch.mockReturnValue(vi.fn());
+    render(<ItemsPanel onStartPlacement={startPlacement} />);
+
+    for (const [name, type] of [
+      ['Dining table', 'table'],
+      ['Dining chair', 'chair'],
+      ['Additional door', 'door'],
+      ['Cashier', 'cashierTable'],
+      ['Automatic dishwasher', 'automaticDishwasher'],
+      ['Couch', 'couch'],
+      ['Arcade', 'arcade'],
+      ['Bed', 'bed'],
+    ]) {
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`Buy ${name}`) }));
+    }
+
+    expect(startPlacement.mock.calls).toEqual([
+      ['table'],
+      ['chair'],
+      ['door'],
+      ['cashierTable'],
+      ['automaticDishwasher'],
+      ['couch'],
+      ['arcade'],
+      ['bed'],
+    ]);
   });
 
   it('starts placement for each staff amenity without charging immediately', () => {

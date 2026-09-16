@@ -2,6 +2,8 @@ import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GameProvider, useDispatch, useGameState } from './GameContext';
 import { createInitialState } from './initialState';
+import { hydrateState } from './persistence';
+import { movementSaveSnapshot } from './movementPersistence';
 import { getRestaurantWorld } from '../simulation/world';
 import SettingsMenu from '../components/SettingsMenu';
 
@@ -347,6 +349,39 @@ describe('GameProvider furniture actions', () => {
     expect(screen.getByTestId('newest-chair-rotations')).toHaveTextContent('2,0,1,3');
   });
 
+  it('allocates an added table after the greatest existing table suffix', () => {
+    const game = renderReducer({
+      tables: [
+        { id: 't1', seats: 4, status: 'empty', x: 200, y: 200 },
+        { id: 't3', seats: 4, status: 'empty', x: 360, y: 200 },
+      ],
+      chairs: [],
+    });
+
+    game.dispatch({ type: 'ADD_TABLE' });
+
+    expect(game.state.tables.at(-1).id).toBe('t4');
+  });
+
+  it('allocates four unique chairs after the greatest existing chair suffix', () => {
+    const game = renderReducer({
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 210, y: 180 },
+        { id: 'ch5', tableId: 't1', x: 210, y: 240 },
+      ],
+    });
+
+    game.dispatch({ type: 'ADD_TABLE' });
+
+    const newTableId = game.state.tables.at(-1).id;
+    const newChairIds = game.state.chairs
+      .filter(chair => chair.tableId === newTableId)
+      .map(chair => chair.id);
+    expect(newChairIds).toEqual(['ch6', 'ch7', 'ch8', 'ch9']);
+    expect(new Set(game.state.chairs.map(chair => chair.id)).size)
+      .toBe(game.state.chairs.length);
+  });
+
   it('buys tables and chairs while deducting their item prices', () => {
     render(<GameProvider><ItemHarness /></GameProvider>);
 
@@ -478,6 +513,19 @@ describe('GameProvider furniture actions', () => {
     expect(game.state).toBe(before);
     game.dispatch({ type: 'DELETE_CHAIR', id: 'chair' });
     expect(game.state).toBe(before);
+  });
+
+  it('allows safe legacy table and chair deletion actions', () => {
+    const game = renderReducer({
+      tables: [{ id: 'table', seats: 1, status: 'empty', x: 500, y: 300 }],
+      chairs: [{ id: 'chair', tableId: 'table', x: 510, y: 280, rotation: 2 }],
+    });
+
+    game.dispatch({ type: 'DELETE_CHAIR', id: 'chair' });
+    expect(game.state.chairs).toEqual([]);
+
+    game.dispatch({ type: 'DELETE_TABLE', id: 'table' });
+    expect(game.state.tables).toEqual([]);
   });
 
   it('buys an additional door and deducts its item price', () => {
@@ -1240,6 +1288,95 @@ describe('GameProvider guarded economy actions', () => {
 
     expect(game.state.restaurant).toMatchObject({ funds: 14000, expansionLevel: 4 });
     expect(game.state.kitchenStations).toHaveLength(initialStationCount + 1);
+  });
+
+  it('allocates an expanded kitchen station after the greatest existing suffix', () => {
+    const game = renderReducer({
+      restaurant: { funds: 1000, expansionLevel: 1 },
+      kitchenStations: [
+        { id: 'k1', equipmentId: null, x: 100, y: 120 },
+        { id: 'k3', equipmentId: null, x: 200, y: 120 },
+      ],
+    });
+
+    game.dispatch({ type: 'EXPAND' });
+
+    expect(game.state.kitchenStations.at(-1).id).toBe('k4');
+    expect(new Set(game.state.kitchenStations.map(station => station.id)).size)
+      .toBe(game.state.kitchenStations.length);
+  });
+
+  it('places an expanded kitchen station in a save-safe snapped slot', () => {
+    const game = renderReducer({ restaurant: { funds: 10000 } });
+
+    game.dispatch({ type: 'EXPAND' });
+
+    expect(game.state.restaurant).toMatchObject({ funds: 9000, expansionLevel: 2 });
+    expect(game.state.kitchenStations.at(-1)).toMatchObject({ id: 'k3', x: 260, y: 120 });
+
+    const snapshot = movementSaveSnapshot(game.state);
+    const restored = hydrateState(snapshot, createInitialState());
+
+    expect(restored.kitchenStations).toEqual(game.state.kitchenStations);
+    expect(restored.restaurant).toMatchObject({ funds: 9000, expansionLevel: 2 });
+  });
+
+  it('keeps repeated expansions valid around moved fixtures and kitchen ID gaps', () => {
+    const game = renderReducer({
+      restaurant: { funds: 10000, expansionLevel: 1 },
+      kitchenStations: [
+        { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
+        { id: 'k7', equipmentId: null, x: 360, y: 120 },
+      ],
+      washStations: [{ id: 'wash1', type: 'manual', x: 240, y: 120, w: 40, h: 40 }],
+      serviceTables: [{ id: 'st1', x: 500, y: 120 }],
+    });
+
+    game.dispatch({ type: 'EXPAND' });
+    game.dispatch({ type: 'EXPAND' });
+    game.dispatch({ type: 'EXPAND' });
+
+    const snapshot = movementSaveSnapshot(game.state);
+    const restored = hydrateState(snapshot, createInitialState());
+
+    expect(game.state.restaurant).toMatchObject({ funds: 0, expansionLevel: 4 });
+    expect(game.state.kitchenStations.map(station => station.id)).toEqual([
+      'k1', 'k7', 'k8', 'k9', 'k10',
+    ]);
+    expect(game.state.kitchenStations.slice(2).map(station => ({ x: station.x, y: station.y })))
+      .toEqual([{ x: 280, y: 120 }, { x: 400, y: 120 }, { x: 460, y: 120 }]);
+    expect(restored.kitchenStations).toEqual(game.state.kitchenStations);
+  });
+
+  it('rejects expansion atomically when a real fixture blocks every post-expansion slot', () => {
+    const expandedWorld = getRestaurantWorld({ expansionLevel: 2 });
+    const game = renderReducer({
+      restaurant: { funds: 10000, expansionLevel: 1 },
+      tables: [],
+      chairs: [],
+      kitchenStations: [],
+      serviceTables: [],
+      cashierStations: [],
+      // This real wash-station footprint intentionally covers the whole
+      // level-2 floor, exhausting every candidate without mocking placement.
+      washStations: [{
+        id: 'blocking-sink',
+        type: 'manual',
+        x: expandedWorld.floorX,
+        y: expandedWorld.diningY,
+        w: expandedWorld.floorW,
+        h: expandedWorld.floorH - (expandedWorld.diningY - expandedWorld.kitchenY),
+      }],
+    });
+    const before = game.state;
+    const beforeStations = before.kitchenStations;
+
+    game.dispatch({ type: 'EXPAND' });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant).toMatchObject({ funds: 10000, expansionLevel: 1 });
+    expect(game.state.kitchenStations).toBe(beforeStations);
+    expect(game.state.kitchenStations).toEqual([]);
   });
 
   it('enforces price limits and paid dish quality', () => {

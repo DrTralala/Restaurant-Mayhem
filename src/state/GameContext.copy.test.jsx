@@ -36,7 +36,7 @@ describe('GameProvider COPY_FIXTURES action', () => {
     const game = renderReducer({
       restaurant: { funds: 1000 },
       tables: [{
-        id: 't1', seats: 2, status: 'occupied', x: 200, y: 200,
+        id: 't1', seats: 4, status: 'occupied', x: 200, y: 200,
         diningPartyId: 'party', diningCustomerIds: ['customer'],
       }],
       chairs: [
@@ -54,7 +54,7 @@ describe('GameProvider COPY_FIXTURES action', () => {
     });
 
     expect(game.state.restaurant.funds).toBe(600);
-    expect(game.state.tables.at(-1)).toEqual({ id: 't2', seats: 2, status: 'empty', x: 600, y: 300 });
+    expect(game.state.tables.at(-1)).toEqual({ id: 't2', seats: 4, status: 'empty', x: 600, y: 300 });
     expect(game.state.chairs.slice(-2)).toEqual([
       { id: 'ch3', tableId: 't2', x: 610, y: 280, rotation: 2 },
       { id: 'ch4', tableId: 't2', x: 610, y: 340, rotation: 0 },

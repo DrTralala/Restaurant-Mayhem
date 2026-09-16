@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { getPlaceable } from '../data/placeables';
 import { createInitialState } from '../state/initialState';
 import {
+  getNextNumericId,
+  getNextNumericIds,
   getPlacementRect,
   snapPlacement,
   validateFixtureCopies,
@@ -78,6 +80,29 @@ it('exposes canonical prices and footprints', () => {
   expect(getPlaceable('serviceTable')).toMatchObject({ price: 300, width: 120, height: 40, rotatable: true });
   expect(getPlaceable('cashierTable')).toMatchObject({ price: 300, width: 40, height: 40 });
   expect(getPlaceable('automaticDishwasher')).toMatchObject({ price: 2000, width: 40, height: 40 });
+});
+
+describe('numeric ID allocation', () => {
+  it('allocates one or many IDs after the greatest numeric suffix', () => {
+    const records = [{ id: 't1' }, { id: 't3' }, { id: 'legacy' }];
+
+    expect(getNextNumericId(records, 't')).toBe('t4');
+    expect(getNextNumericIds(records, 't', 3)).toEqual(['t4', 't5', 't6']);
+  });
+
+  it('uses exact string arithmetic beyond Number.MAX_SAFE_INTEGER', () => {
+    const records = [
+      { id: 't9007199254740991' },
+      { id: 't9007199254740992' },
+    ];
+
+    expect(getNextNumericId(records, 't')).toBe('t9007199254740993');
+    expect(getNextNumericIds(records, 't', 3)).toEqual([
+      't9007199254740993',
+      't9007199254740994',
+      't9007199254740995',
+    ]);
+  });
 });
 
 it('uses the vertical footprint for a quarter-turned service counter', () => {

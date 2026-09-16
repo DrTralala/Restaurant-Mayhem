@@ -1,33 +1,6 @@
-import { PLACEABLES } from '../data/placeables';
+import { SHOP_ITEMS } from './itemCatalog';
 import { useGameState } from '../state/GameContext';
 import { TYPOGRAPHY } from '../typography';
-
-const ITEM_DESCRIPTIONS = {
-  table: 'A four-seat table. Add chairs separately before seating guests.',
-  chair: 'Adds one seat to the newest table with an open chair position.',
-  door: 'Adds another entrance and exit lane so guests can pass through faster.',
-  cashierTable: 'A dedicated station permanently staffed by an available waiter.',
-  automaticDishwasher: '10 levels; level 1 washes items serially every 300 seconds and holds 12 items.',
-  couch: 'Two staff seats for 15 minutes; restores +6 morale per hour while occupied.',
-  arcade: 'One staff seat for 10 minutes; restores +8 morale per hour while occupied.',
-  bed: 'One staff bed: minimum 7 in-game hours, full morale, then 24 hours of reduced drain.',
-};
-
-const ITEMS = [
-  'table',
-  'chair',
-  'door',
-  'cashierTable',
-  'automaticDishwasher',
-  'couch',
-  'arcade',
-  'bed',
-].map(type => ({
-  ...PLACEABLES[type],
-  name: PLACEABLES[type].label,
-  price: type === 'automaticDishwasher' ? 2000 : PLACEABLES[type].price,
-  description: ITEM_DESCRIPTIONS[type],
-}));
 
 export default function ItemsPanel({ onStartPlacement = () => {} }) {
   const state = useGameState();
@@ -40,7 +13,7 @@ export default function ItemsPanel({ onStartPlacement = () => {} }) {
         Buy furniture and structural items for the restaurant.
       </p>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
-        {ITEMS.map(item => {
+        {SHOP_ITEMS.map(item => {
           const cost = item.price;
           const disabled = funds < cost;
           return (

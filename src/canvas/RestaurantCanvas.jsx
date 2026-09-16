@@ -7,103 +7,35 @@ import { drawFloorLayer, drawFurnitureLayer, drawObjectLabel, drawPlacementPrevi
 import { findClickedEntity } from './interaction';
 import { getDefaultStaffPosition, getMissingDoorWarnings, getRestaurantWorld } from '../simulation/world';
 import StaffDetailsPanel from '../components/StaffDetailsPanel';
-import { expandFurnitureSelection, normaliseSelectionRect, selectFurnitureInRect } from './selection';
-import { getFixture, getFixtureDescriptor, getFixtureLabel, getFixtureRect } from '../data/fixtures';
+import { normaliseSelectionRect, selectFurnitureInRect } from './selection';
+import { getFixture, getFixtureDescriptor, getFixtureLabel } from '../data/fixtures';
 import { getPlaceable } from '../data/placeables';
-import { isAmenityInUse } from '../data/staffAmenities';
-import { snapPlacement, validateFixtureCopies, validateFixtureMoves, validatePlacement } from '../simulation/placement';
+import { snapPlacement, validateFixtureCopies, validateFixtureMoves } from '../simulation/placement';
 import { getServiceSlotPosition } from '../simulation/serviceItems';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { getWashStationOccupancy } from '../simulation/dishwashing';
 import { validateStaffMove } from '../state/staffMoves';
+import { useAnimationFrameLoop } from '../hooks/useAnimationFrameLoop';
 import {
   getFixtureCopyEligibility,
   getFixtureCopyReasonMessage,
 } from '../state/fixtureCopies';
+import { getFixtureSaleEligibility } from '../state/fixtureSales';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 
-function buildPlacement(state, request, point, rotation = 0) {
-  const placementRequest = typeof request === 'string' ? { itemType: request } : request;
-  const candidate = {
-    ...placementRequest,
-    x: point.x,
-    y: point.y,
-    rotation,
-  };
-  return { ...candidate, ...validatePlacement(state, candidate) };
-}
-
-function samePlacement(first, second) {
-  return first?.itemType === second?.itemType
-    && first?.equipmentId === second?.equipmentId
-    && first?.x === second?.x
-    && first?.y === second?.y
-    && first?.rotation === second?.rotation
-    && first?.valid === second?.valid
-    && first?.reason === second?.reason
-    && first?.tableId === second?.tableId;
-}
-
-function getFixturePlacementType(fixture) {
-  const descriptor = getFixtureDescriptor(fixture?.type);
-  return typeof descriptor?.placementType === 'function'
-    ? descriptor.placementType(fixture?.data)
-    : descriptor?.placementType;
-}
-
-function getPlacementLabel(state, placement) {
-  const itemType = placement?.itemType;
-  if (itemType === 'equipmentStation') {
-    const equipment = (state.equipment || []).find(candidate => candidate.id === placement.equipmentId);
-    if (equipment?.name) return equipment.name;
-  }
-  return getPlaceable(itemType)?.label || humaniseIdentifier(itemType);
-}
-
-function getMoveItem(state, fixture) {
-  const rect = getFixtureRect(state, fixture);
-  if (!rect) return null;
-
-  const item = { type: fixture.type, id: fixture.id, x: rect.x, y: rect.y };
-  const placementType = getFixturePlacementType(fixture);
-  if (getPlaceable(placementType)?.rotatable) {
-    item.rotation = fixture.data.rotation ?? 0;
-  }
-  return item;
-}
-
-function isRotatableMoveItem(state, item) {
-  const fixture = getFixture(state, item?.type, item?.id);
-  return Boolean(fixture && getPlaceable(getFixturePlacementType(fixture))?.rotatable);
-}
-
-function expandSelectedFixtures(state, selectedItems) {
-  return expandFurnitureSelection(state, selectedItems)
-    .map(item => getFixture(state, item.type, item.id))
-    .filter(Boolean)
-    .map(fixture => getMoveItem(state, fixture))
-    .filter(Boolean);
-}
-
-function buildCopyItems(state, originalItems, anchor, world) {
-  const primary = originalItems[0];
-  if (!primary || !anchor || !world) return originalItems.map(item => ({ ...item }));
-  const fixture = getFixture(state, primary.type, primary.id);
-  const placementType = fixture && getFixturePlacementType(fixture);
-  const target = placementType
-    ? snapPlacement(placementType, world, state, primary.rotation ?? 0)
-    : null;
-  if (!target) return originalItems.map(item => ({ ...item }));
-  const deltaX = target.x - anchor.x;
-  const deltaY = target.y - anchor.y;
-  return originalItems.map(item => ({
-    ...item,
-    x: item.type === 'door'
-      ? getRestaurantWorld(state.restaurant || {}).doorX
-      : item.x + deltaX,
-    y: item.y + deltaY,
-  }));
-}
+import {
+  buildPlacement,
+  getPlacementLabel,
+  samePlacement,
+} from './placementInteraction';
+import {
+  buildCopyItems,
+  buildMoveItems,
+  expandSelectedFixtures,
+  getFixturePlacementType,
+  getMoveItem,
+  isRotatableMoveItem,
+} from './fixtureTransforms';
 
 function copyValidation(state, items) {
   const eligibility = getFixtureCopyEligibility(state, items);
@@ -161,54 +93,6 @@ export function drawCopyPreview(ctx, state, camera, copy) {
       valid,
     });
   }
-}
-
-function snapMoveItem(state, item) {
-  const fixture = getFixture(state, item.type, item.id);
-  const placementType = fixture && getFixturePlacementType(fixture);
-  const placeable = getPlaceable(placementType);
-  if (!placeable) return item;
-
-  return {
-    ...item,
-    x: item.type === 'door'
-      ? getRestaurantWorld(state.restaurant || {}).doorX
-      : Math.round(item.x / placeable.grid) * placeable.grid,
-    y: Math.round(item.y / placeable.grid) * placeable.grid,
-  };
-}
-
-function buildMoveItems(state, originalItems, anchor, world) {
-  const deltaX = world.x - anchor.x;
-  const deltaY = world.y - anchor.y;
-  const snappedItems = originalItems.map(item => snapMoveItem(state, {
-    ...item,
-    x: item.x + deltaX,
-    y: item.y + deltaY,
-  }));
-  const tableDeltas = new Map();
-
-  originalItems.forEach((item, index) => {
-    if (item.type !== 'table') return;
-    const snapped = snappedItems[index];
-    tableDeltas.set(item.id, {
-      x: snapped.x - item.x,
-      y: snapped.y - item.y,
-    });
-  });
-
-  return snappedItems.map((item, index) => {
-    if (item.type !== 'chair') return item;
-    const original = originalItems[index];
-    const chair = getFixture(state, 'chair', original.id)?.data;
-    const tableDelta = tableDeltas.get(chair?.tableId);
-    if (!tableDelta) return item;
-    return {
-      ...item,
-      x: original.x + tableDelta.x,
-      y: original.y + tableDelta.y,
-    };
-  });
 }
 
 const PHYSICALLY_SEATED_CUSTOMER_STATES = new Set([
@@ -314,27 +198,16 @@ function sameStaffMove(first, second) {
     && first?.validation?.reason === second?.validation?.reason;
 }
 
-function canSellItem(state, item) {
-  if (item?.type === 'table') {
-    return (state.tables || []).some(table => table.id === item.id && table.status === 'empty');
-  }
-  if (item?.type === 'chair') {
-    const chair = (state.chairs || []).find(candidate => candidate.id === item.id);
-    const table = chair && (state.tables || []).find(candidate => candidate.id === chair.tableId);
-    return Boolean(chair && table?.status === 'empty'
-      && !(state.customers || []).some(customer => customer.chairId === item.id));
-  }
-  if (item?.type === 'washStation') {
-    const station = (state.washStations || []).find(candidate => candidate.id === item.id);
-    return Boolean(station?.type === 'automatic'
-      && !(state.serviceItems || []).some(serviceItem => serviceItem.washStationId === item.id
-        && ['queued_for_wash', 'washing'].includes(serviceItem.state)));
-  }
-  if (item?.type === 'staffAmenity') {
-    const amenity = (state.staffAmenities || []).find(candidate => candidate.id === item.id);
-    return Boolean(amenity && !isAmenityInUse(amenity));
-  }
-  return false;
+const CANVAS_SELL_TYPES = new Set([
+  'table',
+  'chair',
+  'washStation',
+  'staffAmenity',
+]);
+
+function canOfferFixtureSale(state, item) {
+  return CANVAS_SELL_TYPES.has(item?.type)
+    && getFixtureSaleEligibility(state, item).valid;
 }
 
 function formatNominalSeconds(seconds) {
@@ -560,20 +433,15 @@ export default function RestaurantCanvas({
     setMoveRevision(revision => revision + 1);
   }, [managementOpen]);
 
-  useEffect(() => {
-    let failed = Boolean(fault);
-    let animId = requestAnimationFrame(function loop(timeMs) {
-      try {
-        if (!failed) draw(timeMs);
-      } catch (error) {
-        failed = true;
-        reportFault(error, 'drawing');
-      } finally {
-        animId = requestAnimationFrame(loop);
-      }
-    });
-    return () => cancelAnimationFrame(animId);
-  }, [draw, fault, reportFault]);
+  useAnimationFrameLoop(timeMs => {
+    try {
+      draw(timeMs);
+      return true;
+    } catch (error) {
+      reportFault(error, 'drawing');
+      return false;
+    }
+  }, { enabled: !fault });
 
   // R key to rotate during move or placement
   useEffect(() => {
@@ -958,18 +826,19 @@ export default function RestaurantCanvas({
   };
 
   const handleSellSelected = () => {
-    const sellableItems = selectedItems.filter(item => canSellItem(state, item));
+    const sellableItems = selectedItems.filter(item => canOfferFixtureSale(state, item));
     if (sellableItems.length > 0) dispatch({ type: 'SELL_ITEMS', items: sellableItems });
     setSelectedItems([]);
   };
 
   const canMoveMenuEntity = Boolean(menu);
   const menuDoor = menu?.type === 'door' ? menu.data : null;
-  const canSellMenuEntity = Boolean(menu && canSellItem(state, {
+  const canSellMenuEntity = Boolean(menu && canOfferFixtureSale(state, {
     type: menu.type,
     id: menu.data.id,
   }));
-  const sellableSelectedItems = selectedItems.filter(item => canSellItem(state, item));
+  const sellableSelectedItems = selectedItems.filter(item =>
+    canOfferFixtureSale(state, item));
   const currentCopy = copyRef.current;
   const selectedDishwasher = menu?.type === 'washStation' && menu.data?.type === 'automatic'
     ? (state.washStations || []).find(station => station.id === menu.data.id) || menu.data

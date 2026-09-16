@@ -5,13 +5,14 @@ import { FIXED_STEP_SECONDS } from '../simulation/fixedStep';
 import { runTick } from '../simulation/gameLoop';
 
 let gameState;
+let generation;
 const dispatch = vi.fn();
 const frames = [];
 
 vi.mock('./GameContext', () => ({
   useGameState: () => gameState,
   useDispatch: () => dispatch,
-  useGameGeneration: () => 0,
+  useGameGeneration: () => generation,
 }));
 
 vi.mock('../simulation/gameLoop', () => ({
@@ -27,6 +28,7 @@ function Harness() {
 }
 
 beforeEach(() => {
+  generation = 0;
   gameState = {
     paused: false,
     speed: 1,
@@ -63,6 +65,25 @@ it('advances canonical state with one fixed timing object', () => {
     nextState: expect.objectContaining({ restaurant: { gameTime: 2 } }),
   });
   expect(screen.getByTestId('render-time')).toHaveTextContent('2');
+});
+
+it('stops scheduling after a tick fault and restarts after generation changes', () => {
+  const view = render(<SimulationRuntime><Harness /></SimulationRuntime>);
+  act(() => frames.shift()(0));
+
+  const fault = new Error('injected tick fault');
+  runTick.mockImplementationOnce(() => { throw fault; });
+  act(() => frames.shift()(FIXED_STEP_SECONDS * 1000));
+
+  expect(frames).toHaveLength(0);
+  expect(screen.getByRole('alert')).toBeInTheDocument();
+
+  generation += 1;
+  view.rerender(<SimulationRuntime><Harness /></SimulationRuntime>);
+
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(frames).toHaveLength(1);
+  view.unmount();
 });
 
 it('cancels its pending animation frame on unmount', () => {

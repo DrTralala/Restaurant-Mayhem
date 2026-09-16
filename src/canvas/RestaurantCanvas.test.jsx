@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import RestaurantCanvas from './RestaurantCanvas';
-import { drawCustomerLayer, drawFurnitureLayer, drawStaffLayer } from './layers';
+import { drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawStaffLayer } from './layers';
 import { calculateFitCamera } from './camera';
 import { useDispatch, useGameState } from '../state/GameContext';
-import { useRenderState } from '../state/SimulationRuntime';
+import { useRenderState, useRuntimeFault } from '../state/SimulationRuntime';
 import { findClickedEntity } from './interaction';
 import { getRestaurantWorld } from '../simulation/world';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
@@ -18,7 +18,7 @@ vi.mock('../state/GameContext', () => ({
 
 vi.mock('../state/SimulationRuntime', () => ({
   useRenderState: vi.fn(),
-  useRuntimeFault: () => ({ fault: null, reportFault: () => {} }),
+  useRuntimeFault: vi.fn(),
 }));
 
 vi.mock('./camera', () => ({
@@ -138,6 +138,7 @@ describe('RestaurantCanvas object movement', () => {
   beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    useRuntimeFault.mockReset().mockReturnValue({ fault: null, reportFault: vi.fn() });
     useGameState.mockReturnValue(state);
     useRenderState.mockImplementation(() => useGameState());
     useDispatch.mockReturnValue(vi.fn());
@@ -825,6 +826,25 @@ describe('RestaurantCanvas object movement', () => {
     );
   });
 
+  it('stops the draw loop after a drawing fault without requeueing a frame', () => {
+    const reportFault = vi.fn();
+    useRuntimeFault.mockReturnValue({ fault: null, reportFault });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { value: 600 });
+    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+
+    const fault = new Error('injected drawing fault');
+    drawFloorLayer.mockImplementationOnce(() => { throw fault; });
+    const frame = requestAnimationFrame.mock.calls[0][0];
+    act(() => frame(1250));
+
+    expect(reportFault).toHaveBeenCalledWith(fault, 'drawing');
+    expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+  });
+
   it('draws interpolated characters while retaining canonical interaction state', () => {
     const renderState = {
       ...state,
@@ -883,6 +903,31 @@ describe('RestaurantCanvas object movement', () => {
     expect(dispatch).toHaveBeenCalledWith({
       type: 'SELL_ITEMS',
       items: [{ type: 'table', id: 't1' }, { type: 'chair', id: 'ch1' }],
+    });
+  });
+
+  it('filters protected selected dishwashers through the canonical sale policy', () => {
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({
+      ...state,
+      tables: [{ id: 't1', seats: 2, x: 60, y: 60, status: 'empty' }],
+      chairs: [],
+      washStations: [{ id: 'auto', type: 'automatic', x: 110, y: 60 }],
+      serviceItems: [{ id: 'dirty', state: 'carried_dirty', reservedWashStationId: 'auto' }],
+    });
+    findClickedEntity.mockReturnValue(null);
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.mouseDown(canvas, { clientX: 10, clientY: 10, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 170, clientY: 130, buttons: 1 });
+    fireEvent.mouseUp(canvas, { clientX: 170, clientY: 130, button: 0 });
+    fireEvent.click(screen.getByRole('button', { name: 'Sell selected' }));
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SELL_ITEMS',
+      items: [{ type: 'table', id: 't1' }],
     });
   });
 
@@ -1170,6 +1215,47 @@ describe('RestaurantCanvas object movement', () => {
     fireEvent.click(container.querySelector('canvas'), { clientX: 30, clientY: 50 });
     expect(Boolean(screen.queryByRole('button', { name: /Move/ }))).toBe(moveVisible);
     expect(Boolean(screen.queryByRole('button', { name: 'Sell' }))).toBe(sellVisible);
+  });
+
+  it('hides Sell for a dishwasher with a carried-dirty reservation', () => {
+    const station = { id: 'auto', type: 'automatic', x: 20, y: 40, w: 40, h: 40 };
+    useGameState.mockReturnValue({
+      ...state,
+      washStations: [station],
+      serviceItems: [{ id: 'dirty', state: 'carried_dirty', reservedWashStationId: 'auto' }],
+    });
+    findClickedEntity.mockReturnValue({ type: 'washStation', data: station, text: 'Wash station' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 30, clientY: 50 });
+
+    expect(screen.queryByRole('button', { name: 'Sell' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['door', 'door', { id: 'door1', y: 340, role: 'entrance' }, 'Door · entrance'],
+    ['service counter', 'serviceTable', { id: 'st1', x: 140, y: 120 }, 'Service counter'],
+    ['cashier', 'cashierTable', { id: 'cashier1', x: 800, y: 120, w: 40, h: 40 }, 'Cashier'],
+  ])('does not expose Sell for a %s in the narrow canvas UI', (_label, type, data, label) => {
+    const collections = {
+      door: 'doors',
+      'serviceTable': 'serviceTables',
+      cashierTable: 'cashierStations',
+    };
+    useGameState.mockReturnValue({
+      ...state,
+      [collections[type]]: [data],
+    });
+    findClickedEntity.mockReturnValue({
+      type,
+      data,
+      text: label,
+    });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 30, clientY: 50 });
+
+    expect(screen.queryByRole('button', { name: 'Sell' })).not.toBeInTheDocument();
   });
 
   it('labels a wash-station context menu from the fixture catalogue', () => {

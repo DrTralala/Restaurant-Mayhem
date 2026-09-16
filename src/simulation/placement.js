@@ -18,6 +18,7 @@ import {
   createNavigationWorkspace,
 } from './movement/navigationWorkspace';
 import { GRID_SIZE, getCashierWorkPosition, getDoorPosition, getDoors, getRestaurantWorld } from './world';
+export { getNextNumericId, getNextNumericIds } from './placement/ids';
 
 function invalid(reason) {
   return { valid: false, reason };
@@ -582,20 +583,6 @@ export function validateFixtureMoves(state = {}, moves = []) {
   if (!resolveMovedChairRelationships(state, finalFixtures, normalisedMoves)) return invalid('chair-table');
 
   return { valid: true, reason: null, moves: normalisedMoves };
-}
-
-export function getNextNumericId(items, prefix) {
-  const idPrefix = String(prefix ?? '');
-  let highest = 0;
-  for (const item of Array.isArray(items) ? items : []) {
-    if (item?.id == null) continue;
-    const id = String(item.id);
-    if (!id.startsWith(idPrefix)) continue;
-    const suffix = id.slice(idPrefix.length);
-    if (!/^\d+$/.test(suffix)) continue;
-    highest = Math.max(highest, Number(suffix));
-  }
-  return `${idPrefix}${highest + 1}`;
 }
 
 function fixtureCopyKey(type, id) {
