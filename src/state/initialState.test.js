@@ -12,6 +12,13 @@ function rectanglesOverlap(first, second) {
 }
 
 describe('createInitialState', () => {
+  it('uses ordinary four-seat tables without adding starter furniture', () => {
+    const state = createInitialState();
+    expect(state.tables.map(table => table.seats)).toEqual([4, 4, 4, 4]);
+    expect(state.chairs).toHaveLength(12);
+    expect(state.tables.map(({ x, y }) => [x, y])).toEqual([[200, 200], [360, 200], [200, 360], [360, 360]]);
+  });
+
   it('starts the balanced economy with $600 and a $12 toast', () => {
     const state = createInitialState();
 

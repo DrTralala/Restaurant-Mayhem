@@ -3,6 +3,7 @@ import { getPlacementRect } from '../simulation/placement';
 import { getCharacterPalette } from './characterAppearance';
 import { getServiceItemEmoji } from './serviceItemEmoji';
 import { getPlaceSettingPositions } from './tableGeometry';
+import { getServiceCounterItemPosition } from './serviceCounterGeometry';
 import { getSeatedDisplayGeometry } from './seatedGeometry';
 import { getRemainingFraction } from '../simulation/activity';
 import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/dishwashing';
@@ -411,15 +412,9 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
     const spriteKey = table.status === 'dirty' ? 'tableDirty' : 'table';
     const drewSprite = drawSprite(ctx, sprites, spriteKey, tx, ty, 40, 40);
     if (!drewSprite) {
-      const tableColor = table.status === 'dirty' ? '#663333'
-        : table.status === 'occupied' ? '#4a6741' : '#6b5b3a';
+      const tableColor = table.status === 'dirty' ? '#663333' : '#6b5b3a';
       ctx.fillStyle = tableColor;
       ctx.fillRect(tx, ty, 40, 40);
-    } else if (table.status === 'occupied') {
-      ctx.save();
-      ctx.fillStyle = 'rgba(74,103,65,0.35)';
-      ctx.fillRect(tx, ty, 40, 40);
-      ctx.restore();
     }
   }
 
@@ -581,7 +576,13 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
       }
       continue;
     }
-    ctx.fillText(getServiceItemEmoji(item, state.dishes || []), item.x, item.y);
+    const counter = (state.serviceTables || []).find(candidate => candidate.id === item.serviceTableId);
+    const position = getServiceCounterItemPosition(counter, item.serviceSlotIndex) || item;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);
+    ctx.restore();
   }
 
   ctx.restore();
@@ -761,7 +762,8 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       reducedMotion: renderOptions.reducedMotion,
     });
     if (deciding) drawMenu(ctx, seatedGeometry.menu);
-    drawFoodPatienceMeter(ctx, cx - 7, cy - 28,
+    // Head radius plus half its stroke, then a three-unit gap and meter height.
+    drawFoodPatienceMeter(ctx, cx - 7, cy - 5 * (seated ? 0.7 : 1) - 3 - 3,
       getFoodPatienceFraction(c, state.restaurant?.gameTime));
     const consuming = c.state === 'eating'
       && (!c.navigationGoal || movement.plan === 'arrived');

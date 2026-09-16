@@ -57,6 +57,54 @@ function makeCollidingStationState() {
 }
 
 describe('moveFixtures', () => {
+  it.each(['checkout_queued', 'checkout_moving', 'leaving'])('does not reassign a chair still occupied by a %s customer', customerState => {
+    const state = makeState({
+      tables: [
+        { id: 't1', seats: 4, status: 'occupied', x: 200, y: 200, diningPartyId: 'p1', diningCustomerIds: ['c1'] },
+        { id: 't2', seats: 4, status: 'empty', x: 400, y: 200 },
+      ],
+      customers: [{ id: 'c1', partyId: 'p1', state: customerState, tableId: 't1', chairId: 'ch1', x: 220, y: 190 }],
+      serviceItems: [{ id: 'dish', customerId: 'c1', kind: 'dish', state: 'dirty_at_table', tableId: 't1', x: 208, y: 208 }],
+    });
+    const move = [{ type: 'chair', id: 'ch1', x: 410, y: 180, rotation: 2 }];
+    expect(moveFixtures(state, move)).toBe(state);
+    // Once the customer has left the chair, its old reference must not pin the furniture.
+    const cleared = { ...state, customers: [{ ...state.customers[0], x: 300, y: 300 }] };
+    const moved = moveFixtures(cleared, move);
+    expect(moved.chairs[0].tableId).toBe('t2');
+    expect(moved.customers[0]).toMatchObject({ tableId: 't1', x: 300, y: 300 });
+  });
+
+  it('does not transfer an occupied chair into another party reservation', () => {
+    const state = makeState({
+      tables: [
+        { id: 't1', seats: 4, status: 'occupied', x: 200, y: 200, diningPartyId: 'p1' },
+        { id: 't2', seats: 4, status: 'reserved', x: 400, y: 200, diningPartyId: 'p2' },
+      ],
+      customers: [{ id: 'c1', partyId: 'p1', state: 'eating', tableId: 't1', chairId: 'ch1', x: 220, y: 190 }],
+    });
+    expect(moveFixtures(state, [{ type: 'chair', id: 'ch1', x: 410, y: 180 }])).toBe(state);
+  });
+
+  it('transfers the chair, seated owner and meal to the destination table', () => {
+    const state = makeState({
+      tables: [
+        { id: 't1', seats: 4, status: 'occupied', x: 200, y: 200, diningPartyId: 'p1', diningCustomerIds: ['c1'] },
+        { id: 't2', seats: 4, status: 'empty', x: 400, y: 200 },
+      ],
+      customers: [{ id: 'c1', partyId: 'p1', state: 'eating', tableId: 't1', chairId: 'ch1', x: 220, y: 190 }],
+      serviceItems: [{ id: 'dish', customerId: 'c1', kind: 'dish', state: 'delivered', tableId: 't1', x: 208, y: 208 }],
+    });
+    const result = moveFixtures(state, [{ type: 'chair', id: 'ch1', x: 410, y: 180, rotation: 2 }]);
+    expect(result.chairs[0]).toMatchObject({ tableId: 't2', x: 410, y: 180 });
+    expect(result.customers[0]).toMatchObject({ tableId: 't2', chairId: 'ch1', x: 420, y: 190, state: 'eating' });
+    expect(result.serviceItems[0]).toMatchObject({ tableId: 't2', customerId: 'c1', x: 408, y: 208, state: 'delivered' });
+    expect(result.tables[0]).toMatchObject({ status: 'empty' });
+    expect(result.tables[0]).not.toHaveProperty('diningCustomerIds');
+    expect(result.tables[1]).toMatchObject({ status: 'occupied', diningCustomerIds: ['c1'], diningPartyId: 'p1' });
+    expect(state.customers[0].tableId).toBe('t1');
+  });
+
   it('moves a table, all linked chairs, and their seated customers by one delta', () => {
     const state = makeState({
       customers: [{

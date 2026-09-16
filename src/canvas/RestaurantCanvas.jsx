@@ -241,6 +241,7 @@ function applyMovePreview(renderState, state, move) {
         ...record,
         ...(item.type === 'door' ? {} : { x: item.x }),
         y: item.y,
+        ...(item.type === 'chair' && item.tableId != null ? { tableId: item.tableId } : {}),
         ...(Object.prototype.hasOwnProperty.call(item, 'rotation')
           ? { rotation: item.rotation }
           : {}),
@@ -258,6 +259,7 @@ function applyMovePreview(renderState, state, move) {
         x: item.x - (original?.x ?? chair?.x),
         y: item.y - (original?.y ?? chair?.y),
         tableId: chair?.tableId,
+        destinationTableId: item.tableId ?? chair?.tableId,
       }];
     }));
   if (Array.isArray(renderState?.customers) && chairDeltas.size > 0) {
@@ -267,6 +269,7 @@ function applyMovePreview(renderState, state, move) {
         || customer.tableId !== delta.tableId) return customer;
       return {
         ...customer,
+        tableId: delta.destinationTableId,
         ...(Number.isFinite(customer.x) ? { x: customer.x + delta.x } : {}),
         ...(Number.isFinite(customer.y) ? { y: customer.y + delta.y } : {}),
       };
@@ -600,6 +603,7 @@ export default function RestaurantCanvas({
         moving.originalItems = moving.originalItems.map(item => ({ ...item, rotation }));
         moving.items = moving.items.map(item => ({ ...item, rotation }));
         moving.validation = validateFixtureMoves(state, moving.items);
+        if (moving.validation.valid) moving.items = moving.validation.moves;
         setMoveRevision(revision => revision + 1);
       }
       if (e.key === 'Escape') {

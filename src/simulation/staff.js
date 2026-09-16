@@ -10,7 +10,6 @@ import { clearUnavailableCashierAssignments, getAssignedCashierStation } from '.
 import { getDrink, getResolvedDrink } from '../data/drinks';
 import { getPlaceableDimensions } from '../data/placeables';
 import {
-  allOrderedItemsDelivered,
   createCustomerOrder,
   findAvailableServiceSlot,
   getServiceSlotPosition,
@@ -2208,7 +2207,7 @@ function resolveTask({
       ? { x: table.x + 24, y: table.y + 8 }
       : { x: table.x + 8, y: table.y + 8 };
     const deliveredServiceItems = serviceItems.map((candidate, index) => index === itemIndex
-      ? { ...candidate, state: 'delivered', ...deliveredPosition }
+      ? { ...candidate, state: 'delivered', ...deliveredPosition, consumptionStartedAt: state.restaurant.gameTime }
       : candidate);
     const happiness = item.kind === 'dish'
       ? Math.min(100, (customer.happiness ?? 80) + happinessBonus)
@@ -2216,26 +2215,24 @@ function resolveTask({
     const deliveredCustomer = item.kind === 'dish'
       ? markFoodDelivered({ ...customer, happiness })
       : customer;
-    const started = allOrderedItemsDelivered(deliveredCustomer, deliveredServiceItems)
-      ? startCustomerConsumption(deliveredCustomer, deliveredServiceItems, state.restaurant.gameTime)
-      : null;
+    const started = startCustomerConsumption(deliveredCustomer, deliveredServiceItems, state.restaurant.gameTime);
     const nextCarriedIds = getCarriedServiceItemIds(staff).filter(id => id !== item.id);
     const nextStaff = withCarriedServiceItemIds(completedStaff, nextCarriedIds);
-    const nextServiceItems = started?.serviceItems ?? deliveredServiceItems;
+    const nextServiceItems = started.serviceItems;
     return {
       staff: continueCarriedTask(
         { ...state, staff: state.staff || [] },
         nextStaff,
         nextServiceItems,
         customers.map(candidate => candidate.id === customer.id
-          ? started?.customer ?? deliveredCustomer
+          ? started.customer
           : candidate),
         tables,
         state.staff,
       ),
-      queue, tables, serviceItems: started?.serviceItems ?? deliveredServiceItems,
+      queue, tables, serviceItems: started.serviceItems,
       customers: customers.map(candidate => candidate.id === customer.id
-        ? started?.customer ?? deliveredCustomer
+        ? started.customer
         : candidate),
     };
   }

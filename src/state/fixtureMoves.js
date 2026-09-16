@@ -12,6 +12,8 @@ import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
 import { createNavigationWorkspace } from '../simulation/movement/navigationWorkspace';
 import { reconcileFixtureResidencies } from '../simulation/movement/seatedDeparture';
 import { reconcileSelfSeatingState } from '../simulation/selfSeating';
+import { clearDiningOwnership } from '../simulation/tableLifecycle';
+import { getPartyKey } from '../simulation/partyReviews';
 
 const PHYSICALLY_SEATED_CUSTOMER_STATES = new Set([
   'seated',
@@ -79,6 +81,7 @@ function applyValidatedMoves(state, moves) {
         ...record,
         ...(move.type === 'door' ? {} : { x: move.x }),
         y: move.y,
+        ...(move.type === 'chair' ? { tableId: move.tableId } : {}),
         ...(Object.prototype.hasOwnProperty.call(move, 'rotation')
           ? { rotation: move.rotation }
           : {}),
@@ -136,6 +139,7 @@ export function moveFixtures(state, requestedMoves) {
     const fixture = getFixture(state, move.type, move.id).data;
     return (move.type !== 'door' && move.x !== fixture.x)
       || move.y !== fixture.y
+      || (move.type === 'chair' && move.tableId !== fixture.tableId)
       || (Object.prototype.hasOwnProperty.call(move, 'rotation')
         && move.rotation !== fixture.rotation);
   });
@@ -167,6 +171,7 @@ export function moveFixtures(state, requestedMoves) {
         x: move.x - chair.x,
         y: move.y - chair.y,
         tableId: chair.tableId,
+        destinationTableId: move.tableId,
       }];
     }));
   const affectedCustomerIds = new Set((state.customers || [])
@@ -206,6 +211,7 @@ export function moveFixtures(state, requestedMoves) {
       && customer.tableId === delta.tableId) {
       updated = cancelNavigation({
         ...updated,
+        tableId: delta.destinationTableId,
         ...(Number.isFinite(customer.x) ? { x: customer.x + delta.x } : {}),
         ...(Number.isFinite(customer.y) ? { y: customer.y + delta.y } : {}),
       });
@@ -223,6 +229,15 @@ export function moveFixtures(state, requestedMoves) {
   });
 
   next.serviceItems = (state.serviceItems || []).map(item => {
+    const owner = next.customers.find(customer => customer.id === item.customerId);
+    const priorOwner = (state.customers || []).find(customer => customer.id === item.customerId);
+    if (owner && affectedCustomerIds.has(owner.id) && owner.tableId !== priorOwner?.tableId) {
+      const table = next.tables.find(candidate => candidate.id === owner.tableId);
+      const priorTable = state.tables.find(candidate => candidate.id === priorOwner?.tableId);
+      item = { ...item, tableId: owner.tableId,
+        ...(['delivered', 'dirty_at_table'].includes(item.state) && table && priorTable
+          ? { x: item.x + table.x - priorTable.x, y: item.y + table.y - priorTable.y } : {}) };
+    }
     const cancelledPreparation = cancelledTasks.some(({ workerId, task }) =>
       task.type === 'prepare_dish'
       && task.serviceItemId === item.id
@@ -260,6 +275,27 @@ export function moveFixtures(state, requestedMoves) {
     }
     return item;
   });
+
+  const transfers = next.customers.filter(customer => affectedCustomerIds.has(customer.id)
+    && customer.tableId !== state.customers.find(prior => prior.id === customer.id)?.tableId);
+  if (transfers.length > 0) {
+    next.tables = next.tables.map(table => {
+      const departing = transfers.filter(customer => state.customers.find(prior => prior.id === customer.id)?.tableId === table.id);
+      const arriving = transfers.filter(customer => customer.tableId === table.id);
+      if (departing.length === 0 && arriving.length === 0) return table;
+      const ids = [...new Set([
+        ...(table.diningCustomerIds || []).filter(id => !departing.some(customer => customer.id === id)),
+        ...next.customers.filter(customer => customer.tableId === table.id
+          && PHYSICALLY_SEATED_CUSTOMER_STATES.has(customer.state)).map(customer => customer.id),
+      ])];
+      if (ids.length === 0) {
+        const dirty = next.serviceItems.some(item => item.tableId === table.id && ['dirty_at_table', 'to_clean'].includes(item.state));
+        return clearDiningOwnership(table, dirty ? 'dirty' : 'empty');
+      }
+      return { ...table, status: 'occupied', diningCustomerIds: ids,
+        diningPartyId: table.diningPartyId ?? getPartyKey(arriving[0]) };
+    });
+  }
 
   // Invalidate only the gate whose own door moved; an unrelated door edit must
   // leave the active crossing gate intact so reassessment stays per-door.

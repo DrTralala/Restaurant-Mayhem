@@ -170,6 +170,25 @@ describe('drawFloorLayer', () => {
   });
 });
 
+describe('food patience head spacing', () => {
+  it.each([[true, 1], [false, 1], [true, 2], [false, 2]])('keeps a three-unit gap (seated %s, zoom %s)', (seated, zoom) => {
+    const ctx = recordCtx();
+    drawCustomerLayer(ctx, {
+      restaurant: { gameTime: 25 },
+      tables: [{ id: 'table', x: 100, y: 100 }],
+      chairs: [{ id: 'chair', tableId: 'table', x: 110, y: 80 }],
+      customers: [{ id: 'customer', x: 120, y: 90, tableId: 'table', chairId: 'chair',
+        state: seated ? 'waiting_for_items' : 'entering',
+        foodOutcome: 'pending', foodOrderedAt: 0, foodPatienceBudget: 100, foodDeadlineAt: 100 }],
+    }, { x: 0, y: 0, zoom });
+    const meter = ctx._calls.rectColours.find(rect => rect.colour === '#5a2d20');
+    const headY = seated ? 85 : 86;
+    expect(meter.w).toBe(14 * zoom);
+    expect(meter.h).toBe(3 * zoom);
+    expect(meter.y + meter.h).toBeCloseTo((headY - 5 * (seated ? 0.7 : 1) - 3) * zoom);
+  });
+});
+
 describe('drawFurnitureLayer', () => {
   it('draws dining tables without visible numbering', () => {
     const ctx = recordCtx();
@@ -212,7 +231,7 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.texts.some(call => /^[↑→↓←]$/.test(call.text))).toBe(false);
   });
 
-  it('uses dirty table artwork without a red overlay and retains the occupied overlay', () => {
+  it('uses dirty and clean table artwork without occupancy or dirt overlays', () => {
     const ctx = recordCtx();
     const table = loadedSprite('table');
     const tableDirty = loadedSprite('tableDirty');
@@ -228,9 +247,7 @@ describe('drawFurnitureLayer', () => {
     }, { x: 0, y: 0, zoom: 1 }, { table, tableDirty, chair });
 
     expect(ctx._calls.images.map(call => call.image)).toEqual([tableDirty, table, chair]);
-    expect(ctx._calls.rectColours).toEqual([
-      expect.objectContaining({ x: 200, y: 100, w: 40, h: 40, colour: 'rgba(74,103,65,0.35)' }),
-    ]);
+    expect(ctx._calls.rectColours).toEqual([]);
     expect(ctx._calls.texts.some(call => /^[↑→↓←]$/.test(call.text))).toBe(false);
   });
 
@@ -245,6 +262,49 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.rectColours).toContainEqual({
       x: 100, y: 100, w: 40, h: 40, colour: '#663333',
     });
+  });
+
+  it('uses the same clean fallback for empty and occupied tables', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: ['empty', 'occupied'].map((status, i) => ({ id: status, status, x: i * 100, y: 100 })),
+      chairs: [], kitchenStations: [], serviceTables: [], serviceItems: [],
+    }, { x: 0, y: 0, zoom: 1 });
+    expect(ctx._calls.rectColours.map(rect => rect.colour)).toEqual(['#6b5b3a', '#6b5b3a']);
+  });
+
+  it.each([0, 1, 2, 3])('centres upright food and drink on counter worktop at rotation %s', rotation => {
+    const ctx = recordCtx();
+    const offsets = [
+      [[84, 24], [68, 24], [52, 24], [36, 24]],
+      [[16, 84], [16, 68], [16, 52], [16, 36]],
+      [[36, 16], [52, 16], [68, 16], [84, 16]],
+      [[24, 36], [24, 52], [24, 68], [24, 84]],
+    ];
+    const serviceItems = Array.from({ length: 4 }, (_, i) => ({
+      id: `item${i}`, kind: i % 2 ? 'drink' : 'dish', dishId: 'toast',
+      state: 'on_service', serviceTableId: 'counter', serviceSlotIndex: i, x: 110, y: 110,
+    }));
+    const before = structuredClone(serviceItems);
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [],
+      serviceTables: [{ id: 'counter', x: 100, y: 100, rotation }], serviceItems,
+      dishes: [{ id: 'toast', emoji: '🍞' }],
+    }, { x: 0, y: 0, zoom: 1 }, { serviceCounter: loadedSprite('counter') });
+    expect(ctx._calls.texts).toEqual(offsets[rotation].map(([x, y]) => expect.objectContaining({
+      x: 100 + x, y: 100 + y, textAlign: 'center', textBaseline: 'middle',
+    })));
+    expect(serviceItems).toEqual(before);
+  });
+
+  it.each([undefined, -1, 4, 1.5])('centres counter items at stored points for invalid slot %s', serviceSlotIndex => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [],
+      serviceTables: [{ id: 'counter', x: 100, y: 100 }],
+      serviceItems: [{ id: 'item', state: 'on_service', kind: 'drink', serviceTableId: 'counter', serviceSlotIndex, x: 115, y: 125 }],
+    }, { x: 0, y: 0, zoom: 1 }, { serviceCounter: loadedSprite('counter') });
+    expect(ctx._calls.texts).toEqual([expect.objectContaining({ x: 115, y: 125, textAlign: 'center', textBaseline: 'middle' })]);
   });
 
   it('rotates bare-station drinks dispenser artwork by 180 degrees', () => {

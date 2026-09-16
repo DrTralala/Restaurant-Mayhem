@@ -1,4 +1,5 @@
 import { getPlaceable, getPlaceableDimensions } from '../data/placeables';
+import { getPartyKey } from './partyReviews';
 import {
   createEmptyAmenitySlots,
   getAmenityGeometry,
@@ -397,24 +398,57 @@ function getFixturePlacementType(fixture) {
     : descriptor?.placementType;
 }
 
-function hasValidChairRelationships(state, fixtures) {
+function resolveMovedChairRelationships(state, fixtures, moves) {
   const tables = fixtures.filter(fixture => fixture.type === 'table');
   const chairs = fixtures.filter(fixture => fixture.type === 'chair');
+  const chairMoves = new Map(moves.filter(move => move.type === 'chair').map(move => [move.id, move]));
+  const movedTableIds = new Set(moves.filter(move => move.type === 'table').map(move => move.id));
+  const affectedTableIds = new Set(movedTableIds);
+  const arrivingParties = new Map();
+  const adjacentTo = (chair, table) => areAdjacent(getFixtureRect(state, chair), getFixtureRect(state, table));
+  const stationaryCount = table => chairs.filter(chair => !chairMoves.has(chair.id)
+    && chair.data.tableId === table.id).length;
+
+  // Resolve against the final geometry, reserving capacity for all movers together.
+  for (const chair of chairs.filter(candidate => chairMoves.has(candidate.id))) {
+    const candidates = tables.filter(table => adjacentTo(chair, table)
+      && Number.isFinite(table.data.seats) && stationaryCount(table) < table.data.seats);
+    if (candidates.length !== 1) return false;
+    const occupants = (state.customers || []).filter(customer => customer.chairId === chair.id
+      && ['seated', 'ordering', 'waiting_for_items', 'waiting_for_party', 'eating'].includes(customer.state));
+    const destination = candidates[0].data;
+    const originalChair = (state.chairs || []).find(candidate => candidate.id === chair.id);
+    // Departure authority belongs to the original seat: do not reassign it mid-exit.
+    if (destination.id !== chair.data.tableId && originalChair && (state.customers || []).some(customer =>
+      customer.chairId === chair.id && customer.tableId === chair.data.tableId
+      && ['checkout_queued', 'checkout_moving', 'leaving'].includes(customer.state)
+      && customer.x >= originalChair.x && customer.x < originalChair.x + 20
+      && customer.y >= originalChair.y && customer.y < originalChair.y + 20)) return false;
+    if (destination.id !== chair.data.tableId && occupants.some(customer =>
+      destination.status === 'reserved'
+      || (destination.diningPartyId != null && destination.diningPartyId !== getPartyKey(customer))
+      || (state.customers || []).some(other => other.id !== customer.id
+        && other.tableId === destination.id && getPartyKey(other) !== getPartyKey(customer)))) return false;
+    for (const customer of occupants) {
+      const partyId = getPartyKey(customer);
+      if (arrivingParties.has(destination.id) && arrivingParties.get(destination.id) !== partyId) return false;
+      arrivingParties.set(destination.id, partyId);
+    }
+    affectedTableIds.add(chair.data.tableId);
+    const tableId = candidates[0].id;
+    affectedTableIds.add(tableId);
+    chair.data.tableId = tableId;
+    chairMoves.get(chair.id).tableId = tableId;
+  }
 
   return chairs.every(chair => {
-    const chairRect = getFixtureRect(state, chair);
-    const adjacentTables = tables.filter(table => {
-      const tableRect = getFixtureRect(state, table);
-      return tableRect && areAdjacent(chairRect, tableRect);
-    });
-    const linkedTable = adjacentTables.length === 1
-      && adjacentTables[0].id === chair.data.tableId
-      ? adjacentTables[0]
-      : null;
-    if (!linkedTable || !Number.isFinite(linkedTable.data.seats)) return false;
-
-    return chairs.filter(candidate => candidate.data.tableId === linkedTable.id).length
-      <= linkedTable.data.seats;
+    const affected = chairMoves.has(chair.id) || affectedTableIds.has(chair.data.tableId)
+      || tables.some(table => movedTableIds.has(table.id) && adjacentTo(chair, table));
+    if (!affected) return true;
+    const candidates = tables.filter(table => adjacentTo(chair, table)
+      && Number.isFinite(table.data.seats)
+      && chairs.filter(other => other.id !== chair.id && other.data.tableId === table.id).length < table.data.seats);
+    return candidates.length === 1 && candidates[0].id === chair.data.tableId;
   });
 }
 
@@ -545,7 +579,7 @@ export function validateFixtureMoves(state = {}, moves = []) {
     }
   }
 
-  if (!hasValidChairRelationships(finalState, finalFixtures)) return invalid('chair-table');
+  if (!resolveMovedChairRelationships(state, finalFixtures, normalisedMoves)) return invalid('chair-table');
 
   return { valid: true, reason: null, moves: normalisedMoves };
 }

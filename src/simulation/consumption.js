@@ -30,31 +30,33 @@ export function startCustomerConsumption(customer, serviceItems, gameTime) {
   const cancelledIds = new Set((customer.cancelledServiceItemIds || []).map(id => String(id)));
   const orderedItems = serviceItems.filter(item =>
     item.customerId === customer.id
-      && item.state === 'delivered'
       && !item.foodCancelled
       && !cancelledIds.has(String(item.id)));
   const orderedServiceItemIds = uniqueIds([
     ...(Array.isArray(customer.orderedServiceItemIds) ? customer.orderedServiceItemIds : []),
     ...(customer.cancelledServiceItemIds || []),
+    ...(customer.consumedServiceItemIds || []),
     ...orderedItems.map(item => item.id),
   ]);
   const orderedIds = new Set(orderedServiceItemIds);
   const consumedServiceItemIds = (customer.consumedServiceItemIds || [])
     .filter(id => orderedIds.has(id) && !cancelledIds.has(String(id)));
-  const nextCustomer = orderedItems.some(item => item.kind === 'dish')
+  const deliveredItems = orderedItems.filter(item => item.state === 'delivered' && !isConsumedItem(item));
+  const deliveredIds = new Set(deliveredItems.map(item => item.id));
+  const nextCustomer = deliveredItems.some(item => item.kind === 'dish')
     ? markFoodDelivered(customer)
     : customer;
   return {
     customer: {
       ...nextCustomer,
-      state: 'eating',
-      eatTime: gameTime,
+      state: deliveredItems.length > 0 ? 'eating' : customer.state,
+      eatTime: Number.isFinite(customer.eatTime) ? customer.eatTime : gameTime,
       orderedServiceItemIds,
       consumedServiceItemIds,
     },
-    serviceItems: serviceItems.map(item => orderedIds.has(item.id)
-      ? { ...item, consumptionStartedAt: item.consumptionStartedAt ?? gameTime }
-      : item),
+    serviceItems: serviceItems.map(item => deliveredIds.has(item.id)
+      ? { ...item, consumptionStartedAt: Number.isFinite(item.consumptionStartedAt) ? item.consumptionStartedAt : gameTime }
+      : clearUndeliveredTimer(item)),
   };
 }
 
@@ -64,6 +66,12 @@ function isPhysicalItem(item) {
 
 function isConsumedItem(item) {
   return Number.isFinite(item.consumedAt) || DIRTY_STATES.has(item.state);
+}
+
+function clearUndeliveredTimer(item) {
+  if (itemWasDelivered(item) || !Object.prototype.hasOwnProperty.call(item, 'consumptionStartedAt')) return item;
+  const { consumptionStartedAt: _start, ...untimed } = item;
+  return untimed;
 }
 
 function uniqueIds(ids) {
@@ -94,10 +102,13 @@ export function normaliseConsumptionState(customers, serviceItems, gameTime) {
   const itemList = serviceItems || [];
   const normalisedItems = itemList.map(item => {
     const owner = customerList.find(customer => customer.id === item.customerId);
-    if (owner?.state !== 'eating' || !isPhysicalItem(item)
+    const untimed = clearUndeliveredTimer(item);
+    if (untimed !== item) return untimed;
+    if (!['eating', 'waiting_for_items'].includes(owner?.state) || item.state !== 'delivered'
+      || isConsumedItem(item) || isCancelledItem(owner, item)
       || Number.isFinite(item.consumptionStartedAt)) return item;
 
-    const consumptionStartedAt = Number.isFinite(owner.consumptionStartedAt)
+    const consumptionStartedAt = owner.state === 'eating' && Number.isFinite(owner.consumptionStartedAt)
       ? owner.consumptionStartedAt
       : gameTime;
     return consumptionStartedAt == null
@@ -106,16 +117,17 @@ export function normaliseConsumptionState(customers, serviceItems, gameTime) {
   });
 
   const normalisedCustomers = customerList.map(customer => {
-    if (customer.state !== 'eating' && !isCheckoutState(customer)
-      && customer.foodOutcome !== 'cancelled') return customer;
-
     const ownedItems = normalisedItems.filter(item => item.customerId === customer.id);
-    const physicalItems = ownedItems.filter(isPhysicalItem);
+    const hasDeliveredItem = ownedItems.some(item => item.state === 'delivered' && !isCancelledItem(customer, item));
+    const startsWaitingCustomer = customer.state === 'waiting_for_items' && hasDeliveredItem;
+    if (customer.state !== 'eating' && !isCheckoutState(customer)
+      && customer.foodOutcome !== 'cancelled' && !startsWaitingCustomer) return customer;
+
     const cancelledIds = new Set((customer.cancelledServiceItemIds || []).map(id => String(id)));
     const existingOrderedIds = Array.isArray(customer.orderedServiceItemIds)
       ? customer.orderedServiceItemIds
       : [];
-    const activePhysicalItems = physicalItems.filter(item =>
+    const activePhysicalItems = ownedItems.filter(item =>
       !item.foodCancelled && !cancelledIds.has(String(item.id)));
     const physicalIds = existingOrderedIds.length > 0
       ? activePhysicalItems.map(item => item.id)
@@ -123,6 +135,7 @@ export function normaliseConsumptionState(customers, serviceItems, gameTime) {
     const orderedServiceItemIds = uniqueIds([
       ...existingOrderedIds,
       ...physicalIds,
+      ...(customer.consumedServiceItemIds || []),
       ...(customer.cancelledServiceItemIds || []),
     ]);
     const orderedIds = new Set(orderedServiceItemIds);
@@ -143,6 +156,7 @@ export function normaliseConsumptionState(customers, serviceItems, gameTime) {
 
     const next = {
       ...customer,
+      ...(startsWaitingCustomer ? { state: 'eating', eatTime: Number.isFinite(customer.eatTime) ? customer.eatTime : gameTime } : {}),
       orderedServiceItemIds,
       consumedServiceItemIds,
     };
@@ -320,6 +334,7 @@ export function getCustomerConsumptionRemainingFraction(customer, serviceItems, 
 
   for (const item of normalised.serviceItems) {
     if (item.customerId !== customer.id
+      || item.state !== 'delivered'
       || consumedIds.has(item.id)
       || isConsumedItem(item)
       || isCancelledItem(normalisedCustomer, item)) continue;

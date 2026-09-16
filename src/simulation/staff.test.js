@@ -3083,7 +3083,7 @@ describe('updateStaff', () => {
     expect(result.customers[0]).toMatchObject({ state: 'eating', eatTime: 100 });
   });
 
-  it('marks a dish delivered before a pending drink completes the order', () => {
+  it.each([['dish', false], ['drink', false], ['dish', true], ['drink', true]])('starts consuming a delivered %s while the rest of the order and party are waiting (stale timers: %s)', (kind, staleTimers) => {
     const state = {
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 100 },
@@ -3094,25 +3094,31 @@ describe('updateStaff', () => {
       }],
       customers: [{
         id: 'c1', state: 'waiting_for_items', dishId: 'd1', drinkId: 'water', tableId: 't1',
+        partyId: 'p1', menuOutcome: 'ordered',
         foodOutcome: 'pending', foodDeadlineAt: 200,
-        orderedServiceItemIds: ['dish-item', 'drink-item'],
-      }],
+        orderedServiceItemIds: kind === 'dish' ? ['dish-item', 'drink-item'] : ['drink-item', 'dish-item'],
+      }, { id: 'c2', partyId: 'p1', menuOutcome: 'ordered', state: 'waiting_for_items', tableId: 't1', dishId: 'd1' }],
       tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
       serviceItems: [{
-        id: 'dish-item', kind: 'dish', menuItemId: 'd1', customerId: 'c1', tableId: 't1',
+        id: 'dish-item', kind, menuItemId: kind === 'dish' ? 'd1' : 'water', customerId: 'c1', tableId: 't1',
         state: 'carried',
+        ...(staleTimers ? { consumptionStartedAt: 5 } : {}),
       }, {
-        id: 'drink-item', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',
+        id: 'drink-item', kind: kind === 'dish' ? 'drink' : 'dish', menuItemId: kind === 'dish' ? 'water' : 'd1', customerId: 'c1', tableId: 't1',
         state: 'ordered',
+        ...(staleTimers ? { consumptionStartedAt: 5 } : {}),
       }],
     };
 
     const result = updateStaff(state, 0);
 
     expect(result.customers[0]).toMatchObject({
-      state: 'waiting_for_items', foodOutcome: 'delivered',
+      state: 'eating', foodOutcome: kind === 'dish' ? 'delivered' : 'pending',
     });
     expect(result.serviceItems[0].state).toBe('delivered');
+    expect(result.serviceItems[0].consumptionStartedAt).toBe(100);
+    expect(result.serviceItems[1]).not.toHaveProperty('consumptionStartedAt');
+    expect(result.customers[1].state).toBe('waiting_for_items');
   });
 
   it('adds dish quality, upgrade, and equipment quality only for a dish delivery', () => {
