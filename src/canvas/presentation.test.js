@@ -117,12 +117,12 @@ describe('canvas object labels', () => {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
 
-    drawObjectLabel(ctx, 'Kitchen station', { x: 100, y: 100, w: 40, h: 40 });
+    drawObjectLabel(ctx, 'Drinks Dispenser', { x: 100, y: 100, w: 40, h: 40 });
 
     expect(ctx._calls.rects).toEqual([]);
     expect(ctx._calls.saves).toBe(1);
     expect(ctx._calls.restores).toBe(1);
-    expect(ctx._calls.texts.map(call => call.text)).toEqual(['Kitchen', 'station']);
+    expect(ctx._calls.texts.map(call => call.text)).toEqual(['Drinks', 'Dispens', 'er']);
     expect(ctx._calls.texts.every(call => call.font.includes('9px'))).toBe(true);
     expect(ctx._calls.texts.every(call => call.textAlign === 'center')).toBe(true);
     expect(ctx._calls.texts.every(call => call.textBaseline === 'middle')).toBe(true);
@@ -179,7 +179,7 @@ describe('canvas fixture presentation', () => {
       ]));
   });
 
-  it('uses wrapped nine-pixel labels for kitchen stations and dishwashers without shrinking', () => {
+  it('uses wrapped nine-pixel labels for drinks dispensers and dishwashers without shrinking', () => {
     const ctx = makeContext();
     const state = baseState({
       kitchenStations: [{ id: 'k1', x: 100, y: 100, equipmentId: null }],
@@ -189,9 +189,9 @@ describe('canvas fixture presentation', () => {
     drawFurnitureLayer(ctx, state, camera);
 
     expect(ctx._calls.texts.map(call => call.text)).toEqual(expect.arrayContaining([
-      'Kitchen', 'station', 'Dish', 'washer',
+      'Drinks', 'Dispens', 'er', 'Dish', 'washer',
     ]));
-    const objectText = ctx._calls.texts.filter(call => ['Kitchen', 'station', 'Dish', 'washer'].includes(call.text));
+    const objectText = ctx._calls.texts.filter(call => ['Drinks', 'Dispens', 'er', 'Dish', 'washer'].includes(call.text));
     expect(objectText.every(call => call.font.includes('9px'))).toBe(true);
     expect(objectText.every(call => call.font.includes('5px') === false)).toBe(true);
   });

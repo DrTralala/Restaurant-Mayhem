@@ -130,7 +130,7 @@ const fixtureMovementCases = [
   ['door', 'door1', 'Door · entrance'],
   ['serviceTable', 'st1', 'Service counter'],
   ['cashierTable', 'cashier1', 'Cashier'],
-  ['kitchenStation', 'k1', 'Kitchen station'],
+  ['kitchenStation', 'k1', 'Drinks Dispenser'],
   ['washStation', 'wash1', 'Sink'],
 ];
 
@@ -296,7 +296,7 @@ describe('RestaurantCanvas object movement', () => {
     caseState.tables = [{ id: 't1', seats: 2, status: 'empty', x: 500, y: 300 }];
     useDispatch.mockReturnValue(dispatch);
     useGameState.mockReturnValue(caseState);
-    findClickedEntity.mockReturnValue({ type: 'kitchenStation', data: station, text: 'Kitchen station' });
+    findClickedEntity.mockReturnValue({ type: 'kitchenStation', data: station, text: 'Drinks Dispenser' });
     const { container } = render(<RestaurantCanvas managementOpen={false} />);
     const canvas = container.querySelector('canvas');
 

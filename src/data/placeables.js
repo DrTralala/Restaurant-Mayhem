@@ -48,7 +48,7 @@ export const PLACEABLES = {
   },
   kitchenStation: {
     type: 'kitchenStation',
-    label: 'Kitchen station',
+    label: 'Drinks Dispenser',
     price: null,
     width: 40,
     height: 40,

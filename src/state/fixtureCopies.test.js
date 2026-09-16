@@ -92,6 +92,18 @@ describe('fixture copy eligibility', () => {
     });
   });
 
+  it('names drinks dispensers in their copy restriction', () => {
+    const state = makeState({
+      kitchenStations: [{ id: 'k1', equipmentId: null, x: 100, y: 120 }],
+    });
+
+    expect(getFixtureCopyEligibility(state, [{ type: 'kitchenStation', id: 'k1' }])).toMatchObject({
+      valid: false,
+      reason: 'unpriced-kitchen-station',
+      message: 'Unpriced drinks dispensers cannot be copied.',
+    });
+  });
+
   it('reports an unknown fixture type separately from a stale source', () => {
     expect(getFixtureCopyEligibility(makeState(), [{ type: 'mystery', id: 'm1' }])).toMatchObject({
       valid: false, reason: 'unknown-fixture-type',
