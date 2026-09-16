@@ -1,6 +1,7 @@
 // CLI fixtures exercise schema/argument plumbing, not the real workload acceptance.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMovementMetrics, summariseMovementMetrics } from '../src/simulation/movementMetrics';
@@ -10,7 +11,7 @@ const directories = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 function rootFixture({ baseline = false, milliseconds = 1, overrides = {}, changing = false, missingHelper = false } = {}) {
-  const root = mkdtempSync('/tmp/opencode/task16-profile-');
+  const root = mkdtempSync(join(tmpdir(), 'task16-profile-'));
   directories.push(root);
   mkdirSync(join(root, 'src/simulation'), { recursive: true });
   const summary = baseline ? { batches: 900, batchMilliseconds: milliseconds, solverCalls: 42 }
