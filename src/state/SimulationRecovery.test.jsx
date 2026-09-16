@@ -82,7 +82,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(['tick', 'interpolation'])('latches a %s fault without killing the frame loop or committing the frame', phase => {
+it.each(['tick', 'interpolation'])('latches a %s fault without requeueing or committing the frame', phase => {
   const view = mount();
   frame(0);
   frame(34);
@@ -96,7 +96,7 @@ it.each(['tick', 'interpolation'])('latches a %s fault without killing the frame
   expect(alert).toHaveTextContent(/new game/);
   expect(alert).toHaveStyle({ fontFamily: FONT_FAMILY });
   expect(currentState.restaurant.gameTime).toBe(36002);
-  expect(frames.size).toBe(1);
+  expect(frames.size).toBe(0);
   expect(errorLog).toHaveBeenCalledTimes(1);
   expect(errorLog.mock.calls[0]).toContain(fault);
   const tickCount = runTick.mock.calls.length;
@@ -132,6 +132,9 @@ it.each([['New Game', 36000], ['Load', 42000], ['Reload same state', 36002]])(
     frame(10068);
     expect(screen.getByRole('alert')).toBeInTheDocument();
     expect(errorLog).toHaveBeenCalledTimes(2);
+    expect(frames.size).toBe(0);
+    fireEvent.click(screen.getByText(button));
+    expect(frames.size).toBe(1);
     view.unmount();
     expect(frames.size).toBe(0);
   },
@@ -144,6 +147,7 @@ it.each(['layer', 'context'])('reports a canvas %s fault once and draws again af
     .mockReturnValue({ scale: vi.fn(), fillText: vi.fn() });
   const view = mount(true);
   frame(0);
+  expect(frames.size).toBe(2);
   const fault = new Error('injected drawing fault');
   (source === 'layer' ? drawFloorLayer : context).mockImplementationOnce(() => { throw fault; });
   expect(() => frame(34)).not.toThrow();
@@ -151,6 +155,7 @@ it.each(['layer', 'context'])('reports a canvas %s fault once and draws again af
   const draws = drawFloorLayer.mock.calls.length;
   frame(68);
   expect(drawFloorLayer).toHaveBeenCalledTimes(draws);
+  expect(frames.size).toBe(0);
   expect(errorLog).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByText('New Game'));
   frame(1000);

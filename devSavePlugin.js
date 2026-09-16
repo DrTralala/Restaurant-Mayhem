@@ -1,6 +1,16 @@
 import path from 'node:path';
 import { promises as nodeFs } from 'node:fs';
 
+export const SAVE_BODY_LIMIT_BYTES = 5_000_000;
+
+class SaveApiError extends Error {
+  constructor(statusCode, message) {
+    super(message);
+    this.name = 'SaveApiError';
+    this.statusCode = statusCode;
+  }
+}
+
 export function formatSaveFilename(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -47,14 +57,46 @@ function sendJson(response, status, payload) {
 function readRequestBody(request) {
   return new Promise((resolve, reject) => {
     let body = '';
+    let bytes = 0;
+    let settled = false;
+
+    const fail = error => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
     request.setEncoding('utf8');
+
     request.on('data', chunk => {
+      if (settled) return;
+
+      bytes += Buffer.byteLength(chunk, 'utf8');
+      if (bytes > SAVE_BODY_LIMIT_BYTES) {
+        body = '';
+        fail(new SaveApiError(413, 'Save is too large'));
+        return;
+      }
+
       body += chunk;
-      if (body.length > 5_000_000) reject(new Error('Save is too large'));
     });
-    request.on('end', () => resolve(body));
-    request.on('error', reject);
+
+    request.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(body);
+    });
+
+    request.on('error', fail);
   });
+}
+
+function parseRequestJson(body) {
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new SaveApiError(400, 'Invalid JSON body');
+  }
 }
 
 export function repositorySavePlugin(rootDirectory = process.cwd()) {
@@ -66,7 +108,7 @@ export function repositorySavePlugin(rootDirectory = process.cwd()) {
       server.middlewares.use(async (request, response, next) => {
         try {
           if (request.method === 'POST' && request.url === '/api/saves') {
-            const state = JSON.parse(await readRequestBody(request));
+            const state = parseRequestJson(await readRequestBody(request));
             sendJson(response, 200, await store.save(state));
             return;
           }
@@ -77,7 +119,8 @@ export function repositorySavePlugin(rootDirectory = process.cwd()) {
           }
           next();
         } catch (error) {
-          sendJson(response, 500, { error: error.message });
+          const status = error instanceof SaveApiError ? error.statusCode : 500;
+          sendJson(response, status, { error: error.message });
         }
       });
     },

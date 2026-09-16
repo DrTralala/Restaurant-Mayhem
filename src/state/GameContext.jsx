@@ -1,21 +1,24 @@
 import { createContext, useContext, useReducer, useEffect, useRef } from 'react';
 import { createInitialState } from './initialState';
 import { hydrateState, loadState, saveState } from './persistence';
-import { ITEM_PRICES, ITEM_SELL_RATIO } from '../data/items';
-import { getFixture, getFixtureDescriptor } from '../data/fixtures';
-import { createEmptyAmenitySlots, isAmenityInUse } from '../data/staffAmenities';
+import { ITEM_PRICES } from '../data/items';
+import { createEmptyAmenitySlots } from '../data/staffAmenities';
 import { getDrink, getResolvedDrink, normaliseDrinkOverrides } from '../data/drinks';
 import { getPlaceable } from '../data/placeables';
 import { getEquipmentLevelMultipliers } from '../data/equipment';
 import { clampReputation } from '../simulation/balance';
 import { assignWaiterToStation } from '../simulation/cashiers';
-import { getNextNumericId, snapPlacement, validatePlacement } from '../simulation/placement';
+import {
+  getNextNumericId,
+  getNextNumericIds,
+  snapPlacement,
+  validatePlacement,
+} from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
-import { getOccupiedServiceSlotKeys } from '../simulation/serviceItems';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseOperatingHour } from '../simulation/clock';
 import { getStaffTrainingCost, STAFF_SALARIES } from '../simulation/staffProgression';
-import { getWashStationOccupancy, updateAutomaticDishwashers } from '../simulation/dishwashing';
+import { updateAutomaticDishwashers } from '../simulation/dishwashing';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { createStaffDutyDefaults, validateStaffSchedule } from '../simulation/staffSchedules';
 import {
@@ -29,6 +32,7 @@ import { releaseAmenitySlot } from '../simulation/staffWellbeing';
 import { copyFixtures } from './fixtureCopies';
 import { moveFixtures } from './fixtureMoves';
 import { invalidateMovementRuntime, moveStaff } from './staffMoves';
+import { getFixtureSaleEligibility, sellFixtures } from './fixtureSales';
 
 const DISH_QUALITY_COST = 50;
 const BONUS_COST = 50;
@@ -48,137 +52,6 @@ function getCataloguePrice(itemType, fallback = null) {
 
 function sameId(left, right) {
   return left != null && right != null && String(left) === String(right);
-}
-
-function getFixtureSalePrice(fixture) {
-  const descriptor = getFixtureDescriptor(fixture?.type);
-  const placementType = typeof descriptor?.placementType === 'function'
-    ? descriptor.placementType(fixture?.data)
-    : descriptor?.placementType;
-  return getCataloguePrice(placementType, getPlaceable(placementType)?.price);
-}
-
-function isWashStationSaleSafe(state, station) {
-  return station?.type === 'automatic'
-    && getWashStationOccupancy(state, station) === 0;
-}
-
-function isServiceTableSaleSafe(state, table) {
-  const prefix = `${String(table.id)}:`;
-  return ![...getOccupiedServiceSlotKeys(state)].some(key => key.startsWith(prefix));
-}
-
-function isCashierSaleSafe(state, station) {
-  return !(state.staff || []).some(worker => worker.task?.type === 'take_payment'
-    && sameId(worker.task.stationId, station.id))
-    && !(state.customers || []).some(customer => sameId(customer.cashierStationId, station.id)
-      && ['checkout_moving', 'checkout_processing', 'checkout_queued'].includes(customer.state));
-}
-
-function isDoorSaleSafe(state, door) {
-  const doorId = door?.id;
-  if (doorId == null) return false;
-  const activeActors = [
-    ...(state.customers || []),
-    ...(state.queue || []).flatMap(party => party?.members || []),
-  ];
-  if (activeActors.some(actor => actor.state === 'entering'
-    && sameId(actor.entryDoorId, doorId))) return false;
-  if (activeActors.some(actor => actor.state === 'leaving'
-    && sameId(actor.exitDoorId, doorId) && actor.exitPhase !== 'fading')) return false;
-  if (sameId(state.queueAdmissionGate?.doorId, doorId)) return false;
-  const requests = state.doorAdmissions?.requests;
-  return !Object.values(requests || {}).some(request => sameId(request?.doorId, doorId));
-}
-
-function isFixtureSaleSafe(state, fixture) {
-  const data = fixture?.data;
-  if (!data) return false;
-  if (fixture.type === 'table') return data.status === 'empty';
-  if (fixture.type === 'chair') {
-    const table = (state.tables || []).find(candidate => sameId(candidate.id, data.tableId));
-    return table?.status === 'empty'
-      && !(state.customers || []).some(customer => sameId(customer.chairId, data.id));
-  }
-  if (fixture.type === 'washStation') return isWashStationSaleSafe(state, data);
-  if (fixture.type === 'staffAmenity') return !isAmenityInUse(data);
-  if (fixture.type === 'serviceTable') return isServiceTableSaleSafe(state, data);
-  if (fixture.type === 'cashierTable') return isCashierSaleSafe(state, data);
-  return fixture.type === 'door' && isDoorSaleSafe(state, data);
-}
-
-function getSaleSelection(state, requestedItems) {
-  if (!Array.isArray(requestedItems) || requestedItems.length === 0) return null;
-
-  const seen = new Set();
-  const fixtures = [];
-  for (const item of requestedItems) {
-    if (!item || item.type == null || item.id == null) return null;
-    const key = `${item.type}:${String(item.id)}`;
-    if (seen.has(key)) return null;
-    seen.add(key);
-    const fixture = getFixture(state, item.type, item.id);
-    if (!fixture || getFixtureSalePrice(fixture) == null || !isFixtureSaleSafe(state, fixture)) {
-      return null;
-    }
-    fixtures.push(fixture);
-  }
-
-  const selectedTables = new Set(fixtures
-    .filter(fixture => fixture.type === 'table')
-    .map(fixture => fixture.id));
-  const selectedChairs = new Set(fixtures
-    .filter(fixture => fixture.type === 'chair')
-    .map(fixture => fixture.id));
-  const removedChairs = new Set(selectedChairs);
-  for (const chair of state.chairs || []) {
-    if (selectedTables.has(chair.tableId)) removedChairs.add(chair.id);
-  }
-
-  let refundBase = 0;
-  for (const fixture of fixtures) {
-    if (fixture.type === 'table') refundBase += ITEM_PRICES.table;
-    else if (fixture.type === 'chair' && selectedTables.has(fixture.data.tableId)) continue;
-    else refundBase += getFixtureSalePrice(fixture);
-  }
-  for (const chair of state.chairs || []) {
-    if (selectedTables.has(chair.tableId)
-      && !fixtures.some(fixture => fixture.type === 'chair' && fixture.id === chair.id)) {
-      refundBase += ITEM_PRICES.chair;
-    }
-  }
-
-  return {
-    fixtures,
-    selectedTables,
-    removedChairs,
-    refund: Math.round(refundBase * ITEM_SELL_RATIO),
-  };
-}
-
-function sellFixtures(state, requestedItems) {
-  const selection = getSaleSelection(state, requestedItems);
-  if (!selection) return state;
-
-  const selectedByType = new Map();
-  for (const fixture of selection.fixtures) {
-    const ids = selectedByType.get(fixture.type) || new Set();
-    ids.add(fixture.id);
-    selectedByType.set(fixture.type, ids);
-  }
-  const remove = (type, record) => selectedByType.get(type)?.has(record.id);
-
-  return {
-    ...state,
-    restaurant: { ...state.restaurant, funds: state.restaurant.funds + selection.refund },
-    tables: (state.tables || []).filter(table => !selection.selectedTables.has(table.id)),
-    chairs: (state.chairs || []).filter(chair => !selection.removedChairs.has(chair.id)),
-    doors: (state.doors || []).filter(door => !remove('door', door)),
-    serviceTables: (state.serviceTables || []).filter(table => !remove('serviceTable', table)),
-    cashierStations: (state.cashierStations || []).filter(station => !remove('cashierTable', station)),
-    washStations: (state.washStations || []).filter(station => !remove('washStation', station)),
-    staffAmenities: (state.staffAmenities || []).filter(amenity => !remove('staffAmenity', amenity)),
-  };
 }
 
 function taskServiceItemIds(state, worker) {
@@ -204,6 +77,55 @@ function progressStartForItem(item, task, fallback) {
     ?? task?.washingStartedAt
     ?? task?.startedAt
     ?? fallback;
+}
+
+function orderedGridValues(minimum, maximum, grid, preferred) {
+  const values = [];
+  const first = Math.ceil(minimum / grid) * grid;
+  const last = Math.floor(maximum / grid) * grid;
+  for (let value = first; value <= last; value += grid) values.push(value);
+
+  const preferredIndex = values.indexOf(preferred);
+  if (preferredIndex < 0) return values;
+  return [...values.slice(preferredIndex), ...values.slice(0, preferredIndex)];
+}
+
+function getExpansionStationPlacement(state, expansionLevel) {
+  const item = getPlaceable('kitchenStation');
+  const stations = Array.isArray(state.kitchenStations) ? state.kitchenStations : [];
+  const expandedState = {
+    ...state,
+    restaurant: { ...state.restaurant, expansionLevel },
+  };
+  const world = getRestaurantWorld(expandedState.restaurant);
+  const preferred = snapPlacement('kitchenStation', {
+    x: world.floorX + stations.length * 100,
+    y: world.diningY + 20,
+  }, expandedState);
+  if (!item || !preferred) return null;
+
+  const xValues = orderedGridValues(
+    world.floorX,
+    world.floorX + world.floorW - item.width,
+    item.grid,
+    preferred.x,
+  );
+  const yValues = orderedGridValues(
+    world.diningY,
+    world.kitchenY + world.floorH - item.height,
+    item.grid,
+    preferred.y,
+  );
+
+  for (const y of yValues) {
+    for (const x of xValues) {
+      const result = validatePlacement(expandedState, {
+        itemType: 'kitchenStation', x, y,
+      });
+      if (result.valid) return { x, y };
+    }
+  }
+  return null;
 }
 
 // The lifecycle module exposes release semantics for turnover, while the
@@ -771,24 +693,20 @@ function gameReducer(state, action) {
       };
     }
     case 'ADD_TABLE': {
-      const newId = `t${state.tables.length + 1}`;
+      const newId = getNextNumericId(state.tables, 't');
       const count = state.tables.length;
       const col = count % 2;
       const row = Math.floor(count / 2);
       const tx = 200 + col * 200;
       const ty = 200 + row * 200;
       const seats = 4;
-      const chairIdBase = state.chairs.length + 1;
+      const chairIds = getNextNumericIds(state.chairs, 'ch', 4);
       const newChairs = [
-        { id: `ch${chairIdBase}`, tableId: newId, x: tx + 10, y: ty - 20, rotation: 2 },
-        { id: `ch${chairIdBase + 1}`, tableId: newId, x: tx + 10, y: ty + 40, rotation: 0 },
+        { id: chairIds[0], tableId: newId, x: tx + 10, y: ty - 20, rotation: 2 },
+        { id: chairIds[1], tableId: newId, x: tx + 10, y: ty + 40, rotation: 0 },
+        { id: chairIds[2], tableId: newId, x: tx - 20, y: ty + 10, rotation: 1 },
+        { id: chairIds[3], tableId: newId, x: tx + 40, y: ty + 10, rotation: 3 },
       ];
-      if (seats >= 4) {
-        newChairs.push(
-          { id: `ch${chairIdBase + 2}`, tableId: newId, x: tx - 20, y: ty + 10, rotation: 1 },
-          { id: `ch${chairIdBase + 3}`, tableId: newId, x: tx + 40, y: ty + 10, rotation: 3 },
-        );
-      }
       return {
         ...state,
         tables: [...state.tables, { id: newId, seats, status: 'empty', x: tx, y: ty }],
@@ -837,14 +755,14 @@ function gameReducer(state, action) {
         { type: 'washStation', id: action.id, x: action.x, y: action.y },
       ]);
     case 'DELETE_TABLE':
-      if (!isFixtureSaleSafe(state, getFixture(state, 'table', action.id))) return state;
+      if (!getFixtureSaleEligibility(state, { type: 'table', id: action.id }).valid) return state;
       return {
         ...state,
         tables: state.tables.filter(t => t.id !== action.id),
         chairs: state.chairs.filter(ch => ch.tableId !== action.id),
       };
     case 'DELETE_CHAIR':
-      if (!isFixtureSaleSafe(state, getFixture(state, 'chair', action.id))) return state;
+      if (!getFixtureSaleEligibility(state, { type: 'chair', id: action.id }).valid) return state;
       return {
         ...state,
         chairs: state.chairs.filter(ch => ch.id !== action.id),
@@ -866,10 +784,9 @@ function gameReducer(state, action) {
         },
       ]);
     case 'DELETE_SERVICE_TABLE': {
-      const serviceTable = state.serviceTables.find(table => table.id === action.id);
-      if (!isFixtureSaleSafe(state, serviceTable
-        ? { type: 'serviceTable', id: serviceTable.id, data: serviceTable }
-        : null)) return state;
+      if (!getFixtureSaleEligibility(state, {
+        type: 'serviceTable', id: action.id,
+      }).valid) return state;
       return {
         ...state,
         serviceTables: state.serviceTables.filter(st => st.id !== action.id),
@@ -881,7 +798,9 @@ function gameReducer(state, action) {
       if (!Number.isInteger(level) || level < 1 || cost == null || !canAfford(state, cost)) return state;
       const newLevel = state.restaurant.expansionLevel + 1;
       // Add a new kitchen station when expanding
-      const newStationId = `k${state.kitchenStations.length + 1}`;
+      const newStationId = getNextNumericId(state.kitchenStations, 'k');
+      const placement = getExpansionStationPlacement(state, newLevel);
+      if (!placement) return state;
       return {
         ...state,
         restaurant: {
@@ -892,8 +811,7 @@ function gameReducer(state, action) {
         kitchenStations: [...state.kitchenStations, {
           id: newStationId,
           equipmentId: null,
-          x: 50 + state.kitchenStations.length * 100,
-          y: 120,
+          ...placement,
         }],
       };
     }

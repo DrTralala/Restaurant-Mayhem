@@ -1,9 +1,10 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { advanceFixedStep } from '../simulation/fixedStep';
 import { runTick } from '../simulation/gameLoop';
 import { interpolateSimulationState } from '../canvas/interpolation';
 import { useDispatch, useGameGeneration, useGameState } from './GameContext';
 import { TYPOGRAPHY } from '../typography';
+import { useAnimationFrameLoop } from '../hooks/useAnimationFrameLoop';
 
 const RenderStateContext = createContext(null);
 const RuntimeFaultContext = createContext({ fault: null, reportFault: () => {} });
@@ -56,43 +57,45 @@ export default function SimulationRuntime({ children }) {
     }
   }, [state, generation]);
 
-  useEffect(() => {
-    let frameId;
-    const frame = timestamp => {
-      let phase = 'simulation';
-      try {
-        if (faultRef.current) return;
-        const previousTimestamp = lastTimestampRef.current;
-        lastTimestampRef.current = timestamp;
-        const elapsedSeconds = previousTimestamp == null ? 0 : (timestamp - previousTimestamp) / 1000;
-        const result = advanceFixedStep({
-          state: canonicalRef.current,
-          previousState: previousRef.current,
-          accumulator: accumulatorRef.current,
-          elapsedSeconds,
-        }, runTick, { now: () => performance.now(), maxWorkMs: 8 });
+  useAnimationFrameLoop(timestamp => {
+    let phase = 'simulation';
+    try {
+      if (faultRef.current) return false;
 
-        phase = 'interpolation';
-        const interpolated = interpolateSimulationState(result.previousState, result.state, result.alpha);
+      const previousTimestamp = lastTimestampRef.current;
+      lastTimestampRef.current = timestamp;
+      const elapsedSeconds = previousTimestamp == null
+        ? 0
+        : (timestamp - previousTimestamp) / 1000;
 
-        canonicalRef.current = result.state;
-        previousRef.current = result.previousState;
-        accumulatorRef.current = result.accumulator;
-        if (result.steps > 0) {
-          lastRuntimeStateRef.current = result.state;
-          dispatch({ type: 'TICK', nextState: result.state });
-        }
-        setRenderState(interpolated);
-      } catch (error) {
-        reportFault(error, phase);
-      } finally {
-        frameId = requestAnimationFrame(frame);
+      const result = advanceFixedStep({
+        state: canonicalRef.current,
+        previousState: previousRef.current,
+        accumulator: accumulatorRef.current,
+        elapsedSeconds,
+      }, runTick, { now: () => performance.now(), maxWorkMs: 8 });
+
+      phase = 'interpolation';
+      const interpolated = interpolateSimulationState(
+        result.previousState,
+        result.state,
+        result.alpha,
+      );
+
+      canonicalRef.current = result.state;
+      previousRef.current = result.previousState;
+      accumulatorRef.current = result.accumulator;
+      if (result.steps > 0) {
+        lastRuntimeStateRef.current = result.state;
+        dispatch({ type: 'TICK', nextState: result.state });
       }
-    };
-
-    frameId = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(frameId);
-  }, [dispatch, reportFault]);
+      setRenderState(interpolated);
+      return true;
+    } catch (error) {
+      reportFault(error, phase);
+      return false;
+    }
+  }, { enabled: !fault });
 
   return <RuntimeFaultContext.Provider value={faultContext}>
     <RenderStateContext.Provider value={renderState}>
