@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { expireFoodPatience, getFoodPatienceFraction } from './foodPatience';
 import {
   advanceConsumption,
   getItemConsumptionDuration,
@@ -11,6 +12,82 @@ const items = [
   { id: 'dish', kind: 'dish', customerId: 'c1', tableId: 't1', state: 'delivered' },
   { id: 'drink', kind: 'drink', customerId: 'c1', tableId: 't1', state: 'delivered' },
 ];
+
+it.each(['dish', 'drink'])('consumes a %s before the other item arrives without premature checkout', kind => {
+  const otherKind = kind === 'dish' ? 'drink' : 'dish';
+  const started = startCustomerConsumption(
+    { id: 'c1', state: 'waiting_for_items', dishId: 'toast', drinkId: 'water', foodOutcome: 'pending' },
+    items.map(item => ({ ...item, state: item.kind === kind ? 'delivered' : 'ordered' })), 100,
+  );
+  expect(started.customer.orderedServiceItemIds).toEqual(['dish', 'drink']);
+  expect(started.serviceItems.find(item => item.kind === kind).consumptionStartedAt).toBe(100);
+  expect(started.serviceItems.find(item => item.kind === otherKind)).not.toHaveProperty('consumptionStartedAt');
+  expect(started.customer.foodOutcome).toBe(kind === 'dish' ? 'delivered' : 'pending');
+  const finishedAt = 100 + getItemConsumptionDuration(kind);
+  const finished = advanceConsumption({ customers: [started.customer], serviceItems: started.serviceItems, restaurant: { gameTime: finishedAt } });
+  expect(finished.customers[0]).toMatchObject({ state: 'eating', consumedServiceItemIds: [kind] });
+  expect(finished.serviceItems.find(item => item.kind === kind).state).toBe('dirty_at_table');
+  // Cleaning removes the early item; delivery must retain its completed ledger.
+  const later = startCustomerConsumption(finished.customers[0],
+    finished.serviceItems.filter(item => item.kind === otherKind).map(item => ({ ...item, state: 'delivered' })), finishedAt + 10);
+  expect(later.customer).toMatchObject({ eatTime: 100, orderedServiceItemIds: ['dish', 'drink'], consumedServiceItemIds: [kind] });
+  expect(later.serviceItems[0].consumptionStartedAt).toBe(finishedAt + 10);
+  expect(advanceConsumption({ customers: [later.customer], serviceItems: later.serviceItems,
+    restaurant: { gameTime: finishedAt + 10 + getItemConsumptionDuration(otherKind) } }).customers[0].state).toBe('checkout_queued');
+});
+
+it('starts only newly delivered timers while another item is still being consumed', () => {
+  const result = startCustomerConsumption({ id: 'c1', state: 'eating', eatTime: 10 }, [
+    { ...items[0], consumptionStartedAt: 10 }, items[1],
+  ], 100);
+  expect(result.serviceItems.map(item => item.consumptionStartedAt)).toEqual([10, 100]);
+  expect(result.customer.eatTime).toBe(10);
+});
+
+it('repairs waiting saved customers with delivered items but never times undelivered items', () => {
+  const result = normaliseConsumptionState([
+    { id: 'c1', state: 'waiting_for_items', foodOutcome: 'pending', dishId: 'toast', drinkId: 'water' },
+  ], [
+    { ...items[0], state: 'on_service', consumptionStartedAt: 5 }, items[1],
+  ], 100);
+  expect(result.customers[0]).toMatchObject({ state: 'eating', foodOutcome: 'pending', orderedServiceItemIds: ['dish', 'drink'] });
+  expect(result.serviceItems[0]).not.toHaveProperty('consumptionStartedAt');
+  expect(result.serviceItems[1].consumptionStartedAt).toBe(100);
+  expect(normaliseConsumptionState(result.customers, result.serviceItems, 200)).toEqual(result);
+});
+
+it.each(['ordered', 'preparing', 'ready', 'on_service', 'carried'])('does not show consumption progress for %s items', state => {
+  expect(getCustomerConsumptionRemainingFraction({ id: 'c1', state: 'eating' },
+    [{ ...items[0], state, consumptionStartedAt: 100 }], 120)).toBeNull();
+});
+
+it('lets party members consume arrivals independently but coordinates checkout', () => {
+  const customers = ['c1', 'c2'].map(id => ({ id, partyId: 'p1', menuOutcome: 'ordered', state: 'waiting_for_items', drinkId: 'water' }));
+  const serviceItems = customers.map((customer, index) => ({ id: `drink${index}`, kind: 'drink', customerId: customer.id,
+    state: index === 0 ? 'delivered' : 'ordered' }));
+  const started = advanceConsumption({ customers, serviceItems, restaurant: { gameTime: 0 } });
+  const earlyFinished = advanceConsumption({ ...started, restaurant: { gameTime: 180 } });
+  expect(earlyFinished.serviceItems[0].state).toBe('dirty_at_table');
+  expect(earlyFinished.customers.map(customer => customer.state)).toEqual(['eating', 'waiting_for_items']);
+  const secondStarted = advanceConsumption({ ...earlyFinished,
+    serviceItems: earlyFinished.serviceItems.map(item => item.id === 'drink1' ? { ...item, state: 'delivered' } : item),
+    restaurant: { gameTime: 200 } });
+  expect(secondStarted.customers.map(customer => customer.state)).toEqual(['eating', 'eating']);
+  const finished = advanceConsumption({ ...secondStarted, restaurant: { gameTime: 380 } });
+  expect(finished.customers.map(customer => customer.state)).toEqual(['checkout_queued', 'checkout_queued']);
+});
+
+it('keeps food patience active while drinking and after the drink is finished', () => {
+  const started = startCustomerConsumption({ id: 'c1', state: 'waiting_for_items', dishId: 'toast', drinkId: 'water',
+    foodOutcome: 'pending', foodOrderedAt: 0, foodPatienceBudget: 300, foodDeadlineAt: 300 },
+  items.map(item => ({ ...item, state: item.kind === 'dish' ? 'ordered' : 'delivered' })), 0);
+  const drinking = { customers: [started.customer], serviceItems: started.serviceItems, restaurant: { gameTime: 180 } };
+  const finished = advanceConsumption(drinking);
+  expect(finished.customers[0].state).toBe('eating');
+  expect(getFoodPatienceFraction(finished.customers[0], 180)).toBe(0.4);
+  const expired = expireFoodPatience({ ...finished, restaurant: { gameTime: 300 } });
+  expect(expired.customers[0]).toMatchObject({ foodOutcome: 'cancelled', cancelledServiceItemIds: ['dish'], consumedServiceItemIds: ['drink'] });
+});
 
 it('starts every delivered order item together and records exact IDs', () => {
   const started = startCustomerConsumption(

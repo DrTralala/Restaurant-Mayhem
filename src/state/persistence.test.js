@@ -15,6 +15,42 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+it('normalises legacy two-seat tables regardless of ID without changing their other properties', () => {
+  const fresh = createInitialState();
+  const saved = {
+    ...fresh,
+    tables: fresh.tables.map((table, index) => ({ ...table, seats: 2,
+      id: index === 0 ? 'custom-table' : table.id, status: index === 0 ? 'dirty' : table.status })),
+    chairs: fresh.chairs.map(chair => chair.tableId === 't1' ? { ...chair, tableId: 'custom-table' } : chair),
+  };
+  const hydrated = hydrateState(saved, fresh);
+  expect(hydrated.tables).toEqual(saved.tables.map(table => ({ ...table, seats: 4 })));
+  expect(hydrated.chairs).toEqual(saved.chairs);
+  expect(saved.tables[0].seats).toBe(2);
+  expect(hydrateState(hydrated, fresh).tables).toEqual(hydrated.tables);
+});
+
+it('hydrates a partly delivered order into independent consumption without timing pending food', () => {
+  const fresh = createInitialState();
+  const saved = { ...fresh,
+    restaurant: { ...fresh.restaurant, gameTime: 100 },
+    tables: fresh.tables.map(table => table.id === 't1' ? { ...table, status: 'occupied' } : table),
+    customers: [{ id: 'c1', state: 'waiting_for_items', tableId: 't1', chairId: 'ch1', x: 220, y: 190,
+      menuOutcome: 'ordered', dishId: fresh.dishes[0].id, drinkId: 'water',
+      foodOutcome: 'pending', foodOrderedAt: 0, foodPatienceBudget: 300, foodDeadlineAt: 300,
+      orderedServiceItemIds: ['dish', 'drink'], consumedServiceItemIds: [] }],
+    serviceItems: [
+      { id: 'dish', kind: 'dish', menuItemId: fresh.dishes[0].id, customerId: 'c1', tableId: 't1', state: 'ordered' },
+      { id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1', state: 'delivered', x: 224, y: 208 },
+    ],
+  };
+  const hydrated = hydrateState(saved, fresh);
+  expect(hydrated.customers[0]).toMatchObject({ state: 'eating', foodOutcome: 'pending', orderedServiceItemIds: ['dish', 'drink'] });
+  expect(hydrated.serviceItems[0]).not.toHaveProperty('consumptionStartedAt');
+  expect(hydrated.serviceItems[1].consumptionStartedAt).toBe(100);
+  expect(hydrateState(hydrated, fresh).serviceItems).toEqual(hydrated.serviceItems);
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });

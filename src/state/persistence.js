@@ -425,7 +425,8 @@ export function hydrateState(saved, fresh) {
   hydrated.serviceItems = cooking.serviceItems || hydrated.serviceItems;
   if (Array.isArray(cooking.cookingBatches)) hydrated.cookingBatches = cooking.cookingBatches;
   if ('tables' in saved || 'tables' in fresh) {
-    hydrated.tables = saved.tables || fresh.tables || [];
+    hydrated.tables = (saved.tables || fresh.tables || []).map(table =>
+      table.seats === 2 ? { ...table, seats: 4 } : table);
   }
   const savedRestaurant = saved.restaurant && typeof saved.restaurant === 'object'
     ? saved.restaurant

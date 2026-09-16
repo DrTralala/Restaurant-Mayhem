@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getPlaceable } from '../data/placeables';
+import { createInitialState } from '../state/initialState';
 import {
   getPlacementRect,
   snapPlacement,
@@ -17,6 +18,58 @@ const state = {
   cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 40, h: 40 }],
   doors: [{ id: 'door1', y: 340, role: 'entrance' }],
 };
+
+describe('ordinary chair transfers', () => {
+  it('does not combine different dining parties through simultaneous occupied-chair transfers', () => {
+    const initial = createInitialState();
+    initial.chairs = initial.chairs.filter(chair => chair.tableId !== 't3');
+    initial.customers = [
+      { id: 'c1', partyId: 'p1', state: 'eating', tableId: 't1', chairId: 'ch1' },
+      { id: 'c2', partyId: 'p2', state: 'eating', tableId: 't2', chairId: 'ch3' },
+    ];
+    expect(validateFixtureMoves(initial, [
+      { type: 'chair', id: 'ch1', x: 210, y: 340 },
+      { type: 'chair', id: 'ch3', x: 210, y: 400 },
+    ])).toMatchObject({ valid: false, reason: 'chair-table' });
+  });
+
+  it.each([0, 1, 2, 3])('allows a starter chair at a purchasable destination with rotation %s', rotation => {
+    const initial = createInitialState();
+    const placement = { itemType: 'chair', x: 180, y: 200, rotation };
+    expect(validatePlacement(initial, placement)).toMatchObject({ valid: true, tableId: 't1' });
+    const result = validateFixtureMoves(initial, [{ type: 'chair', id: 'ch5', ...placement }]);
+    expect(result).toMatchObject({ valid: true, moves: [{ id: 'ch5', tableId: 't1', rotation }] });
+  });
+
+  it('does not let an unrelated detached chair veto a valid move', () => {
+    const initial = createInitialState();
+    initial.chairs.push({ id: 'legacy', tableId: 'missing', x: 600, y: 500 });
+    expect(validateFixtureMoves(initial, [{ type: 'chair', id: 'ch5', x: 200, y: 340, rotation: 0 }]).valid).toBe(true);
+  });
+
+  it('checks final capacity when multiple chairs transfer together', () => {
+    const initial = createInitialState();
+    initial.tables[0].seats = 3;
+    const moves = [
+      { type: 'chair', id: 'ch5', x: 180, y: 200 },
+      { type: 'chair', id: 'ch6', x: 240, y: 200 },
+    ];
+    expect(validateFixtureMoves(initial, moves)).toMatchObject({ valid: false, reason: 'chair-table' });
+    initial.tables[0].seats = 4;
+    expect(validateFixtureMoves(initial, moves)).toMatchObject({ valid: true,
+      moves: [expect.objectContaining({ tableId: 't1' }), expect.objectContaining({ tableId: 't1' })] });
+  });
+
+  it('excludes moving chairs when swapping between full tables', () => {
+    const initial = createInitialState();
+    const moves = [
+      { type: 'chair', id: 'ch5', x: 370, y: 340 },
+      { type: 'chair', id: 'ch9', x: 210, y: 340 },
+    ];
+    expect(validateFixtureMoves(initial, moves)).toMatchObject({ valid: true,
+      moves: [expect.objectContaining({ tableId: 't4' }), expect.objectContaining({ tableId: 't3' })] });
+  });
+});
 
 it('exposes canonical prices and footprints', () => {
   expect(getPlaceable('table')).toMatchObject({ price: 300, width: 40, height: 40 });

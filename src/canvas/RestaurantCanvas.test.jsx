@@ -186,6 +186,7 @@ describe('RestaurantCanvas object movement', () => {
         x: type === 'door' ? getRestaurantWorld(caseState.restaurant).doorX : 500,
         y: 300,
         ...(['chair', 'serviceTable'].includes(type) ? { rotation: 0 } : {}),
+        ...(type === 'chair' ? { tableId: caseState.tables[0].id } : {}),
       }],
     });
   });
@@ -249,6 +250,29 @@ describe('RestaurantCanvas object movement', () => {
     const customerPreview = drawCustomerLayer.mock.calls.at(-1)[1];
     expect(furniturePreview.chairs[0]).toMatchObject({ x: 220, y: 180 });
     expect(customerPreview.customers[0]).toMatchObject({ x: 230, y: 190 });
+  });
+
+  it('keeps a transferred chair and its customer on the destination table in rotated previews', () => {
+    const movedChair = { id: 'ch1', tableId: 't1', x: 210, y: 180, rotation: 2 };
+    useGameState.mockReturnValue({ ...state,
+      tables: [{ id: 't1', seats: 4, x: 200, y: 200 }, { id: 't2', seats: 4, x: 400, y: 200 }],
+      chairs: [movedChair],
+      customers: [{ id: 'c1', state: 'eating', tableId: 't1', chairId: 'ch1', x: 220, y: 190 }],
+    });
+    findClickedEntity.mockReturnValue({ type: 'chair', data: movedChair, text: 'Chair' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { value: 600 });
+    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+    fireEvent.click(canvas, { clientX: 210, clientY: 180 });
+    fireEvent.click(screen.getByRole('button', { name: /Move/ }));
+    fireEvent.mouseMove(canvas, { clientX: 410, clientY: 180, buttons: 0 });
+    fireEvent.keyDown(window, { key: 'r' });
+    requestAnimationFrame.mock.calls.at(-1)[0](1000);
+    expect(drawFurnitureLayer.mock.calls.at(-1)[1].chairs[0]).toMatchObject({ tableId: 't2', rotation: 3 });
+    expect(drawCustomerLayer.mock.calls.at(-1)[1].customers[0]).toMatchObject({ tableId: 't2', x: 420, y: 190 });
   });
 
   it('previews only on-service items at a moved service counter', () => {
@@ -324,7 +348,7 @@ describe('RestaurantCanvas object movement', () => {
     fireEvent.click(canvas, { clientX: 137, clientY: 83 });
     expect(dispatch).toHaveBeenCalledWith({
       type: 'MOVE_FIXTURES',
-      items: [{ type: 'chair', id: 'ch1', x: 140, y: 80, rotation: 0 }],
+      items: [{ type: 'chair', id: 'ch1', x: 140, y: 80, rotation: 0, tableId: 't1' }],
     });
   });
 
@@ -569,7 +593,7 @@ describe('RestaurantCanvas object movement', () => {
 
     expect(dispatch).toHaveBeenCalledWith({
       type: 'MOVE_FIXTURES',
-      items: [{ type: 'chair', id: 'ch1', x: 130, y: 80, rotation: 0 }],
+      items: [{ type: 'chair', id: 'ch1', x: 130, y: 80, rotation: 0, tableId: 't1' }],
     });
   });
 
@@ -899,7 +923,7 @@ describe('RestaurantCanvas object movement', () => {
       type: 'MOVE_FIXTURES',
       items: [
         { type: 'table', id: 't1', x: 100, y: 120 },
-        { type: 'chair', id: 'ch1', x: 140, y: 130, rotation: 0 },
+        { type: 'chair', id: 'ch1', x: 140, y: 130, rotation: 0, tableId: 't1' },
       ],
     });
   });

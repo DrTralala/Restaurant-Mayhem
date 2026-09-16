@@ -121,7 +121,7 @@ describe('copyFixtures', () => {
     expect(result).not.toBe(state);
     expect(result.restaurant.funds).toBe(200);
     expect(result.tables.at(-1)).toEqual({
-      id: 't5', seats: 2, status: 'empty', x: 600, y: 300,
+      id: 't5', seats: 4, status: 'empty', x: 600, y: 300,
     });
     expect(result.chairs.slice(-2)).toEqual([
       { id: 'ch13', tableId: 't5', x: 610, y: 280, rotation: 2 },

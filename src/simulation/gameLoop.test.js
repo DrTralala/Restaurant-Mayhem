@@ -1188,6 +1188,7 @@ describe('runTick', () => {
     const removedAfterCleaningIds = new Set();
     const checkoutAbandonments = new Set();
     const consumedAtByKind = new Map();
+    const consumptionStartByKind = new Map();
     const firstDirtyStateByKind = new Map();
     const itemKindById = new Map();
     let previousItems = new Map();
@@ -1221,6 +1222,7 @@ describe('runTick', () => {
         if (Number.isFinite(item.consumptionStartedAt) && consumptionStart == null) {
           consumptionStart = item.consumptionStartedAt;
         }
+        if (Number.isFinite(item.consumptionStartedAt)) consumptionStartByKind.set(item.kind, item.consumptionStartedAt);
         if (Number.isFinite(item.consumedAt) && !consumedAtByKind.has(item.kind)) {
           consumedAtByKind.set(item.kind, item.consumedAt);
         }
@@ -1296,7 +1298,10 @@ describe('runTick', () => {
       }
       if (kindsForJourney.length === 2 && deliveredKinds.size === 1) {
         expect(customer).toBeDefined();
-        expect(customer.state).toBe('waiting_for_items');
+        expect(customer.state).toBe('eating');
+        for (const item of journeyItems.filter(item => item.state === 'delivered')) {
+          expect(Number.isFinite(item.consumptionStartedAt)).toBe(true);
+        }
       }
       if (deliveredKinds.size === 2) {
         bothDelivered = true;
@@ -1316,7 +1321,7 @@ describe('runTick', () => {
       state, customerId, seen, deliveredKinds, stages, cleaningTasks, cleanedItemIds,
       journeyItemIds, pickupTaskItemIds, deliveryTaskItemIds, removedAfterCleaningIds,
       checkoutAbandonments, reputationBeforePayment, reputationAfterPayment,
-      consumedAtByKind, firstDirtyStateByKind, consumptionStart, checkoutStartedAt,
+      consumedAtByKind, firstDirtyStateByKind, consumptionStart, consumptionStartByKind, checkoutStartedAt,
       paymentStartedAt, drinkClearedWhileDishUnfinished,
       bothDelivered, progressedAfterBoth, elapsed: elapsed + 1, completed,
     };
@@ -1367,8 +1372,8 @@ describe('runTick', () => {
       expect(firstDirtyStateByKind.get(kind)).toBe('dirty_at_table');
       expect(paymentStartedAt).toBeGreaterThanOrEqual(consumedAtByKind.get(kind));
     } else {
-      expect(result.consumedAtByKind.get('drink') - result.consumptionStart).toBe(180);
-      expect(result.consumedAtByKind.get('dish') - result.consumptionStart).toBe(480);
+      expect(result.consumedAtByKind.get('drink') - result.consumptionStartByKind.get('drink')).toBe(180);
+      expect(result.consumedAtByKind.get('dish') - result.consumptionStartByKind.get('dish')).toBe(480);
       expect(result.consumedAtByKind.get('drink')).toBeLessThan(result.consumedAtByKind.get('dish'));
       expect(result.checkoutStartedAt).toBeGreaterThanOrEqual(result.consumedAtByKind.get('dish'));
       expect(drinkClearedWhileDishUnfinished).toBe(true);
