@@ -208,11 +208,9 @@ function washDuration(station) {
     ?? ACTIVITY_DURATIONS.automaticWash;
 }
 
-function isTableReadyForCleaning(table, customers, serviceItems, chairs = []) {
+function isTableReadyForCleaning(table, customers, chairs = []) {
   const hasBlockingCustomer = customers.some(customer => customer.tableId === table.id
     && customer.state !== 'leaving' && !isCheckoutState(customer));
-  const hasDirtyItem = serviceItems.some(item => item.tableId === table.id
-    && item.state === 'dirty_at_table');
   // A leaving/checkout member is not proof that the chair is physically clear.
   const chairsClear = chairs
     .filter(chair => chair?.tableId === table.id && Number.isFinite(chair.x) && Number.isFinite(chair.y))
@@ -220,7 +218,7 @@ function isTableReadyForCleaning(table, customers, serviceItems, chairs = []) {
       || !Number.isFinite(customer?.y)
       || Math.hypot(customer.x - (chair.x + 10), customer.y - (chair.y + 10))
         >= CHARACTER_START_SPACING));
-  return !hasBlockingCustomer && !hasDirtyItem && chairsClear;
+  return !hasBlockingCustomer && chairsClear;
 }
 
 function projectedWashWorkload(state, station, staff, serviceItems, allStaff) {
@@ -386,7 +384,7 @@ function janitorCleanupCandidates({ state, staff, allStaff, serviceItems, claime
   for (const table of state.tables || []) {
     if (table.status !== 'dirty'
       || claimedTableIds?.has(table.id)
-      || !isTableReadyForCleaning(table, state.customers || [], serviceItems, state.chairs)) continue;
+      || !isTableReadyForCleaning(table, state.customers || [], state.chairs)) continue;
     const target = targetForTableOrCurrent(state, table, staff);
     add({
       type: 'clean_table',
@@ -1527,7 +1525,7 @@ function resolveTask({
     if (!table || table.status !== 'dirty') {
       return { staff: completedStaff, queue, customers, serviceItems, tables };
     }
-    if (!isTableReadyForCleaning(table, customers, serviceItems, state.chairs)) {
+    if (!isTableReadyForCleaning(table, customers, state.chairs)) {
       return { staff: completedStaff, queue, customers, serviceItems, tables };
     }
     if (staff.task.cleaningStartedAt == null) {

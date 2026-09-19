@@ -12,7 +12,7 @@ export function createInitialState() {
       name: 'My Restaurant',
       funds: 600,
       dailyRevenue: 0,
-      reputation: 2.0,
+      reputation: 1.0,
       day: 1,
       gameTime: 10 * 3600, // start at 10:00 AM
       totalServed: 0,

@@ -12,6 +12,10 @@ function rectanglesOverlap(first, second) {
 }
 
 describe('createInitialState', () => {
+  it('starts a new restaurant at a 1.0 rating', () => {
+    expect(createInitialState().restaurant.reputation).toBe(1.0);
+  });
+
   it('uses ordinary four-seat tables without adding starter furniture', () => {
     const state = createInitialState();
     expect(state.tables.map(table => table.seats)).toEqual([4, 4, 4, 4]);

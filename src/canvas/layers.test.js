@@ -5,6 +5,7 @@ import { processKitchen } from '../simulation/kitchen';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { getPlaceSettingPositions } from './tableGeometry';
 import { recordSeatResidency } from '../simulation/movement/seatedDeparture';
+import { expireFoodPatience, startFoodPatience } from '../simulation/foodPatience';
 
 function recordCtx(extraCanvas = {}) {
   const calls = {
@@ -1498,6 +1499,40 @@ describe('drawCustomerLayer', () => {
     drawCustomerLayer(ctx, state, camera);
 
     expect(ctx._calls.rects).not.toContainEqual({ x: 208, y: 192, w: 24, h: 16 });
+  });
+
+  it.each([false, true])('keeps the menu hidden after food patience expires (consumed drink: %s)', consumedDrink => {
+    const state = {
+      customers: [startFoodPatience({
+        id: 'c1', archetype: 'regular', state: 'waiting_for_items',
+        tableId: 't1', chairId: 'ch1', dishId: 'd1',
+        dishPriceAtOrder: 12, orderSubtotal: 12, patienceMax: 100,
+        drinkId: consumedDrink ? 'water' : null,
+        orderedServiceItemIds: consumedDrink ? ['food', 'drink'] : ['food'],
+        consumedServiceItemIds: consumedDrink ? ['drink'] : [],
+      }, 0)],
+      tables: [{ id: 't1', x: 200, y: 200, status: 'occupied', seats: 2 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 210, y: 180 }],
+      restaurant: { gameTime: 100 },
+      serviceItems: [
+        { id: 'food', kind: 'dish', customerId: 'c1', tableId: 't1', state: 'ordered' },
+        ...(consumedDrink ? [{
+          id: 'drink', kind: 'drink', customerId: 'c1', tableId: 't1',
+          state: 'dirty_at_table', deliveredAt: 20, consumedAt: 50,
+        }] : []),
+      ],
+      staff: [],
+    };
+    const expired = expireFoodPatience(state, 100);
+    expect(expired.customers[0]).toMatchObject({ state: 'seated', foodOutcome: 'cancelled', dishId: null });
+    const ctx = recordCtx();
+
+    drawCustomerLayer(ctx, expired, camera);
+
+    expect(ctx._calls.arcs).toHaveLength(1);
+    expect(ctx._calls.rectColours).not.toContainEqual({
+      x: 208, y: 192, w: 24, h: 16, colour: '#f3e6bd',
+    });
   });
 
   it('does not render seated customers without an explicit valid chair', () => {
