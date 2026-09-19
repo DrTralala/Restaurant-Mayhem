@@ -3282,7 +3282,13 @@ export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
           staff[i] = markTaskAssigned(clearNavigationGoal(staff[i]));
           continue;
         }
-        const paused = pausePreparationProgress({ ...state, staff }, s, restaurant?.gameTime);
+        // Recovery must preserve work committed by earlier workers this tick,
+        // including deliveries and the customers' consumption state.
+        const paused = pausePreparationProgress({
+          ...state, restaurant, staff, customers, queue, tables, serviceItems,
+          completedCustomers, pendingPartyReviews, partyReviewHistory, floorDirt,
+          queueAdmissionGate, queueSlots, cookingBatches,
+        }, s, restaurant?.gameTime);
         const released = releaseStaffWork(paused, s.id, 'blocked-preparation', restaurant?.gameTime);
         staff = released.staff || staff;
         customers = released.customers || customers;
