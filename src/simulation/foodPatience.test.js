@@ -248,8 +248,8 @@ describe('food patience', () => {
     const result = cancelCustomerFood(pending, 'c1', 100);
 
     expect(result.serviceItems[0]).toMatchObject({
-      state: 'to_clean', x: 150, y: 130,
-      wasteOrigin: { serviceTableId: 'st1', serviceSlotIndex: 0, x: 150, y: 130 },
+      state: 'to_clean', x: 155, y: 130,
+      wasteOrigin: { serviceTableId: 'st1', serviceSlotIndex: 0, x: 155, y: 130 },
     });
     expect(result.serviceItems[0]).toHaveProperty('wasteOrigin');
   });

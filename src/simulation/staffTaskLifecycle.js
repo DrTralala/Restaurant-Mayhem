@@ -320,7 +320,7 @@ function removeBatchId(item) {
   return withoutBatch;
 }
 
-function releasePreparationItem(item, workerId, { preserveReady = true } = {}) {
+function releasePreparationItem(item, workerId, { preserveReady = true, now = null } = {}) {
   if (!item || item.assignedStaffId !== workerId) return item;
   if (item.state === 'preparing' || item.state === 'ordered') {
     const withoutBatch = removeBatchId(item);
@@ -332,7 +332,11 @@ function releasePreparationItem(item, workerId, { preserveReady = true } = {}) {
       serviceTableId: null,
       serviceSlotIndex: null,
       assignedStaffId: null,
-      ...(hasProgress ? {} : { preparationStartedAt: null, readyAt: null }),
+      ...(hasProgress
+        ? (finite(now)
+          ? { lastProgressAt: Math.max(finite(item.lastProgressAt) ? item.lastProgressAt : now, now) }
+          : {})
+        : { preparationStartedAt: null, readyAt: null, lastProgressAt: null }),
     };
   }
   if (item.state === 'ready' && preserveReady) {
@@ -417,14 +421,14 @@ function safeCarriedTask(state, worker, serviceItems) {
       continue;
     }
     if (item.foodCancelled === true || foodExpired) continue;
-    if (customer && customer.state !== 'leaving') {
+    if (worker.role === 'waiter' && customer && customer.state !== 'leaving') {
       return { type: 'deliver_service_item', serviceItemId: item.id, customerId: item.customerId };
     }
   }
   return null;
 }
 
-function releaseCookingClaims(state, workerId, task) {
+function releaseCookingClaims(state, workerId, task, now) {
   const batches = (state.cookingBatches || []).filter(batch => sameId(batch.cookId, workerId)
     || sameId(batch.id, task?.batchId));
   const batchIds = new Set(batches.map(batch => String(batch.id)));
@@ -436,13 +440,13 @@ function releaseCookingClaims(state, workerId, task) {
   let serviceItems = (state.serviceItems || []).map(item => {
     if (!memberIds.has(String(item.id))) return item;
     if (item.state === 'carried') return removeBatchId(item);
-    return releasePreparationItem(item, workerId);
+     return releasePreparationItem(item, workerId, { now });
   });
   const cookingBatches = (state.cookingBatches || []).filter(batch => !batchIds.has(String(batch.id)));
   return { ...state, serviceItems, cookingBatches, releasedBatchItemIds: memberIds };
 }
 
-function releaseTaskReservations(state, worker) {
+function releaseTaskReservations(state, worker, now) {
   const task = worker.task;
   let next = state;
   if (!task) return next;
@@ -459,7 +463,7 @@ function releaseTaskReservations(state, worker) {
       ...next,
       serviceItems: (next.serviceItems || []).map(item =>
         taskItemIds(task).some(id => sameId(id, item.id))
-          ? releasePreparationItem(item, worker.id)
+           ? releasePreparationItem(item, worker.id, { now })
           : item),
     };
   }
@@ -545,9 +549,9 @@ export function releaseStaffWork(state, staffId, reason = 'released', now = stat
   const settled = settleWorkerProgress(next, originalWorker, now);
   next = settled.state;
   let worker = settled.worker;
-  next = releaseTaskReservations(next, worker);
+  next = releaseTaskReservations(next, worker, now);
 
-  const released = releaseCookingClaims(next, staffId, worker.task);
+  const released = releaseCookingClaims(next, staffId, worker.task, now);
   next = released;
   delete next.releasedBatchItemIds;
 

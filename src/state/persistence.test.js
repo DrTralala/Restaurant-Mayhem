@@ -10,6 +10,9 @@ import { SAVE_VERSION } from './saveVersion';
 import { getCustomerMovementEntries, prepareCustomersForMovement, updateCustomers } from '../simulation/customers';
 import { buildCustomerQueueStressState } from '../simulation/customerQueueStress';
 import { recordSeatResidency } from '../simulation/movement/seatedDeparture';
+import { createGrid } from '../simulation/navigation/grid';
+import { isAtPreparationPosition } from '../simulation/preparationPosition';
+import { findAvailableServiceSlot } from '../simulation/serviceItems';
 
 beforeEach(() => {
   localStorage.clear();
@@ -49,6 +52,69 @@ it('hydrates a partly delivered order into independent consumption without timin
   expect(hydrated.serviceItems[0]).not.toHaveProperty('consumptionStartedAt');
   expect(hydrated.serviceItems[1].consumptionStartedAt).toBe(100);
   expect(hydrateState(hydrated, fresh).serviceItems).toEqual(hydrated.serviceItems);
+});
+
+it('normalises a saved cook out of a blocked station cell before preparation resumes', () => {
+  const fresh = createInitialState();
+  const station = fresh.kitchenStations.find(candidate => candidate.id === 'k1');
+  const saved = {
+    ...fresh,
+    restaurant: { ...fresh.restaurant, gameTime: 100 },
+    customers: [
+      { id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast' },
+      { id: 'c2', state: 'waiting_for_items', dishId: 'starter-toast' },
+    ],
+    serviceItems: [
+      {
+        id: 'dish', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', batchId: 'batch-1',
+        state: 'preparing', stationId: station.id, assignedStaffId: 'starter-cook',
+        preparationStartedAt: 20, accumulatedWork: 12, lastProgressAt: 20,
+      },
+      {
+        id: 'dish-2', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c2', batchId: 'batch-1',
+        state: 'preparing', stationId: station.id, assignedStaffId: 'starter-cook',
+        preparationStartedAt: 20, accumulatedWork: 18, lastProgressAt: 20,
+      },
+    ],
+    cookingBatches: [{
+      id: 'batch-1', cookId: 'starter-cook', stationId: station.id,
+      serviceItemIds: ['dish', 'dish-2'], status: 'preparing', startedAt: 20,
+    }],
+    staff: fresh.staff.map(worker => worker.id === 'starter-cook'
+      ? {
+        ...worker,
+        x: station.x + 20,
+        y: station.y + 20,
+        navigationGoal: { x: station.x + 20, y: station.y + 20 },
+        task: {
+          type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'dish',
+          serviceItemIds: ['dish', 'dish-2'], stationId: station.id,
+        },
+      }
+      : worker),
+  };
+
+  const hydrated = hydrateState(saved, fresh);
+  const cook = hydrated.staff.find(worker => worker.id === 'starter-cook');
+
+  expect(createGrid(hydrated).isOpen(cook)).toBe(true);
+  expect(isAtPreparationPosition(cook, station)).toBe(false);
+  expect(cook.task).toMatchObject(saved.staff.find(worker => worker.id === 'starter-cook').task);
+  expect(hydrated.serviceItems).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'dish', accumulatedWork: 12, lastProgressAt: 20 }),
+    expect.objectContaining({ id: 'dish-2', accumulatedWork: 18, lastProgressAt: 20 }),
+  ]));
+
+  const legalSaved = {
+    ...saved,
+    staff: saved.staff.map(worker => worker.id === 'starter-cook'
+      ? { ...worker, x: station.x - 10, y: station.y + 10,
+        navigationGoal: { x: station.x - 10, y: station.y + 10 } }
+      : worker),
+  };
+  const legalHydrated = hydrateState(legalSaved, fresh);
+  expect(legalHydrated.staff.find(worker => worker.id === 'starter-cook'))
+    .toMatchObject({ x: station.x - 10, y: station.y + 10 });
 });
 
 afterEach(() => {
@@ -329,6 +395,95 @@ describe('loadState', () => {
 });
 
 describe('hydrateState', () => {
+  it('round-trips a waiter pickup after reusing its freed slot but rejects a cook-carried duplicate', () => {
+    const fresh = createInitialState();
+    const waiter = {
+      ...fresh.staff.find(worker => worker.id === 'starter-waiter'),
+      x: 130,
+      y: 130,
+      task: {
+        type: 'pickup_service_item', serviceItemId: 'picked', serviceTableId: 'st1',
+      },
+      activityPhase: 'task_assigned',
+    };
+    const cook = {
+      ...fresh.staff.find(worker => worker.id === 'starter-cook'),
+      x: 350,
+      y: 130,
+      task: null,
+    };
+    const base = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 100 },
+      cashierStations: [],
+      staff: [waiter, cook],
+      customers: [
+        { id: 'picked-customer', state: 'waiting_for_items', tableId: 't1', dishId: 'starter-toast' },
+        { id: 'replacement-customer', state: 'waiting_for_items', tableId: 't2', dishId: 'starter-toast' },
+      ],
+      serviceItems: [{
+        id: 'picked', kind: 'dish', menuItemId: 'starter-toast', customerId: 'picked-customer',
+        tableId: 't1', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0,
+        x: 155, y: 150,
+      }],
+    };
+
+    const picked = runTick(base, { gameDt: 0, movementDt: 0 });
+    expect(picked.serviceItems[0]).toMatchObject({ state: 'carried', serviceSlotIndex: 0 });
+    expect(picked.staff.find(worker => worker.id === waiter.id)?.carryingServiceItemIds)
+      .toEqual(['picked']);
+
+    const reusedSlot = findAvailableServiceSlot(picked);
+    expect(reusedSlot).toMatchObject({ serviceTableId: 'st1', serviceSlotIndex: 0 });
+    const validRuntimeSave = {
+      ...picked,
+      serviceItems: [...picked.serviceItems, {
+        id: 'replacement', kind: 'dish', menuItemId: 'starter-toast',
+        customerId: 'replacement-customer', tableId: 't2', state: 'on_service',
+        ...reusedSlot,
+      }],
+    };
+
+    saveState(validRuntimeSave);
+    const loaded = loadState();
+    expect(loaded).not.toBeNull();
+    expect(hydrateState(loaded, fresh).serviceItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'picked', state: 'carried', serviceSlotIndex: 0 }),
+        expect.objectContaining({ id: 'replacement', state: 'on_service', serviceSlotIndex: 0 }),
+      ]),
+    );
+
+    const cookCarriedDuplicate = {
+      ...validRuntimeSave,
+      customers: [...validRuntimeSave.customers,
+        { id: 'cook-customer', state: 'waiting_for_items', tableId: 't3', dishId: 'starter-toast' }],
+      staff: validRuntimeSave.staff.map(worker => worker.id === cook.id
+        ? {
+          ...worker,
+          carryingServiceItemIds: ['cook-carried'],
+          task: {
+            type: 'place_dish_on_service', serviceItemId: 'cook-carried',
+            serviceTableId: 'st1', serviceSlotIndex: 0,
+          },
+        }
+        : worker),
+      serviceItems: [...validRuntimeSave.serviceItems, {
+        id: 'cook-carried', kind: 'dish', menuItemId: 'starter-toast',
+        customerId: 'cook-customer', tableId: 't3', state: 'carried',
+        serviceTableId: 'st1', serviceSlotIndex: 0, assignedStaffId: cook.id,
+        x: cook.x, y: cook.y,
+      }],
+    };
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      saveState(cookCarriedDuplicate);
+      expect(loadState()).toBeNull();
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it('rejects duplicate service-item IDs instead of silently merging owners', () => {
     const fresh = createInitialState();
     const saved = {
@@ -370,6 +525,264 @@ describe('hydrateState', () => {
       ],
     };
     expect(hydrateState(valid, fresh).serviceItems.map(item => item.id)).toEqual(['dish', 'drink']);
+  });
+
+  it('accepts upper counter slots for on-counter items, reservations and waste origins', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [
+        { id: 'counter-owner', state: 'waiting_for_items', tableId: 't1', dishId: 'starter-toast' },
+        { id: 'drink-owner', state: 'waiting_for_items', tableId: 't2', drinkId: 'water' },
+        { id: 'carried-owner', state: 'waiting_for_items', tableId: 't3', dishId: 'starter-toast' },
+        {
+          id: 'waste-owner', state: 'seated', tableId: 't4', dishId: null,
+          foodOutcome: 'cancelled', foodOrderedAt: 100, foodPatienceBudget: 50,
+          foodDeadlineAt: 150, foodCancelledAt: 150, foodCancelledPrice: 12,
+          cancelledServiceItemIds: ['waste'], consumedServiceItemIds: [],
+        },
+      ],
+      staff: fresh.staff.map(worker => {
+        if (worker.id === 'starter-cook') {
+          return {
+            ...worker,
+            id: 'drink-cook',
+            x: 200,
+            y: 200,
+            task: {
+              type: 'prepare_drink', serviceItemId: 'drink',
+              serviceTableId: 'st1', serviceSlotIndex: 7,
+            },
+          };
+        }
+        if (worker.id === 'starter-waiter') {
+          return {
+            ...worker,
+            id: 'dish-cook',
+            role: 'cook',
+            x: 220,
+            y: 200,
+            carryingServiceItemIds: ['carried'],
+            task: {
+              type: 'place_dish_on_service', serviceItemId: 'carried',
+              serviceTableId: 'st1', serviceSlotIndex: 5,
+            },
+          };
+        }
+        return worker;
+      }),
+      serviceItems: [
+        {
+          id: 'counter', kind: 'dish', menuItemId: 'starter-toast', customerId: 'counter-owner',
+          tableId: 't1', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 4,
+          x: 155, y: 150,
+        },
+        {
+          id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'drink-owner',
+          tableId: 't2', state: 'preparing', serviceTableId: 'st1', serviceSlotIndex: 7,
+          assignedStaffId: 'drink-cook', preparationStartedAt: 10, x: 200, y: 200,
+        },
+        {
+          id: 'carried', kind: 'dish', menuItemId: 'starter-toast', customerId: 'carried-owner',
+          tableId: 't3', state: 'carried', serviceTableId: 'st1', serviceSlotIndex: 5,
+          assignedStaffId: 'dish-cook', x: 220, y: 200,
+        },
+        {
+          id: 'waste', kind: 'dish', menuItemId: 'starter-toast', customerId: 'waste-owner',
+          tableId: 't4', state: 'to_clean', foodCancelled: true, deliveryProhibited: true,
+          cancelledAt: 150, serviceTableId: 'st1', serviceSlotIndex: 6, x: 185, y: 150,
+          wasteOrigin: {
+            state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 7,
+            stationId: null, tableId: 't4', x: 185, y: 150,
+          },
+        },
+      ],
+    };
+
+    saveState(saved);
+    const restored = hydrateState(loadState(), fresh);
+    const byId = id => restored.serviceItems.find(item => item.id === id);
+
+    expect(byId('counter')).toMatchObject({
+      serviceTableId: 'st1', serviceSlotIndex: 4, state: 'on_service',
+    });
+    expect(byId('drink')).toMatchObject({
+      serviceTableId: 'st1', serviceSlotIndex: 7, state: 'preparing', assignedStaffId: 'drink-cook',
+    });
+    expect(byId('carried')).toMatchObject({
+      serviceTableId: 'st1', serviceSlotIndex: 5, state: 'carried',
+    });
+    expect(byId('waste')).toMatchObject({
+      serviceTableId: 'st1', serviceSlotIndex: 6, state: 'to_clean', foodCancelled: true,
+      wasteOrigin: expect.objectContaining({ serviceSlotIndex: 7 }),
+    });
+  });
+
+  it('round-trips a new drink station reservation and carried upper-slot delivery', () => {
+    const fresh = createInitialState();
+    const dispenser = fresh.kitchenStations.find(station => station.equipmentId == null);
+    const firstCook = fresh.staff.find(worker => worker.role === 'cook');
+    const secondCook = { ...firstCook, id: 'delivery-cook', x: 220, y: 200 };
+    const saved = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 100 },
+      customers: [
+        { id: 'preparing-customer', state: 'waiting_for_items', tableId: 't1', drinkId: 'water' },
+        { id: 'carried-customer', state: 'waiting_for_items', tableId: 't2', drinkId: 'water' },
+      ],
+      staff: [
+        {
+          ...firstCook,
+          task: {
+            type: 'prepare_drink', serviceItemId: 'preparing-drink', stationId: dispenser.id,
+            serviceTableId: 'st1', serviceSlotIndex: 6,
+          },
+        },
+        {
+          ...secondCook,
+          carryingServiceItemIds: ['carried-drink'],
+          task: {
+            type: 'place_dish_on_service', serviceItemId: 'carried-drink',
+            serviceTableId: 'st1', serviceSlotIndex: 7,
+          },
+        },
+      ],
+      serviceItems: [
+        {
+          id: 'preparing-drink', kind: 'drink', menuItemId: 'water', customerId: 'preparing-customer',
+          tableId: 't1', state: 'preparing', stationId: dispenser.id,
+          serviceTableId: 'st1', serviceSlotIndex: 6, assignedStaffId: firstCook.id,
+          preparationStartedAt: 20, accumulatedWork: 12, lastProgressAt: 20,
+        },
+        {
+          id: 'carried-drink', kind: 'drink', menuItemId: 'water', customerId: 'carried-customer',
+          tableId: 't2', state: 'carried', serviceTableId: 'st1', serviceSlotIndex: 7,
+          assignedStaffId: secondCook.id, x: 220, y: 200,
+        },
+      ],
+    };
+
+    saveState(saved);
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.staff.find(worker => worker.id === firstCook.id)?.task).toMatchObject({
+      type: 'prepare_drink', stationId: dispenser.id, serviceSlotIndex: 6,
+    });
+    expect(restored.serviceItems.find(item => item.id === 'preparing-drink')).toMatchObject({
+      state: 'preparing', stationId: dispenser.id, serviceSlotIndex: 6,
+      accumulatedWork: 12, lastProgressAt: 20,
+    });
+    expect(restored.serviceItems.find(item => item.id === 'carried-drink')).toMatchObject({
+      state: 'carried', serviceSlotIndex: 7, assignedStaffId: secondCook.id,
+    });
+  });
+
+  it('rejects a counter slot beyond the shared capacity', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      staff: [],
+      customers: [{ id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: 'starter-toast' }],
+      serviceItems: [{
+        id: 'out-of-range', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1',
+        tableId: 't1', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 8,
+        x: 155, y: 170,
+      }],
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow(/serviceSlotIndex|at most/i);
+  });
+
+  it('rejects duplicate ownership of an upper counter slot', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      staff: [],
+      customers: [
+        { id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: 'starter-toast' },
+        { id: 'c2', state: 'waiting_for_items', tableId: 't2', dishId: 'starter-toast' },
+      ],
+      serviceItems: [
+        {
+          id: 'first', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1',
+          tableId: 't1', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 7,
+          x: 155, y: 170,
+        },
+        {
+          id: 'second', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c2',
+          tableId: 't2', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 7,
+          x: 155, y: 170,
+        },
+      ],
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow(/duplicates occupied service slot/i);
+  });
+
+  it('rejects a carried drink that duplicates an occupied upper counter slot', () => {
+    const fresh = createInitialState();
+    const cook = {
+      ...fresh.staff.find(worker => worker.role === 'cook'),
+      id: 'drink-cook', x: 220, y: 200,
+      carryingServiceItemIds: ['carried-drink'],
+      task: {
+        type: 'place_dish_on_service', serviceItemId: 'carried-drink',
+        serviceTableId: 'st1', serviceSlotIndex: 7,
+      },
+    };
+    const saved = {
+      ...fresh,
+      staff: [cook],
+      customers: [
+        { id: 'on-counter-customer', state: 'waiting_for_items', tableId: 't1', dishId: 'starter-toast' },
+        { id: 'carried-customer', state: 'waiting_for_items', tableId: 't2', drinkId: 'water' },
+      ],
+      serviceItems: [
+        {
+          id: 'on-counter', kind: 'dish', menuItemId: 'starter-toast', customerId: 'on-counter-customer',
+          tableId: 't1', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 7,
+          x: 155, y: 170,
+        },
+        {
+          id: 'carried-drink', kind: 'drink', menuItemId: 'water', customerId: 'carried-customer',
+          tableId: 't2', state: 'carried', serviceTableId: 'st1', serviceSlotIndex: 7,
+          assignedStaffId: 'drink-cook', x: 220, y: 200,
+        },
+      ],
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow(/duplicates occupied service slot/i);
+  });
+
+  it('rejects conflicting drink preparation tasks that claim one dispenser', () => {
+    const fresh = createInitialState();
+    const drinkStation = fresh.kitchenStations.find(station => station.equipmentId == null);
+    const starterCook = fresh.staff.find(worker => worker.role === 'cook');
+    const cooks = [starterCook, { ...starterCook, id: 'second-cook' }];
+    const saved = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 100 },
+      customers: [
+        { id: 'c1', state: 'waiting_for_items', tableId: 't1', drinkId: 'water' },
+        { id: 'c2', state: 'waiting_for_items', tableId: 't2', drinkId: 'water' },
+      ],
+      staff: cooks.map((worker, index) => ({
+        ...worker,
+        task: {
+          type: 'prepare_drink', serviceItemId: `drink-${index + 1}`, stationId: drinkStation.id,
+          serviceTableId: 'st1', serviceSlotIndex: index,
+        },
+      })),
+      serviceItems: cooks.map((worker, index) => ({
+        id: `drink-${index + 1}`, kind: 'drink', menuItemId: 'water', customerId: `c${index + 1}`,
+        tableId: `t${index + 1}`, state: 'preparing', stationId: drinkStation.id,
+        serviceTableId: 'st1', serviceSlotIndex: index, assignedStaffId: worker.id,
+        preparationStartedAt: 20, accumulatedWork: 12, lastProgressAt: 20,
+      })),
+    };
+
+    expect(() => hydrateState(saved, fresh)).toThrow(/already owned by staff member/i);
   });
 
   it('rejects a carried load that mixes clean and dirty service items', () => {

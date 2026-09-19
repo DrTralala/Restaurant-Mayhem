@@ -276,12 +276,12 @@ describe('drawFurnitureLayer', () => {
   it.each([0, 1, 2, 3])('centres upright food and drink on counter worktop at rotation %s', rotation => {
     const ctx = recordCtx();
     const offsets = [
-      [[84, 24], [68, 24], [52, 24], [36, 24]],
-      [[16, 84], [16, 68], [16, 52], [16, 36]],
-      [[36, 16], [52, 16], [68, 16], [84, 16]],
-      [[24, 36], [24, 52], [24, 68], [24, 84]],
+      [[84, 28], [68, 28], [52, 28], [36, 28], [84, 14], [68, 14], [52, 14], [36, 14]],
+      [[12, 84], [12, 68], [12, 52], [12, 36], [26, 84], [26, 68], [26, 52], [26, 36]],
+      [[36, 12], [52, 12], [68, 12], [84, 12], [36, 26], [52, 26], [68, 26], [84, 26]],
+      [[28, 36], [28, 52], [28, 68], [28, 84], [14, 36], [14, 52], [14, 68], [14, 84]],
     ];
-    const serviceItems = Array.from({ length: 4 }, (_, i) => ({
+    const serviceItems = Array.from({ length: 8 }, (_, i) => ({
       id: `item${i}`, kind: i % 2 ? 'drink' : 'dish', dishId: 'toast',
       state: 'on_service', serviceTableId: 'counter', serviceSlotIndex: i, x: 110, y: 110,
     }));
@@ -294,10 +294,12 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.texts).toEqual(offsets[rotation].map(([x, y]) => expect.objectContaining({
       x: 100 + x, y: 100 + y, textAlign: 'center', textBaseline: 'middle',
     })));
+    const positions = ctx._calls.texts.map(({ x, y }) => `${x},${y}`);
+    expect(new Set(positions).size).toBe(8);
     expect(serviceItems).toEqual(before);
   });
 
-  it.each([undefined, -1, 4, 1.5])('centres counter items at stored points for invalid slot %s', serviceSlotIndex => {
+  it.each([undefined, -1, 8, 1.5])('centres counter items at stored points for invalid slot %s', serviceSlotIndex => {
     const ctx = recordCtx();
     drawFurnitureLayer(ctx, {
       tables: [], chairs: [], kitchenStations: [],
@@ -875,7 +877,7 @@ describe('drawFurnitureLayer', () => {
       queue: [], tables: [], chairs: [], floorDirt: [], washStations: [], serviceTables: [{ id: 'st1', x: 200, y: 100 }],
       dishes: [{ id: 'dish', prepTime: 60, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }], kitchenStations: [station],
-      staff: [{ id: 'cook', name: 'Cook', role: 'cook', morale: 80, x: 80, y: 120,
+      staff: [{ id: 'cook', name: 'Cook', role: 'cook', morale: 80, x: 90, y: 110,
         task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } }],
       serviceItems: [{ id: 'food', kind: 'dish', menuItemId: 'dish', customerId: 'customer', state: 'ordered' }],
     };

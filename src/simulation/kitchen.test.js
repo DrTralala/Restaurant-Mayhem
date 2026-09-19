@@ -25,15 +25,16 @@ describe('processKitchen', () => {
       restaurant: { gameTime: 30 },
       serviceItems: [item],
       dishes: [{ id: 'toast', prepTime: 60 }],
-      kitchenStations: [{ id: 'k1' }],
+      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
       staff: [{ id: 'cook1', role: 'cook', morale: 0,
+        x: 90, y: 110,
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' } }],
     });
 
     expect(result.serviceItems[0]).toMatchObject({ accumulatedWork: 15, lastProgressAt: 30 });
   });
 
-  it('keeps equipment and global speed modifiers when the assigned cook has no task record', () => {
+  it('does not progress a dish when the assigned cook has no active task record', () => {
     const result = processKitchen({
       ...baseState,
       restaurant: { gameTime: 50 },
@@ -43,13 +44,13 @@ describe('processKitchen', () => {
         preparationStartedAt: 0,
       }],
       dishes: [{ id: 'toast', prepTime: 120 }],
-      kitchenStations: [{ id: 'k1', equipmentId: 'oven' }],
+       kitchenStations: [{ id: 'k1', equipmentId: 'oven', x: 100, y: 100 }],
       equipment: [{ id: 'oven', owned: true, speedMultiplier: 2 }],
       upgrades: [{ level: 1, effects: { type: 'globalSpeed', value: 0.25 } }],
       staff: [{ id: 'cook1', role: 'cook', morale: 50 }],
     });
 
-    expect(result.serviceItems[0]).toMatchObject({ state: 'ready', readyAt: 50 });
+    expect(result.serviceItems[0]).toMatchObject({ state: 'preparing' });
   });
 
   it('keeps the cook task ledger in step when an older item ledger is missing', () => {
@@ -62,8 +63,9 @@ describe('processKitchen', () => {
         preparationStartedAt: 0,
       }],
       dishes: [{ id: 'toast', prepTime: 120 }],
-      kitchenStations: [{ id: 'k1' }],
+      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
       staff: [{ id: 'cook1', role: 'cook', morale: 100,
+        x: 90, y: 110,
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
           accumulatedWork: 30, lastProgressAt: 30 } }],
     });
@@ -176,12 +178,13 @@ describe('processKitchen', () => {
         serviceTableId: null, serviceSlotIndex: null,
       }],
       dishes: [{ id: 'd1', prepTime: 120, requiredEquipmentId: 'eq1' }],
-      kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
+       kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
       equipment: [{ id: 'eq1', speedMultiplier: 1.2, qualityBonus: 0, owned: true }],
       upgrades: [{ level: 1, effects: { type: 'globalSpeed', value: 0.1 } }],
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       staff: [{
         id: 'cook1', role: 'cook',
+        x: 90, y: 130,
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
       }],
     };
@@ -226,6 +229,152 @@ describe('processKitchen', () => {
     });
 
     expect(result.serviceItems).toEqual(items);
+  });
+
+  it('pauses remote dish work without catch-up and advances both ledgers to now', () => {
+    const state = {
+      ...baseState,
+      restaurant: { gameTime: 100 },
+      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
+      dishes: [{ id: 'toast', prepTime: 120 }],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+        state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+        preparationStartedAt: 0, accumulatedWork: 12, lastProgressAt: 20,
+      }],
+      staff: [{
+        id: 'cook1', role: 'cook', morale: 50, x: 500, y: 500,
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
+          accumulatedWork: 12, lastProgressAt: 20 },
+      }],
+    };
+
+    const paused = processKitchen(state);
+
+    expect(paused.serviceItems[0]).toMatchObject({ accumulatedWork: 12, lastProgressAt: 100 });
+    expect(paused.staff[0].task).toMatchObject({ accumulatedWork: 12, lastProgressAt: 100 });
+
+    const attended = processKitchen({
+      ...paused,
+      restaurant: { gameTime: 110 },
+      staff: [{ ...paused.staff[0], x: 90, y: 110 }],
+    });
+    expect(attended.serviceItems[0]).toMatchObject({ accumulatedWork: 22, lastProgressAt: 110 });
+    expect(attended.staff[0].task).toMatchObject({ accumulatedWork: 22, lastProgressAt: 110 });
+  });
+
+  it('does not complete saved work while the cook is remote', () => {
+    const state = {
+      ...baseState,
+      restaurant: { gameTime: 100 },
+      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
+      dishes: [{ id: 'toast', prepTime: 60 }],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+        state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+        preparationStartedAt: 0, accumulatedWork: 60, lastProgressAt: 20,
+      }],
+      staff: [{
+        id: 'cook1', role: 'cook', morale: 50, x: 500, y: 500,
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
+          accumulatedWork: 60, lastProgressAt: 20 },
+      }],
+    };
+
+    const paused = processKitchen(state);
+
+    expect(paused.serviceItems[0]).toMatchObject({
+      state: 'preparing', accumulatedWork: 60, lastProgressAt: 100,
+    });
+    expect(paused.staff[0].task).toMatchObject({ accumulatedWork: 60, lastProgressAt: 100 });
+  });
+
+  it('does not move paused progress timestamps backwards on an older replay time', () => {
+    const state = {
+      ...baseState,
+      restaurant: { gameTime: 50 },
+      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
+      dishes: [{ id: 'toast', prepTime: 120 }],
+      serviceItems: [{
+        id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+        state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+        preparationStartedAt: 0, accumulatedWork: 12, lastProgressAt: 100,
+      }],
+      staff: [{
+        id: 'cook1', role: 'cook', morale: 50, x: 500, y: 500,
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
+          accumulatedWork: 12, lastProgressAt: 100 },
+      }],
+    };
+
+    const replayed = processKitchen(state);
+
+    expect(replayed.serviceItems[0]).toMatchObject({ accumulatedWork: 12, lastProgressAt: 100 });
+    expect(replayed.staff[0].task).toMatchObject({ accumulatedWork: 12, lastProgressAt: 100 });
+  });
+
+  it('pauses every member of an attended-gated cooking batch while its cook is away', () => {
+    const state = {
+      ...baseState,
+      restaurant: { gameTime: 100 },
+      customers: [{ id: 'c1', state: 'waiting_for_items' }, { id: 'c2', state: 'waiting_for_items' }],
+      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
+      dishes: [{ id: 'toast', prepTime: 120 }],
+      serviceItems: [
+        {
+          id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1', batchId: 'b1',
+          state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+          preparationStartedAt: 0, accumulatedWork: 12, lastProgressAt: 20,
+        },
+        {
+          id: 'i2', kind: 'dish', menuItemId: 'toast', customerId: 'c2', batchId: 'b1',
+          state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+          preparationStartedAt: 0, accumulatedWork: 30, lastProgressAt: 20,
+        },
+      ],
+      cookingBatches: [{
+        id: 'b1', cookId: 'cook1', stationId: 'k1', serviceItemIds: ['i1', 'i2'],
+        status: 'preparing', startedAt: 0,
+      }],
+      staff: [{
+        id: 'cook1', role: 'cook', morale: 50, x: 500, y: 500,
+        task: {
+          type: 'prepare_dish', batchId: 'b1', serviceItemId: 'i1',
+          serviceItemIds: ['i1', 'i2'], stationId: 'k1',
+          accumulatedWork: 12, lastProgressAt: 20,
+        },
+      }],
+    };
+
+    const result = processKitchen(state);
+
+    expect(result.serviceItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'i1', accumulatedWork: 12, lastProgressAt: 100 }),
+      expect.objectContaining({ id: 'i2', accumulatedWork: 30, lastProgressAt: 100 }),
+    ]));
+    expect(result.staff[0].task).toMatchObject({ accumulatedWork: 12, lastProgressAt: 100 });
+  });
+
+  it('does not progress or retain a preparation task when the required equipment is missing', () => {
+    const item = {
+      id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+      state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
+      preparationStartedAt: 0, accumulatedWork: 12, lastProgressAt: 20,
+    };
+    const result = processKitchen({
+      ...baseState,
+      restaurant: { gameTime: 100 },
+      serviceItems: [item],
+      dishes: [{ id: 'toast', prepTime: 120, requiredEquipmentId: 'eq1' }],
+      kitchenStations: [{ id: 'k1', x: 100, y: 100, equipmentId: 'other' }],
+      staff: [{
+        id: 'cook1', role: 'cook', x: 90, y: 110,
+        task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
+      }],
+    });
+
+    expect(result.serviceItems).toEqual([item]);
+    expect(result.staff[0].task).toBeNull();
   });
 
   it('does not complete a food preparation at its deadline', () => {

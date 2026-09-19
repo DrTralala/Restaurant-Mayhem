@@ -57,11 +57,18 @@ describe('balance helpers', () => {
     expect(getQueuePatienceMultiplier(twentyParties)).toBe(1.5);
   });
 
-  it('paces ordinary off-peak arrivals between 20 and 30 real seconds apart', () => {
+  it('paces ordinary off-peak arrivals below the high-rating threshold', () => {
     expect(1 / (getBaseArrivalRate(1) * 60)).toBeCloseTo(30.303, 3);
     expect(1 / (getBaseArrivalRate(3) * 60)).toBeCloseTo(25.641, 3);
-    expect(1 / (getBaseArrivalRate(5) * 60)).toBeCloseTo(22.222, 3);
+    expect(1 / (getBaseArrivalRate(4.49) * 60)).toBeCloseTo(23.004, 3);
   });
+
+  it.each([[4.49, 1], [4.5, 2], [4.75, 2.5], [5, 3]])(
+    'applies the high-rating multiplier at %s stars', (stars, multiplier) => {
+      const previousRate = 0.00055 + (stars - 1) * 0.00005;
+      expect(getBaseArrivalRate(stars)).toBeCloseTo(previousRate * multiplier, 10);
+    },
+  );
 
   it.each([[0, 0.10], [0.5, 0.20], [0.999999, 0.30], [1, 0.30]])(
     'samples a bounded integer tip rate for %s', (sample, expected) => {

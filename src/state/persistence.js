@@ -16,7 +16,7 @@ import { SAVE_VERSION } from './saveVersion';
 import { normaliseDoorAdmissions } from './doorAdmissions';
 import { hydrateMovementResidencies, movementSaveSnapshot, validateSavedNavigationGeometry } from './movementPersistence';
 import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
-import { repairInvalidStaffOverlaps } from './staffMoves';
+import { repairInvalidStaffOverlaps, repairInvalidStaffPreparationPositions } from './staffMoves';
 import { getCarriedServiceItemIds, getStaffCarryCapacity, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseServiceItemOwnership } from '../simulation/serviceItems';
 import { normaliseCookingBatches } from '../simulation/cookingBatches';
@@ -487,7 +487,7 @@ export function hydrateState(saved, fresh) {
 
   const residencies = hydrateMovementResidencies(normaliseDoorAdmissions(hydrated));
   const reconciled = reconcileSelfSeatingState(residencies);
-  const repaired = repairInvalidStaffOverlaps(reconciled);
+  const repaired = repairInvalidStaffPreparationPositions(repairInvalidStaffOverlaps(reconciled));
   const routeReconciled = reconcileCashierRoutes(repaired, savedCashierStations);
   return {
     ...routeReconciled,

@@ -20,6 +20,8 @@ import { getCanvasFont } from '../typography';
 import { drawSprite } from './sprites';
 
 const CANVAS_LABEL_FONT = getCanvasFont('compact');
+// Counter items sit in two 14px rows, so keep the glyphs within that spacing.
+const SERVICE_COUNTER_ITEM_FONT = getCanvasFont('item', 12);
 
 function labelRect(rect) {
   if (!rect || !Number.isFinite(rect.x) || !Number.isFinite(rect.y)) return null;
@@ -579,6 +581,7 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
     const counter = (state.serviceTables || []).find(candidate => candidate.id === item.serviceTableId);
     const position = getServiceCounterItemPosition(counter, item.serviceSlotIndex) || item;
     ctx.save();
+    ctx.font = SERVICE_COUNTER_ITEM_FONT;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);

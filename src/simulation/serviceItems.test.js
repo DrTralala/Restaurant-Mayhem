@@ -186,7 +186,7 @@ describe('service item orders', () => {
     };
 
     expect(findAvailableServiceSlot(state)).toEqual({
-      serviceTableId: 'st1', serviceSlotIndex: 1, x: 180, y: 130,
+      serviceTableId: 'st1', serviceSlotIndex: 1, x: 185, y: 130,
     });
   });
 
@@ -272,14 +272,38 @@ describe('service item orders', () => {
     };
 
     expect(findAvailableServiceSlot(state)).toEqual({
-      serviceTableId: 'st1', serviceSlotIndex: 2, x: 210, y: 130,
+      serviceTableId: 'st1', serviceSlotIndex: 2, x: 215, y: 130,
     });
+  });
+
+  it('counts a valid bare-dispenser reservation as occupied before assigning another drink', () => {
+    const state = {
+      kitchenStations: [{ id: 'dispenser-a', equipmentId: null, x: 100, y: 100 }],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      serviceItems: [{
+        id: 'i1', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'preparing',
+        stationId: 'dispenser-a', serviceTableId: 'st1', serviceSlotIndex: 0, assignedStaffId: 'w1',
+      }],
+      customers: [{ id: 'c1', drinkId: 'water', state: 'waiting_for_items' }],
+      staff: [{ id: 'w1', role: 'cook', task: {
+        type: 'prepare_drink', serviceItemId: 'i1', stationId: 'dispenser-a',
+        serviceTableId: 'st1', serviceSlotIndex: 0,
+      } }],
+    };
+
+    expect(hasValidDrinkReservation(state, state.serviceItems[0])).toBe(true);
+    expect(findAvailableServiceSlot(state).serviceSlotIndex).toBe(1);
   });
 
   it('places service slots down a quarter-turned counter', () => {
     expect(getServiceSlotPosition({ x: 140, y: 120, rotation: 1 }, 2)).toEqual({
-      x: 150, y: 190,
+      x: 150, y: 195,
     });
+  });
+
+  it('places the second row compactly inside the counter footprint', () => {
+    expect(getServiceSlotPosition({ x: 140, y: 120 }, 4)).toEqual({ x: 155, y: 150 });
+    expect(getServiceSlotPosition({ x: 140, y: 120, rotation: 1 }, 5)).toEqual({ x: 170, y: 165 });
   });
 
   it('ignores a stale drink reservation with no matching worker task', () => {
@@ -321,6 +345,32 @@ describe('service item orders', () => {
     });
   });
 
+  it.each([
+    ['missing', []],
+    ['equipped', [{ id: 'dispenser', equipmentId: 'eq1', x: 100, y: 100 }]],
+  ])('rejects a drink reservation whose %s station is not a bare dispenser', (_label, kitchenStations) => {
+    const state = {
+      kitchenStations,
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', drinkId: 'water' }],
+      staff: [{
+        id: 'w1', role: 'cook', task: {
+          type: 'prepare_drink', serviceItemId: 'i1', stationId: 'dispenser',
+          serviceTableId: 'st1', serviceSlotIndex: 0,
+        },
+      }],
+      serviceItems: [{
+        id: 'i1', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'preparing',
+        stationId: 'dispenser', serviceTableId: 'st1', serviceSlotIndex: 0,
+        assignedStaffId: 'w1', preparationStartedAt: 10, accumulatedWork: 12, lastProgressAt: 20,
+      }],
+    };
+
+    expect(hasValidDrinkReservation(state, state.serviceItems[0])).toBe(false);
+    expect(normaliseServiceItemOwnership({ ...state, restaurant: { gameTime: 100 } }).serviceItems[0])
+      .toMatchObject({ state: 'ordered', stationId: null, assignedStaffId: null, lastProgressAt: 100 });
+  });
+
   it('ignores a drink reservation whose worker task records a different slot', () => {
     const state = {
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
@@ -351,10 +401,21 @@ describe('service item orders', () => {
     expect(findAvailableServiceSlot(state).serviceSlotIndex).toBe(0);
   });
 
-  it('returns null when all four slots on every counter are occupied', () => {
+  it('allocates eight slots and refuses a ninth', () => {
+    const state = { serviceTables: [{ id: 'counter', x: 100, y: 100 }],
+      serviceItems: [], staff: [], customers: [] };
+    for (let index = 0; index < 8; index += 1) {
+      const slot = findAvailableServiceSlot(state);
+      expect(slot).toMatchObject({ serviceTableId: 'counter', serviceSlotIndex: index });
+      state.serviceItems.push({ id: `i${index}`, kind: 'dish', state: 'on_service', ...slot });
+    }
+    expect(findAvailableServiceSlot(state)).toBeNull();
+  });
+
+  it('returns null when all eight slots on every counter are occupied', () => {
     const state = {
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
-      serviceItems: Array.from({ length: 4 }, (_, serviceSlotIndex) => ({
+      serviceItems: Array.from({ length: 8 }, (_, serviceSlotIndex) => ({
         id: `i${serviceSlotIndex}`, state: 'on_service',
         serviceTableId: 'st1', serviceSlotIndex,
       })),

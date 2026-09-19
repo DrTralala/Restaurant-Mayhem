@@ -137,14 +137,46 @@ function staticallyReachable(state, worker, point) {
 }
 
 function findStaffRepairPoint(state, worker) {
+  const currentPointOpen = createGrid(state).isOpen(worker);
   for (const offset of REPAIR_OFFSETS) {
     const point = { x: worker.x + offset.x, y: worker.y + offset.y };
     if (!validateStaffMove(state, worker.id, point).valid
       || !clearOfCurrentClaims(state, worker, point)
-      || !staticallyReachable(state, worker, point)) continue;
+      || (currentPointOpen && !staticallyReachable(state, worker, point))) continue;
     return point;
   }
   return null;
+}
+
+function hasActivePreparationTask(state, worker) {
+  const task = worker?.task;
+  const item = (state.serviceItems || []).find(candidate => candidate.id === task?.serviceItemId);
+  return worker?.role === 'cook'
+    && ['prepare_dish', 'prepare_drink'].includes(task?.type)
+    && item?.kind === (task?.type === 'prepare_drink' ? 'drink' : 'dish')
+    && item?.assignedStaffId === worker.id
+    && item?.stationId === task.stationId
+    && ['ordered', 'preparing', 'ready'].includes(item.state);
+}
+
+// Imported staff can retain an old station-centre coordinate after fixture
+// geometry changes. The movement grid must continue rejecting that start; only
+// this invalid saved preparation state is normalised to a free floor point.
+export function repairInvalidStaffPreparationPositions(state) {
+  let next = state;
+  for (const worker of next.staff || []) {
+    if (!hasActivePreparationTask(next, worker) || !finitePoint(worker)
+      || createGrid(next).isOpen(worker)) continue;
+    const point = findStaffRepairPoint(next, worker);
+    if (!point) continue;
+    next = {
+      ...next,
+      staff: next.staff.map(candidate => sameId(candidate.id, worker.id)
+        ? { ...clearNavigationGoal(candidate), x: point.x, y: point.y }
+        : candidate),
+    };
+  }
+  return next;
 }
 
 // Repair only the imported/runtime state that is known to be unsafe because a
@@ -226,9 +258,10 @@ export function invalidateMovementRuntime(state, id) {
   };
 }
 
-function resetPreparation(item, workerId, kind) {
+function resetPreparation(item, workerId, kind, now) {
   if (!item || item.assignedStaffId !== workerId || item.kind !== kind
     || !['ordered', 'preparing', 'ready'].includes(item.state)) return item;
+  const hasProgress = Number.isFinite(item.accumulatedWork) && item.accumulatedWork > 0;
   return {
     ...item,
     state: 'ordered',
@@ -236,8 +269,11 @@ function resetPreparation(item, workerId, kind) {
     serviceTableId: null,
     serviceSlotIndex: null,
     assignedStaffId: null,
-    preparationStartedAt: null,
-    readyAt: null,
+    ...(hasProgress
+      ? (Number.isFinite(now)
+        ? { lastProgressAt: Math.max(Number.isFinite(item.lastProgressAt) ? item.lastProgressAt : now, now) }
+        : {})
+      : { preparationStartedAt: null, readyAt: null, lastProgressAt: null }),
   };
 }
 
@@ -249,6 +285,7 @@ function resetWashing(item, workerId) {
 
 function resetStaffWork(state, worker) {
   const task = worker.task;
+  const now = state.restaurant?.gameTime;
   let customers = state.customers || [];
   let serviceItems = state.serviceItems || [];
 
@@ -261,13 +298,13 @@ function resetStaffWork(state, worker) {
 
   if (task?.type === 'prepare_dish') {
     serviceItems = serviceItems.map(item => item.id === task.serviceItemId
-      ? resetPreparation(item, worker.id, 'dish')
+      ? resetPreparation(item, worker.id, 'dish', now)
       : item);
   }
 
   if (task?.type === 'prepare_drink') {
     serviceItems = serviceItems.map(item => item.id === task.serviceItemId
-      ? resetPreparation(item, worker.id, 'drink')
+      ? resetPreparation(item, worker.id, 'drink', now)
       : item);
   }
 
