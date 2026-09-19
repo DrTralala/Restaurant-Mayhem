@@ -671,7 +671,8 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       }
     }
 
-    const orderingCustomer = customers.find(c => c.state === 'seated' && !c.dishId && !c.drinkId && (!claimedCustomerIds || !claimedCustomerIds.has(c.id)));
+    const orderingCustomer = customers.find(c => isOrderableCustomer(c)
+      && (!claimedCustomerIds || !claimedCustomerIds.has(c.id)));
     const hasOrderableItem = state.dishes?.length > 0
       || state.unlockedDrinkIds?.some(drinkId => getDrink(drinkId));
     if (orderingCustomer && hasOrderableItem) {
@@ -681,10 +682,10 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
         const groupOrder = Number(staff.skill) >= 10;
         const customerIds = groupOrder
           ? customers
-            .filter(customer => customer.state === 'seated'
-              && customer.tableId === orderingCustomer.tableId
-              && getPartyKey(customer) === getPartyKey(orderingCustomer)
-              && !customer.dishId && !customer.drinkId
+            .filter(customer => isOrderableCustomer(customer, {
+              tableId: orderingCustomer.tableId,
+              partyId: getPartyKey(orderingCustomer),
+            })
               && (!claimedCustomerIds || !claimedCustomerIds.has(customer.id)))
             .map(customer => customer.id)
           : [orderingCustomer.id];
@@ -879,7 +880,7 @@ function hasObsoleteCustomerTask(staff, customers, tables, serviceItems, washSta
       ? staff.task.customerIds : [staff.task.customerId];
     return !customerIds.some(customerId => {
       const member = customers.find(candidate => candidate.id === customerId);
-      return canCompleteOrderForMember(member, staff.task);
+      return isOrderableCustomer(member, staff.task);
     });
   }
   if (staff.task?.type === 'deliver_service_item') {
@@ -1159,11 +1160,13 @@ function orderTaskCustomerIds(task) {
   });
 }
 
-function canCompleteOrderForMember(customer, task) {
+function isOrderableCustomer(customer, task = {}) {
   return customer?.state === 'seated'
     && (task.tableId == null || customer.tableId === task.tableId)
     && (task.partyId == null || getPartyKey(customer) === task.partyId)
-    && !customer.dishId && !customer.drinkId;
+    && !customer.dishId && !customer.drinkId
+    && customer.foodOutcome !== 'cancelled'
+    && customer.foodOutcome !== 'delivered';
 }
 
 function resolveTakeOrderTask({ state, staff, customers, queue, tables, serviceItems,
@@ -1174,7 +1177,7 @@ function resolveTakeOrderTask({ state, staff, customers, queue, tables, serviceI
     .map(id => customers.find(customer => customer.id === id))
     .filter(Boolean);
   const eligibleMembers = snapshotMembers.filter(customer =>
-    canCompleteOrderForMember(customer, staff.task));
+    isOrderableCustomer(customer, staff.task));
   if (eligibleMembers.length === 0) {
     return { staff: completedStaff, customers, queue, tables, serviceItems };
   }
@@ -1186,7 +1189,7 @@ function resolveTakeOrderTask({ state, staff, customers, queue, tables, serviceI
   let nextRestaurant = restaurant;
   for (const snapshotMember of eligibleMembers) {
     const current = updatedCustomers.find(candidate => candidate.id === snapshotMember.id);
-    if (!canCompleteOrderForMember(current, staff.task)) continue;
+    if (!isOrderableCustomer(current, staff.task)) continue;
     const ordered = createCustomerOrder(
       { ...state, serviceItems: nextServiceItems },
       current,
@@ -1330,7 +1333,7 @@ function resolveTask({
   if (staff.task.type === 'take_order') {
     const hasEligibleMember = orderTaskCustomerIds(staff.task)
       .map(id => customers.find(customer => customer.id === id))
-      .some(customer => canCompleteOrderForMember(customer, staff.task));
+      .some(customer => isOrderableCustomer(customer, staff.task));
     if (!hasEligibleMember) {
       return { staff: completedStaff, customers, queue, tables, serviceItems };
     }

@@ -91,9 +91,10 @@ describe('StaffPanel', () => {
     const { rerender } = render(<StaffPanel />);
     const draftCard = getStaffCard('z-worker');
     fireEvent.click(within(draftCard).getByRole('button', { name: 'Edit schedule for Draft' }));
-    fireEvent.change(within(draftCard).getByRole('combobox', { name: '00:00 to 00:30' }), {
-      target: { value: 'rest' },
-    });
+    fireEvent.change(within(draftCard).getByRole('combobox', { name: 'Duty' }), { target: { value: 'rest' } });
+    fireEvent.change(within(draftCard).getByRole('combobox', { name: 'From' }), { target: { value: '0' } });
+    fireEvent.change(within(draftCard).getByRole('combobox', { name: 'To' }), { target: { value: '2' } });
+    fireEvent.click(within(draftCard).getByRole('button', { name: 'Set range' }));
 
     fireEvent.click(within(getStaffCard('a-worker')).getByRole('button', { name: /^Train/ }));
     rerender(<StaffPanel />);
@@ -101,7 +102,7 @@ describe('StaffPanel', () => {
     expect(screen.getAllByTestId('staff-card').map(card => card.dataset.staffId))
       .toEqual(['a-worker', 'z-worker']);
     expect(within(getStaffCard('z-worker'))
-      .getByRole('combobox', { name: '00:00 to 00:30' })).toHaveValue('rest');
+      .getByRole('list', { name: 'Schedule totals' })).toHaveTextContent(/Rest:\s*1 hour/);
   });
 
   it('cancels a schedule draft and restores the source schedule on the next edit', () => {
@@ -113,13 +114,15 @@ describe('StaffPanel', () => {
     render(<StaffPanel />);
     const card = getStaffCard('s1');
     fireEvent.click(within(card).getByRole('button', { name: 'Edit schedule for Marco' }));
-    fireEvent.change(within(card).getByRole('combobox', { name: '00:00 to 00:30' }), {
-      target: { value: 'rest' },
-    });
+    fireEvent.change(within(card).getByRole('combobox', { name: 'Duty' }), { target: { value: 'rest' } });
+    fireEvent.change(within(card).getByRole('combobox', { name: 'From' }), { target: { value: '0' } });
+    fireEvent.change(within(card).getByRole('combobox', { name: 'To' }), { target: { value: '2' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Set range' }));
     fireEvent.click(within(card).getByRole('button', { name: 'Cancel schedule' }));
     fireEvent.click(within(card).getByRole('button', { name: 'Edit schedule for Marco' }));
 
-    expect(within(card).getByRole('combobox', { name: '00:00 to 00:30' })).toHaveValue('work');
+    expect(within(card).getByRole('list', { name: 'Schedule totals' })).toHaveTextContent(/Work:\s*24 hours/);
+    expect(within(card).getByRole('list', { name: 'Schedule totals' })).toHaveTextContent(/Rest:\s*0 hours/);
   });
 
   it('keeps invalid schedule drafts open with a readable reason and does not dispatch', () => {
@@ -132,13 +135,41 @@ describe('StaffPanel', () => {
     render(<StaffPanel />);
     const card = getStaffCard('s1');
     fireEvent.click(within(card).getByRole('button', { name: 'Edit schedule for Marco' }));
-    fireEvent.change(within(card).getByRole('combobox', { name: '00:00 to 00:30' }), {
-      target: { value: 'pto' },
-    });
+    fireEvent.change(within(card).getByRole('combobox', { name: 'Duty' }), { target: { value: 'pto' } });
+    fireEvent.change(within(card).getByRole('combobox', { name: 'From' }), { target: { value: '0' } });
+    fireEvent.change(within(card).getByRole('combobox', { name: 'To' }), { target: { value: '2' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Set range' }));
     fireEvent.click(within(card).getByRole('button', { name: 'Apply schedule' }));
 
     expect(dispatch).not.toHaveBeenCalled();
     expect(screen.getByRole('alert')).toHaveTextContent(/14 half-hour slots|7 in-game hours/i);
+  });
+
+  it('copies another worker schedule into the open draft without dispatching immediately', () => {
+    const copiedSchedule = Array.from({ length: 48 }, (_mode, index) => index === 44 ? 'rest' : 'work');
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [
+        { id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 },
+        { id: 's2', name: 'Anna', role: 'waiter', skill: 3, morale: 80, salary: 150, schedule: copiedSchedule },
+      ],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit schedule for Marco' }));
+
+    const copyFrom = within(card).getByRole('combobox', { name: 'Copy from' });
+    expect(within(card).getByRole('option', { name: 'Anna' })).toBeInTheDocument();
+    expect(within(card).queryByRole('option', { name: 'Marco' })).not.toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Copy schedule' })).toBeDisabled();
+
+    fireEvent.change(copyFrom, { target: { value: 's2' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Copy schedule' }));
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(within(card).getByRole('list', { name: 'Schedule totals' })).toHaveTextContent(/Rest:\s*0\.5 hours/);
   });
 
   it('does not disable hiring or show a legacy staff-slot denominator', () => {

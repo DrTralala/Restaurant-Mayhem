@@ -37,7 +37,7 @@ describe('ItemsPanel', () => {
 
     expect(screen.getByText('Automatic dishwasher')).toBeInTheDocument();
     expect(screen.getByText('$2000')).toBeInTheDocument();
-    expect(screen.getByText(/10 levels.*300 seconds.*12 items/i))
+    expect(screen.getByText(/10 levels.*600 seconds.*12 items/i))
       .toBeInTheDocument();
   });
 

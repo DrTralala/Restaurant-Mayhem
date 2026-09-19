@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState } from '../state/initialState';
 import { prepareStaffForMovement, resolveStaffAfterMovement, updateStaff } from './staff';
+import { clearNavigationGoal } from './movement/navigationGoal';
 
 function stalledStaffState() {
   const initial = createInitialState();
@@ -120,4 +121,360 @@ describe('distinct staff service destinations', () => {
     expect(state.customers[0]).toMatchObject({ state: 'waiting_for_items', menuOutcome: 'ordered' });
     expect(state.serviceItems).toContainEqual(expect.objectContaining({ customerId: 'leaving', state: 'ordered' }));
   }, 30000);
+});
+
+describe('waiter orderability recovery', () => {
+  it.each(['cancelled', 'delivered'])(
+    'does not target a %s seated customer or include them in a group order',
+    foodOutcome => {
+      const fresh = createInitialState();
+      const state = {
+        ...fresh,
+        staff: [{
+          ...fresh.staff.find(worker => worker.role === 'waiter'),
+          id: 'order-waiter',
+          skill: 10,
+          x: 180,
+          y: 220,
+          task: null,
+        }],
+        tables: [fresh.tables.find(table => table.id === 't1')],
+        customers: [
+          {
+            id: 'blocked',
+            partyId: 'party-1',
+            state: 'seated',
+            tableId: 't1',
+            dishId: null,
+            drinkId: null,
+            foodOutcome,
+          },
+          {
+            id: 'eligible',
+            partyId: 'party-1',
+            state: 'seated',
+            tableId: 't1',
+            dishId: null,
+            drinkId: null,
+            foodOutcome: null,
+          },
+        ],
+        serviceItems: [],
+      };
+
+      const assigned = updateStaff(state, 0);
+
+      expect(assigned.staff[0].task).toMatchObject({
+        type: 'take_order',
+        customerId: 'eligible',
+        customerIds: ['eligible'],
+      });
+    },
+  );
+
+  it('releases a stale group order made entirely of non-orderable members before serving a valid diner', () => {
+    const fresh = createInitialState();
+    const staleTask = {
+      type: 'take_order',
+      customerId: 'cancelled',
+      customerIds: ['cancelled', 'delivered'],
+      tableId: 't1',
+      partyId: 'stale-party',
+    };
+    const state = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 100 },
+      staff: [{
+        ...fresh.staff.find(worker => worker.role === 'waiter'),
+        id: 'order-waiter',
+        skill: 10,
+        x: 180,
+        y: 220,
+        task: staleTask,
+      }],
+      tables: [fresh.tables.find(table => table.id === 't1')],
+      customers: [
+        {
+          id: 'cancelled',
+          partyId: 'stale-party',
+          state: 'seated',
+          tableId: 't1',
+          dishId: null,
+          drinkId: null,
+          foodOutcome: 'cancelled',
+        },
+        {
+          id: 'delivered',
+          partyId: 'stale-party',
+          state: 'seated',
+          tableId: 't1',
+          dishId: null,
+          drinkId: null,
+          foodOutcome: 'delivered',
+        },
+        {
+          id: 'eligible',
+          partyId: 'new-party',
+          state: 'seated',
+          tableId: 't1',
+          dishId: null,
+          drinkId: null,
+          foodOutcome: null,
+        },
+      ],
+      serviceItems: [],
+    };
+
+    const released = resolveStaffAfterMovement(state, 0);
+    expect(released.staff[0].task).toBeNull();
+
+    const reassigned = updateStaff(released, 0);
+    expect(reassigned.staff[0].task).toMatchObject({
+      type: 'take_order',
+      customerId: 'eligible',
+    });
+  });
+
+  function mixedGroupRecoveryState(fresh, pendingPartyReviews) {
+    const terminal = {
+      id: 'cancelled',
+      partyId: 'party-1',
+      state: 'seated',
+      tableId: 't1',
+      dishId: null,
+      drinkId: null,
+      menuOutcome: 'ordered',
+      foodOutcome: 'cancelled',
+      foodCancelledAt: 80,
+      cancelledServiceItemIds: ['cancelled-item'],
+    };
+    const eligible = {
+      id: 'eligible',
+      partyId: 'party-1',
+      partySize: 2,
+      state: 'seated',
+      tableId: 't1',
+      dishId: null,
+      drinkId: null,
+      spendingTier: 'premium',
+      spendingBudget: 100,
+      archetype: 'regular',
+      foodOutcome: null,
+    };
+    const table = { ...fresh.tables.find(candidate => candidate.id === 't1'), status: 'occupied' };
+    return {
+      terminal,
+      eligible,
+      state: {
+        ...fresh,
+        restaurant: { ...fresh.restaurant, gameTime: 100, day: 1 },
+        staff: [{
+          ...fresh.staff.find(worker => worker.role === 'waiter'),
+          id: 'order-waiter',
+          skill: 10,
+          x: 180,
+          y: 220,
+          task: {
+            type: 'take_order',
+            customerId: terminal.id,
+            customerIds: [terminal.id, eligible.id],
+            tableId: 't1',
+            partyId: 'party-1',
+            startedAt: 0,
+            accumulatedWork: 0,
+            lastProgressAt: 0,
+          },
+        }],
+        tables: [table],
+        customers: [terminal, eligible],
+        serviceItems: [],
+        unlockedDrinkIds: [],
+        pendingPartyReviews,
+        partyReviewHistory: [],
+        completedCustomers: [],
+      },
+    };
+  }
+
+  it('preserves an existing mixed party review and settles after the eligible member pays', () => {
+    const fresh = createInitialState();
+    const { terminal, eligible, state: baseState } = mixedGroupRecoveryState(fresh, []);
+    const state = {
+      ...baseState,
+      pendingPartyReviews: [{
+        partyId: 'party-1',
+        memberIds: [terminal.id, eligible.id],
+        orderedMemberIds: [terminal.id],
+        unaffordableMemberIds: [],
+        paidReviews: [{ customerId: terminal.id, score: 100 }],
+      }],
+    };
+    const completed = resolveStaffAfterMovement(state, 0);
+
+    expect(completed.customers.find(customer => customer.id === terminal.id)).toEqual(terminal);
+    expect(completed.customers.find(customer => customer.id === eligible.id)).toMatchObject({
+      state: 'waiting_for_items',
+      menuOutcome: 'ordered',
+    });
+    expect(completed.serviceItems).toEqual([
+      expect.objectContaining({ customerId: eligible.id, state: 'ordered' }),
+    ]);
+    expect(completed.tables).toEqual(state.tables);
+    expect(completed.pendingPartyReviews).toEqual([{
+      partyId: 'party-1',
+      memberIds: [terminal.id, eligible.id],
+      orderedMemberIds: [terminal.id, eligible.id],
+      unaffordableMemberIds: [],
+      paidReviews: [{ customerId: terminal.id, score: 100 }],
+    }]);
+
+    const paymentState = {
+      ...completed,
+      restaurant: {
+        ...completed.restaurant, gameTime: 60, day: 1, reputation: 3, totalServed: 0,
+      },
+      staff: [{
+        ...fresh.staff.find(worker => worker.role === 'waiter'),
+        id: 'cashier',
+        x: 840,
+        y: 100,
+        task: { type: 'take_payment', customerId: eligible.id, stationId: 'cashier1', startedAt: 0 },
+      }],
+      customers: completed.customers.map(customer => customer.id === eligible.id
+        ? {
+          ...customer,
+          state: 'checkout_processing',
+          cashierStationId: 'cashier1',
+          paymentReady: false,
+          x: 840,
+          y: 180,
+          happiness: 100,
+        }
+        : customer),
+      cashierStations: [{
+        id: 'cashier1', x: 800, y: 120, w: 80, h: 40, assignedStaffId: 'cashier',
+      }],
+      completedCustomers: [],
+    };
+    const settled = updateStaff(paymentState, 0);
+
+    expect(settled.pendingPartyReviews).toEqual([]);
+    expect(settled.partyReviewHistory).toEqual([
+      expect.objectContaining({
+        partyId: 'party-1', memberCount: 2, paidCount: 2, unaffordableCount: 0,
+      }),
+    ]);
+    expect(settled.customers.find(customer => customer.id === terminal.id)).toEqual(
+      completed.customers.find(customer => customer.id === terminal.id),
+    );
+    expect(settled.customers.find(customer => customer.id === eligible.id)).toMatchObject({
+      state: 'leaving',
+      departureReason: 'served',
+    });
+  });
+
+  it('does not create an incomplete mixed-party review when the saved task has no tracker', () => {
+    const fresh = createInitialState();
+    const { terminal, eligible, state } = mixedGroupRecoveryState(fresh, []);
+    const completed = resolveStaffAfterMovement(state, 0);
+    const pending = completed.pendingPartyReviews[0];
+
+    expect(completed.customers.find(customer => customer.id === terminal.id)).toEqual(terminal);
+    expect(pending).toEqual({
+      partyId: 'party-1',
+      memberIds: [eligible.id],
+      orderedMemberIds: [eligible.id],
+      unaffordableMemberIds: [],
+      paidReviews: [],
+    });
+  });
+
+  it.each(['cancelled', 'delivered'])(
+    'releases and recovers an individual %s saved order task without reordering the terminal customer',
+    foodOutcome => {
+      const fresh = createInitialState();
+      const terminal = {
+        id: 'terminal',
+        partyId: 'terminal-party',
+        state: 'seated',
+        tableId: 't1',
+        dishId: null,
+        drinkId: null,
+        menuOutcome: 'ordered',
+        foodOutcome,
+      };
+      const eligible = {
+        id: 'eligible',
+        partyId: 'eligible-party',
+        state: 'seated',
+        tableId: 't1',
+        dishId: null,
+        drinkId: null,
+        spendingTier: 'premium',
+        spendingBudget: 100,
+        archetype: 'regular',
+        foodOutcome: null,
+      };
+      const table = { ...fresh.tables.find(candidate => candidate.id === 't1'), status: 'occupied' };
+      const state = {
+        ...fresh,
+        restaurant: { ...fresh.restaurant, gameTime: 100, day: 1 },
+        staff: [{
+          ...fresh.staff.find(worker => worker.role === 'waiter'),
+          id: 'order-waiter',
+          skill: 5,
+          x: 180,
+          y: 220,
+          task: { type: 'take_order', customerId: terminal.id },
+        }],
+        tables: [table],
+        customers: [terminal, eligible],
+        serviceItems: [],
+        unlockedDrinkIds: [],
+        pendingPartyReviews: [],
+        partyReviewHistory: [],
+        completedCustomers: [],
+      };
+
+      const released = resolveStaffAfterMovement(state, 0);
+      expect(released.staff[0].task).toBeNull();
+      expect(released.customers.find(customer => customer.id === terminal.id)).toEqual(terminal);
+      expect(released.tables).toEqual([table]);
+
+      const reassigned = updateStaff(released, 0);
+      expect(reassigned.staff[0].task).toMatchObject({
+        type: 'take_order', customerId: eligible.id,
+      });
+      const assignedWorker = reassigned.staff[0];
+      const assignedGoal = assignedWorker.navigationGoal || assignedWorker;
+      const completionState = {
+        ...reassigned,
+        restaurant: { ...reassigned.restaurant, gameTime: 100 },
+        staff: [clearNavigationGoal({
+          ...assignedWorker,
+          x: assignedGoal.x,
+          y: assignedGoal.y,
+          task: {
+            ...assignedWorker.task,
+            startedAt: 0,
+            accumulatedWork: 0,
+            lastProgressAt: 0,
+          },
+        })],
+      };
+      const completed = resolveStaffAfterMovement(completionState, 0);
+
+      expect(completed.customers.find(customer => customer.id === terminal.id)).toEqual(terminal);
+      expect(completed.tables).toEqual([table]);
+      expect(completed.serviceItems.every(item => item.customerId !== terminal.id)).toBe(true);
+      expect(completed.pendingPartyReviews.some(record => record.partyId === terminal.partyId)).toBe(false);
+      expect(completed.customers.find(customer => customer.id === eligible.id)).toMatchObject({
+        state: 'waiting_for_items',
+        menuOutcome: 'ordered',
+      });
+      expect(completed.serviceItems).toContainEqual(
+        expect.objectContaining({ customerId: eligible.id, state: 'ordered' }),
+      );
+    },
+  );
 });

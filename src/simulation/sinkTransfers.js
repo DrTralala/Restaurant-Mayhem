@@ -1,3 +1,4 @@
+import { ACTIVITY_DURATIONS } from './activity';
 import {
   DISHWASHER_BASE_WASH_WORK,
   getDishwasherStats,
@@ -145,19 +146,21 @@ function manualBacklogSeconds(state, station, candidate, now, worker) {
   const safeRate = rate > 0 ? rate : 1;
   const active = (state.serviceItems || []).find(item =>
     sameId(item.washStationId, station.id) && item.state === 'washing');
-    const activeRemaining = active
-     ? Math.max(0, DISHWASHER_BASE_WASH_WORK - finiteWork(active)
+  const activeRemaining = active
+    ? Math.max(0, ACTIVITY_DURATIONS.manualWash - finiteWork(active)
       - (finite(active.lastProgressAt) && active.lastProgressAt < now
         ? (now - active.lastProgressAt) * safeRate : 0)) / safeRate
     : 0;
-   const candidateTime = Math.max(0, DISHWASHER_BASE_WASH_WORK - finiteWork(candidate)) / safeRate;
+  const candidateTime = Math.max(0, ACTIVITY_DURATIONS.manualWash - finiteWork(candidate)) / safeRate;
   const queuedBefore = (state.serviceItems || [])
     .filter(item => sameId(item.washStationId, station.id)
       && item.state === 'queued_for_wash'
       && item.id !== candidate.id
       && itemQueueTime(item, 0) <= itemQueueTime(candidate, 0))
     .length;
-   return activeRemaining + queuedBefore * (DISHWASHER_BASE_WASH_WORK / safeRate) + candidateTime;
+  return activeRemaining
+    + queuedBefore * (ACTIVITY_DURATIONS.manualWash / safeRate)
+    + candidateTime;
 }
 
 function compareCandidates(left, right) {
@@ -193,10 +196,6 @@ export function selectSinkTransfer(state, staffId, now = state?.restaurant?.game
     for (const destination of automaticStations) {
       const stats = getDishwasherStats(destination.level == null ? 1 : destination.level);
       if (!stats || sameId(destination.id, source.id)) continue;
-      // A level-one machine has the same base work as a manual wash. Moving
-      // dishes there cannot repay the pickup/drop-off cost, even if a manual
-      // queue happens to be busy right now.
-      if (stats.secondsPerDish >= DISHWASHER_BASE_WASH_WORK) continue;
       const capacity = getWashStationCapacity(destination);
       const occupancy = getWashStationOccupancy(state, destination, {
         excludeServiceItemId: candidate.id,

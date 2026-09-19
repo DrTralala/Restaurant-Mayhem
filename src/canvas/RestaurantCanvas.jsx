@@ -872,9 +872,7 @@ export default function RestaurantCanvas({
             <>
               {canMoveMenuEntity && (
                 <button onClick={handleMoveEntity} style={menuBtn}>
-                  Move {getPlaceable(getFixturePlacementType({ type: menu.type, data: menu.data }))?.rotatable
-                    ? '(R=rotate)'
-                    : ''}
+                  Move
                 </button>
               )}
               {menuDoor.role !== 'entrance' && (
@@ -903,9 +901,7 @@ export default function RestaurantCanvas({
           )}
           {!menuDoor && canMoveMenuEntity && (
             <button onClick={handleMoveEntity} style={menuBtn}>
-              Move {getPlaceable(getFixturePlacementType({ type: menu.type, data: menu.data }))?.rotatable
-                ? '(R=rotate)'
-                : ''}
+              Move
             </button>
           )}
           {canSellMenuEntity && (
