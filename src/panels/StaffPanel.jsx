@@ -259,6 +259,7 @@ export default function StaffPanel() {
           {editingScheduleId === s.id && (
             <StaffScheduleEditor
               staff={s}
+              staffList={staff}
               schedule={scheduleDraft || getStaffSchedule(s)}
               onChange={nextSchedule => setScheduleDrafts(current => ({ ...current, [s.id]: nextSchedule }))}
               onApply={nextSchedule => applySchedule(s.id, nextSchedule)}

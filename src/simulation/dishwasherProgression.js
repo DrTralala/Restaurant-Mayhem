@@ -1,7 +1,7 @@
 import { ACTIVITY_DURATIONS } from './activity';
 import { getStaffTrainingCost } from './staffProgression';
 
-export const DISHWASHER_BASE_WASH_WORK = ACTIVITY_DURATIONS.manualWash;
+export const DISHWASHER_BASE_WASH_WORK = ACTIVITY_DURATIONS.automaticWash;
 export const DISHWASHER_MAX_LEVEL = 10;
 
 const DISHWASHER_CAPACITIES = Object.freeze([

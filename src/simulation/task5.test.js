@@ -256,22 +256,23 @@ describe('Task 5 dirty dishes and washing', () => {
       .toBe('carried_dirty');
   });
 
-  it('uses 300 game seconds for automatic washing and ignores morale', () => {
+  it('uses 600 game seconds for automatic washing and ignores morale', () => {
     expect(ACTIVITY_DURATIONS.manualWash).toBe(300);
+    expect(ACTIVITY_DURATIONS.automaticWash).toBe(600);
     const station = { id: 'auto', type: 'automatic', x: 200, y: 200, w: 40, h: 40 };
     const item = { id: 'dirty', state: 'washing', washStationId: 'auto', washStartedAt: 0 };
-    const at299 = updateAutomaticDishwashers(makeState({
-      restaurant: { gameTime: 299 }, washStations: [station], serviceItems: [item],
+    const at599 = updateAutomaticDishwashers(makeState({
+      restaurant: { gameTime: 599 }, washStations: [station], serviceItems: [item],
       staff: [{ id: 'waiter', role: 'waiter', morale: 0 }],
     }));
-    const at300 = updateAutomaticDishwashers({
-      ...at299,
-      restaurant: { gameTime: 300 },
+    const at600 = updateAutomaticDishwashers({
+      ...at599,
+      restaurant: { gameTime: 600 },
       staff: [{ id: 'waiter', role: 'waiter', morale: 100 }],
     });
 
-    expect(at299.serviceItems).toHaveLength(1);
-    expect(at300.serviceItems).toEqual([]);
+    expect(at599.serviceItems).toHaveLength(1);
+    expect(at600.serviceItems).toEqual([]);
   });
 
   it('keeps manual washing morale-adjusted from its 300-work baseline', () => {

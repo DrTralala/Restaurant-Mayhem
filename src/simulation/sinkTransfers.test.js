@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ACTIVITY_DURATIONS } from './activity';
 import { selectSinkTransfer } from './sinkTransfers';
 
 function stateFor(overrides = {}) {
@@ -23,9 +24,13 @@ describe('manual sink transfer selection', () => {
       ],
     });
 
-    expect(selectSinkTransfer(state, 'w1', 100)).toMatchObject({
+    const transfer = selectSinkTransfer(state, 'w1', 100);
+    expect(transfer).toMatchObject({
       serviceItemId: 'a-dish', washStationId: 'machine', sourceWashStationId: 'sink',
     });
+    expect(transfer.manualCompletionAt).toBeCloseTo(
+      100 + 1 + 2 * (ACTIVITY_DURATIONS.manualWash / 1.5),
+    );
     expect(selectSinkTransfer({
       ...state,
       staff: [{ ...state.staff[0], id: 'j1', role: 'janitor' }],
@@ -46,5 +51,44 @@ describe('manual sink transfer selection', () => {
     });
 
     expect(selectSinkTransfer(state, 'w1', 100)).toBeNull();
+  });
+
+  it('rejects a nominally faster machine when a fast manual wash has no backlog', () => {
+    const state = stateFor({
+      serviceItems: [{
+        id: 'dish', kind: 'dish', state: 'queued_for_wash', washStationId: 'sink', washQueuedAt: 1,
+      }],
+    });
+
+    expect(selectSinkTransfer({
+      ...state,
+      washStations: [
+        ...state.washStations.slice(0, 1),
+        { id: 'machine', type: 'automatic', level: 10, x: 240, y: 200, w: 40, h: 40 },
+      ],
+    }, 'w1', 100)).toBeNull();
+  });
+
+  it('keeps a beneficial transfer when active manual work has a real remainder', () => {
+    const state = stateFor({
+      serviceItems: [
+        {
+          id: 'active', kind: 'dish', state: 'washing', washStationId: 'sink',
+          accumulatedWork: 50, lastProgressAt: 90,
+        },
+        { id: 'candidate', kind: 'dish', state: 'queued_for_wash', washStationId: 'sink', washQueuedAt: 1 },
+      ],
+    });
+    const transfer = selectSinkTransfer(state, 'w1', 100);
+    const manualRate = 1.5;
+    const activeRemainder = (ACTIVITY_DURATIONS.manualWash - 50 - 10 * manualRate) / manualRate;
+    const candidateTime = ACTIVITY_DURATIONS.manualWash / manualRate;
+
+    expect(transfer).toMatchObject({
+      serviceItemId: 'candidate', washStationId: 'machine', sourceWashStationId: 'sink',
+    });
+    expect(transfer.manualCompletionAt).toBeCloseTo(
+      100 + 1 + activeRemainder + candidateTime,
+    );
   });
 });

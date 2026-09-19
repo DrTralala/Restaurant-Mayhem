@@ -1116,8 +1116,12 @@ describe('updateStaff', () => {
         { id: 'sink', type: 'manual', x: 200, y: 200, w: 40, h: 40 },
         { id: 'machine', type: 'automatic', level: 10, x: 400, y: 200, w: 40, h: 40 },
       ],
-      serviceItems: [{ id: 'queued-dish', kind: 'dish', customerId: 'gone',
-        state: 'queued_for_wash', washStationId: 'sink', washQueuedAt: 1 }],
+      serviceItems: [
+        { id: 'queued-dish', kind: 'dish', customerId: 'gone',
+          state: 'queued_for_wash', washStationId: 'sink', washQueuedAt: 1 },
+        { id: 'z-backlog', kind: 'dish', customerId: 'gone-backlog',
+          state: 'queued_for_wash', washStationId: 'sink', washQueuedAt: 1 },
+      ],
     };
 
     const assigned = updateStaff(initial, { gameDt: 0, movementDt: 0 });

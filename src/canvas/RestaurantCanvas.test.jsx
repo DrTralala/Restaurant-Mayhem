@@ -1302,6 +1302,19 @@ describe('RestaurantCanvas object movement', () => {
 
     expect(moveIndex).toBeLessThan(entranceIndex);
     expect(moveIndex).toBeLessThan(exitIndex);
+    expect(buttons).toContain('Move');
+    expect(buttons).not.toContain('Move (R=rotate)');
+  });
+
+  it('labels a rotatable fixture Move exactly without a rotation suffix', () => {
+    useGameState.mockReturnValue(state);
+    findClickedEntity.mockReturnValue({ type: 'chair', data: chair, text: 'Chair' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 150, clientY: 80 });
+
+    expect(screen.getByRole('button', { name: 'Move' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Move (R=rotate)' })).not.toBeInTheDocument();
   });
 
   it('shows authoritative dishwasher controls and dispatches only its id for an upgrade', () => {
@@ -1328,12 +1341,32 @@ describe('RestaurantCanvas object movement', () => {
 
     expect(screen.getByText('Level 1 / 10')).toBeInTheDocument();
     expect(screen.getByText('Occupancy 2 / 12')).toBeInTheDocument();
-    expect(screen.getByText('Nominal 300 seconds per dish')).toBeInTheDocument();
+    expect(screen.getByText('Nominal 600 seconds per dish')).toBeInTheDocument();
     const nextUpgradeCost = getDishwasherStats(station.level).nextUpgradeCost;
     expect(screen.getByText(`Next upgrade $${nextUpgradeCost}`)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: `Upgrade dishwasher ($${nextUpgradeCost})` }));
 
     expect(dispatch).toHaveBeenCalledWith({ type: 'UPGRADE_DISHWASHER', id: 'wash1' });
+  });
+
+  it('shows the level-ten dishwasher nominal duration as 300 seconds per dish', () => {
+    const station = {
+      id: 'wash1', type: 'automatic', level: 10, x: 300, y: 120, w: 40, h: 40,
+    };
+    useGameState.mockReturnValue({
+      ...state,
+      restaurant: { expansionLevel: 1, funds: 100_000, gameTime: 10 },
+      washStations: [station],
+    });
+    findClickedEntity.mockReturnValue({
+      type: 'washStation', data: station, text: 'Automatic dishwasher',
+    });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 320, clientY: 140 });
+
+    expect(screen.getByText('Level 10 / 10')).toBeInTheDocument();
+    expect(screen.getByText('Nominal 300 seconds per dish')).toBeInTheDocument();
   });
 
   it.each([

@@ -304,7 +304,7 @@ function validateRestaurant(state) {
   validateOptionalFinite(restaurant, 'gameTime', 'restaurant', { minimum: 0 });
   validateOptionalFinite(restaurant, 'day', 'restaurant', { minimum: 1, integer: true });
   validateOptionalFinite(restaurant, 'totalServed', 'restaurant', { minimum: 0, integer: true });
-  validateOptionalFinite(restaurant, 'funds', 'restaurant', { minimum: 0 });
+  validateOptionalFinite(restaurant, 'funds', 'restaurant');
   validateOptionalFinite(restaurant, 'dailyRevenue', 'restaurant');
   validateOptionalFinite(restaurant, 'reputation', 'restaurant');
 }

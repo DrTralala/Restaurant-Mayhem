@@ -13,6 +13,7 @@ import { recordSeatResidency } from '../simulation/movement/seatedDeparture';
 import { createGrid } from '../simulation/navigation/grid';
 import { isAtPreparationPosition } from '../simulation/preparationPosition';
 import { findAvailableServiceSlot } from '../simulation/serviceItems';
+import { validateSavedState } from './saveValidation';
 
 beforeEach(() => {
   localStorage.clear();
@@ -259,6 +260,31 @@ describe('saveState', () => {
 });
 
 describe('loadState', () => {
+  it('loads a finite negative restaurant balance unchanged', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, funds: -451.38 },
+    };
+
+    expect(() => validateSavedState(saved)).not.toThrow();
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
+
+    const loaded = loadState();
+    expect(loaded?.restaurant.funds).toBe(-451.38);
+    expect(hydrateState(loaded, fresh).restaurant.funds).toBe(-451.38);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'rejects non-finite restaurant funds (%s)',
+    funds => {
+      const state = createInitialState();
+      state.restaurant.funds = funds;
+
+      expect(() => validateSavedState(state)).toThrow(/restaurant\.funds.*finite/i);
+    },
+  );
+
   it('releases a saved cooking batch whose station no longer exists', () => {
     const fresh = createInitialState();
     const saved = {
