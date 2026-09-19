@@ -12,6 +12,8 @@ import { getQueuePartyCount, getQueueProjectedMembers, getQueueVisibleMembers, r
 import { UPGRADES } from '../data/upgrades';
 import { createInitialState } from '../state/initialState';
 import { hydrateState, loadState, saveState } from '../state/persistence';
+import { getBaseArrivalRate } from './balance';
+import { getRushHourMultiplier } from './clock';
 
 const baseState = {
   restaurant: { reputation: 3.0, gameTime: 12 * 3600, openHour: 10, closeHour: 22, totalServed: 0 },
@@ -329,6 +331,108 @@ describe('spawnCustomers', () => {
 
     expect(result.queue).toHaveLength(0);
   });
+
+  it('compares a five-star arrival roll against the high-rating probability', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, reputation: 5 },
+      upgrades: [{ level: 2, effects: { type: 'customerRate', value: 0.0001 } }],
+    };
+    const dt = 60;
+    const expectedProbability = 1 - Math.exp(
+      -(getBaseArrivalRate(5) + 0.0002)
+        * getRushHourMultiplier(state.restaurant.gameTime)
+        * dt,
+    );
+
+    vi.spyOn(Math, 'random').mockReturnValue(expectedProbability - 1e-9);
+    expect(spawnCustomers(state, dt).queue).toHaveLength(1);
+
+    vi.restoreAllMocks();
+    vi.spyOn(Math, 'random').mockReturnValue(expectedProbability + 1e-9);
+    expect(spawnCustomers(state, dt).queue).toHaveLength(0);
+  });
+
+  it('raises five-star arrivals above the pre-change ordinary probability', () => {
+    const state = { ...baseState, restaurant: { ...baseState.restaurant, reputation: 5 } };
+    const dt = 60;
+    const previousRate = 0.00055 + (5 - 1) * 0.00005;
+    const rushMultiplier = getRushHourMultiplier(state.restaurant.gameTime);
+    const ordinaryProbability = 1 - Math.exp(-previousRate * rushMultiplier * dt);
+    const expectedProbability = 1 - Math.exp(-getBaseArrivalRate(5) * rushMultiplier * dt);
+
+    expect(expectedProbability).toBeGreaterThan(ordinaryProbability);
+
+    vi.spyOn(Math, 'random').mockReturnValue((ordinaryProbability + expectedProbability) / 2);
+    expect(spawnCustomers(state, dt).queue).toHaveLength(1);
+  });
+
+  it('does not spawn during closed hours even at five stars', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, reputation: 5, gameTime: 3 * 3600 },
+    };
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const result = spawnCustomers(state, 60);
+
+    expect(result.queue).toHaveLength(0);
+  });
+
+  it('stops five-star arrivals once the queue is at capacity', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const queue = Array.from({ length: 8 }, (_, index) => ({ id: `q${index}`, partyId: `p${index}` }));
+
+    const result = spawnCustomers({
+      ...baseState,
+      restaurant: { ...baseState.restaurant, reputation: 5 },
+      queue,
+    }, 60);
+
+    expect(result.queue).toHaveLength(8);
+  });
+
+  it('clamps reputation above five stars to the top arrival probability', () => {
+    const state = { ...baseState, restaurant: { ...baseState.restaurant, reputation: 6 } };
+    const dt = 60;
+    const expectedProbability = 1 - Math.exp(
+      -getBaseArrivalRate(5) * getRushHourMultiplier(state.restaurant.gameTime) * dt,
+    );
+
+    expect(getBaseArrivalRate(6)).toBeCloseTo(getBaseArrivalRate(5), 10);
+
+    vi.spyOn(Math, 'random').mockReturnValue(expectedProbability - 1e-9);
+    expect(spawnCustomers(state, dt).queue).toHaveLength(1);
+
+    vi.restoreAllMocks();
+    vi.spyOn(Math, 'random').mockReturnValue(expectedProbability + 1e-9);
+    expect(spawnCustomers(state, dt).queue).toHaveLength(0);
+  });
+
+  it.each([
+    [0.449999, 1, 'solo'],
+    [0.45, 2, 'couple'],
+    [0.799999, 2, 'couple'],
+    [0.8, 3, 'triple'],
+    [0.899999, 3, 'triple'],
+    [0.9, 4, 'family'],
+  ])('keeps the approved party boundary %s for a %s-person %s at five stars',
+    (partyRoll, expectedSize, expectedType) => {
+      vi.spyOn(Math, 'random')
+        .mockReturnValueOnce(0)
+        .mockReturnValue(partyRoll);
+
+      const result = spawnCustomers({
+        ...baseState,
+        restaurant: { ...baseState.restaurant, reputation: 5 },
+      }, 60);
+      const members = result.queue[0].members;
+
+      expect(members).toHaveLength(expectedSize);
+      expect(members.every(customer => customer.partyType === expectedType)).toBe(true);
+      expect(members.every(customer => customer.partySize === expectedSize)).toBe(true);
+      expect(new Set(members.map(customer => customer.partyId)).size).toBe(1);
+    });
 
   it.each([
     [0, 900],

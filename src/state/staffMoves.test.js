@@ -242,6 +242,36 @@ describe('moveStaff', () => {
     });
   });
 
+  it('pauses accumulated drink work at the staff-relocation clock boundary', () => {
+    const state = makeState({
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 100 }],
+      serviceTables: [{ id: 'st1', x: 300, y: 120 }],
+      customers: [{ id: 'customer', state: 'waiting_for_items', drinkId: 'water' }],
+      staff: [{
+        id: 'worker', name: 'Marco', role: 'cook', salary: 200, morale: 80, skill: 3,
+        x: 200, y: 200, carryingServiceItemId: null,
+        task: {
+          type: 'prepare_drink', serviceItemId: 'drink', stationId: 'dispenser',
+          serviceTableId: 'st1', serviceSlotIndex: 0,
+        },
+        navigationGoal: { x: 90, y: 110 }, activityPhase: 'working',
+      }],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'customer',
+        state: 'preparing', stationId: 'dispenser', serviceTableId: 'st1', serviceSlotIndex: 0,
+        assignedStaffId: 'worker', preparationStartedAt: 10, accumulatedWork: 12, lastProgressAt: 20,
+      }],
+    });
+
+    const moved = moveStaff(state, 'worker', { x: 500, y: 300 });
+
+    expect(moved.serviceItems[0]).toMatchObject({
+      state: 'ordered', stationId: null, serviceTableId: null, serviceSlotIndex: null,
+      assignedStaffId: null, accumulatedWork: 12, lastProgressAt: 100,
+    });
+    expect(moved.staff[0].task).toBeNull();
+  });
+
   it('releases every member when a cook carrying a cooking batch is moved', () => {
     const state = makeState({
       kitchenStations: [{ id: 'station', equipmentId: null, x: 100, y: 120 }],

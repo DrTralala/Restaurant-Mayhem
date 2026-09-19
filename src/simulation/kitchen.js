@@ -7,6 +7,8 @@ import {
 } from './staffPerformance';
 import { getBatchServiceItemIds, normaliseCookingBatches } from './cookingBatches';
 import { expireFoodPatience } from './foodPatience';
+import { getCharacterMovementStatus } from './movement';
+import { isAtPreparationPosition } from './preparationPosition';
 
 const PHYSICAL_ITEM_STATES = new Set(['on_service', 'carried', 'delivered']);
 const DIRTY_ITEM_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
@@ -15,14 +17,37 @@ function isActiveCustomer(customers, customerId) {
   return customers.some(customer => customer.id === customerId && customer.state !== 'leaving');
 }
 
-function canProgressDish(state, item) {
+function sameId(left, right) {
+  return left != null && right != null && String(left) === String(right);
+}
+
+function taskItemIds(task) {
+  return [
+    ...(Array.isArray(task?.serviceItemIds) ? task.serviceItemIds : []),
+    task?.serviceItemId,
+  ].filter(id => id != null).map(id => String(id));
+}
+
+function taskMatchesDish(state, cook, item) {
+  const task = cook?.task;
+  if (task?.type !== 'prepare_dish'
+    || !sameId(task.stationId, item.stationId)
+    || !sameId(item.assignedStaffId, cook.id)) return false;
+  if (taskItemIds(task).includes(String(item.id))) return true;
+  if (task.batchId == null) return false;
+  const batch = (state.cookingBatches || []).find(candidate =>
+    sameId(candidate.id, task.batchId));
+  return getBatchServiceItemIds(batch).some(id => sameId(id, item.id));
+}
+
+function dishPreparation(state, item) {
   const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
   if (item.foodCancelled === true || customer?.foodOutcome === 'cancelled') return null;
   const dish = (state.dishes || []).find(candidate => candidate.id === item.menuItemId);
   const station = (state.kitchenStations || []).find(candidate => candidate.id === item.stationId);
   const cook = (state.staff || []).find(candidate =>
-    candidate.id === item.assignedStaffId && candidate.role === 'cook');
-  if (!dish || !station || !cook || !Number.isFinite(item.preparationStartedAt)) return null;
+    sameId(candidate.id, item.assignedStaffId) && candidate.role === 'cook');
+  if (!dish || !station || !cook || !taskMatchesDish(state, cook, item)) return null;
 
   if (dish.requiredEquipmentId && station.equipmentId !== dish.requiredEquipmentId) return null;
   const equipment = station.equipmentId
@@ -31,6 +56,35 @@ function canProgressDish(state, item) {
   if (dish.requiredEquipmentId && !equipment) return null;
 
   return { dish, equipment, station, cook };
+}
+
+function isCertifiedPreparationArrival(state, preparation) {
+  return isAtPreparationPosition(preparation.cook, preparation.station)
+    && getCharacterMovementStatus(state, preparation.cook.id).plan === 'arrived';
+}
+
+function canProgressDish(state, item) {
+  const preparation = dishPreparation(state, item);
+  if (!preparation || !Number.isFinite(item.preparationStartedAt)
+    || !isCertifiedPreparationArrival(state, preparation)) return null;
+  return preparation;
+}
+
+function pausePreparationProgress(item, cookTask, now) {
+  const taskIsPrimary = sameId(cookTask?.serviceItemId, item.id);
+  const accumulatedWork = Number.isFinite(item.accumulatedWork)
+    ? Math.max(0, item.accumulatedWork)
+    : taskIsPrimary && Number.isFinite(cookTask?.accumulatedWork)
+      ? Math.max(0, cookTask.accumulatedWork) : 0;
+  const previousProgressTimes = [item.lastProgressAt, cookTask?.lastProgressAt]
+    .filter(Number.isFinite);
+  const lastProgressAt = Number.isFinite(now)
+    ? Math.max(now, ...previousProgressTimes)
+    : previousProgressTimes.length > 0 ? Math.max(...previousProgressTimes) : undefined;
+  return {
+    accumulatedWork,
+    lastProgressAt,
+  };
 }
 
 export function processKitchen(state) {
@@ -63,7 +117,7 @@ export function processKitchen(state) {
     if (item.state !== 'preparing') return item;
 
     const kitchenState = { ...reconciled, customers, serviceItems };
-    const preparation = canProgressDish(kitchenState, item);
+    const preparation = dishPreparation(kitchenState, item);
     if (!preparation) return item;
 
     const preparationTask = {
@@ -84,19 +138,21 @@ export function processKitchen(state) {
       delete cookTask.accumulatedWork;
       delete cookTask.lastProgressAt;
     }
-    const progressSource = getStaffTaskSource(kitchenState, {
-      ...preparation.cook,
-      task: cookTask,
-    });
-    const progress = advanceStaffTaskProgress(
-      progressSource,
-      state.restaurant.gameTime,
-      getStaffTaskRate(kitchenState, preparation.cook, preparationTask),
-      item.preparationStartedAt,
-      getStaffTaskLegacyRate(kitchenState, preparation.cook, preparationTask),
-    );
+    const attended = canProgressDish(kitchenState, item) != null;
+    const progress = attended
+      ? advanceStaffTaskProgress(
+        getStaffTaskSource(kitchenState, {
+          ...preparation.cook,
+          task: cookTask,
+        }),
+        state.restaurant.gameTime,
+        getStaffTaskRate(kitchenState, preparation.cook, preparationTask),
+        item.preparationStartedAt,
+        getStaffTaskLegacyRate(kitchenState, preparation.cook, preparationTask),
+      )
+      : pausePreparationProgress(item, preparation.cook.task, state.restaurant.gameTime);
     progressByItemId.set(item.id, progress);
-    if (progress.accumulatedWork < (preparation.dish.prepTime || 60)) {
+    if (!attended || progress.accumulatedWork < (preparation.dish.prepTime || 60)) {
       return {
         ...item,
         accumulatedWork: progress.accumulatedWork,
@@ -126,7 +182,7 @@ export function processKitchen(state) {
     const validActiveTask = ['preparing', 'ready'].includes(item?.state)
       && item.assignedStaffId === worker.id
       && item.stationId === worker.task.stationId
-      && canProgressDish({ ...state, customers, serviceItems }, item);
+      && dishPreparation({ ...state, customers, serviceItems, cookingBatches }, item);
     const validPreparation = validOrderedTask || validActiveTask;
     if (!validPreparation) return { ...worker, task: null };
     const progress = progressByItemId.get(item?.id);

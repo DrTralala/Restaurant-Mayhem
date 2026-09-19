@@ -11,7 +11,7 @@ function kitchenState({ skill = 3, gameTime = 0, serviceItems = [], customers = 
   serviceTables = [{ id: 'st1', x: 140, y: 120 }], counterItems = [] } = {}) {
   return {
     restaurant: { gameTime, expansionLevel: 1 },
-    staff: [{ id: 'cook', role: 'cook', skill, morale: 50, x: 80, y: 160, task: staffTask }],
+    staff: [{ id: 'cook', role: 'cook', skill, morale: 50, x: 90, y: 130, task: staffTask }],
     customers,
     serviceItems: [...counterItems, ...serviceItems],
     dishes: [
@@ -148,7 +148,11 @@ describe('cooking batches', () => {
         customers: [waitingCustomer('c1', 10), waitingCustomer('c2', 20),
           { id: 'counter-1', state: 'waiting_for_items' },
           { id: 'counter-2', state: 'waiting_for_items' },
-          { id: 'counter-3', state: 'waiting_for_items' }],
+          { id: 'counter-3', state: 'waiting_for_items' },
+          { id: 'counter-4', state: 'waiting_for_items' },
+          { id: 'counter-5', state: 'waiting_for_items' },
+          { id: 'counter-6', state: 'waiting_for_items' },
+          { id: 'counter-7', state: 'waiting_for_items' }],
         serviceItems: [
           { ...orderedDish('i1', 'c1'), state: 'ready', batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'cook', readyAt: 60 },
           { ...orderedDish('i2', 'c2'), state: 'ready', batchId: 'batch-1', stationId: 'k1', assignedStaffId: 'cook', readyAt: 60 },
@@ -157,6 +161,10 @@ describe('cooking batches', () => {
           { id: 'occupied-1', kind: 'dish', customerId: 'counter-1', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0 },
           { id: 'occupied-2', kind: 'dish', customerId: 'counter-2', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 1 },
           { id: 'occupied-3', kind: 'dish', customerId: 'counter-3', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 2 },
+          { id: 'occupied-4', kind: 'dish', customerId: 'counter-4', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 3 },
+          { id: 'occupied-5', kind: 'dish', customerId: 'counter-5', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 4 },
+          { id: 'occupied-6', kind: 'dish', customerId: 'counter-6', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 5 },
+          { id: 'occupied-7', kind: 'dish', customerId: 'counter-7', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 6 },
         ],
         staffTask: {
           type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
@@ -172,7 +180,7 @@ describe('cooking batches', () => {
     const carrying = updateStaff(batchReady, { gameDt: 0, movementDt: 0 });
     expect(carrying.staff[0].carryingServiceItemIds).toEqual(['i1']);
     expect(carrying.serviceItems.find(item => item.id === 'i1')).toMatchObject({
-      state: 'carried', serviceTableId: 'st1', serviceSlotIndex: 3,
+      state: 'carried', serviceTableId: 'st1', serviceSlotIndex: 7,
     });
     expect(carrying.serviceItems.find(item => item.id === 'i2')).toMatchObject({
       state: 'ready', batchId: 'batch-1', stationId: 'k1',
@@ -304,7 +312,7 @@ describe('cooking batches', () => {
       ...state,
       chairs: blockers,
       staff: [{
-        ...state.staff[0], x: 480, y: 340, carryingServiceItemIds: ['i1'],
+          ...state.staff[0], x: 480, y: 340, carryingServiceItemIds: ['i1'],
       }],
       cookingBatches: [{
         id: 'batch-1', cookId: 'cook', stationId: 'k1', serviceItemIds: ['i1', 'i2'],

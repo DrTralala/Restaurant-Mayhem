@@ -76,6 +76,74 @@ function scheduleWith(entries) {
   return schedule;
 }
 
+function preparationArrivalState(kind, resumed) {
+  const isDrink = kind === 'drink';
+  const isBatch = kind === 'batch';
+  const station = isDrink
+    ? { id: 'dispenser', equipmentId: null, x: 100, y: 100 }
+    : { id: 'k1', equipmentId: 'eq1', x: 100, y: 100 };
+  const customers = isDrink
+    ? [{ id: 'c1', state: 'waiting_for_items', tableId: 't1', drinkId: 'water' }]
+    : [
+      { id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: 'starter-toast' },
+      ...(isBatch
+        ? [{ id: 'c2', state: 'waiting_for_items', tableId: 't2', dishId: 'starter-toast' }]
+        : []),
+    ];
+  const itemIds = isBatch ? ['i1', 'i2'] : ['i1'];
+  const serviceItems = itemIds.map((id, index) => ({
+    id,
+    kind: isDrink ? 'drink' : 'dish',
+    menuItemId: isDrink ? 'water' : 'starter-toast',
+    customerId: `c${index + 1}`,
+    tableId: `t${index + 1}`,
+    state: resumed ? 'preparing' : 'ordered',
+    stationId: station.id,
+    assignedStaffId: 'cook',
+    ...(isDrink ? { serviceTableId: 'st1', serviceSlotIndex: 0 } : {}),
+    ...(isBatch ? { batchId: 'batch' } : {}),
+    ...(resumed ? {
+      preparationStartedAt: 0,
+      accumulatedWork: 20 + index,
+      lastProgressAt: 0,
+    } : {
+      preparationStartedAt: null,
+      readyAt: null,
+    }),
+  }));
+  return isolatedRunState({
+    kitchenStations: [station],
+    serviceTables: [{ id: 'st1', x: 300, y: 100 }],
+    customers,
+    dishes: isDrink ? [] : [{
+      id: 'starter-toast', prepTime: 60, requiredEquipmentId: 'eq1', quality: 1,
+    }],
+    equipment: isDrink ? [] : [{ id: 'eq1', owned: true, speedMultiplier: 1 }],
+    staff: [{
+      id: 'cook', role: 'cook', skill: isBatch ? 5 : 3, morale: 80,
+      x: 70, y: 110,
+      task: {
+        type: isDrink ? 'prepare_drink' : 'prepare_dish',
+        serviceItemId: 'i1',
+        ...(isDrink ? {
+          stationId: station.id, serviceTableId: 'st1', serviceSlotIndex: 0,
+        } : {
+          stationId: station.id,
+          ...(isBatch ? { batchId: 'batch', serviceItemIds: itemIds } : {}),
+        }),
+      },
+      navigationGoal: { x: 90, y: 110 },
+    }],
+    serviceItems,
+    ...(isBatch ? {
+      cookingBatches: [{
+        id: 'batch', cookId: 'cook', stationId: station.id, serviceItemIds: itemIds,
+        status: 'preparing', startedAt: 0,
+      }],
+    } : {}),
+  });
+}
+
 function deterministicMovementProjection(state, statuses) {
   const actors = [...state.staff, ...state.customers]
     .sort((left, right) => String(left.id).localeCompare(String(right.id)))
@@ -140,6 +208,44 @@ function runDeterministicMovementSequence(reverseEntries) {
 
 describe('runTick', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(['drink', 'dish', 'batch'])
+    ('does not credit walking time when a resumed %s preparation arrives during a long tick', kind => {
+      const initial = preparationArrivalState(kind, true);
+      const before = initial.serviceItems.map(item => ({
+        id: item.id, accumulatedWork: item.accumulatedWork, lastProgressAt: item.lastProgressAt,
+      }));
+
+      const arrived = runTick(initial, { gameDt: 10, movementDt: 1 });
+      const arrivedItems = arrived.serviceItems.filter(item => before.some(entry => entry.id === item.id));
+
+      arrivedItems.forEach(item => {
+        const previous = before.find(entry => entry.id === item.id);
+        expect(item.accumulatedWork).toBe(previous.accumulatedWork);
+        expect(item.lastProgressAt).toBe(10);
+      });
+
+      const stationary = runTick(arrived, { gameDt: 1, movementDt: 0 });
+      stationary.serviceItems
+        .filter(item => before.some(entry => entry.id === item.id))
+        .forEach(item => {
+          const previous = arrivedItems.find(entry => entry.id === item.id);
+          expect(item.accumulatedWork).toBeGreaterThan(previous.accumulatedWork);
+          expect(item.lastProgressAt).toBe(11);
+        });
+    });
+
+  it.each(['drink', 'dish', 'batch'])
+    ('starts an initial %s preparation at arrival without retroactive work', kind => {
+      const arrived = runTick(preparationArrivalState(kind, false), { gameDt: 10, movementDt: 1 });
+
+      arrived.serviceItems.forEach(item => {
+        expect(item.state).toBe('preparing');
+        expect(item.accumulatedWork).toBe(0);
+        expect(item.lastProgressAt).toBe(10);
+      });
+    });
+
   it('returns same state when paused', () => {
     const state = { ...emptyState, paused: true };
     const result = runTick(state, 1);
@@ -155,6 +261,242 @@ describe('runTick', () => {
     const state = { ...emptyState, speed: 2 };
     const result = runTick(state, { gameDt: 4, movementDt: 2 / 30 });
     expect(result.restaurant.gameTime).toBe(104);
+  });
+
+  it('moves a drink from dispenser preparation to its counter slot before waiter pickup is possible', () => {
+    let state = isolatedRunState({
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 360, y: 120 }],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [{
+        id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: null, drinkId: 'water',
+      }],
+      staff: [
+        { id: 'cook', role: 'cook', skill: 3, morale: 80, x: 600, y: 300, task: null },
+        { id: 'waiter', role: 'waiter', skill: 3, morale: 80, x: 500, y: 300, task: null },
+      ],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',
+        state: 'ordered', serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null,
+      }],
+    });
+    let sawPreparing = false;
+    let sawCarried = false;
+    let sawOnService = false;
+    let cookMovedWhileCarrying = false;
+    let previousCookPosition = { x: state.staff[0].x, y: state.staff[0].y };
+
+    for (let tick = 0; tick < 500; tick += 1) {
+      state = runTick(state, { gameDt: 1, movementDt: 1 });
+      const drink = state.serviceItems.find(item => item.id === 'drink');
+      const cook = state.staff.find(worker => worker.id === 'cook');
+      const waiter = state.staff.find(worker => worker.id === 'waiter');
+      if (drink.state === 'preparing') {
+        sawPreparing = true;
+        expect(drink.stationId).toBe('dispenser');
+        expect(drink.serviceTableId).toBe('st1');
+        expect(drink.serviceSlotIndex).toBe(0);
+      }
+      if (drink.state === 'carried') {
+        sawCarried = true;
+        expect(cook.carryingServiceItemIds).toContain('drink');
+        expect(cook.task).toMatchObject({
+          type: 'place_dish_on_service', serviceItemId: 'drink',
+          serviceTableId: 'st1', serviceSlotIndex: 0,
+        });
+        expect(drink.stationId).toBeNull();
+        expect(drink.serviceTableId).toBe('st1');
+        expect(drink.serviceSlotIndex).toBe(0);
+        expect(waiter.task?.type).not.toBe('pickup_service_item');
+        cookMovedWhileCarrying ||= cook.x !== previousCookPosition.x
+          || cook.y !== previousCookPosition.y;
+      }
+      if (drink.state === 'on_service') {
+        sawOnService = true;
+        expect(drink.assignedStaffId).toBeNull();
+        expect(cook.task).toBeNull();
+        expect(cook.carryingServiceItemIds).not.toContain('drink');
+        break;
+      }
+      previousCookPosition = { x: cook.x, y: cook.y };
+    }
+
+    expect(sawPreparing).toBe(true);
+    expect(sawCarried).toBe(true);
+    expect(cookMovedWhileCarrying).toBe(true);
+    expect(sawOnService).toBe(true);
+  });
+
+  it('keeps a carried drink reservation in the upper slot while a second drink ticks', () => {
+    let state = isolatedRunState({
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 360, y: 120 }],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [
+        { id: 'carried-customer', state: 'waiting_for_items', tableId: 't1', drinkId: 'water' },
+        { id: 'second-customer', state: 'waiting_for_items', tableId: 't2', drinkId: 'water' },
+      ],
+      staff: [
+        {
+          id: 'delivery-cook', role: 'cook', skill: 3, morale: 80, x: 600, y: 300,
+          carryingServiceItemIds: ['carried-drink'],
+          task: {
+            type: 'place_dish_on_service', serviceItemId: 'carried-drink',
+            serviceTableId: 'st1', serviceSlotIndex: 7,
+          },
+        },
+        { id: 'second-cook', role: 'cook', skill: 3, morale: 80, x: 600, y: 300, task: null },
+      ],
+      serviceItems: [
+        {
+          id: 'carried-drink', kind: 'drink', menuItemId: 'water', customerId: 'carried-customer',
+          tableId: 't1', state: 'carried', serviceTableId: 'st1', serviceSlotIndex: 7,
+          assignedStaffId: 'delivery-cook', x: 600, y: 300,
+        },
+        {
+          id: 'second-drink', kind: 'drink', menuItemId: 'water', customerId: 'second-customer',
+          tableId: 't2', state: 'ordered', serviceTableId: null, serviceSlotIndex: null,
+          assignedStaffId: null,
+        },
+      ],
+    });
+    let sawSecondReservation = false;
+
+    for (let tick = 0; tick < 20; tick += 1) {
+      state = runTick(state, { gameDt: 1, movementDt: 1 });
+      const carried = state.serviceItems.find(item => item.id === 'carried-drink');
+      const second = state.serviceItems.find(item => item.id === 'second-drink');
+      expect(carried.serviceTableId).toBe('st1');
+      expect(carried.serviceSlotIndex).toBe(7);
+      if (second.serviceSlotIndex != null) {
+        sawSecondReservation = true;
+        expect(second.serviceTableId).toBe('st1');
+        expect(second.serviceSlotIndex).not.toBe(7);
+      }
+    }
+
+    expect(sawSecondReservation).toBe(true);
+  });
+
+  it('pauses and resumes drink work when actors temporarily block every preparation side', () => {
+    const blockedPoints = [
+      [80, 100], [80, 120], [140, 100], [140, 120],
+      [100, 80], [120, 80], [100, 140], [120, 140],
+    ];
+    let state = isolatedRunState({
+      restaurant: { ...isolatedRunState().restaurant, gameTime: 100 },
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 100 }],
+      serviceTables: [{ id: 'st1', x: 300, y: 120 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', tableId: 't1', drinkId: 'water' }],
+      staff: [
+        {
+          id: 'cook', role: 'cook', skill: 3, morale: 80, x: 80, y: 110,
+          task: {
+            type: 'prepare_drink', serviceItemId: 'drink', stationId: 'dispenser',
+            serviceTableId: 'st1', serviceSlotIndex: 0,
+          },
+        },
+        ...blockedPoints.map(([x, y], index) => ({
+          id: `blocker-${index}`, role: 'waiter', skill: 3, morale: 80, x, y,
+          navigationGoal: { x, y },
+          task: { type: 'take_order', customerId: `missing-${index}` },
+        })),
+      ],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',
+        state: 'preparing', stationId: 'dispenser', serviceTableId: 'st1', serviceSlotIndex: 0,
+        assignedStaffId: 'cook', preparationStartedAt: 0, accumulatedWork: 20, lastProgressAt: 20,
+      }],
+    });
+
+    state = runTick(state, { gameDt: 1, movementDt: 1 });
+    expect(state.serviceItems[0]).toMatchObject({ accumulatedWork: 20, lastProgressAt: 101 });
+    expect(state.serviceItems[0].state).toBe('preparing');
+
+    state = {
+      ...state,
+      staff: state.staff.map(worker => worker.id === 'cook'
+        ? worker : { ...worker, x: 500, y: 500 }),
+    };
+    let resumed = false;
+    for (let tick = 0; tick < 20; tick += 1) {
+      state = runTick(state, { gameDt: 1, movementDt: 1 });
+      if (state.serviceItems[0].accumulatedWork > 20) {
+        resumed = true;
+        break;
+      }
+    }
+
+    expect(resumed).toBe(true);
+    expect(state.serviceItems[0].accumulatedWork).toBeGreaterThan(20);
+  });
+
+  it('releases a drink reservation when its customer leaves during preparation', () => {
+    let state = isolatedRunState({
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 360, y: 120 }],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [{
+        id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: null, drinkId: 'water',
+      }],
+      staff: [
+        { id: 'cook', role: 'cook', skill: 3, morale: 80, x: 600, y: 300, task: null },
+        { id: 'waiter', role: 'waiter', skill: 3, morale: 80, x: 500, y: 300, task: null },
+      ],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',
+        state: 'ordered', serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null,
+      }],
+    });
+
+    for (let tick = 0; tick < 100 && state.serviceItems[0].state !== 'preparing'; tick += 1) {
+      state = runTick(state, { gameDt: 1, movementDt: 1 });
+    }
+    expect(state.serviceItems[0].state).toBe('preparing');
+
+    state = {
+      ...state,
+      customers: state.customers.map(customer => customer.id === 'c1'
+        ? { ...customer, state: 'leaving' }
+        : customer),
+    };
+    const result = runTick(state, { gameDt: 1, movementDt: 1 });
+
+    expect(result.serviceItems.find(item => item.id === 'drink')).toBeUndefined();
+    expect(result.staff[0].task).toBeNull();
+    expect(result.staff[0].carryingServiceItemIds || []).not.toContain('drink');
+  });
+
+  it('releases a carried drink for cleanup when its customer leaves before counter arrival', () => {
+    let state = isolatedRunState({
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 360, y: 120 }],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [{
+        id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: null, drinkId: 'water',
+      }],
+      staff: [
+        { id: 'cook', role: 'cook', skill: 3, morale: 80, x: 600, y: 300, task: null },
+        { id: 'waiter', role: 'waiter', skill: 3, morale: 80, x: 500, y: 300, task: null },
+      ],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',
+        state: 'ordered', serviceTableId: null, serviceSlotIndex: null, assignedStaffId: null,
+      }],
+    });
+
+    for (let tick = 0; tick < 500 && state.serviceItems[0].state !== 'carried'; tick += 1) {
+      state = runTick(state, { gameDt: 1, movementDt: 1 });
+    }
+    expect(state.serviceItems[0].state).toBe('carried');
+
+    state = {
+      ...state,
+      customers: state.customers.map(customer => customer.id === 'c1'
+        ? { ...customer, state: 'leaving' }
+        : customer),
+    };
+    const result = runTick(state, { gameDt: 1, movementDt: 1 });
+
+    expect(result.serviceItems[0]).toMatchObject({ state: 'to_clean', assignedStaffId: null });
+    expect(result.staff[0].task).toBeNull();
+    expect(result.staff[0].carryingServiceItemIds || []).not.toContain('drink');
   });
 
   it('splits a game interval at a staff schedule transition before settling the next phase', () => {
@@ -718,6 +1060,44 @@ describe('runTick', () => {
     });
     expect(next.serviceItems[0]).toMatchObject({
       state: 'dirty_at_table', consumedAt: 101, dirtyAt: 101,
+    });
+  });
+
+  it('reroutes a hydrated stationless drink on the first runTick without remote progress', () => {
+    const fresh = createInitialState();
+    const saved = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 100 },
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 360, y: 120 }],
+      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
+      customers: [{
+        id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: null, drinkId: 'water',
+        orderedServiceItemIds: ['drink'],
+      }],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',
+        state: 'preparing', serviceTableId: 'st1', serviceSlotIndex: 0, assignedStaffId: 'cook',
+        preparationStartedAt: 10, accumulatedWork: 12, lastProgressAt: 20,
+      }],
+      staff: [{
+        id: 'cook', role: 'cook', morale: 80, x: 600, y: 300,
+        schedule: Array.from({ length: 48 }, () => 'work'), effectiveDuty: 'work',
+        dutyPhase: 'available', dutyTransitionRequestedAt: null, amenityUse: null,
+        ptoSession: null, wellRestedUntil: 0, amenityWaitingSince: null,
+        lastRestActivityType: null,
+        task: { type: 'prepare_drink', serviceItemId: 'drink', serviceTableId: 'st1', serviceSlotIndex: 0 },
+      }],
+    };
+
+    const hydrated = hydrateState(saved, fresh);
+    const rerouted = runTick(hydrated, { gameDt: 0, movementDt: 0 });
+
+    expect(rerouted.serviceItems[0]).toMatchObject({
+      id: 'drink', state: 'ordered', stationId: 'dispenser', assignedStaffId: 'cook',
+      accumulatedWork: 12, lastProgressAt: 100,
+    });
+    expect(rerouted.staff[0].task).toMatchObject({
+      type: 'prepare_drink', serviceItemId: 'drink', stationId: 'dispenser',
     });
   });
 

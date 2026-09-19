@@ -99,7 +99,7 @@ function intersectsIds(value, ids) {
 function taskIsAffected(task, affected) {
   if (!task) return false;
   return intersectsIds(task.tableId, affected.tableIds)
-    || (task.type === 'prepare_dish'
+    || (['prepare_dish', 'prepare_drink'].includes(task.type)
       && intersectsIds(task.stationId, affected.kitchenStationIds))
     || (task.type === 'take_payment'
       && intersectsIds(task.stationId, affected.cashierIds))
@@ -239,18 +239,29 @@ export function moveFixtures(state, requestedMoves) {
           ? { x: item.x + table.x - priorTable.x, y: item.y + table.y - priorTable.y } : {}) };
     }
     const cancelledPreparation = cancelledTasks.some(({ workerId, task }) =>
-      task.type === 'prepare_dish'
+      ['prepare_dish', 'prepare_drink'].includes(task.type)
       && task.serviceItemId === item.id
       && task.stationId === item.stationId
       && item.assignedStaffId === workerId);
     if (item.state === 'preparing'
       && (kitchenStationIds.has(item.stationId) || cancelledPreparation)) {
+      const cancelledDrink = item.kind === 'drink';
+      const hasProgress = Number.isFinite(item.accumulatedWork) && item.accumulatedWork > 0;
+      const now = next.restaurant?.gameTime;
       return {
         ...item,
         state: 'ordered',
         stationId: null,
         assignedStaffId: null,
-        preparationStartedAt: null,
+        ...(cancelledDrink ? {
+          serviceTableId: null,
+          serviceSlotIndex: null,
+        } : {}),
+        ...(hasProgress
+          ? (Number.isFinite(now)
+            ? { lastProgressAt: Math.max(Number.isFinite(item.lastProgressAt) ? item.lastProgressAt : now, now) }
+            : {})
+          : { preparationStartedAt: null, readyAt: null, lastProgressAt: null }),
       };
     }
     const cancelledWash = cancelledTasks.some(({ task }) =>

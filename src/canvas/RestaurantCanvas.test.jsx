@@ -308,7 +308,7 @@ describe('RestaurantCanvas object movement', () => {
 
     const furniturePreview = drawFurnitureLayer.mock.calls.at(-1)[1];
     const previewItems = furniturePreview.serviceItems;
-    expect(previewItems.find(item => item.id === 'on-service')).toMatchObject({ x: 570, y: 310 });
+    expect(previewItems.find(item => item.id === 'on-service')).toMatchObject({ x: 575, y: 310 });
     expect(previewItems.find(item => item.id === 'carried')).toMatchObject({ x: 140, y: 130 });
     expect(previewItems.find(item => item.id === 'reserved')).toMatchObject({ x: 110, y: 130 });
     expect(previewItems.find(item => item.id === 'other-counter')).toMatchObject({ x: 310, y: 130 });

@@ -7,6 +7,7 @@ import {
   withCarriedServiceItemIds,
 } from './staffInventory';
 import { clearNavigationGoal } from './movement/navigationGoal';
+import { getServiceSlotPosition } from './serviceCounter';
 
 const DIRTY_ITEM_STATES = new Set([
   'dirty_at_table',
@@ -147,29 +148,12 @@ export function canDeliverFoodItem(customer, item, now) {
 export const isFoodDeliveryAllowed = canDeliverFoodItem;
 export const canDeliverDish = canDeliverFoodItem;
 
-function counterSlotPosition(serviceTable, serviceSlotIndex) {
-  if (!serviceTable || !Number.isInteger(serviceSlotIndex)) return null;
-  const rotation = Number.isInteger(serviceTable.rotation)
-    ? ((serviceTable.rotation % 4) + 4) % 4
-    : 0;
-  if (rotation === 1) {
-    return { x: serviceTable.x + 10, y: serviceTable.y + 10 + serviceSlotIndex * 30 };
-  }
-  if (rotation === 2) {
-    return { x: serviceTable.x + 110 - serviceSlotIndex * 30, y: serviceTable.y + 10 };
-  }
-  if (rotation === 3) {
-    return { x: serviceTable.x + 10, y: serviceTable.y + 110 - serviceSlotIndex * 30 };
-  }
-  return { x: serviceTable.x + 10 + serviceSlotIndex * 30, y: serviceTable.y + 10 };
-}
-
 function getWasteOrigin(state, item) {
   const serviceTable = (state.serviceTables || []).find(table =>
     sameId(table.id, item.serviceTableId));
   const station = (state.kitchenStations || []).find(candidate =>
     sameId(candidate.id, item.stationId));
-  const slotPosition = counterSlotPosition(serviceTable, item.serviceSlotIndex);
+  const slotPosition = getServiceSlotPosition(serviceTable, item.serviceSlotIndex);
   const stationPosition = Number.isFinite(station?.x) && Number.isFinite(station?.y)
     ? { x: station.x + 20, y: station.y + 20 }
     : null;

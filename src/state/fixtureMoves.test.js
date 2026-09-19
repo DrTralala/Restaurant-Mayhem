@@ -231,6 +231,36 @@ describe('moveFixtures', () => {
     expect(result.staff[0]).not.toHaveProperty('navigationGoal');
   });
 
+  it('pauses accumulated drink work at the fixture-move clock boundary', () => {
+    const state = makeState({
+      tables: [],
+      chairs: [],
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 100 }],
+      serviceTables: [{ id: 'st1', x: 300, y: 120 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', drinkId: 'water', tableId: 't1' }],
+      staff: [{
+        id: 'cook1', role: 'cook', x: 90, y: 110, navigationGoal: { x: 90, y: 110 },
+        task: {
+          type: 'prepare_drink', serviceItemId: 'drink', stationId: 'dispenser',
+          serviceTableId: 'st1', serviceSlotIndex: 0,
+        },
+      }],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'preparing',
+        stationId: 'dispenser', serviceTableId: 'st1', serviceSlotIndex: 0,
+        assignedStaffId: 'cook1', preparationStartedAt: 10, accumulatedWork: 12, lastProgressAt: 20,
+      }],
+    });
+
+    const moved = moveFixtures(state, [{ type: 'kitchenStation', id: 'dispenser', x: 500, y: 100 }]);
+
+    expect(moved.serviceItems[0]).toMatchObject({
+      state: 'ordered', stationId: null, serviceTableId: null, serviceSlotIndex: null,
+      assignedStaffId: null, accumulatedWork: 12, lastProgressAt: 100,
+    });
+    expect(moved.staff[0].task).toBeNull();
+  });
+
   it('releases every member when a kitchen station used by a batch moves', () => {
     const state = makeState({
       tables: [],
@@ -613,6 +643,21 @@ describe('moveFixtures', () => {
 
     expect(result.serviceTables[0]).toMatchObject({ x: 400, y: 120 });
     expect(result.serviceItems[0]).toMatchObject({ x: 180, y: 130 });
+  });
+
+  it('blocks moving a counter with an item in an upper slot', () => {
+    const state = makeState({
+      serviceTables: [{ id: 'st1', x: 400, y: 120 }],
+      serviceItems: [{
+        id: 'i1', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 4,
+        x: 415, y: 150,
+      }],
+    });
+
+    const result = moveFixtures(state, [{ type: 'serviceTable', id: 'st1', x: 500, y: 120 }]);
+
+    expect(result.serviceTables[0]).toMatchObject({ x: 400, y: 120 });
+    expect(result.serviceItems[0]).toMatchObject({ serviceSlotIndex: 4, x: 415, y: 150 });
   });
 
   it('blocks moving a counter with cancelled waste in an occupied slot', () => {

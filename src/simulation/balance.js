@@ -32,8 +32,10 @@ export function getUpgradeEffect(state, type) {
 
 export function getBaseArrivalRate(reputation) {
   const stars = clampReputation(reputation);
-  return 0.00055 + (stars - 1) * 0.00005;
+  const baseRate = 0.00055 + (stars - 1) * 0.00005;
+  return baseRate * (stars < 4.5 ? 1 : 2 + (stars - 4.5) * 2);
 }
+
 
 export function getQueuePatienceMultiplier(queue) {
   const parties = getQueuePartyCount(queue);

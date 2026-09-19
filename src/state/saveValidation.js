@@ -4,7 +4,9 @@ import {
   isStaffAmenityType,
 } from '../data/staffAmenities';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
+import { SERVICE_COUNTER_CAPACITY } from '../simulation/serviceCounter';
 import { validateStaffSchedule } from '../simulation/staffSchedules';
+import { getCarriedServiceItemIds } from '../simulation/staffInventory';
 import { isStaffTaskRoleAllowed } from '../simulation/taskRoles';
 import { validateSavedNavigationGeometry } from './movementPersistence';
 import { SAVE_VERSION } from './saveVersion';
@@ -53,6 +55,14 @@ const has = (record, key) => record != null
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const sameId = (left, right) => left != null && right != null && String(left) === String(right);
 const idKey = value => value == null ? null : String(value);
+
+function isCookCarriedDeliveryReservation(state, item) {
+  if (item?.state !== 'carried' || !['dish', 'drink'].includes(item.kind)) return false;
+  const cook = (state.staff || []).find(worker => sameId(worker.id, item.assignedStaffId));
+  return cook?.role === 'cook'
+    && sameId(item.assignedStaffId, cook.id)
+    && getCarriedServiceItemIds(cook).some(id => sameId(id, item.id));
+}
 
 const VERSIONED_COLLECTIONS = Object.freeze([
   'tables', 'chairs', 'doors', 'cashierStations', 'kitchenStations', 'washStations',
@@ -335,7 +345,7 @@ function validateTask(task, path, role = null) {
   ]) validateOptionalId(task, key, path);
   if (has(task, 'customerIds')) validateUniqueIds(task.customerIds, `${path}.customerIds`);
   if (has(task, 'serviceItemIds')) validateUniqueIds(task.serviceItemIds, `${path}.serviceItemIds`);
-  validateOptionalFinite(task, 'serviceSlotIndex', path, { minimum: 0, maximum: 3, integer: true });
+  validateOptionalFinite(task, 'serviceSlotIndex', path, { minimum: 0, maximum: SERVICE_COUNTER_CAPACITY - 1, integer: true });
   for (const key of [
     'startedAt', 'preparationStartedAt', 'washingStartedAt', 'cleaningStartedAt',
     'lastProgressAt',
@@ -540,7 +550,7 @@ function validateWasteOrigin(origin, path, serviceTables, tables) {
   validateOptionalId(origin, 'serviceTableId', path, { nullable: true });
   validateOptionalId(origin, 'stationId', path, { nullable: true });
   validateOptionalId(origin, 'tableId', path, { nullable: true });
-  validateOptionalFinite(origin, 'serviceSlotIndex', path, { minimum: 0, maximum: 3, integer: true, nullable: true });
+  validateOptionalFinite(origin, 'serviceSlotIndex', path, { minimum: 0, maximum: SERVICE_COUNTER_CAPACITY - 1, integer: true, nullable: true });
   validateOptionalFinite(origin, 'eligibleAt', path, { minimum: 0, nullable: true });
   validateOptionalFinite(origin, 'createdAt', path, { minimum: 0, nullable: true });
   validatePositionFields(origin, path, { allowNull: true });
@@ -606,7 +616,7 @@ function validateCleaningAction(target, path, staff) {
 }
 
 function validateServiceItems(state, serviceItems, fixtures) {
-  const { serviceTables, tables, washStations } = fixtures;
+  const { serviceTables, tables, washStations, kitchenStations } = fixtures;
   const staff = Array.isArray(state.staff) ? state.staff : [];
   const itemIds = new Set();
   const occupiedSlots = new Map();
@@ -624,7 +634,7 @@ function validateServiceItems(state, serviceItems, fixtures) {
       'reservedWashStationId', 'assignedStaffId', 'batchId',
     ]) validateOptionalId(item, key, path, { nullable: true });
     validatePositionFields(item, path, { allowNull: true });
-    validateOptionalFinite(item, 'serviceSlotIndex', path, { minimum: 0, maximum: 3, integer: true, nullable: true });
+    validateOptionalFinite(item, 'serviceSlotIndex', path, { minimum: 0, maximum: SERVICE_COUNTER_CAPACITY - 1, integer: true, nullable: true });
     for (const key of [
       'orderedAt', 'orderTime', 'createdAt', 'preparationStartedAt', 'readyAt', 'dirtyAt',
       'washQueuedAt', 'washStartedAt', 'consumedAt', 'consumptionStartedAt', 'cancelledAt',
@@ -649,6 +659,13 @@ function validateServiceItems(state, serviceItems, fixtures) {
       && !tables.some(table => sameId(table.id, item.tableId))) {
       fail(`${path}.tableId`, 'must name an existing dining table');
     }
+    const drinkPreparationRecovery = item.kind === 'drink'
+      && isRecoverableDrinkPreparationReservation(state, item);
+    if (item.kind === 'drink' && item.stationId != null
+      && !kitchenStations.some(station => sameId(station.id, item.stationId))
+      && !drinkPreparationRecovery) {
+      fail(`${path}.stationId`, 'must name an existing kitchen station');
+    }
     if (item.washStationId != null
       && !washStations.some(station => sameId(station.id, item.washStationId))) {
       fail(`${path}.washStationId`, 'must name an existing wash station');
@@ -660,7 +677,7 @@ function validateServiceItems(state, serviceItems, fixtures) {
       }
     }
     if (stateName === 'on_service' || stateName === 'to_clean'
-      || (stateName === 'carried' && item.kind === 'dish')) {
+      || isCookCarriedDeliveryReservation(state, item)) {
       if (item.serviceTableId != null && item.serviceSlotIndex != null) {
         const key = `${idKey(item.serviceTableId)}:${item.serviceSlotIndex}`;
         if (occupiedSlots.has(key)) fail(path, `duplicates occupied service slot ${key}`);
@@ -772,6 +789,22 @@ function isRecoverablePreparationReservation(state, batch, item = null, task = n
     && sameId(candidateTask.batchId, batch?.id);
 }
 
+function isRecoverableDrinkPreparationReservation(state, item = null, task = null) {
+  const candidateItem = item || (state.serviceItems || []).find(serviceItem =>
+    sameId(serviceItem?.id, task?.serviceItemId));
+  const candidateTask = task || (state.staff || []).find(worker =>
+    worker?.task?.type === 'prepare_drink'
+      && sameId(worker.task.serviceItemId, candidateItem?.id))?.task;
+  const worker = (state.staff || []).find(candidate => candidate?.task === candidateTask);
+  return candidateTask?.type === 'prepare_drink'
+    && worker?.role === 'cook'
+    && candidateItem?.kind === 'drink'
+    && ['ordered', 'preparing'].includes(candidateItem.state)
+    && sameId(candidateItem.assignedStaffId, worker.id)
+    && sameId(candidateTask.serviceItemId, candidateItem.id)
+    && (candidateTask.stationId == null || sameId(candidateTask.stationId, candidateItem.stationId));
+}
+
 function isRecoverableManualWashOwnership(state, item, fixtures) {
   if (!['queued_for_wash', 'washing'].includes(item?.state)) return false;
   const owner = (state.staff || []).find(worker =>
@@ -806,11 +839,18 @@ function validateTaskForeignKeys(state, worker, task, fixtures, serviceItemHisto
       (state.serviceItems || []).find(item => sameId(item.id, task.serviceItemId)),
       task,
     );
+  const recoverableDrinkPreparation = task.type === 'prepare_drink'
+    && isRecoverableDrinkPreparationReservation(
+      state,
+      state.serviceItems?.find(item => sameId(item.id, task.serviceItemId)),
+      task,
+    );
+  const recoverableReservation = recoverablePreparation || recoverableDrinkPreparation;
   const serviceItems = state.serviceItems || [];
   const allowHistorical = (kind, value) => {
     if (kind === 'service item') return historicalItem;
     if (kind === 'customer') return historicalCustomer;
-    return historicalItem || recoverablePreparation;
+    return historicalItem || recoverableReservation;
   };
   const requireReference = (value, records, key, kind, { nullable = false } = {}) => {
     if (value == null && nullable) return;
@@ -848,6 +888,7 @@ function validateTaskForeignKeys(state, worker, task, fixtures, serviceItemHisto
     prepare_drink: [
       ['serviceItemId', serviceItems, 'service item'],
       ['serviceTableId', fixtures.serviceTables, 'service table'],
+      ['stationId', state.kitchenStations, 'kitchen station', { nullable: true }],
     ],
     prepare_dish: [
       ['serviceItemId', serviceItems, 'service item'],
@@ -868,6 +909,36 @@ function validateTaskForeignKeys(state, worker, task, fixtures, serviceItemHisto
 
   for (const [key, records, kind, options = {}] of references) {
     requireReference(task[key], records, key, kind, options);
+  }
+
+  if (task.type === 'prepare_drink') {
+    const item = serviceItems.find(candidate => sameId(candidate.id, task.serviceItemId));
+    if (item && item.assignedStaffId != null && !sameId(item.assignedStaffId, worker.id)) {
+      fail(`${path}.serviceItemId`, 'must be owned by the task staff member');
+    }
+    if (item && task.stationId != null && item.stationId == null
+      && ['ordered', 'preparing'].includes(item.state)) {
+      fail(`${path}.stationId`, 'must be mirrored on the drink service item');
+    }
+    if (item && task.stationId != null && item.stationId != null
+      && !sameId(task.stationId, item.stationId)) {
+      fail(`${path}.stationId`, 'must agree with the drink service item station');
+    }
+    if (item && task.serviceTableId != null && item.serviceTableId != null
+      && !sameId(task.serviceTableId, item.serviceTableId)) {
+      fail(`${path}.serviceTableId`, 'must agree with the drink service item counter');
+    }
+    if (item && task.serviceSlotIndex != null && item.serviceSlotIndex != null
+      && task.serviceSlotIndex !== item.serviceSlotIndex) {
+      fail(`${path}.serviceSlotIndex`, 'must agree with the drink service item slot');
+    }
+    if (task.stationId != null) {
+      const station = fixtures.kitchenStations.find(candidate =>
+        sameId(candidate.id, task.stationId));
+      if (station?.equipmentId != null) {
+        fail(`${path}.stationId`, 'must name a bare drink dispenser');
+      }
+    }
   }
   if (task.batchId != null) {
     const batch = (state.cookingBatches || []).find(candidate =>
@@ -925,7 +996,18 @@ function validateForeignKeys(state, serviceItems, fixtures) {
   });
 
   const customerHistory = historicalCustomerIds(state);
+  const preparationStationOwners = new Map();
   for (const worker of staff) {
+    if (['prepare_dish', 'prepare_drink'].includes(worker.task?.type)
+      && worker.task.stationId != null) {
+      const stationKey = idKey(worker.task.stationId);
+      const priorOwner = preparationStationOwners.get(stationKey);
+      if (priorOwner && !sameId(priorOwner.id, worker.id)) {
+        fail(`staff.${String(worker.id)}.task.stationId`,
+          `is already owned by staff member ${String(priorOwner.id)}`);
+      }
+      preparationStationOwners.set(stationKey, worker);
+    }
     validateTaskForeignKeys(
       state,
       worker,
