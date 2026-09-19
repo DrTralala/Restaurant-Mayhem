@@ -1447,7 +1447,7 @@ describe('updateStaff', () => {
     expect(done.serviceItems).toHaveLength(1);
   });
 
-  it('does not claim a dirty table while a customer or dirty item blocks cleaning', () => {
+  it('does not claim a dirty table until its dining customer leaves', () => {
     const blocked = {
       ...baseState,
       tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
@@ -1459,7 +1459,7 @@ describe('updateStaff', () => {
       ...blocked,
       customers: [{ id: 'c1', tableId: 't1', state: 'leaving' }],
       serviceItems: [{ id: 'dirty', tableId: 't1', state: 'dirty_at_table' }],
-    }, 0).staff[0].task).toBeNull();
+    }, 0).staff[0].task).toMatchObject({ type: 'clean_table', tableId: 't1' });
   });
 
   it('never assigns automatic-station queued work to a janitor', () => {
@@ -2597,6 +2597,30 @@ describe('updateStaff', () => {
     expect(finished.staff[0].task).toBeNull();
   });
 
+  it.each(['dirty_at_table', 'queued_for_wash'])('wipes a vacated table with dishes %s', itemState => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      staff: [{ id: 'j1', role: 'janitor', skill: 1, morale: 50, x: 180, y: 220, task: null }],
+      tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
+      serviceItems: [{ id: 'plate', tableId: 't1', state: itemState }],
+    };
+
+    const assigned = updateStaff(state, 0);
+    expect(assigned.staff[0].task).toMatchObject({ type: 'clean_table', tableId: 't1' });
+    const started = updateStaff(assigned, 0);
+    expect(started.staff[0].task).toMatchObject({ cleaningStartedAt: 100 });
+    const finished = updateStaff({
+      ...started,
+      restaurant: { ...started.restaurant, gameTime: 220 },
+    }, 0);
+
+    expect(finished.tables[0].status).toBe('empty');
+    expect(finished.serviceItems).toEqual(state.serviceItems);
+    expect(finished.staff[0].task).toBeNull();
+    expect(updateStaff(finished, 0).staff[0].task).toBeNull();
+  });
+
   it('keeps the table cleaning task identity and target ledger across incomplete ticks', () => {
     const state = {
       ...baseState,
@@ -2716,7 +2740,7 @@ describe('updateStaff', () => {
   it('does not start cleaning while a checkout diner is still physically on a chair', () => {
     const result = updateStaff({
       ...baseState,
-      staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 400, y: 300, task: null }],
+      staff: [{ id: 'w1', role: 'janitor', morale: 80, x: 400, y: 300, task: null }],
       tables: [{
         id: 't1', seats: 2, status: 'dirty', x: 200, y: 200,
         diningPartyId: 'p1', diningCustomerIds: ['payer'],
@@ -2755,7 +2779,7 @@ describe('updateStaff', () => {
   it('cancels active table cleaning when a customer blocks the table', () => {
     const active = {
       ...baseState,
-      staff: [{ id: 'w1', role: 'waiter', x: 180, y: 220,
+      staff: [{ id: 'w1', role: 'janitor', x: 180, y: 220,
         task: { type: 'clean_table', tableId: 't1', cleaningStartedAt: 100 } }],
       tables: [{ id: 't1', seats: 2, status: 'dirty', x: 200, y: 220 }],
       restaurant: { ...baseState.restaurant, gameTime: 150 },

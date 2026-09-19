@@ -363,6 +363,9 @@ function planForParty(state, party) {
   const partySize = party.members.length;
   for (const table of state.tables || []) {
     if (table?.status !== 'empty') continue;
+    // Wiping and dish collection can finish in either order; admission needs both.
+    if ((state.serviceItems || []).some(item => item.tableId === table.id
+      && item.state === 'dirty_at_table')) continue;
     const chairCount = (state.chairs || []).filter(chair => chair.tableId === table.id).length;
     if ((table.seats || chairCount) < partySize) continue;
     const chairs = availableChairsForTable(state, table);

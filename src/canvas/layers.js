@@ -750,7 +750,8 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       continue;
     }
 
-    const deciding = (c.state === 'seated' && !c.dishId) || c.state === 'ordering';
+    const deciding = (c.state === 'seated' && !c.dishId
+      && !c.menuOutcome && c.foodOutcome !== 'cancelled') || c.state === 'ordering';
     ctx.save();
     ctx.globalAlpha = c.state === 'leaving' && c.exitPhase === 'fading'
       ? Math.max(0, 1 - (c.exitFadeProgress || 0))

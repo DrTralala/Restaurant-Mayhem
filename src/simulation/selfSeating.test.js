@@ -87,6 +87,23 @@ describe('self seating admission', () => {
     expect(prepareSelfSeating(state).queue).toHaveLength(1);
   });
 
+  it('waits for dish collection before admitting to a wiped table', () => {
+    const state = queuedState({
+      serviceItems: [{ id: 'plate', tableId: 't1', state: 'dirty_at_table' }],
+    });
+    const waiting = prepareSelfSeating(state);
+    expect(waiting.queue).toHaveLength(1);
+    expect(waiting.tables[0].status).toBe('empty');
+    expect(waiting.customers).toHaveLength(0);
+
+    const admitted = prepareSelfSeating({
+      ...waiting,
+      serviceItems: [{ id: 'plate', tableId: 't1', state: 'carried_dirty' }],
+    });
+    expect(admitted.queue).toHaveLength(0);
+    expect(admitted.tables[0]).toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
+  });
+
   it('stores full chair approaches on the reserved table', () => {
     const next = prepareSelfSeating(queuedState());
     expect(next.tables[0].seatingAssignments).toHaveLength(1);

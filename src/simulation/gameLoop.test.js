@@ -1993,7 +1993,6 @@ describe('runTick', () => {
     expect(stageIndex('paying_at_cashier')).toBeLessThan(stageIndex('dirty_at_table'));
     expect(stageIndex('paying_at_cashier')).toBeLessThan(stageIndex('leaving'));
     expect(stageIndex('dirty_at_table')).toBeLessThan(stageIndex('carried_dirty'));
-    expect(stageIndex('carried_dirty')).toBeLessThan(stageIndex('clean_table'));
     expect(emptyTransitions).toBe(1);
     expect(stageIndex('carried_dirty')).toBeLessThan(stageIndex('queued_for_wash'));
     expect(stageIndex('queued_for_wash')).toBeLessThan(stageIndex('washing'));
@@ -2004,6 +2003,7 @@ describe('runTick', () => {
     const initial = createInitialState();
     let state = {
       ...initial,
+      restaurant: { ...initial.restaurant, reputation: 2 },
       unlockedDrinkIds: [],
       queue: [],
       customers: [
