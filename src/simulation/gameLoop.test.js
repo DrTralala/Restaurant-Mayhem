@@ -15,6 +15,7 @@ import { ACTIVITY_DURATIONS } from './activity';
 import { STAFF_WELLBEING_CONSTANTS } from './staffWellbeing';
 import * as foodPatienceDomain from './foodPatience';
 import * as wellbeingDomain from './staffWellbeing';
+import { findPreparationTarget } from './preparationPosition';
 
 const emptyState = {
   restaurant: { funds: 500, gameTime: 100, day: 1, openHour: 10, closeHour: 22, totalServed: 0, reputation: 2.0 },
@@ -2745,6 +2746,101 @@ function minimumPhysicalSpacing(actors) {
   }
   return minimum;
 }
+
+describe('blocked preparation preserves earlier staff work', () => {
+  it.each([
+    ['drink', false], ['dish', false],
+    ['drink', true], ['dish', true],
+  ])('preserves a %s delivery with cook-first=%s through consumption', (kind, cookFirst) => {
+    const initial = createInitialState();
+    const waiter = {
+      ...initial.staff.find(worker => worker.role === 'waiter'),
+      id: 'waiter', x: 224, y: 208, carryingServiceItemIds: ['delivery'],
+      task: { type: 'deliver_service_item', serviceItemId: 'delivery', customerId: 'diner' },
+    };
+    const cook = {
+      ...initial.staff.find(worker => worker.role === 'cook'),
+      id: 'cook', x: 80, y: 340, carryingServiceItemIds: [],
+      task: {
+        type: 'prepare_dish', batchId: 'batch', stationId: 'k1',
+        serviceItemId: 'preparing', serviceItemIds: ['preparing'],
+      },
+    };
+    const station = { ...initial.kitchenStations.find(candidate => candidate.id === 'k1'), x: 320 };
+    const state = {
+      ...initial,
+      paused: false,
+      restaurant: { ...initial.restaurant, gameTime: 100 },
+      tables: [
+        { id: 't1', seats: 4, status: 'occupied', x: 200, y: 200 },
+        ...[
+          { id: 'left', x: 280, y: 120 }, { id: 'right', x: 360, y: 120 },
+          { id: 'top', x: 320, y: 80 }, { id: 'bottom', x: 320, y: 160 },
+        ].map(table => ({ ...table, seats: 4, status: 'empty' })),
+      ],
+      kitchenStations: [station],
+      serviceTables: [{ id: 'st1', x: 600, y: 120 }],
+      washStations: [],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 210, y: 180 },
+        { id: 'ch2', tableId: 't1', x: 250, y: 180 },
+      ],
+      customers: [
+        {
+          id: 'diner', state: 'waiting_for_items', tableId: 't1', chairId: 'ch1',
+          x: 220, y: 190, dishId: kind === 'dish' ? 'starter-toast' : null,
+          drinkId: kind === 'drink' ? 'water' : null,
+          orderedServiceItemIds: ['delivery'], consumedServiceItemIds: [],
+          cancelledServiceItemIds: [],
+        },
+        {
+          id: 'waiting', state: 'waiting_for_items', tableId: 't1', chairId: 'ch2',
+          x: 260, y: 190, dishId: 'starter-toast', drinkId: null,
+          foodOutcome: 'pending', foodOrderedAt: 0, foodPatienceBudget: 1000, foodDeadlineAt: 1000,
+          orderedServiceItemIds: ['preparing'], consumedServiceItemIds: [],
+          cancelledServiceItemIds: [],
+        },
+      ],
+      staff: cookFirst ? [cook, waiter] : [waiter, cook],
+      serviceItems: [
+        {
+          id: 'delivery', kind, menuItemId: kind === 'dish' ? 'starter-toast' : 'water',
+          customerId: 'diner', tableId: 't1', state: 'carried', assignedStaffId: 'waiter',
+          x: 224, y: 208,
+        },
+        {
+          id: 'preparing', kind: 'dish', menuItemId: 'starter-toast', customerId: 'waiting',
+          tableId: 't1', state: 'preparing', assignedStaffId: 'cook', stationId: 'k1',
+          batchId: 'batch', accumulatedWork: 10, preparationStartedAt: 80, lastProgressAt: 90,
+        },
+      ],
+      cookingBatches: [{
+        id: 'batch', cookId: 'cook', stationId: 'k1', serviceItemIds: ['preparing'],
+        status: 'preparing', startedAt: 80, readyAt: null,
+      }],
+    };
+    expect(findPreparationTarget(state, station, cook)).toBeNull();
+
+    let result = runTick(state, { gameDt: 0, movementDt: 0 });
+    expect(result.serviceItems.find(item => item.id === 'delivery')).toMatchObject({
+      state: 'delivered', consumptionStartedAt: 100,
+    });
+    expect(result.customers.find(customer => customer.id === 'diner').state).toBe('eating');
+    expect(result.staff.find(worker => worker.id === 'waiter').carryingServiceItemIds).toEqual([]);
+    expect(result.serviceItems.find(item => item.id === 'preparing')).toMatchObject({
+      state: 'ordered', assignedStaffId: null,
+    });
+    expect(result.cookingBatches).toEqual([]);
+
+    // A subsequent tick must not discard the delivery as an ownerless carried item.
+    result = runTick(result, { gameDt: 0, movementDt: 0 });
+    const duration = kind === 'dish' ? ACTIVITY_DURATIONS.consumeFood : ACTIVITY_DURATIONS.consumeDrink;
+    result = runTick(result, { gameDt: duration, movementDt: 0 });
+    expect(result.customers.find(customer => customer.id === 'diner')).toMatchObject({
+      consumedServiceItemIds: ['delivery'], state: 'checkout_queued',
+    });
+  });
+});
 
 describe('queue-lease occupancy is never stolen by a coordinate-less actor', () => {
   function coordinateLessFixture() {
