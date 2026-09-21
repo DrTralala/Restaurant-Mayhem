@@ -9,6 +9,7 @@ import { hydrateSeatResidency } from '../simulation/movement/seatedDeparture';
 import { getDoors, getRestaurantWorld } from '../simulation/world';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { getAmenityGeometry } from '../data/staffAmenities';
+import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
 
 // Validate before any unit-step raster loop. Finite numbers alone need not advance by one.
 export function validateSavedNavigationGeometry(state) {
@@ -118,14 +119,19 @@ const withoutSeatingTransition = actor => {
   return domain;
 };
 
-const canonicalStaff = worker => withCarriedServiceItemIds(
-  worker,
-  getCarriedServiceItemIds(worker),
-);
+const canonicalStaff = worker => {
+  const { navigationYield, ...clean } = worker;
+  const ownsGoal = navigationYield && clean.navigationGoal?.x === navigationYield.goal?.x
+    && clean.navigationGoal?.y === navigationYield.goal?.y;
+  const domain = ownsGoal ? clearNavigationGoal(clean) : clean;
+  return withCarriedServiceItemIds(domain, getCarriedServiceItemIds(domain));
+};
 
 // Shared by both persistence transports. Input is live trusted state, not imported JSON.
 export function movementSaveSnapshot(state) {
-  const { movementCoordinator: _movementCoordinator, ...domain } = state;
+  if (state.navigationFault) throw new Error('Repair navigation conflicts before saving this game');
+  const { movementCoordinator: _movementCoordinator,
+    navigationPreflight: _queries, navigationFault: _fault, ...domain } = state;
   validateSavedNavigationGeometry(state);
   const workspace = createNavigationWorkspace(state);
   return {

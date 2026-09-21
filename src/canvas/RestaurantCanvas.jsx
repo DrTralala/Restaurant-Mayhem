@@ -15,6 +15,7 @@ import { getServiceSlotPosition } from '../simulation/serviceItems';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { getWashStationOccupancy } from '../simulation/dishwashing';
 import { validateStaffMove } from '../state/staffMoves';
+import { projectFixtureActors } from '../simulation/navigation/occupancy';
 import { useAnimationFrameLoop } from '../hooks/useAnimationFrameLoop';
 import {
   getFixtureCopyEligibility,
@@ -95,13 +96,6 @@ export function drawCopyPreview(ctx, state, camera, copy) {
   }
 }
 
-const PHYSICALLY_SEATED_CUSTOMER_STATES = new Set([
-  'seated',
-  'ordering',
-  'waiting_for_items',
-  'eating',
-]);
-
 function applyMovePreview(renderState, state, move) {
   if (!move) return renderState;
   const preview = { ...renderState };
@@ -133,32 +127,8 @@ function applyMovePreview(renderState, state, move) {
     });
   }
 
-  const chairDeltas = new Map((move.items || [])
-    .filter(item => item.type === 'chair')
-    .map(item => {
-      const original = move.originalItems.find(candidate =>
-        candidate.type === item.type && candidate.id === item.id);
-      const chair = getFixture(state, 'chair', item.id)?.data;
-      return [item.id, {
-        x: item.x - (original?.x ?? chair?.x),
-        y: item.y - (original?.y ?? chair?.y),
-        tableId: chair?.tableId,
-        destinationTableId: item.tableId ?? chair?.tableId,
-      }];
-    }));
-  if (Array.isArray(renderState?.customers) && chairDeltas.size > 0) {
-    preview.customers = renderState.customers.map(customer => {
-      const delta = chairDeltas.get(customer.chairId);
-      if (!delta || !PHYSICALLY_SEATED_CUSTOMER_STATES.has(customer.state)
-        || customer.tableId !== delta.tableId) return customer;
-      return {
-        ...customer,
-        tableId: delta.destinationTableId,
-        ...(Number.isFinite(customer.x) ? { x: customer.x + delta.x } : {}),
-        ...(Number.isFinite(customer.y) ? { y: customer.y + delta.y } : {}),
-      };
-    });
-  }
+  const projected = projectFixtureActors(state, preview, move.items || []);
+  preview.customers = projected.customers;
 
   const movedServiceTableIds = new Set((move.items || [])
     .filter(item => item.type === 'serviceTable')

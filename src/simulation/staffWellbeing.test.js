@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyAmenitySlots } from '../data/staffAmenities';
+import { createEmptyAmenitySlots, getAmenityGeometry } from '../data/staffAmenities';
 import { advanceCharacterMovementBatch } from './movement';
 import { createStaffDutyDefaults } from './staffSchedules';
 import {
@@ -9,6 +9,7 @@ import {
   releaseAmenitySlot,
   reserveAmenitySlot,
   resolveStaffWellbeingAfterMovement,
+  selectStaffWellbeingExit,
 } from './staffWellbeing';
 
 const allWork = () => Array.from({ length: 48 }, () => 'work');
@@ -68,6 +69,70 @@ function reserveAndArrive(currentState, amenity, staffId = 'staff-1', now = 0) {
 }
 
 describe('staff wellbeing controller', () => {
+  it.each([
+    ['an orphan lease', {
+      queue: [],
+      queueSlots: [{ memberId: 'orphan', partyId: 'ghost', x: 610, y: 490, slot: 0 }],
+    }],
+    ['an ambiguous lease', {
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [
+        { memberId: 'queued', partyId: 'party', x: 610, y: 490, slot: 0 },
+        { memberId: 'queued', partyId: 'party', x: 650, y: 490, slot: 1 },
+      ],
+    }],
+    ['a foreign-party lease', {
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'other-party', x: 610, y: 490, slot: 0 }],
+    }],
+    ['a display-overflow member', {
+      queue: [{ partyId: 'overflow-party', members: [{ id: 'overflow', partyId: 'overflow-party', state: 'queued' }] }],
+      queueSlots: [],
+    }],
+  ])('does not let %s block a legal amenity exit', (_label, overrides) => {
+    const amenity = couch();
+    const geometry = getAmenityGeometry(amenity);
+    const current = state({
+      staff: [worker({
+        x: geometry.slotAnchors[0].x,
+        y: geometry.slotAnchors[0].y,
+        dutyPhase: 'active',
+        amenityUse: { amenityId: amenity.id, slotIndex: 0, phase: 'occupied' },
+      })],
+      staffAmenities: [{ ...amenity, slots: [{ index: 0, reservedBy: null, occupiedBy: 'staff-1' }, { index: 1, reservedBy: null, occupiedBy: null }] }],
+      ...overrides,
+    });
+
+    expect(selectStaffWellbeingExit(current, 'staff-1')).toEqual(geometry.exitCandidates[0]);
+  });
+
+  it('keeps a legitimate leased queue member and actual departing customer as exit blockers', () => {
+    const amenity = couch();
+    const geometry = getAmenityGeometry(amenity);
+    const base = {
+      staff: [worker({
+        x: geometry.slotAnchors[0].x,
+        y: geometry.slotAnchors[0].y,
+        dutyPhase: 'active',
+        amenityUse: { amenityId: amenity.id, slotIndex: 0, phase: 'occupied' },
+      })],
+      staffAmenities: [{ ...amenity, slots: [{ index: 0, reservedBy: null, occupiedBy: 'staff-1' }, { index: 1, reservedBy: null, occupiedBy: null }] }],
+    };
+    const leased = state({
+      ...base,
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'party', x: geometry.exitCandidates[0].x, y: geometry.exitCandidates[0].y, slot: 0 }],
+    });
+    const departing = state({
+      ...base,
+      customers: [{ id: 'departing', partyId: 'party', state: 'leaving', x: geometry.exitCandidates[0].x, y: geometry.exitCandidates[0].y }],
+      queueSlots: [{ memberId: 'departing', partyId: 'party', x: geometry.exitCandidates[0].x, y: geometry.exitCandidates[0].y, slot: 0 }],
+    });
+
+    expect(selectStaffWellbeingExit(leased, 'staff-1')).toEqual(geometry.exitCandidates[1]);
+    expect(selectStaffWellbeingExit(departing, 'staff-1')).toEqual(geometry.exitCandidates[1]);
+  });
+
   it('selects the earliest real cyclic duty boundary for game-loop settlement', () => {
     const first = allWork();
     first[1] = 'rest';

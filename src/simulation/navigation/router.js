@@ -1,5 +1,6 @@
 import { cellKey, worldToCell } from '../movement/navigationWorkspace';
 import { isLatticePoint, latticeAnchors } from './grid';
+import { noteNavigation } from './telemetry';
 
 const keyOf = point => `${point.x},${point.y}`;
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -38,6 +39,7 @@ export function findRoute(grid, start, goal, { maxExpansions = Infinity, blocked
 }
 
 export function beginRouteSearch(grid, start, goal, { blocked = new Set(), allowBlockedStart = false, allowBlockedGoal = false } = {}) {
+  noteNavigation('routeStarts');
   const cursor = { grid, goal: goal ? { ...goal } : null, blocked: new Set(blocked), allowBlockedGoal,
     frontier: [], costs: new Map(), result: null, goalAnchors: new Set() };
   if (!grid.isOpen(start) || !grid.isOpen(goal)
@@ -63,7 +65,11 @@ export function forkRouteSearch(cursor) {
 
 export function advanceRouteSearch(cursor, maxExpansions) {
   let expansions = 0;
-  const result = (status, points = []) => ({ status, points, expansions });
+  const result = (status, points = []) => {
+    noteNavigation('routeAdvances');
+    noteNavigation('routeExpansions', expansions);
+    return { status, points, expansions };
+  };
   if (cursor.result) return result(cursor.result.status, cursor.result.points.map(point => ({ ...point })));
   const { grid, goal, blocked, goalAnchors, frontier, costs } = cursor;
   const goalKey = keyOf(goal);

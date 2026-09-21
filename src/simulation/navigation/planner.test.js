@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createGrid } from './grid';
 import { actionsConflict } from './reservations';
+import * as reservations from './reservations';
 import { planMovement } from './planner';
 
 const state = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [], serviceTables: [] };
@@ -29,6 +30,25 @@ function expectSafePlan(request, result) {
 }
 
 describe('bounded movement planning', () => {
+  it.each([
+    ['clear', 1000, 'arrived', []],
+    ['blocked', 400, 'blocked', ['peer']],
+  ])('checks the %s initial hold only once when expanding the initial node', (_label, peerX, status, blockers) => {
+    const request = { ...options(), goal: { x: 400, y: 300 }, maxExpansions: 1,
+      reservations: [hold('peer', { x: peerX, y: 300 })] };
+    const conflict = vi.spyOn(reservations, 'actionsConflict');
+    try {
+      const result = planMovement(request);
+      expect(result).toEqual({ status, expansions: 1, blockers,
+        actions: status === 'arrived' ? [{ from: { x: 400, y: 300 }, to: { x: 400, y: 300 }, start: 0, end: 2 }] : [] });
+      const initialChecks = conflict.mock.calls.filter(([action]) => action.start === 0 && action.end === 2
+        && action.from.x === 400 && action.from.y === 300 && action.to.x === 400 && action.to.y === 300);
+      expect(initialChecks).toHaveLength(1);
+    } finally {
+      conflict.mockRestore();
+    }
+  });
+
   it('keeps completed grid traversals at exact nodes for fractional traversal durations', () => {
     for (const speed of [55, 62, 73, 75]) {
       const request = { ...options(), speed, horizon: 10, goal: { x: 800, y: 300 }, maxExpansions: 256 };
@@ -59,6 +79,38 @@ describe('bounded movement planning', () => {
     expect(result.status).toBe('arrived');
     expectSafePlan(request, result);
     expect(result.actions.at(-1).to).toEqual(request.goal);
+  });
+
+  it('preserves a required first edge before continuing towards the destination', () => {
+    const request = { ...options(), start: { x: 406, y: 300 }, goal: { x: 440, y: 300 },
+      firstWaypoint: { x: 400, y: 300 } };
+    const result = planMovement(request);
+    expect(result.actions.find(action => action.from.x !== action.to.x || action.from.y !== action.to.y)?.to)
+      .toEqual({ x: 400, y: 300 });
+    expect(result.status).toBe('arrived');
+    expectSafePlan(request, result);
+  });
+
+  it('clips a required first edge safely when its traversal exceeds the horizon', () => {
+    const request = { ...options(), start: { x: 406, y: 300 }, goal: { x: 440, y: 300 },
+      firstWaypoint: { x: 400, y: 300 }, speed: 1 };
+    const result = planMovement(request);
+    expect(result.actions.at(-1).to).toEqual({ x: 404, y: 300 });
+    expectSafePlan(request, result);
+  });
+
+  it('holds rather than reversing or crossing traffic when its required first edge is blocked', () => {
+    const request = { ...options(), start: { x: 420, y: 300 }, firstWaypoint: { x: 400, y: 300 },
+      reservations: [hold('peer', { x: 400, y: 300 })] };
+    const result = planMovement(request);
+    expect(result.actions.every(action => action.from.x === action.to.x && action.from.y === action.to.y)).toBe(true);
+    expect(result.blockers).toContain('peer');
+    expectSafePlan(request, result);
+  });
+
+  it('rejects a required first waypoint outside the current graph edges', () => {
+    const result = planMovement({ ...options(), firstWaypoint: { x: 440, y: 300 } });
+    expect(result).toMatchObject({ status: 'unreachable', actions: [], expansions: 0 });
   });
 
   it('makes safe partial progress without solving the whole journey', () => {

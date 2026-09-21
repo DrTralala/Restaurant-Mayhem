@@ -3,6 +3,31 @@ import { canClaimDestination } from './destinations';
 
 describe('destination clearance', () => {
   const actor = { id: 'self', x: 200, y: 200, navigationGoal: { x: 220, y: 200 } };
+  it.each([
+    ['an orphan lease', {
+      queue: [],
+      queueSlots: [{ memberId: 'orphan', partyId: 'ghost', x: 220, y: 200, slot: 0 }],
+    }],
+    ['an ambiguous lease', {
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [
+        { memberId: 'queued', partyId: 'party', x: 220, y: 200, slot: 0 },
+        { memberId: 'queued', partyId: 'party', x: 260, y: 200, slot: 1 },
+      ],
+    }],
+    ['a foreign-party lease', {
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'other-party', x: 220, y: 200, slot: 0 }],
+    }],
+    ['a display-overflow member', {
+      queue: [{ partyId: 'party', members: [{ id: 'overflow', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [],
+    }],
+  ])('does not let %s block a destination', (_label, overrides) => {
+    expect(canClaimDestination({ ...overrides, staff: [actor], customers: [] }, actor, actor.navigationGoal))
+      .toBe(true);
+  });
+
   it('does not block an actor with its own current position or goal', () => {
     expect(canClaimDestination({ staff: [actor] }, actor, actor)).toBe(true);
     expect(canClaimDestination({ staff: [actor] }, actor, actor.navigationGoal)).toBe(true);
@@ -16,7 +41,17 @@ describe('destination clearance', () => {
   });
   it('respects stationary customer positions and queue leases', () => {
     expect(canClaimDestination({ customers: [{ id: 'peer', x: 220, y: 200 }] }, actor, actor.navigationGoal)).toBe(false);
-    expect(canClaimDestination({ queueSlots: [{ memberId: 'peer', x: 220, y: 200 }] }, actor, actor.navigationGoal)).toBe(false);
+    expect(canClaimDestination({
+      queue: [{ partyId: 'party', members: [{ id: 'peer', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'peer', partyId: 'party', x: 220, y: 200 }],
+    }, actor, actor.navigationGoal)).toBe(false);
+  });
+
+  it('keeps an actual departing customer as a destination blocker', () => {
+    expect(canClaimDestination({
+      customers: [{ id: 'departing', state: 'leaving', x: 220, y: 200 }],
+      queueSlots: [{ memberId: 'departing', partyId: 'party', x: 220, y: 200 }],
+    }, actor, actor.navigationGoal)).toBe(false);
   });
   it.each([null, {}, { x: NaN, y: 1 }, { x: 1, y: Infinity }])('rejects an invalid target %j', point => {
     expect(canClaimDestination({}, actor, point)).toBe(false);

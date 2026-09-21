@@ -82,15 +82,20 @@ export function orderTrafficRequests(requests, compare = compareTraffic) {
 export function arbitrateDestinations(requests, previousClaims = new Map()) {
   const claims = new Map();
   const blocked = new Map();
-  const productiveOwner = request => (request.priority ?? 2) < 4 && samePoint(previousClaims.get(request.id), request.goal);
+  const eligiblePreviousOwner = request => (request.speed ?? 1) > 0
+    && (request.waitingSeconds ?? (request.waitingTicks || 0) / 30) < 2
+    && request.previousPlan !== 'unreachable'
+    && samePoint(previousClaims.get(request.id), request.goal);
+  const productiveOwner = request => (request.priority ?? 2) < 4 && eligiblePreviousOwner(request);
   const compareArbitration = (a, b) =>
     Number(samePoint(b.start, b.goal)) - Number(samePoint(a.start, a.goal))
     || Number(productiveOwner(b)) - Number(productiveOwner(a))
     || score(a) - score(b)
-    || Number(samePoint(previousClaims.get(b.id), b.goal)) - Number(samePoint(previousClaims.get(a.id), a.goal))
+    || Number(eligiblePreviousOwner(b)) - Number(eligiblePreviousOwner(a))
     || compareTraffic(a, b);
   const ordered = orderTrafficRequests(
-    requests.filter(request => Number.isFinite(request.goal?.x) && Number.isFinite(request.goal?.y)),
+    requests.filter(request => Number.isFinite(request.goal?.x) && Number.isFinite(request.goal?.y)
+      && ((request.speed ?? 1) > 0 || samePoint(request.start, request.goal))),
     compareArbitration,
   );
   const requestsById = new Map(ordered.map(request => [request.id, request]));

@@ -61,6 +61,39 @@ it('retains the next movement waypoint until arrival without mutating previous f
   expect(first.coordinator.records.get('a').commitment).toEqual(commitment);
 });
 
+it('retires a yield commitment crossed within the batch before committing its continuation', () => {
+  const goal = { x: 600, y: 300 };
+  const actor = { id: 'yielding', x: 607.8666666666666, y: 320, task: null,
+    activityPhase: 'idle_roaming', navigationGoal: goal, navigationYield: { goal } };
+  const state = { ...world, staff: [actor], movementCoordinator: createMovementCoordinator() };
+  state.movementCoordinator.records.set(actor.id, { goal, routeGoal: goal,
+    topology: createActorGrid(state, actor).signature, avoidanceKey: '[]',
+    route: [{ x: 600, y: 320 }, goal], commitment: { x: 600, y: 320 }, waitingTicks: 0 });
+  const batch = advanceCharacterMovementBatch(state, [{ character: actor, speed: 26 }], 0.4);
+  expect(batch.moved.get(actor.id).y).toBeLessThan(320);
+  expect(batch.coordinator.records.get(actor.id).commitment).toEqual(goal);
+  expect(state.movementCoordinator.records.get(actor.id).commitment).toEqual({ x: 600, y: 320 });
+});
+
+it.each(['changed goal', 'assigned task', 'customer'])('does not extend ordinary commitments for %s yield metadata', kind => {
+  const goal = { x: 600, y: 300 };
+  const task = kind === 'assigned task' ? { type: 'deliver_service_item', serviceItemId: 'item' } : null;
+  const actor = { id: 'actor', x: 606.1333333333332, y: 320, task,
+    activityPhase: 'idle_roaming', navigationGoal: goal, carryingServiceItemIds: task ? ['item'] : [],
+    navigationYield: { goal: kind === 'changed goal' ? { x: 620, y: 300 } : goal } };
+  const state = { ...world, staff: kind === 'customer' ? [] : [actor],
+    customers: kind === 'customer' ? [actor] : [], movementCoordinator: createMovementCoordinator() };
+  state.movementCoordinator.records.set(actor.id, { goal, routeGoal: goal,
+    topology: createActorGrid(state, actor).signature, avoidanceKey: '[]',
+    route: [{ x: 600, y: 320 }, goal], commitment: { x: 600, y: 320 }, waitingTicks: 0 });
+  const batch = advanceCharacterMovementBatch(state, [{ character: actor, speed: 26 }], 0.4);
+  expect(batch.moved.get(actor.id)).toMatchObject({ x: 600, y: 320, navigationGoal: goal });
+  expect(batch.moved.get(actor.id).task).toBe(task);
+  expect(batch.moved.get(actor.id).carryingServiceItemIds).toBe(actor.carryingServiceItemIds);
+  expect(actor.navigationGoal).toBe(goal);
+  expect(state.movementCoordinator.records.get(actor.id).commitment).toEqual({ x: 600, y: 320 });
+});
+
 it('finishes in-transit yield manoeuvres before breaking dependencies between occupied bays', () => {
   const requests = new Map([
     ['a', { id: 'a', start: { x: 940, y: 302 }, goal: { x: 500, y: 220 }, speed: 60, waitingTicks: 400 }],

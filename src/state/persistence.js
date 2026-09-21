@@ -6,7 +6,7 @@ import { normaliseMilestones } from '../data/milestones';
 import { getPlaceableDimensions } from '../data/placeables';
 import { DEFAULT_OPERATING_HOURS, normaliseOperatingHour } from '../simulation/clock';
 import { normaliseConsumptionState } from '../simulation/consumption';
-import { isCheckoutState } from '../simulation/checkout';
+import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout';
 import { normaliseCustomerQueue, normaliseQueueDepartures, normaliseQueueSlots, reconcileQueueSlots } from '../simulation/customerQueue';
 import { reconcileSelfSeatingState } from '../simulation/selfSeating';
 import { clearNavigationGoal, setNavigationGoal } from '../simulation/movement/navigationGoal';
@@ -25,8 +25,11 @@ import {
   normalisePendingPartyReviews,
 } from '../simulation/partyReviews';
 import { validateSavedState } from './saveValidation';
+import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
+import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
 
 export function saveState(state) {
+  if (state.navigationFault) return;
   try {
     const serialized = JSON.stringify(movementSaveSnapshot(state));
     localStorage.setItem(SAVE_KEY, serialized);
@@ -220,7 +223,24 @@ function reconcileCashierRoutes(state, savedCashierStations = state.cashierStati
     })
     : state.staff;
 
-  return { ...state, customers, staff };
+  const candidate = { ...state, customers, staff };
+  if (!newSpatialIssues(state, candidate).length) return candidate;
+  return {
+    ...candidate,
+    customers: customers.map(customer => {
+      const original = (state.customers || []).find(actor => sameId(actor.id, customer.id));
+      if (!original || (original.x === customer.x && original.y === customer.y)) return customer;
+      return requeueCheckoutCustomer({ ...customer, x: original.x, y: original.y, checkoutDeparture: null });
+    }),
+    staff: staff.map(worker => {
+      const original = (state.staff || []).find(actor => sameId(actor.id, worker.id));
+      if (!original || (original.x === worker.x && original.y === worker.y)) return worker;
+      const station = stations.find(item => sameId(item.id, worker.task?.stationId))
+        || stations.find(item => sameId(item.assignedStaffId, worker.id));
+      const restored = { ...worker, x: original.x, y: original.y };
+      return station ? setNavigationGoal(restored, getCashierWorkPosition(station)) : clearNavigationGoal(restored);
+    }),
+  };
 }
 
 // Save validation is deliberately narrow: reject contradictory inventory rather
@@ -350,10 +370,15 @@ export function hydrateState(saved, fresh) {
   validateSavedNavigationGeometry(saved);
   validateSavedServiceItemInventory(saved);
   validateSavedState(saved);
-  const staff = (saved.staff || fresh.staff || []).map(character => ({
-    ...withCarriedServiceItemIds(character, getCarriedServiceItemIds(character)),
-    gender: inferGender(character),
-  }));
+  const staff = (saved.staff || fresh.staff || []).map(character => {
+    const { navigationYield, ...withoutYield } = character;
+    const clean = samePoint(withoutYield.navigationGoal, navigationYield?.goal)
+      ? clearNavigationGoal(withoutYield) : withoutYield;
+    return {
+      ...withCarriedServiceItemIds(clean, getCarriedServiceItemIds(clean)),
+      gender: inferGender(clean),
+    };
+  });
   const queue = normaliseCustomerQueue(saved.queue || fresh.queue || []).map(party => ({
     ...party,
     members: party.members.map(character => normaliseCustomerEconomy({
@@ -407,6 +432,9 @@ export function hydrateState(saved, fresh) {
   if ('completedCustomers' in saved || 'completedCustomers' in fresh) {
     hydrated.completedCustomers = completedCustomers;
   }
+  hydrated.movementCoordinator = createMovementCoordinator();
+  delete hydrated.navigationPreflight;
+  delete hydrated.navigationFault;
   const consumption = normaliseConsumptionState(
     hydrated.customers,
     hydrated.serviceItems || [],
@@ -470,6 +498,10 @@ export function hydrateState(saved, fresh) {
     });
   }
 
+  const positionedStaff = Array.isArray(hydrated.tables)
+    ? allocateStaffPositions(hydrated) : null;
+  if (positionedStaff) hydrated.staff = positionedStaff;
+
   // Durable queue-slot leases: structural validation of the saved records, then
   // the same idempotent ownership reconciliation used per tick. Missing leases
   // seed from [] and backfill legal current candidates in logical FIFO order.
@@ -487,11 +519,19 @@ export function hydrateState(saved, fresh) {
 
   const residencies = hydrateMovementResidencies(normaliseDoorAdmissions(hydrated));
   const reconciled = reconcileSelfSeatingState(residencies);
-  const repaired = repairInvalidStaffPreparationPositions(repairInvalidStaffOverlaps(reconciled));
-  const routeReconciled = reconcileCashierRoutes(repaired, savedCashierStations);
-  return {
-    ...routeReconciled,
+  const routed = reconcileCashierRoutes(reconciled, savedCashierStations);
+  const repaired = repairInvalidStaffPreparationPositions(repairInvalidStaffOverlaps(routed));
+  const seed = normaliseQueueSlots(repaired.queueSlots || [], repaired);
+  const finalState = {
+    ...repaired,
+    queueSlots: reconcileQueueSlots({ ...repaired, queueSlots: seed }, seed),
     version: fresh.version,
     movementCoordinator: createMovementCoordinator(),
   };
+  const { navigationFault: _savedFault, navigationPreflight: _savedQueries, ...clean } = finalState;
+  // Small partial domain fixtures used by legacy callers do not contain a
+  // navigable fixture world; preserve their historical shape rather than
+  // manufacturing an unplaced-staff quarantine for missing context.
+  return Array.isArray(clean.tables) && Array.isArray(clean.doors)
+    ? quarantineNavigation(clean) : clean;
 }

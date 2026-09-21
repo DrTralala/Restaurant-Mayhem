@@ -5,6 +5,16 @@ import { orderTrafficRequests } from './traffic';
 const samePoint = (a, b) => a && b && a.x === b.x && a.y === b.y;
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
+function distanceToSegment(point, start, end) {
+  if (!start || !end) return Infinity;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const projection = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1,
+    ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+  return distance(point, { x: start.x + projection * dx, y: start.y + projection * dy });
+}
+
 function passedConflict(peer, current, origin) {
   if (!peer.start || !origin) return false;
   const dx = peer.goal.x - peer.start.x, dy = peer.goal.y - peer.start.y;
@@ -43,13 +53,13 @@ function cycles(requests, statuses) {
   return groups;
 }
 
-export function chooseRecoveries({ requests, records, statuses, grid, budget }) {
+export function chooseRecoveries({ requests, records, statuses, grid, gridFor = () => grid, budget }) {
   const recoveries = new Map();
   let expansions = 0;
   for (const [id, request] of requests) {
     if (request.checkoutAdvance) continue;
     const old = records.get(id);
-    if (!old?.recovery || !samePoint(old.goal, request.goal) || !grid.isOpen(old.recovery.goal)) continue;
+    if (!old?.recovery || !samePoint(old.goal, request.goal) || !gridFor(request).isOpen(old.recovery.goal)) continue;
     const outstanding = old.recovery.peers.filter(peer => {
       const current = requests.get(peer.id);
       return current?.goal && samePoint(current.goal, peer.goal) && !samePoint(current.start, current.goal)
@@ -77,6 +87,7 @@ export function chooseRecoveries({ requests, records, statuses, grid, budget }) 
     for (const id of group) {
       if (recoveries.has(id)) continue;
       const request = requests.get(id);
+      const actorGrid = gridFor(request);
       if (!request.goal || request.speed <= 0 || request.checkoutAdvance) continue;
       const peers = group.filter(other => other !== id).map(other => requests.get(other));
       const trafficCells = new Set(peers.flatMap(peer => [peer.start, peer.goal, ...(records.get(peer.id)?.route || [])])
@@ -90,10 +101,11 @@ export function chooseRecoveries({ requests, records, statuses, grid, budget }) 
           if (Math.abs(dx) + Math.abs(dy) > 6) continue;
           const cell = { x: start.x + dx, y: start.y + dy };
           const point = cellToWorld(cell);
-          if (samePoint(point, request.start) || !grid.isOpen(point)
+          if (distance(point, request.start) < 16 || !actorGrid.isOpen(point)
             || trafficCells.has(cellKey(cell)) || occupied.has(cellKey(cell))) continue;
           if ([...requests.values()].some(other => other.id !== id
             && ((other.goal && distance(point, other.goal) < 16) || distance(point, other.start) < 16))) continue;
+          if (peers.some(peer => distanceToSegment(point, peer.start, peer.goal) < 16)) continue;
           if ([...recoveries.values()].some(recovery => distance(point, recovery.goal) < 16)) continue;
           candidates.push(point);
         }
@@ -102,7 +114,7 @@ export function chooseRecoveries({ requests, records, statuses, grid, budget }) 
       for (const point of candidates) {
         const available = Math.min(128, budget - expansions);
         if (available <= 0) break;
-        const route = findRoute(grid, request.start, point, { maxExpansions: available, blocked: occupied });
+        const route = findRoute(actorGrid, request.start, point, { maxExpansions: available, blocked: occupied });
         expansions += route.expansions;
         if (route.status !== 'found') continue;
         let length = 0;

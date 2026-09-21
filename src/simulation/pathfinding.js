@@ -9,6 +9,7 @@ import {
 import { resolveNavigationWorkspace } from './movement/navigationWorkspace';
 import { createGrid } from './navigation/grid';
 import { findRoute } from './navigation/router';
+import { noteNavigation } from './navigation/telemetry';
 
 export {
   buildBlockedCells,
@@ -33,6 +34,7 @@ export function findPath(state, startCell, goalCell, options = {}) {
     || Object.keys(options).some(key => key !== 'workspace' && key !== 'metrics')) {
     throw new Error('findPath accepts only static path options: workspace and metrics');
   }
+  noteNavigation('pathRequests');
   const workspace = resolveNavigationWorkspace(state, options.workspace || null, options.metrics || null);
   const owner = Array.isArray(state.doors) ? state.doors : state;
   let cache = routeCaches.get(owner);
@@ -42,11 +44,13 @@ export function findPath(state, startCell, goalCell, options = {}) {
   }
   const key = `${cellKey(startCell)}->${cellKey(goalCell)}`;
   if (cache.routes.has(key)) {
+    noteNavigation('pathCacheHits');
     const route = cache.routes.get(key);
     cache.routes.delete(key);
     cache.routes.set(key, route);
     return route.map(cell => ({ ...cell }));
   }
+  noteNavigation('pathCacheMisses');
   const result = findRoute(createGrid(state, workspace), cellToWorld(startCell), cellToWorld(goalCell));
   const route = result.status === 'found' ? result.points.map(worldToCell) : [];
   cache.routes.set(key, route);

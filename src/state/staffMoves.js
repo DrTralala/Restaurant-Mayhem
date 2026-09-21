@@ -114,7 +114,6 @@ function clearOfCurrentClaims(state, worker, point) {
     ...(state.staff || []),
     ...(state.customers || []),
     ...getQueueVisibleMembers(state, state.queue || []),
-    ...(state.queueSlots || []),
   ].filter(candidate => finitePoint(candidate)
     && !sameId(candidate.id ?? candidate.memberId, worker.id));
   const claims = state.movementCoordinator?.claims;
@@ -318,7 +317,8 @@ function resetStaffWork(state, worker) {
 }
 
 function clearStaffRuntime(worker) {
-  const cleared = clearNavigationGoal(worker);
+  const { navigationYield: _yield, ...withoutYield } = worker;
+  const cleared = clearNavigationGoal(withoutYield);
   return {
     ...cleared,
     task: null,
