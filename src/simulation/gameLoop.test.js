@@ -1073,7 +1073,7 @@ describe('runTick', () => {
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       customers: [{
         id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: null, drinkId: 'water',
-        orderedServiceItemIds: ['drink'],
+        orderedServiceItemIds: ['drink'], x: 190, y: 210,
       }],
       serviceItems: [{
         id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',

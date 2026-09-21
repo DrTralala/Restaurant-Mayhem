@@ -86,6 +86,23 @@ it('stops scheduling after a tick fault and restarts after generation changes', 
   view.unmount();
 });
 
+it('names affected actor IDs in the navigation fault banner', () => {
+  gameState = {
+    ...gameState,
+    paused: true,
+    navigationFault: {
+      kind: 'unsafe-navigation-state',
+      issues: [{ kind: 'actor-overlap', ids: ['starter-cook', 'starter-host'] }],
+    },
+  };
+
+  render(<SimulationRuntime><Harness /></SimulationRuntime>);
+
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'Affected actors: starter-cook, starter-host.',
+  );
+});
+
 it('cancels its pending animation frame on unmount', () => {
   const view = render(<SimulationRuntime><Harness /></SimulationRuntime>);
 

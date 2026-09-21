@@ -143,6 +143,21 @@ describe('moveStaff', () => {
     expect(result.cashierStations).toEqual(state.cashierStations);
   });
 
+  it('cancels a retained idle yield during manual relocation', () => {
+    const state = makeState({
+      staff: [{
+        ...makeState().staff[0],
+        navigationGoal: { x: 400, y: 200 },
+        navigationYield: { goal: { x: 400, y: 200 }, beneficiaryId: 'peer' },
+      }],
+    });
+
+    const result = moveStaff(state, 'worker', { x: 500, y: 300 });
+
+    expect(result.staff[0]).not.toHaveProperty('navigationYield');
+    expect(result.staff[0]).not.toHaveProperty('navigationGoal');
+  });
+
   it('preserves a carried waiter item and moves its physical position with the worker', () => {
     const state = makeState({
       staff: [{
@@ -379,6 +394,48 @@ describe('moveStaff', () => {
     expect(result.staffAmenities[0].slots[0]).toEqual({
       index: 0, reservedBy: null, occupiedBy: null,
     });
+  });
+
+  it.each([
+    ['an orphan lease', {
+      queue: [],
+      queueSlots: [{ memberId: 'orphan', partyId: 'ghost', x: 400, y: 400, slot: 0 }],
+    }],
+    ['an ambiguous lease', {
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [
+        { memberId: 'queued', partyId: 'party', x: 400, y: 400, slot: 0 },
+        { memberId: 'queued', partyId: 'party', x: 440, y: 400, slot: 1 },
+      ],
+    }],
+    ['a foreign-party lease', {
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'other-party', x: 400, y: 400, slot: 0 }],
+    }],
+    ['a display-overflow member', {
+      queue: [{ partyId: 'party', members: [{ id: 'overflow', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [],
+    }],
+  ])('does not let %s block the first safe staff repair point', (_label, overrides) => {
+    const result = repairInvalidStaffOverlaps({ ...seatOriginOverlapState(), ...overrides });
+    expect(result.staff[0]).toMatchObject({ x: 400, y: 400 });
+  });
+
+  it('keeps a legitimate leased member and actual departing customer as repair blockers', () => {
+    const base = seatOriginOverlapState();
+    const leased = repairInvalidStaffOverlaps({
+      ...base,
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'party', x: 400, y: 400, slot: 0 }],
+    });
+    const departing = repairInvalidStaffOverlaps({
+      ...base,
+      customers: [...base.customers, { id: 'departing', partyId: 'party', state: 'leaving', x: 400, y: 400 }],
+      queueSlots: [{ memberId: 'departing', partyId: 'party', x: 400, y: 400, slot: 0 }],
+    });
+
+    expect(leased.staff[0]).not.toMatchObject({ x: 400, y: 400 });
+    expect(departing.staff[0]).not.toMatchObject({ x: 400, y: 400 });
   });
 
   it('repairs a staff overlap with a verified seat-origin customer without moving the customer', () => {

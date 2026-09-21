@@ -13,6 +13,13 @@ import {
 } from '../data/fixtures';
 import { findPath, isInsideWorld, worldToCell } from './pathfinding';
 import {
+  footprintHasActor,
+  newSpatialIssues,
+  physicalActors,
+  projectFixtureActors,
+} from './navigation/occupancy';
+import { reconcileFixtureResidencies } from './movement/seatedDeparture';
+import {
   buildBlockedCells,
   cellKey,
   createNavigationWorkspace,
@@ -330,6 +337,10 @@ export function validatePlacement(state = {}, placement = {}) {
     return invalid('overlap');
   }
 
+  if (requestedPlacement.itemType !== 'door' && footprintHasActor(currentState, rect)) {
+    return invalid('actor-occupied');
+  }
+
   const existingAmenityAccess = getAmenityAccessRects(currentState);
   if (existingAmenityAccess.some(accessRect => rectangleIntersects(rect, accessRect))) {
     return invalid('amenity-access');
@@ -460,11 +471,7 @@ function movesStrandAnActor(state, finalState, moves) {
   const newlyBlocked = new Set([...after].filter(key => !before.has(key)));
   if (newlyBlocked.size === 0) return false;
 
-  const actors = [
-    ...(state.staff || []),
-    ...(state.customers || []),
-    ...(state.queueSlots || []),
-  ];
+  const actors = physicalActors(state);
   return actors.some(actor => isFinitePoint(actor)
     && newlyBlocked.has(cellKey(worldToCell(actor))));
 }
@@ -581,6 +588,17 @@ export function validateFixtureMoves(state = {}, moves = []) {
   }
 
   if (!resolveMovedChairRelationships(state, finalFixtures, normalisedMoves)) return invalid('chair-table');
+
+  const projectedActors = projectFixtureActors(currentState, finalState, normalisedMoves);
+  // Match the real committer's fixtureMoves.js:317–318 path. A legal moved
+  // seated customer must receive refreshed residency before the audit, while
+  // a departing/foreign/revoked actor must remain unauthorised.
+  const projected = reconcileFixtureResidencies(
+    currentState,
+    projectedActors,
+    createNavigationWorkspace(projectedActors),
+  );
+  if (newSpatialIssues(currentState, projected).length) return invalid('actor-occupied');
 
   return { valid: true, reason: null, moves: normalisedMoves };
 }
@@ -854,6 +872,8 @@ export function validateFixtureCopies(state = {}, requestedCopies = []) {
   if (!hasValidCopiedChairRelationships(finalFixtures, copiedChairs)) {
     return invalid('chair-table');
   }
+
+  if (newSpatialIssues(currentState, finalState).length) return invalid('actor-occupied');
 
   const normalisedCopies = copies.map(copy => ({
     type: copy.type,

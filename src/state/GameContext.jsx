@@ -15,6 +15,7 @@ import {
   validatePlacement,
 } from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
+import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseOperatingHour } from '../simulation/clock';
 import { getStaffTrainingCost, STAFF_SALARIES } from '../simulation/staffProgression';
@@ -33,6 +34,7 @@ import { copyFixtures } from './fixtureCopies';
 import { moveFixtures } from './fixtureMoves';
 import { invalidateMovementRuntime, moveStaff } from './staffMoves';
 import { getFixtureSaleEligibility, sellFixtures } from './fixtureSales';
+import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
 
 const DISH_QUALITY_COST = 50;
 const BONUS_COST = 50;
@@ -415,7 +417,7 @@ function placeItem(state, action) {
 const GameContext = createContext(null);
 const DispatchContext = createContext(null);
 
-function gameReducer(state, action) {
+function reduceGameAction(state, action) {
   switch (action.type) {
     case 'TICK':
       return action.nextState;
@@ -589,10 +591,19 @@ function gameReducer(state, action) {
         activityPhase: null,
         idleUntil: null,
       };
+      const occupiedIds = [...state.staff, ...(state.customers || []),
+        ...(state.queue || []).flatMap(party => party.members || [party]),
+        ...(state.queueDepartures || [])];
+      if (hiredStaff.id == null || occupiedIds.some(actor => String(actor.id) === String(hiredStaff.id))) return state;
+      const unplacedHire = { ...hiredStaff, x: null, y: null };
+      const allocatedStaff = allocateStaffPositions(state, [
+        ...state.staff, { ...withCarriedServiceItemIds(unplacedHire, []), salary },
+      ]);
+      if (!allocatedStaff) return state;
       return {
         ...state,
         restaurant: { ...state.restaurant, funds: state.restaurant.funds - salary },
-        staff: [...state.staff, { ...withCarriedServiceItemIds(hiredStaff, []), salary }],
+        staff: allocatedStaff,
       };
     }
     case 'SET_STAFF_SCHEDULE': {
@@ -820,6 +831,24 @@ function gameReducer(state, action) {
     default:
       return state;
   }
+}
+
+export function gameReducer(state, action) {
+  if (state.navigationFault && action.type === 'TOGGLE_PAUSE') return state;
+  let candidate = reduceGameAction(state, action);
+  if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE') return candidate;
+  if (state.navigationFault && (candidate.staff || []).some(worker =>
+    !Number.isFinite(worker.x) || !Number.isFinite(worker.y))) {
+    const positioned = allocateStaffPositions(candidate);
+    if (positioned) candidate = { ...candidate, staff: positioned };
+  }
+  const spatialKeys = ['staff', 'customers', 'queue', 'queueSlots', 'tables', 'chairs',
+    'doors', 'kitchenStations', 'serviceTables', 'cashierStations', 'washStations', 'staffAmenities'];
+  const changed = spatialKeys.some(key => candidate[key] !== state[key])
+    || candidate.restaurant?.expansionLevel !== state.restaurant?.expansionLevel;
+  if (!changed) return candidate;
+  if (newSpatialIssues(state, candidate).length) return state;
+  return state.navigationFault ? quarantineNavigation(candidate) : candidate;
 }
 
 const GameGenerationContext = createContext(0);

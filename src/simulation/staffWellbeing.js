@@ -17,6 +17,9 @@ import {
 } from './movement/navigationWorkspace';
 import { createGrid } from './navigation/grid';
 import { findRoute } from './navigation/router';
+import { queryReachability } from './navigation/preflight';
+import { newSpatialIssues } from './navigation/occupancy';
+import { getQueueVisibleMembers } from './customerQueue';
 import { releaseStaffWork } from './staffTaskLifecycle';
 
 export const STAFF_WELLBEING_CONSTANTS = Object.freeze({
@@ -265,7 +268,7 @@ function actorPositions(state, excludedId) {
   const actors = [
     ...(state?.staff || []),
     ...(state?.customers || []),
-    ...(state?.queueSlots || []),
+    ...getQueueVisibleMembers(state, state?.queue || []),
   ].filter(actor => !sameId(actor?.id ?? actor?.memberId, excludedId) && finitePoint(actor));
   const claims = state?.movementCoordinator?.claims;
   const claimedPoints = claims instanceof Map
@@ -326,7 +329,7 @@ function routeToApproach(state, worker, approach) {
   const grid = createGrid(state, workspace);
   if (!grid.isOpen(worker) || !grid.isOpen(approach)) return false;
   if (samePoint(worker, approach)) return true;
-  return findRoute(grid, worker, approach, { maxExpansions: 512 }).status === 'found';
+  return queryReachability(`amenity:${String(worker.id)}`, grid, worker, approach, 512) === 'found';
 }
 
 function approachFor(amenity, slotIndex) {
@@ -950,7 +953,7 @@ function startAmenityActivity(state, worker, now) {
       return withoutResidency;
     })()
     : nextWorkerBase;
-  return {
+  const result = {
     state: {
       ...state,
       staff: state.staff.map(candidate => sameId(candidate.id, worker.id) ? nextWorker : candidate),
@@ -965,6 +968,7 @@ function startAmenityActivity(state, worker, now) {
     },
     worker: nextWorker,
   };
+  return newSpatialIssues(state, result.state).length ? { state, worker } : result;
 }
 
 function releaseableUse(state, worker, now) {

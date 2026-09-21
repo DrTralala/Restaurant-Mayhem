@@ -90,4 +90,37 @@ describe('destination ownership and traffic priority', () => {
     item.goal.x = 900;
     expect(claims.get('a')).toEqual({ x: 400, y: 300 });
   });
+
+  it('expires historical ownership preference after two movement seconds', () => {
+    const previousClaims = new Map([['z-owner', { x: 400, y: 300 }]]);
+    const owner = request('z-owner', 400, 300, { waitingSeconds: 1.9, speed: 1 });
+    const challenger = request('a-challenger', 400, 300, { speed: 1 });
+    expect([...arbitrateDestinations([owner, challenger], previousClaims).claims.keys()])
+      .toEqual(['z-owner']);
+
+    const expired = { ...owner, waitingSeconds: 2 };
+    expect([...arbitrateDestinations([expired, challenger], previousClaims).claims.keys()])
+      .toEqual(['a-challenger']);
+  });
+
+  it('does not claim a remote endpoint for a zero-speed actor but keeps at-goal occupancy', () => {
+    const remote = request('remote', 400, 300, { speed: 0 });
+    expect(arbitrateDestinations([remote]).claims.size).toBe(0);
+
+    const atGoal = request('at-goal', 400, 300, { start: { x: 400, y: 300 }, speed: 0 });
+    expect([...arbitrateDestinations([atGoal]).claims.keys()]).toEqual(['at-goal']);
+  });
+
+  it('does not retain an unreachable owner and keeps legacy speed omission compatible', () => {
+    const previousClaims = new Map([['z-owner', { x: 400, y: 300 }]]);
+    const unreachable = request('z-owner', 400, 300, { previousPlan: 'unreachable', speed: 1 });
+    const challenger = request('a-challenger', 400, 300, { speed: 1 });
+    expect([...arbitrateDestinations([unreachable, challenger], previousClaims).claims.keys()])
+      .toEqual(['a-challenger']);
+
+    const legacy = request('z-owner', 400, 300);
+    delete legacy.speed;
+    expect([...arbitrateDestinations([legacy, challenger], previousClaims).claims.keys()])
+      .toEqual(['z-owner']);
+  });
 });

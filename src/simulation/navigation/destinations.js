@@ -1,3 +1,5 @@
+import { getQueueVisibleMembers } from '../customerQueue';
+
 export const CHARACTER_CLEARANCE = 16;
 
 function finitePoint(point) {
@@ -8,7 +10,7 @@ function finitePoint(point) {
 export function canClaimDestination(state, actor, point) {
   if (!finitePoint(point)) return false;
   const peers = [...(state.staff || []), ...(state.customers || []),
-    ...(state.queueSlots || [])];
+    ...getQueueVisibleMembers(state, state.queue || [])];
   return peers.every(peer => {
     if (String(peer.id ?? peer.memberId) === String(actor.id)) return true;
     const destination = finitePoint(peer.navigationGoal) ? peer.navigationGoal : peer;

@@ -22,6 +22,40 @@ function tick(state, descriptors = entries(state)) {
 }
 
 describe('bounded traffic coordinator', () => {
+  it.each([
+    ['an orphan lease', {
+      queue: [],
+      queueSlots: [{ memberId: 'orphan', partyId: 'ghost', x: 460, y: 300, slot: 0 }],
+    }, []],
+    ['an ambiguous lease', {
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [
+        { memberId: 'queued', partyId: 'party', x: 460, y: 300, slot: 0 },
+        { memberId: 'queued', partyId: 'party', x: 500, y: 300, slot: 1 },
+      ],
+    }, []],
+    ['a foreign-party lease', {
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'other-party', x: 460, y: 300, slot: 0 }],
+    }, []],
+    ['a display-overflow member', {
+      queue: [{ partyId: 'party', members: [{ id: 'overflow', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [],
+    }, []],
+    ['a legitimate leased member', {
+      queue: [{ partyId: 'party', members: [{ id: 'queued', partyId: 'party', state: 'queued' }] }],
+      queueSlots: [{ memberId: 'queued', partyId: 'party', x: 460, y: 300, slot: 0 }],
+    }, ['queued']],
+    ['an actual departing customer', {
+      queue: [],
+      queueSlots: [{ memberId: 'departing', partyId: 'party', x: 460, y: 300, slot: 0 }],
+      customers: [{ id: 'departing', partyId: 'party', state: 'leaving', x: 460, y: 300 }],
+    }, ['departing']],
+  ])('uses only physical queue authority for %s', (_label, overrides, expectedIds) => {
+    const result = advanceCharacterMovementBatch({ ...world([]), ...overrides }, [], 0);
+    expect([...result.coordinator.requests.keys()].sort()).toEqual(expectedIds);
+  });
+
   it('diagnoses unsafe starting overlap without teleporting it or stopping independent actors', () => {
     const state = world([actor('a', 400, 300), actor('b', 410, 300), actor('independent', 600, 300, { x: 660, y: 300 })]);
     const result = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
@@ -58,6 +92,37 @@ describe('bounded traffic coordinator', () => {
     const snapshot = structuredClone(state);
     tick(state);
     expect(state).toEqual(snapshot);
+  });
+
+  it('tracks held time in movement seconds and preserves it across split batches', () => {
+    const initial = world([actor('worker', 400, 300, { x: 460, y: 300 })]);
+    const heldEntry = [{ character: initial.staff[0], speed: 0 }];
+    const oneBatch = advanceCharacterMovementBatch(initial, heldEntry, 0.1);
+    let splitState = { ...initial, movementCoordinator: createMovementCoordinator() };
+    splitState = {
+      ...splitState,
+      movementCoordinator: advanceCharacterMovementBatch(splitState, heldEntry, 0.05).coordinator,
+    };
+    splitState = {
+      ...splitState,
+      movementCoordinator: advanceCharacterMovementBatch(splitState, heldEntry, 0.05).coordinator,
+    };
+
+    expect(oneBatch.coordinator.records.get('worker').waitingSeconds).toBeCloseTo(0.1);
+    expect(splitState.movementCoordinator.records.get('worker').waitingSeconds).toBeCloseTo(0.1);
+    expect(advanceCharacterMovementBatch(initial, heldEntry, 0).coordinator.records
+      .get('worker').waitingSeconds).toBe(0);
+  });
+
+  it('resets held time after actual displacement, including a detour', () => {
+    const state = world([actor('worker', 400, 300, { x: 500, y: 300 })]);
+    state.movementCoordinator.records.set('worker', {
+      goal: { x: 500, y: 300 }, waitingSeconds: 2, waitingTicks: 60,
+    });
+    const result = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
+
+    expect(result.moved.get('worker').x).toBeGreaterThan(400);
+    expect(result.coordinator.records.get('worker').waitingSeconds).toBe(0);
   });
 
   it('is invariant to input actor ordering', () => {

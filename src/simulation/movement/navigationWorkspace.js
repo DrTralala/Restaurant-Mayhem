@@ -1,6 +1,7 @@
 import { GRID_SIZE, getDoors, getRestaurantWorld } from '../world';
 import { getPlaceableDimensions } from '../../data/placeables';
 import { getAmenityGeometry } from '../../data/staffAmenities';
+import { noteNavigation } from '../navigation/telemetry';
 
 export function cellKey(cell) {
   return `${cell.x},${cell.y}`;
@@ -124,6 +125,7 @@ export function isNavigationWorkspaceForState(workspace, state) {
 }
 
 export function createNavigationWorkspace(state, metrics = null) {
+  noteNavigation('workspaceBuilds');
   const world = getRestaurantWorld(state?.restaurant || {});
   const blocked = buildBlockedCells(state, metrics);
   const bounds = Object.freeze({

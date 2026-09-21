@@ -189,6 +189,54 @@ describe('domain-authorised navigation connectors', () => {
     expect(state.customers[1]).toMatchObject({ x: 1113, y: 360 });
     expect([...state.movementCoordinator.statuses.values()].every(status => status.plan === 'arrived')).toBe(true);
   });
+
+  it('keeps a valid departing customer connector authoritative through real recovery', () => {
+    const table = { id: 'table', x: 200, y: 200 };
+    const chair = { id: 'chair', tableId: 'table', x: 180, y: 200 };
+    let customer = {
+      id: 'departing', partyId: 'party', state: 'checkout_moving',
+      x: chair.x + 10, y: chair.y + 10, chairId: chair.id, tableId: table.id,
+      navigationGoal: { x: 300, y: 210 },
+    };
+    customer = { ...customer, ...recordSeatResidency(customer, chair, table) };
+    const blocker = {
+      id: 'blocker', role: 'waiter', x: 220, y: 210, navigationGoal: { x: 220, y: 300 },
+    };
+    const coordinator = createMovementCoordinator();
+    coordinator.records.set('departing', {
+      goal: customer.navigationGoal, waitingTicks: 8, waitingSeconds: 8 / 30,
+    });
+    coordinator.records.set('blocker', {
+      goal: blocker.navigationGoal, waitingTicks: 8, waitingSeconds: 8 / 30,
+    });
+    coordinator.statuses.set('departing', {
+      motion: 'holding', plan: 'waiting', reason: 'traffic', blockers: ['blocker'],
+    });
+    coordinator.statuses.set('blocker', {
+      motion: 'holding', plan: 'waiting', reason: 'traffic', blockers: ['departing'],
+    });
+    const state = {
+      restaurant: { expansionLevel: 1 },
+      tables: [table], chairs: [chair], customers: [customer], staff: [blocker],
+      kitchenStations: [], serviceTables: [], doors: [{ id: 'door', y: 340, role: 'exit' }],
+      movementCoordinator: coordinator,
+    };
+
+    const batch = advanceCharacterMovementBatch(state, [
+      { character: customer, speed: 62 },
+      { character: blocker, speed: 0 },
+    ], 1 / 30);
+    const moved = batch.moved.get('departing');
+    const recovery = batch.diagnostics.recoveries.get('departing');
+
+    expect(recovery).toBeDefined();
+    expect(batch.statuses.get('departing')).toMatchObject({ plan: 'moving', motion: 'traversing' });
+    expect(moved).toMatchObject({ seatResidency: { phase: 'departing' } });
+    expect(moved.seatResidency.connector).toMatchObject({
+      from: { x: customer.x, y: customer.y },
+    });
+    expect(moved.seatResidency.phase).not.toBe('revoked');
+  });
 });
 
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);

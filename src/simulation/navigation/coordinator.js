@@ -7,7 +7,10 @@ import { arbitrateDestinations, orderTrafficRequests } from './traffic';
 import { chooseRecoveries } from './recovery';
 import { createActorGrid, commitActorPosition } from './domainGrid';
 import { stationaryTrajectory, trajectorySegment } from '../movement/trajectory';
+import { noteNavigation } from './telemetry';
+import { getQueueVisibleMembers } from '../customerQueue';
 
+// Historical name: this ceiling applies per movement batch, not per complete runTick.
 export const MAX_EXPANSIONS_PER_TICK = 2048;
 export const MAX_EXPANSIONS_PER_ACTOR = 256;
 const HORIZON = 2;
@@ -17,7 +20,7 @@ const copyPoint = point => ({ x: point.x, y: point.y });
 const hold = (point, horizon) => [{ from: copyPoint(point), to: copyPoint(point), start: 0, end: horizon }];
 
 export function createMovementCoordinator() {
-  return { version: 1, tick: 0, requests: new Map(), statuses: new Map(), claims: new Map(),
+  return { version: 1, tick: 0, elapsedMovementSeconds: 0, requests: new Map(), statuses: new Map(), claims: new Map(),
     records: new Map(), plans: new Map(), diagnostics: { expansionsThisTick: 0 } };
 }
 
@@ -31,9 +34,9 @@ function normalise(state, entries, previous) {
   for (const actor of [...(state.staff || []), ...(state.customers || [])]) {
     if (actor?.id != null && finitePoint(actor)) actors.set(String(actor.id), actor);
   }
-  for (const slot of state.queueSlots || []) {
-    if (slot.memberId != null && finitePoint(slot) && !actors.has(String(slot.memberId))) {
-      actors.set(String(slot.memberId), { id: String(slot.memberId), x: slot.x, y: slot.y });
+  for (const member of getQueueVisibleMembers(state, state.queue || [])) {
+    if (member?.id != null && finitePoint(member) && !actors.has(String(member.id))) {
+      actors.set(String(member.id), member);
     }
   }
   const descriptors = new Map();
@@ -64,6 +67,8 @@ function normalise(state, entries, previous) {
       queueRank,
       checkoutStationId,
       waitingTicks: samePoint(old?.goal, goal) ? old.waitingTicks : 0,
+      waitingSeconds: samePoint(old?.goal, goal) ? old.waitingSeconds || 0 : 0,
+      previousPlan: previous.statuses.get(id)?.plan ?? null,
       priority: priority(character, entry), duplicate: duplicate.has(id) });
   }
   return requests;
@@ -148,11 +153,14 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
   const previous = state.movementCoordinator?.version === 1 ? state.movementCoordinator : createMovementCoordinator();
   const next = createMovementCoordinator();
   next.tick = previous.tick + 1;
+  next.elapsedMovementSeconds = (previous.elapsedMovementSeconds || 0) + dt;
   const baseGrid = createGrid(state);
   const requests = normalise(state, entries, previous);
   next.requests = requests;
   const recoveryResult = chooseRecoveries({ requests, records: previous.records,
-    statuses: previous.statuses, grid: baseGrid, budget: 512 });
+    statuses: previous.statuses, grid: baseGrid,
+    gridFor: request => createActorGrid(state, request.character, baseGrid, request.doorFlow),
+    budget: 512 });
   const effectiveGoal = request => request.checkoutAdvance
     ? request.goal : recoveryResult.recoveries.get(request.id)?.goal || request.goal;
   const arbitration = arbitrateDestinations([...requests.values()].filter(request => request.goal)
@@ -213,6 +221,10 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
     let route = !request.checkoutAdvance && sameRoute ? old.route : null;
     let routeSearch = !request.checkoutAdvance && sameRoute
       && samePoint(old.searchStart, start) && old.routeSearch ? forkRouteSearch(old.routeSearch) : null;
+    const continueYield = commitment && character.activityPhase === 'idle_roaming' && !character.task
+      && state.staff?.includes(character)
+      && samePoint(character.navigationYield?.goal, goal) && samePoint(goal, target)
+      && !samePoint(commitment, target);
     if (unsafeActors.has(id)) { plan = 'waiting'; reason = 'unsafe-initial-state'; }
     else if (request.duplicate) { plan = 'waiting'; reason = 'duplicate-descriptor'; }
     else if (request.invalidGoal) { plan = 'unreachable'; reason = 'invalid-goal'; }
@@ -251,7 +263,9 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
         }
       }
       if (route && plan !== 'unreachable') {
-        const result = planMovement({ grid, start, goal: commitment || routeTarget(grid, start, route, speed, horizon, target), speed, horizon,
+        const result = planMovement({ grid, start,
+          goal: (!continueYield && commitment) || routeTarget(grid, start, route, speed, horizon, target), speed, horizon,
+          firstWaypoint: continueYield ? commitment : null,
           reservations: [...reservations.values()].filter(item => item.actorId !== id),
           maxExpansions: Math.max(0, available - spent) });
         spent += result.expansions;
@@ -270,12 +284,12 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
     else if (advancing) plan = 'moving';
     else if (plan === 'planning' && reason === 'traffic') plan = 'waiting';
     const status = { plan, motion: advancing ? 'traversing' : 'holding', reason, blockers };
+    const waitingSeconds = !goal || plan === 'arrived' || advancing ? 0 : request.waitingSeconds + dt;
+    status.waitingSeconds = waitingSeconds;
+
     next.statuses.set(id, status);
-    const remaining = goal ? Math.hypot(position.x - goal.x, position.y - goal.y) : 0;
-    const bestDistance = samePoint(old?.goal, goal) ? old.bestDistance ?? Infinity
-      : goal ? Math.hypot(start.x - goal.x, start.y - goal.y) : 0;
-    const progress = remaining < bestDistance - 1e-6;
-    if (commitment && samePoint(position, commitment)) commitment = null;
+    if (commitment && (samePoint(position, commitment) || (continueYield
+      && actions.some(action => action.end <= dt && samePoint(action.to, commitment))))) commitment = null;
     if (!request.checkoutAdvance && !commitment) {
       const nextMove = actions.find(action => action.end > dt && !samePoint(action.from, action.to));
       commitment = nextMove && !samePoint(position, nextMove.to)
@@ -285,8 +299,9 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
     }
     next.records.set(id, { goal, routeGoal: target, topology: grid.signature, route, routeSearch, searchStart: start, recovery,
       routeAvoidance, avoidanceKey, commitment,
-      bestDistance: Math.min(bestDistance, remaining),
-      waitingTicks: !goal || plan === 'arrived' || progress ? 0 : request.waitingTicks + 1 });
+      waitingSeconds,
+      waitingTicks: Math.floor(waitingSeconds * 30 + 1e-9),
+      lastMovedAt: advancing ? next.elapsedMovementSeconds : old?.lastMovedAt ?? next.elapsedMovementSeconds });
     next.plans.set(id, actions);
     if (!advancing && goal && plan !== 'arrived') diagnostics.waiting.set(id, status);
     moved.set(id, commitActorPosition(character, grid, position, actions));
@@ -302,5 +317,9 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
     metrics.executorMilliseconds += executorMilliseconds;
     metrics.plannerMilliseconds += elapsed - executorMilliseconds;
   }
+  noteNavigation('movementBatches');
+  noteNavigation('coordinatorExpansionSubtotal', diagnostics.expansionsThisTick);
+  noteNavigation('invariantFailures', diagnostics.invariantFailure ? 1 : 0);
+  noteNavigation('overBudgetBatches', diagnostics.expansionsThisTick > MAX_EXPANSIONS_PER_TICK ? 1 : 0);
   return { moved, coordinator: next, statuses: next.statuses, trajectories, diagnostics };
 }

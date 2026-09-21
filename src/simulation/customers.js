@@ -17,6 +17,8 @@ import {
 import { createGrid } from './navigation/grid';
 import { createActorGrid } from './navigation/domainGrid';
 import { findRoute } from './navigation/router';
+import { queryReachability } from './navigation/preflight';
+import { navigationFixtureRectangles } from './movement/navigationWorkspace';
 import { isCheckoutState, prepareCheckoutCustomers } from './checkout';
 import { releaseVacatedTables } from './tableLifecycle';
 import {
@@ -54,9 +56,7 @@ const EXIT_GEOMETRY_EPSILON = 1e-9;
 const EXIT_DISTANCE = 120;
 const EXIT_OPENING_HEIGHT = 40;
 const EXIT_REACHABILITY_EXPANSIONS = 2048;
-const EXIT_REACHABILITY_CACHE_LIMIT = 1024;
 const EXIT_FLOW_GRID_CACHE_LIMIT = 32;
-const exitReachabilityCache = new Map();
 const exitFlowGridCache = new Map();
 
 function isFinitePoint(point) {
@@ -441,6 +441,9 @@ function navigationTopologyKey(state) {
     serviceTables: geometry(state.serviceTables, ['id', 'x', 'y', 'rotation']),
     cashierStations: geometry(state.cashierStations, ['id', 'x', 'y', 'w', 'h']),
     washStations: geometry(state.washStations, ['id', 'x', 'y', 'w', 'h']),
+    staffAmenities: navigationFixtureRectangles(state)
+      .filter(rectangle => rectangle.kind === 'staffAmenity')
+      .map(rectangle => JSON.stringify(rectangle)).sort(),
     doors: getDoors(state).map(door => [door?.id, door?.y, door?.role]),
   });
 }
@@ -464,15 +467,8 @@ function isReachableExitCrossingPoint(state, customer, door, point, flowGrid = n
   // assignment in that case; the coordinator still applies the authoritative
   // domain grid before any movement is committed.
   if (!grid.isOpen(customer)) return customer.seatResidency?.phase === 'clear';
-  const key = JSON.stringify([grid.signature, door.y, customer.x, customer.y, point.x, point.y]);
-  if (exitReachabilityCache.has(key)) return exitReachabilityCache.get(key);
-  const result = findRoute(grid, customer, point, {
-    maxExpansions: EXIT_REACHABILITY_EXPANSIONS,
-  });
-  if (result.status === 'found' || result.status === 'unreachable') {
-    setBoundedCache(exitReachabilityCache, key, result.status === 'found', EXIT_REACHABILITY_CACHE_LIMIT);
-  }
-  return result.status === 'found';
+  return queryReachability(`exit:${String(customer.id)}:${String(door.id)}`,
+    grid, customer, point, EXIT_REACHABILITY_EXPANSIONS) === 'found';
 }
 
 function chooseExitCrossingPoint(state, customer, door, flowGrid = null) {

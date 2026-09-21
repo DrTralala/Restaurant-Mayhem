@@ -9,6 +9,7 @@ import { getCharacterMovementStatus } from './movement';
 import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoal';
 import { getCashierWorkPosition } from './world';
 import { canClaimDestination } from './navigation/destinations';
+import { prepareIdleYield } from './navigation/idleYield';
 import { getCarriedServiceItemIds } from './staffInventory';
 import { getStaffPerformanceMultiplier } from './staffPerformance';
 
@@ -82,6 +83,8 @@ export function getStaffMovementSpeed(worker) {
 }
 
 export function prepareStaffActivity(state, worker) {
+  const yielded = prepareIdleYield(state, worker);
+  if (yielded !== undefined) return yielded;
   if (worker.task) {
     return worker.activityPhase === 'working' ? worker : markTaskAssigned(worker);
   }

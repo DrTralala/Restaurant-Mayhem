@@ -55,6 +55,66 @@ it('releases a passing bay once the peer has cleared the conflict, not only its 
   expect(records.get('yielding').recovery.peers).toHaveLength(1);
 });
 
+it('uses the requesting actor grid when retaining a recovery', () => {
+  const state = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [] };
+  const grid = createGrid(state);
+  const request = { id: 'departing', start: { x: 200, y: 200 }, goal: { x: 300, y: 200 },
+    speed: 60, waitingTicks: 8 };
+  const records = new Map([['departing', {
+    goal: request.goal,
+    recovery: {
+      goal: { x: 220, y: 200 }, origin: request.start,
+      peers: [{ id: 'peer', start: { x: 240, y: 200 }, goal: { x: 400, y: 200 } }],
+    },
+  }]]);
+  const requests = new Map([
+    ['departing', request],
+    ['peer', { id: 'peer', start: { x: 240, y: 200 }, goal: { x: 400, y: 200 },
+      speed: 60, waitingTicks: 8 }],
+  ]);
+  let requestedGrid = false;
+  const actorGrid = { ...grid, isOpen: () => false };
+
+  const result = chooseRecoveries({ requests, records, statuses: new Map(), grid,
+    gridFor: candidate => {
+      requestedGrid = candidate.id === 'departing';
+      return actorGrid;
+    }, budget: 0 });
+
+  expect(requestedGrid).toBe(true);
+  expect(result.recoveries.has('departing')).toBe(false);
+});
+
+it('does not grant a recovery point within the actor clearance of its current position', () => {
+  const requests = new Map([
+    ['a', { id: 'a', start: { x: 900, y: 342 }, goal: { x: 500, y: 220 }, speed: 60, waitingTicks: 8 }],
+    ['b', { id: 'b', start: { x: 880, y: 360 }, goal: { x: 1020, y: 340 }, speed: 60, waitingTicks: 8 }],
+  ]);
+  const statuses = new Map([
+    ['a', { motion: 'holding', blockers: ['b'] }],
+    ['b', { motion: 'holding', blockers: ['a'] }],
+  ]);
+
+  const result = chooseRecoveries({ requests, records: new Map(), statuses,
+    grid: createGrid({ restaurant: { expansionLevel: 1 }, tables: [], chairs: [] }), budget: 512 });
+
+  for (const [id, recovery] of result.recoveries) {
+    expect(Math.hypot(recovery.goal.x - requests.get(id).start.x,
+      recovery.goal.y - requests.get(id).start.y)).toBeGreaterThanOrEqual(16);
+    for (const peer of recovery.peers) {
+      const request = requests.get(peer.id);
+      const dx = request.goal.x - request.start.x;
+      const dy = request.goal.y - request.start.y;
+      const lengthSquared = dx * dx + dy * dy;
+      const projection = Math.max(0, Math.min(1,
+        ((recovery.goal.x - request.start.x) * dx + (recovery.goal.y - request.start.y) * dy)
+        / lengthSquared));
+      expect(Math.hypot(recovery.goal.x - (request.start.x + projection * dx),
+        recovery.goal.y - (request.start.y + projection * dy))).toBeGreaterThanOrEqual(16);
+    }
+  }
+});
+
 it('admits another safe yield when an existing yielding actor remains part of a larger traffic cycle', () => {
   const requests = new Map([
     ['host', { id: 'host', start: { x: 320, y: 160 }, goal: { x: 340, y: 140 }, speed: 75, waitingTicks: 400 }],

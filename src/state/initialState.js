@@ -4,10 +4,11 @@ import { MILESTONES } from '../data/milestones';
 import { createMovementCoordinator } from '../simulation/navigation/coordinator';
 import { createStaffDutyDefaults } from '../simulation/staffSchedules';
 import { DEFAULT_OPERATING_HOURS } from '../simulation/clock';
+import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
 import { SAVE_VERSION } from './saveVersion';
 
 export function createInitialState() {
-  return {
+  const state = {
     restaurant: {
       name: 'My Restaurant',
       funds: 600,
@@ -152,4 +153,7 @@ export function createInitialState() {
     version: SAVE_VERSION,
     movementCoordinator: createMovementCoordinator(),
   };
+  const staff = allocateStaffPositions(state);
+  if (!staff) throw new Error('Starter layout has no safe staff allocation');
+  return { ...state, staff };
 }

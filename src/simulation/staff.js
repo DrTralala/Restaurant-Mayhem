@@ -71,23 +71,21 @@ import {
 import { getOrderSnapshotSubtotal } from './menuEconomy';
 import { getDishwasherStats } from './dishwasherProgression';
 import { findPreparationTarget, isAtPreparationPosition } from './preparationPosition';
+import { allocateStaffPositions } from './navigation/staffAllocation';
+import { positionAvailable, quarantineNavigation } from './navigation/occupancy';
 
 export function ensureStaffRuntime(staff, state) {
-  return (staff || []).map((worker, index) => {
-    const position = Number.isFinite(worker.x) && Number.isFinite(worker.y)
-      ? { x: worker.x, y: worker.y }
-      : getDefaultStaffPosition(worker.role, index, state, worker.id);
-    return withCarriedServiceItemIds(
-      { ...worker, ...position, task: worker.task || null },
-      getCarriedServiceItemIds(worker),
-    );
-  });
+  const positioned = allocateStaffPositions(state, staff || []);
+  if (!positioned) throw new Error('No safe floor position is available for unplaced staff');
+  return positioned.map(worker => withCarriedServiceItemIds(
+    { ...worker, task: worker.task || null }, getCarriedServiceItemIds(worker),
+  ));
 }
 
 const CHARACTER_START_SPACING = 16;
 
-function targetForTable(state, table, staff) {
-  return targetForRect(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff);
+function targetForTable(state, table, staff, excludedGoal = null) {
+  return targetForRect(state, { x: table.x, y: table.y, w: 40, h: 40 }, staff, excludedGoal);
 }
 
 function targetForTableOrCurrent(state, table, staff) {
@@ -109,6 +107,7 @@ function getServiceTableRect(serviceTable) {
 }
 
 function isStaffDestinationAvailable(state, point, staff) {
+  if (!positionAvailable(state, point, staff.id)) return false;
   return (state.staff || []).every(worker => {
     if (worker.id === staff.id || (!worker.task && !worker.navigationGoal)) return true;
     const destination = worker.navigationGoal || worker;
@@ -117,12 +116,13 @@ function isStaffDestinationAvailable(state, point, staff) {
   });
 }
 
-function targetForRect(state, rect, staff) {
+function targetForRect(state, rect, staff, excludedGoal = null) {
   const start = worldToCell(staff);
   const candidates = findAdjacentOpenCells(state, rect, start);
   for (const target of candidates) {
     const goal = target.x === start.x && target.y === start.y
       ? { x: staff.x, y: staff.y } : cellToWorld(target);
+    if (excludedGoal && goal.x === excludedGoal.x && goal.y === excludedGoal.y) continue;
     if (!isStaffDestinationAvailable(state, goal, staff)) continue;
     const staticRoute = findPath(state, start, target);
     if (staticRoute.length || (target.x === start.x && target.y === start.y)) {
@@ -2570,8 +2570,11 @@ function resolveTask({
 
 export function prepareStaffForMovement(state, gameDt) {
   gameDt = Math.max(0, Number(gameDt) || 0);
+  const positionedStaff = allocateStaffPositions(state, state.staff || []);
+  if (!positionedStaff) return quarantineNavigation(state);
   state = {
     ...state,
+    staff: positionedStaff,
     cashierStations: clearUnavailableCashierAssignments(
       state.cashierStations,
       state.staff,
@@ -2632,8 +2635,9 @@ export function prepareStaffForMovement(state, gameDt) {
     return a < b ? -1 : a > b ? 1 : 0;
   });
   for (const index of activityOrder) {
-    if (staff[index].movementResidency?.kind !== 'staff_amenity'
-      && (staff[index].task || isStaffWorkEligible(staff[index], restaurant?.gameTime))) {
+    if (staff[index].navigationYield
+      || (staff[index].movementResidency?.kind !== 'staff_amenity'
+        && (staff[index].task || isStaffWorkEligible(staff[index], restaurant?.gameTime)))) {
       staff[index] = prepareStaffActivity(activityState, staff[index]);
     }
   }
@@ -2696,12 +2700,20 @@ export function prepareStaffForMovement(state, gameDt) {
       || !worker.navigationGoal
       || hasObsoleteCustomerTask(worker, customers, tables, serviceItems, state.washStations || [], restaurant?.gameTime)) continue;
     const currentState = { ...state, staff, customers, tables, serviceItems };
-    if (isStaffDestinationAvailable(currentState, worker.navigationGoal, worker)) continue;
+    const id = String(worker.id);
+    const record = state.movementCoordinator?.records?.get?.(id);
+    const status = state.movementCoordinator?.statuses?.get?.(id);
+    const persistentlyBlocked = record?.goal?.x === worker.navigationGoal.x
+      && record?.goal?.y === worker.navigationGoal.y
+      && (record.waitingSeconds || 0) >= 2
+      && ['traffic', 'destination-owned', 'static-geometry'].includes(status?.reason);
+    if (!persistentlyBlocked && isStaffDestinationAvailable(currentState, worker.navigationGoal, worker)) continue;
     const tableId = worker.task.type === 'take_order'
       ? customers.find(customer => customer.id === worker.task.customerId)?.tableId
       : serviceItems.find(item => item.id === worker.task.serviceItemId)?.tableId;
     const table = tables.find(candidate => candidate.id === tableId);
-    const target = table && targetForTable(currentState, table, worker);
+    const target = table && targetForTable(currentState, table, worker,
+      persistentlyBlocked ? worker.navigationGoal : null);
     if (target) staff[i] = setNavigationGoal(worker, target.goal);
   }
 
@@ -3357,6 +3369,11 @@ export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
       continue;
     }
 
+    if (s.navigationYield) {
+      staff[i] = s;
+      continue;
+    }
+
     const result = assignTask({
       state: {
         ...state, restaurant, staff, customers, queue, tables, serviceItems,
@@ -3431,18 +3448,21 @@ export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
 export function updateStaff(state, timing) {
   const gameDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.gameDt) || 0);
   const movementDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.movementDt) || 0);
+  const positionedStaff = allocateStaffPositions(state, state.staff || []);
+  if (!positionedStaff) return quarantineNavigation(state);
+  const positionedState = { ...state, staff: positionedStaff };
   // `updateStaff` remains a standalone compatibility entry point for callers
   // that do not run the canonical game loop. runTick owns wellbeing and never
   // calls this wrapper, so this legacy drain cannot be applied twice there.
   const standaloneState = gameDt > 0
     ? {
-        ...state,
-        staff: (state.staff || []).map(worker => ({
+        ...positionedState,
+        staff: positionedState.staff.map(worker => ({
           ...worker,
           morale: Math.max(0, worker.morale - 0.01 * gameDt / 60),
         })),
       }
-    : state;
+    : positionedState;
   const prepared = prepareStaffForMovement(standaloneState, gameDt);
   const movementEntries = getStaffBatchEntries(prepared);
   const batch = advanceCharacterMovementBatch(prepared, movementEntries, movementDt);
