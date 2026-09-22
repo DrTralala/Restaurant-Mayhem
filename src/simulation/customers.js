@@ -271,8 +271,54 @@ function chooseParty() {
   return { type: 'family', size: 4 };
 }
 
+function normaliseQueuedParties(queue) {
+  return normaliseCustomerQueue(queue || []).map(party => {
+    const serviceContractId = party.members[0]?.serviceContractId;
+    return serviceContractId && party.members.every(member => member.serviceContractId === serviceContractId)
+      ? { ...party, serviceContractId } : party;
+  });
+}
+
+// Logical members only. Queue leases, ingress and whole-party seating remain
+// responsible for any world position; neither arrival path reserves a chair.
+function createQueuedMember(state, { partyId, partyType, partySize }, member) {
+  const patienceMax = getCustomerPatience(member.archetype, partySize);
+  return {
+    id: member.id, partyId, partyType, partySize,
+    archetype: member.archetype, gender: member.gender,
+    spendingTier: member.spendingTier, spendingBudget: member.spendingBudget,
+    patience: patienceMax, patienceMax, queuePatience: patienceMax, queuePatienceMax: patienceMax,
+    happiness: 80 + getUpgradeEffect(state, 'happiness'), state: 'queued',
+    dishId: null, drinkId: null, foodOrderedAt: null, foodPatienceBudget: null,
+    foodDeadlineAt: null, foodOutcome: null, foodCancelledAt: null, cancelledServiceItemIds: [],
+    tableId: null, chairId: null, tipAmount: 0, seatTime: null, orderTime: null, eatTime: null,
+  };
+}
+
+export function admitScheduledServiceParty(state, booking) {
+  const queue = normaliseQueuedParties(state.queue);
+  if (!isRestaurantOpen(state)) return { state, admitted: false, reason: 'closed' };
+  if (queue.length >= QUEUE_PARTY_CAPACITY) return { state, admitted: false, reason: 'queue_full' };
+  const usedIds = new Set([...getCustomerIdentityIds(state, queue), ...getPartyIdentityIds(state, queue),
+    ...(state.staff || []).map(worker => worker.id)]
+    .filter(id => id != null).map(String));
+  const bookingIds = [booking.partyId, ...booking.members.map(member => member.id)];
+  if (new Set(bookingIds).size !== bookingIds.length || bookingIds.some(id => usedIds.has(String(id)))) {
+    return { state, admitted: false, reason: 'identity_conflict' };
+  }
+  const party = { partyId: booking.partyId, partyType: booking.partyType, partySize: booking.members.length };
+  const members = booking.members.map(member => ({
+    ...createQueuedMember(state, party, member),
+    serviceContractId: booking.instanceId, serviceContractGuestId: member.serviceContractGuestId,
+    serviceContractArrivalAt: booking.arrivalAt,
+  }));
+  return { state: { ...state, queue: [...queue, {
+    partyId: booking.partyId, serviceContractId: booking.instanceId, members,
+  }] }, admitted: true, reason: null };
+}
+
 export function spawnCustomers(state, dt = 1) {
-  const queue = normaliseCustomerQueue(state.queue || []);
+  const queue = normaliseQueuedParties(state.queue);
   if (!isRestaurantOpen(state)) return { ...state, queue };
   if (queue.length >= QUEUE_PARTY_CAPACITY) return { ...state, queue };
 
@@ -293,38 +339,11 @@ export function spawnCustomers(state, dt = 1) {
     const nextCustomer = nextUnusedId('c', usedCustomerIds, customerIdCounter);
     customerIdCounter = nextCustomer.counter;
     usedCustomerIds.push(nextCustomer.id);
-    const patienceMax = getCustomerPatience(archetype, party.size);
     const gender = Math.random() < 0.5 ? 'male' : 'female';
     const spendingProfile = createSpendingProfile(state.restaurant.reputation);
-    return {
-      id: nextCustomer.id,
-      partyId,
-      partyType: party.type,
-      partySize: party.size,
-      archetype,
-      gender,
-      ...spendingProfile,
-      patience: patienceMax,
-      patienceMax,
-      queuePatience: patienceMax,
-      queuePatienceMax: patienceMax,
-      happiness: 80 + getUpgradeEffect(state, 'happiness'),
-      state: 'queued',
-      dishId: null,
-       drinkId: null,
-       foodOrderedAt: null,
-       foodPatienceBudget: null,
-       foodDeadlineAt: null,
-       foodOutcome: null,
-       foodCancelledAt: null,
-       cancelledServiceItemIds: [],
-       tableId: null,
-      chairId: null,
-      tipAmount: 0,
-      seatTime: null,
-      orderTime: null,
-      eatTime: null,
-    };
+    return createQueuedMember(state, { partyId, partyType: party.type, partySize: party.size }, {
+      id: nextCustomer.id, archetype, gender, ...spendingProfile,
+    });
   });
 
   return {
@@ -727,7 +746,7 @@ function materialiseQueueDepartures(state, queue, queueSlots) {
 export function prepareCustomersForMovement(state, gameDt) {
   state = expireFoodPatience(state, state.restaurant?.gameTime);
   const customers = state.customers || [];
-  const queue = normaliseCustomerQueue(state.queue || []);
+  const queue = normaliseQueuedParties(state.queue);
   const restaurantOpen = isRestaurantOpen(state);
 
   // 1. Reconcile exact queue-slot ownership: validate the seed records, retain
@@ -801,11 +820,14 @@ export function prepareCustomersForMovement(state, gameDt) {
     members: party.members.map(customer => {
       const patienceMax = getPatienceMax(customer);
       const queuePatienceMax = getQueuePatienceMax(customer);
+      const queuedDt = customer.serviceContractId && Number.isFinite(customer.serviceContractArrivalAt)
+        ? Math.min(gameDt, Math.max(0, state.restaurant.gameTime - customer.serviceContractArrivalAt))
+        : gameDt;
       return {
         ...customer,
         patience: patienceMax,
         patienceMax,
-        queuePatience: Math.max(0, getQueuePatience(customer) - gameDt * queuePatienceMultiplier),
+        queuePatience: Math.max(0, getQueuePatience(customer) - queuedDt * queuePatienceMultiplier),
         queuePatienceMax,
       };
     }),

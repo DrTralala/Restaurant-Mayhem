@@ -32,6 +32,18 @@ const baseState = {
 describe('spawnCustomers', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('preserves the ordinary spawn, party, archetype, gender and budget RNG order', () => {
+    const samples = [0, 0.6, 0.8, 0.1, 0.5, 0, 0.9, 0.95, 0.99];
+    const random = vi.spyOn(Math, 'random').mockImplementation(() => samples.shift());
+    const result = spawnCustomers(baseState, 60);
+    expect(result.queue[0].members.map(({ partyType, partySize, archetype, gender, spendingTier, spendingBudget, patience }) =>
+      ({ partyType, partySize, archetype, gender, spendingTier, spendingBudget, patience }))).toEqual([
+      { partyType: 'couple', partySize: 2, archetype: 'rusher', gender: 'male', spendingTier: 'value', spendingBudget: 15, patience: 750 },
+      { partyType: 'couple', partySize: 2, archetype: 'rusher', gender: 'female', spendingTier: 'premium', spendingBudget: 120, patience: 750 },
+    ]);
+    expect(random).toHaveBeenCalledTimes(9);
+  });
+
   it('avoids hydrated customer and party identities and leaves the existing pending review untouched', async () => {
     vi.resetModules();
     const [{ spawnCustomers: spawnAfterReload }, { hydrateState }, { createInitialState }, partyReviews] = await Promise.all([
