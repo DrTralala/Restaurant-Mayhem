@@ -1,5 +1,6 @@
 import { advanceClock } from './clock';
 import {
+  admitScheduledServiceParty,
   getCustomerMovementEntries,
   prepareCustomersForMovement,
   resolveCustomersAfterMovement,
@@ -24,6 +25,8 @@ import { finitePoint, quarantineNavigation } from './navigation/occupancy';
 import { allocateStaffPositions } from './navigation/staffAllocation';
 import { runPreflightFrame } from './navigation/preflight';
 import { navigationPhase } from './navigation/telemetry';
+import { advanceServiceContractArrivals, getNextServiceContractBoundary, settleServiceContracts } from './serviceContracts';
+import { evaluateCareerRun, isCareerDecisionPending } from './careerRun';
 
 /**
  * Combine customer- and staff-phase movement descriptors into one batch. A
@@ -79,6 +82,8 @@ function nextChronologicalBoundary(state, fromTime, toTime) {
     wellbeingDomain.getNextStaffWellbeingBoundary(state, fromTime, toTime),
     getNextFoodDeadline(state, fromTime, toTime),
   ].filter(value => Number.isFinite(value) && value > fromTime + TIME_EPSILON);
+  const contractBoundary = getNextServiceContractBoundary(state, fromTime, toTime);
+  if (contractBoundary !== null) candidates.push(contractBoundary);
   return candidates.length ? Math.min(...candidates) : toTime;
 }
 
@@ -89,16 +94,42 @@ function prepareStaffAtTickEntry(state) {
   return allocated ? { ...state, staff: allocated } : quarantineNavigation(state);
 }
 
+function tickStopped(state) {
+  return state.paused || state.navigationFault || isCareerDecisionPending(state);
+}
+
+function evaluateCareer(state) {
+  const careerRun = evaluateCareerRun(state.careerRun, state.restaurant);
+  return careerRun === state.careerRun ? state : { ...state, careerRun };
+}
+
+function repairContractEntry(state) {
+  const now = state.restaurant.gameTime;
+  let next = state;
+  if (next.serviceContracts?.active && now >= next.serviceContracts.active.deadlineAt) {
+    next = settleServiceContracts(next, now, { entry: true });
+  }
+  if (next.serviceContracts?.active?.parties.some(party => party.status === 'scheduled' && party.arrivalAt <= now)) {
+    next = foodPatienceDomain.expireFoodPatience(next, now);
+    next = advanceServiceContractArrivals(next, now, { admitParty: admitScheduledServiceParty });
+  }
+  return next;
+}
+
 function runTickSegment(state, fromTime, toTime, movementDt, totalGameDt, isFinalSegment) {
   const gameDt = Math.max(0, toTime - fromTime);
   let s = navigationPhase('clock', () => advanceClock(state, gameDt));
   const now = s.restaurant.gameTime;
+  const careerTerminal = s.careerRun?.status === 'active' && now >= s.careerRun.deadlineAt;
 
   // Food cancellation is the first domain transition at every timestamp. The
   // customer and kitchen modules retain defensive idempotent calls, but this
   // explicit call makes the deadline ordering visible to the run loop.
   s = navigationPhase('food-patience', () => foodPatienceDomain.expireFoodPatience(s, now));
-  if (isFinalSegment) s = navigationPhase('spawn', () => spawnCustomers(s, totalGameDt));
+  if (!careerTerminal) {
+    s = navigationPhase('contract-arrivals', () => advanceServiceContractArrivals(s, now, { admitParty: admitScheduledServiceParty }));
+    if (isFinalSegment) s = navigationPhase('spawn', () => spawnCustomers(s, totalGameDt));
+  }
   s = navigationPhase('customers-prepare', () => prepareCustomersForMovement(s, gameDt));
   s = navigationPhase('dirt', () => updateDirt(s, gameDt));
   s = navigationPhase('consumption', () => advanceConsumption(s));
@@ -126,31 +157,40 @@ function runTickSegment(state, fromTime, toTime, movementDt, totalGameDt, isFina
   s = navigationPhase('kitchen', () => processKitchen(s));
   s = navigationPhase('dishwashers', () => updateAutomaticDishwashers(s));
   s = navigationPhase('revenue', () => calculateRevenue(s));
+  s = navigationPhase('contract-settlement', () => settleServiceContracts(s, now));
   s = navigationPhase('milestones', () => checkMilestones(s));
+  s = navigationPhase('career-evaluation', () => evaluateCareer(s));
 
   return s;
 }
 
 function runTickInternal(state, timing) {
   const legacyDt = Number.isFinite(timing) ? timing * state.speed * 60 : null;
-  const gameDt = Math.max(0, legacyDt ?? (Number(timing?.gameDt) || 0));
-  const movementDt = Math.max(0, legacyDt ?? (Number(timing?.movementDt) || 0));
+  const requestedGameDt = Math.max(0, legacyDt ?? (Number(timing?.gameDt) || 0));
+  const requestedMovementDt = Math.max(0, legacyDt ?? (Number(timing?.movementDt) || 0));
   const startTime = Number.isFinite(state.restaurant?.gameTime)
     ? state.restaurant.gameTime : 0;
+  const gameDt = state.careerRun?.status === 'active'
+    ? Math.min(requestedGameDt, Math.max(0, state.careerRun.deadlineAt - startTime)) : requestedGameDt;
+  const movementDt = requestedGameDt > 0
+    ? requestedMovementDt * (gameDt / requestedGameDt) : requestedMovementDt;
+  // Keep legacy sandbox tolerances, but never skip a representable contract
+  // boundary or leave an active career stranded just short of its deadline.
+  const timeEpsilon = state.serviceContracts?.active || state.careerRun?.status === 'active' ? 0 : TIME_EPSILON;
+  let currentState = repairContractEntry(state);
 
-  if (gameDt <= TIME_EPSILON) {
-    return runTickSegment(state, startTime, startTime, movementDt, 0, true);
+  if (gameDt <= timeEpsilon) {
+    return runTickSegment(currentState, startTime, startTime, movementDt, 0, true);
   }
 
   const endTime = startTime + gameDt;
-  let currentState = state;
   let currentTime = startTime;
   let movedTime = 0;
   let guard = 0;
 
-  while (currentTime < endTime - TIME_EPSILON && guard < 4096) {
+  while (currentTime < endTime - timeEpsilon && guard < 4096) {
     const boundary = Math.max(
-      currentTime + TIME_EPSILON,
+      currentTime + timeEpsilon,
       Math.min(endTime, nextChronologicalBoundary(currentState, currentTime, endTime)),
     );
     const segmentEnd = boundary > currentTime ? boundary : endTime;
@@ -163,15 +203,16 @@ function runTickInternal(state, timing) {
       segmentEnd,
       segmentMovementDt,
       gameDt,
-      segmentEnd >= endTime - TIME_EPSILON,
+      segmentEnd >= endTime - timeEpsilon,
     );
     currentTime = segmentEnd;
     guard += 1;
+    if (tickStopped(currentState)) return currentState;
   }
 
   // Preserve the requested movement budget even when floating-point boundary
   // arithmetic leaves a tiny remainder.
-  if (currentTime < endTime - TIME_EPSILON) {
+  if (currentTime < endTime - timeEpsilon) {
     currentState = runTickSegment(
       currentState,
       currentTime,
@@ -185,10 +226,21 @@ function runTickInternal(state, timing) {
 }
 
 export function runTick(state, timing) {
-  if (state.paused || state.navigationFault) return state;
+  if (tickStopped(state)) return state;
+
+  // A loaded career at cutoff finalises only already-recorded facts. Overdue
+  // career data becomes a non-scoring decision before any contract entry repair.
+  if (state.careerRun?.status === 'active' && state.restaurant.gameTime >= state.careerRun.deadlineAt) {
+    if (state.restaurant.gameTime > state.careerRun.deadlineAt) return evaluateCareer(state);
+    let next = calculateRevenue(state);
+    if (next.serviceContracts?.active && next.restaurant.gameTime >= next.serviceContracts.active.deadlineAt) {
+      next = settleServiceContracts(next, next.restaurant.gameTime, { entry: true });
+    }
+    return evaluateCareer(next);
+  }
 
   const positioned = prepareStaffAtTickEntry(state);
-  if (positioned.paused || positioned.navigationFault) return positioned;
+  if (tickStopped(positioned)) return positioned;
 
   const frame = runPreflightFrame(positioned.navigationPreflight,
     () => runTickInternal(positioned, timing));
