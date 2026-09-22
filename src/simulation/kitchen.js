@@ -9,6 +9,7 @@ import { getBatchServiceItemIds, normaliseCookingBatches } from './cookingBatche
 import { expireFoodPatience } from './foodPatience';
 import { getCharacterMovementStatus } from './movement';
 import { isAtPreparationPosition } from './preparationPosition';
+import { getDishForServiceItem } from './cookbook';
 
 const PHYSICAL_ITEM_STATES = new Set(['on_service', 'carried', 'delivered']);
 const DIRTY_ITEM_STATES = new Set(['dirty_at_table', 'carried_dirty', 'queued_for_wash', 'washing']);
@@ -43,7 +44,7 @@ function taskMatchesDish(state, cook, item) {
 function dishPreparation(state, item) {
   const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
   if (item.foodCancelled === true || customer?.foodOutcome === 'cancelled') return null;
-  const dish = (state.dishes || []).find(candidate => candidate.id === item.menuItemId);
+  const dish = getDishForServiceItem(state, item);
   const station = (state.kitchenStations || []).find(candidate => candidate.id === item.stationId);
   const cook = (state.staff || []).find(candidate =>
     sameId(candidate.id, item.assignedStaffId) && candidate.role === 'cook');
@@ -172,7 +173,7 @@ export function processKitchen(state) {
   const staff = (reconciled.staff || []).map(worker => {
     if (worker.task?.type !== 'prepare_dish') return worker;
     const item = serviceItems.find(candidate => candidate.id === worker.task.serviceItemId);
-    const dish = item && (state.dishes || []).find(candidate => candidate.id === item.menuItemId);
+    const dish = getDishForServiceItem(state, item);
     const station = (state.kitchenStations || []).find(candidate => candidate.id === worker.task.stationId);
     const requiredEquipmentOwned = !dish?.requiredEquipmentId
       || (state.equipment || []).some(candidate => candidate.id === dish.requiredEquipmentId && candidate.owned);
