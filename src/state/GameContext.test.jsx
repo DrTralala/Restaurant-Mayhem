@@ -1499,6 +1499,7 @@ describe('GameProvider guarded economy actions', () => {
       price: 100.6,
       quality: 10,
     };
+    delete validDish.cookbookId; // This regression exercises unrestricted custom creation.
 
     game.dispatch({ type: 'ADD_DISH', dish: validDish });
     expect(game.state.dishes).toEqual([{ ...validDish, price: 100, quality: 1 }]);
@@ -1515,7 +1516,7 @@ describe('GameProvider guarded economy actions', () => {
     const initial = createInitialState();
     const game = renderReducer({
       restaurant: { funds: 50 },
-      dishes: [{ ...initial.dishes[0], quality: 9.5 }],
+      dishes: [{ ...initial.dishes[0], cookbookId: null, quality: 9.5 }],
     });
 
     game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast' });

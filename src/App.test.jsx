@@ -5,7 +5,8 @@ import { hydrateState, loadState, saveState } from './state/persistence';
 import { loadLatestRepositoryState, saveRepositoryState } from './state/repositorySaves';
 
 const dispatch = vi.fn();
-const gameState = { version: 1, paused: true, notifications: [] };
+const gameState = { version: 1, paused: true, notifications: [],
+  restaurant: { gameTime: 36000, reputation: 1 } };
 
 vi.mock('./state/GameContext', () => ({
   GameProvider: ({ children }) => children,

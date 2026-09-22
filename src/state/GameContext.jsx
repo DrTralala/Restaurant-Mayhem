@@ -1,5 +1,10 @@
-import { createContext, useContext, useReducer, useEffect, useRef } from 'react';
-import { createInitialState } from './initialState';
+import { createContext, useContext, useReducer, useEffect, useRef, useState, useCallback } from 'react';
+import { TYPOGRAPHY } from '../typography';
+import { createCareerInitialState, createInitialState } from './initialState';
+import { getCareerScenario } from '../data/careerScenarios';
+import { continueCareerAsSandbox, isCareerDecisionPending } from '../simulation/careerRun';
+import { reconcileCookbookDiscoveries, reduceCookbookAction } from '../simulation/cookbook';
+import { acceptServiceContract, withdrawServiceContract } from '../simulation/serviceContracts';
 import { hydrateState, loadState, saveState } from './persistence';
 import { ITEM_PRICES } from '../data/items';
 import { createEmptyAmenitySlots } from '../data/staffAmenities';
@@ -418,7 +423,13 @@ const GameContext = createContext(null);
 const DispatchContext = createContext(null);
 
 function reduceGameAction(state, action) {
+  const cookbookResult = reduceCookbookAction(state, action);
+  if (cookbookResult !== null) return cookbookResult;
   switch (action.type) {
+    case 'ACCEPT_SERVICE_CONTRACT':
+      return acceptServiceContract(state, { templateId: action.templateId });
+    case 'WITHDRAW_SERVICE_CONTRACT':
+      return withdrawServiceContract(state, { instanceId: action.instanceId });
     case 'TICK':
       return action.nextState;
     case 'SET_SPEED':
@@ -455,11 +466,15 @@ function reduceGameAction(state, action) {
       if (!dish || typeof dish.id !== 'string' || !dish.id
         || typeof dish.name !== 'string' || !dish.name.trim()
         || !Number.isFinite(dish.price) || !Number.isFinite(dish.quality)
-        || dish.quality < STARTING_DISH_QUALITY) return state;
+        || dish.quality < STARTING_DISH_QUALITY
+        || state.dishes.some(existing => existing.id === dish.id)
+        || [...(state.customers || []), ...(state.serviceItems || [])].some(holder =>
+          holder.dishOrderSnapshot?.menuItemId === dish.id)) return state;
+      const { cookbookId, masteryPerk, ...customDish } = dish;
       return {
         ...state,
         dishes: [...state.dishes, {
-          ...dish,
+          ...customDish,
           price: Math.min(100, Math.max(1, Math.round(dish.price))),
           quality: STARTING_DISH_QUALITY,
         }],
@@ -472,6 +487,9 @@ function reduceGameAction(state, action) {
       if (!dish || !action.changes) return state;
       const changes = { ...action.changes };
       delete changes.quality;
+      delete changes.id;
+      delete changes.cookbookId;
+      delete changes.masteryPerk;
       if ('price' in changes) {
         if (!Number.isFinite(changes.price)) delete changes.price;
         else changes.price = Math.min(100, Math.max(1, Math.round(changes.price)));
@@ -834,9 +852,30 @@ function reduceGameAction(state, action) {
 }
 
 export function gameReducer(state, action) {
+  // Recovery actions are deliberately handled before the ordinary mutation gate
+  // and spatial repair: Continue must not clear or repair another stop reason.
+  if (action.type === 'START_CAREER' || action.type === 'RETRY_CAREER') {
+    const retry = action.type === 'RETRY_CAREER';
+    const scenarioId = retry ? state.careerRun?.scenarioId : action.scenarioId;
+    if (action.confirmedReplace !== true || typeof action.runId !== 'string' || !action.runId.trim()
+      || action.runId === state.careerRun?.runId
+      || !getCareerScenario(scenarioId, retry ? state.careerRun?.scenarioRevision ?? null : 1)
+      || (retry && (!['won', 'lost'].includes(state.careerRun?.status)
+        || action.expectedRunId !== state.careerRun.runId))) return state;
+    return createCareerInitialState({ scenarioId, runId: action.runId });
+  }
+  if (action.type === 'CONTINUE_CAREER_AS_SANDBOX') {
+    if (!state.careerRun || action.expectedRunId !== state.careerRun.runId) return state;
+    const careerRun = continueCareerAsSandbox(state.careerRun);
+    return careerRun === state.careerRun ? state : { ...state, careerRun };
+  }
+  if (isCareerDecisionPending(state) && action.type !== 'LOAD_STATE') return state;
   if (state.navigationFault && action.type === 'TOGGLE_PAUSE') return state;
   let candidate = reduceGameAction(state, action);
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE') return candidate;
+  if (candidate.equipment !== state.equipment && candidate.cookbook) {
+    candidate = { ...candidate, cookbook: reconcileCookbookDiscoveries(candidate) };
+  }
   if (state.navigationFault && (candidate.staff || []).some(worker =>
     !Number.isFinite(worker.x) || !Number.isFinite(worker.y))) {
     const positioned = allocateStaffPositions(candidate);
@@ -855,7 +894,10 @@ const GameGenerationContext = createContext(0);
 
 function reduceGameSession(session, action) {
   const state = gameReducer(session.state, action);
-  if (action.type === 'LOAD_STATE') return { state, generation: session.generation + 1 };
+  if (action.type === 'LOAD_STATE' || (state !== session.state
+    && ['START_CAREER', 'RETRY_CAREER'].includes(action.type))) {
+    return { state, generation: session.generation + 1 };
+  }
   return state === session.state ? session : { ...session, state };
 }
 
@@ -870,24 +912,49 @@ export function GameProvider({ children }) {
   });
   const stateRef = useRef(state);
   stateRef.current = state;
+  const [saveMessage, setSaveMessage] = useState('');
+  const saveNow = useCallback(current => {
+    const saved = saveState(current);
+    setSaveMessage(saved ? '' : current.navigationFault
+      ? 'Progress could not be saved: automatic saving is disabled until layout conflicts are resolved.'
+      : 'Progress could not be saved. This session is still available, but reloading may lose progress.');
+  }, []);
+  const savedTransition = useRef(null);
+  const careerTransition = state.careerRun
+    ? JSON.stringify([generation, state.careerRun.runId, state.careerRun.status, state.careerRun.issue]) : null;
+
+  useEffect(() => {
+    if (careerTransition === null) {
+      savedTransition.current = null;
+      setSaveMessage('');
+    } else if (savedTransition.current !== careerTransition) {
+      savedTransition.current = careerTransition;
+      saveNow(stateRef.current);
+    }
+  }, [careerTransition, saveNow]);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      saveState(stateRef.current);
+      saveNow(stateRef.current);
     }, 30000);
-    const handleBeforeUnload = () => saveState(stateRef.current);
+    const handleBeforeUnload = () => saveNow(stateRef.current);
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
       clearInterval(interval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, []);
+  }, [saveNow]);
 
   return (
     <GameContext.Provider value={state}>
       <DispatchContext.Provider value={dispatch}>
         <GameGenerationContext.Provider value={generation}>
           {children}
+          {saveMessage && <div role="status" style={{ ...TYPOGRAPHY.secondary,
+            position: 'fixed', top: 8, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 210, maxWidth: '90vw', padding: '8px 12px', background: '#16213e',
+            color: '#f0a500', border: '1px solid #0f3460', borderRadius: 4,
+          }}>{saveMessage}</div>}
         </GameGenerationContext.Provider>
       </DispatchContext.Provider>
     </GameContext.Provider>
