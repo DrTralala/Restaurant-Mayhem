@@ -368,13 +368,13 @@ describe('canonical payments, reconciliation and settlement', () => {
 });
 
 describe('strict save branch validation', () => {
-  it.each(['acceptance', 'identity-conflict miss'])('preserves a valid unrelated ID collision after %s', phase => {
+  it.each(['acceptance', 'identity-conflict miss', 'retained missed result'])('preserves a valid unrelated ID collision after %s', phase => {
     const customer = { id: 'sc-1-g1', partyId: 'ordinary-party' };
     const before = { ...createInitialState(), customers: [customer] };
     expect(() => validateSavedState(before)).not.toThrow();
     expect(() => validateServiceContractsState(createServiceContractsState(), before)).not.toThrow();
     let state = accept(before);
-    if (phase === 'identity-conflict miss') {
+    if (phase !== 'acceptance') {
       state = at(state, 36900);
       const inject = vi.fn(s => ({ state: s, admitted: false, reason: 'identity_conflict' }));
       state = advanceServiceContractArrivals(state, 36900, { admitParty: inject });
@@ -383,6 +383,7 @@ describe('strict save branch validation', () => {
       expect(advanceServiceContractArrivals(state, 36900, { admitParty: inject })).toBe(state);
       expect(inject).toHaveBeenCalledTimes(1);
     }
+    if (phase === 'retained missed result') state = settleServiceContracts(at(state, 40500), 40500, { entry: true });
     expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
     expect(state.customers).toBe(before.customers);
     expect(state.customers[0]).toBe(customer);
@@ -460,6 +461,32 @@ describe('strict save branch validation', () => {
     const state = paid(arrive(accept()), 0);
     const queue = state.queue.map(p => ({ ...p, members: p.members.map(m => ({ ...m, paidVisitSequence: undefined })) }));
     expect(() => validateServiceContractsState(state.serviceContracts, { ...state, queue })).toThrow();
+  });
+  it.each([
+    [null, 'live payment marker'], [undefined, 'live payment marker'],
+    [2, 'live payment marker'], [1, 'live guest identity/profile'],
+  ])('retained paid guest with stripped tags still validates ownership and marker %s', (paidVisitSequence, error) => {
+    let state = settleServiceContracts(at(paid(arrive(accept()), 0), 40500), 40500);
+    state = { ...state, paidVisitSequence: 2 };
+    expect(state.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'fulfilled_paid', paidVisitSequence: 1 });
+    expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
+    const queue = state.queue.map(party => ({ ...party, members: party.members.map((member, i) => i === 0
+      ? { ...member, serviceContractId: null, serviceContractGuestId: null, paidVisitSequence } : member) }));
+    expect(() => validateServiceContractsState(state.serviceContracts, { ...state, queue })).toThrow(error);
+  });
+  it.each(['failed', 'not_fulfilled', 'unfinished'])('retained %s ledger still proves admission when live tags are stripped', status => {
+    let state = arrive(accept());
+    if (status === 'failed') {
+      state = { ...state, queue: state.queue.map(party => ({ ...party,
+        members: party.members.map((member, i) => i === 0 ? { ...member, foodOutcome: 'cancelled' } : member) })) };
+      state = settleServiceContracts(state, 36900);
+    } else if (status === 'not_fulfilled') state = paid(state, 0, { dish: null, foodOutcome: 'none' });
+    state = settleServiceContracts(at(state, 40500), 40500);
+    expect(state.serviceContracts.results[0].guestResults[0].status).toBe(status);
+    expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
+    const queue = state.queue.map(party => ({ ...party, members: party.members.map((member, i) => i === 0
+      ? { ...member, serviceContractId: null, serviceContractGuestId: null } : member) }));
+    expect(() => validateServiceContractsState(state.serviceContracts, { ...state, queue })).toThrow('live guest identity/profile');
   });
   it('rejects raw queued member identity conflicts before normalisation can hide them', () => {
     const state = arrive(accept());
