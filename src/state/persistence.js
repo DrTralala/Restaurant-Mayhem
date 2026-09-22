@@ -15,7 +15,7 @@ import { getCashierCustomerPosition, getCashierWorkPosition } from '../simulatio
 import { SAVE_VERSION } from './saveVersion';
 import { normaliseDoorAdmissions } from './doorAdmissions';
 import { hydrateMovementResidencies, movementSaveSnapshot, validateSavedNavigationGeometry } from './movementPersistence';
-import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
+import { getOrderSnapshotSubtotal, normaliseCustomerEconomy } from '../simulation/menuEconomy';
 import { repairInvalidStaffOverlaps, repairInvalidStaffPreparationPositions } from './staffMoves';
 import { getCarriedServiceItemIds, getStaffCarryCapacity, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseServiceItemOwnership } from '../simulation/serviceItems';
@@ -376,6 +376,10 @@ function migrateLegacyDishSnapshots(saved) {
     if (item.kind !== 'dish' || Object.hasOwn(item, 'dishOrderSnapshot')) continue;
     const customer = customers.find(actor => actor.id === item.customerId);
     if (!customer || Object.hasOwn(customer, 'dishOrderSnapshot')) continue;
+    // A complete recipe is not a complete committed order. Keep legacy price
+    // fallback and legacy review routing when the original ordered bill cannot
+    // be recovered; never fabricate menuOutcome or a half-new snapshot.
+    if (getOrderSnapshotSubtotal(customer) === null) continue;
     const dish = (saved.dishes || []).find(candidate => candidate.id === item.menuItemId);
     if (!dish || (customer.dishId !== dish.id && customer.foodOutcome !== 'cancelled')) continue;
     const orderedAt = customer.foodOrderedAt ?? customer.orderTime;
@@ -383,8 +387,8 @@ function migrateLegacyDishSnapshots(saved) {
     // or fill missing recipe/order facts from the fresh restaurant.
     let snapshot;
     try {
-      const price = customer.foodOutcome === 'cancelled' ? dish.price
-        : Object.hasOwn(customer, 'dishPriceAtOrder') ? customer.dishPriceAtOrder : dish.price;
+      const price = customer.foodOutcome === 'cancelled'
+        ? customer.foodCancelledPrice ?? dish.price : customer.dishPriceAtOrder;
       snapshot = createDishOrderSnapshot({ ...dish, price, cookbookId: null, masteryPerk: null },
         { serviceItemId: item.id, orderedAt });
     } catch {

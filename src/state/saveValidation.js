@@ -13,6 +13,7 @@ import { validateSavedNavigationGeometry } from './movementPersistence';
 import { SAVE_VERSION } from './saveVersion';
 import { validateCookbookState, validateDishOrderSnapshots } from '../simulation/cookbook';
 import { validateServiceContractsState } from '../simulation/serviceContracts';
+import { getOrderSnapshotSubtotal } from '../simulation/menuEconomy';
 
 const STAFF_ROLES = new Set(['cook', 'waiter', 'janitor']);
 const STAFF_DUTIES = new Set(['work', 'rest', 'pto']);
@@ -1316,6 +1317,11 @@ export function validateSavedState(state) {
   try {
     validateCookbookState(state);
     validateDishOrderSnapshots({ ...state, customers: paidVisitActors(state) });
+    for (const actor of paidVisitActors(state)) {
+      if (Object.hasOwn(actor, 'dishOrderSnapshot') && getOrderSnapshotSubtotal(actor) === null) {
+        throw new Error('food snapshot requires a consistent committed ordered bill');
+      }
+    }
     validateServiceContractsState(state.serviceContracts, state);
   } catch (error) {
     fail('progression', error.message);
@@ -1361,7 +1367,7 @@ function validatePaidVisitSequences(state) {
     if (!Number.isSafeInteger(value) || value <= 0 || value > root) fail(path, 'must be a committed sequence within the root counter');
   };
   for (const actor of actors) {
-    if (!actor || !Object.hasOwn(actor, 'paidVisitSequence')) continue;
+    if (!actor || !Object.hasOwn(actor, 'paidVisitSequence') || actor.paidVisitSequence === null) continue;
     check(actor.paidVisitSequence, 'customer.paidVisitSequence');
     if (markers.has(actor.paidVisitSequence)) fail('customer.paidVisitSequence', 'is shared by multiple live customers');
     markers.add(actor.paidVisitSequence);

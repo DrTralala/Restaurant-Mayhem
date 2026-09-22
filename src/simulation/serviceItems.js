@@ -645,7 +645,11 @@ export function normaliseServiceItemOwnership(state) {
         ? malformedTrackedOrder
         : missingSelectedKinds.length > 0);
     return malformed
-      ? { ...customer, state: 'leaving', dishId: null, drinkId: null, orderTime: null }
+      ? { ...customer, state: 'leaving',
+        // A discarded/missing mixed-order item still means unpaid departure,
+        // not consumption. Preserve the committed history on new orders: its
+        // live IDs and bill must continue to agree with the retained snapshot.
+        ...(Object.hasOwn(customer, 'dishOrderSnapshot') ? {} : { dishId: null, drinkId: null, orderTime: null }) }
       : customer;
   });
   return { ...state, customers: finalCustomers, staff, serviceItems };
