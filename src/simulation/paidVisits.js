@@ -75,6 +75,8 @@ export function commitPaidVisit(state, { customer, payment, paidAt }) {
   requireFact(isAmount(paidAt) && paidAt === state.restaurant?.gameTime, 'payment time');
   requireFact(payment?.customerId === live.id && isAmount(payment.tip)
     && isAmount(payment.totalPaid) && payment.revenue === payment.totalPaid, 'payment totals/owner');
+  requireFact(['dishId', 'drinkId'].every(key => !has(payment, key) || payment[key] === live[key]),
+    'payment line identity');
   const bill = getCheckoutBill(state, live);
   requireFact(payment.totalPaid === bill.subtotal + payment.tip, 'payment differs from committed bill');
   const partyId = getPartyKey(live);

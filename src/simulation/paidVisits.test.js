@@ -175,6 +175,13 @@ describe('atomic paid visit producer', () => {
     expect(state.customers[0].paidVisitSequence).toBeUndefined();
   });
 
+  it.each([{ dishId: 'another-dish' }, { drinkId: 'water' }])('rejects a contradictory receipt line identity %j before awards', changes => {
+    const state = fixture();
+    expect(() => commit(state, { ...receipt(), ...changes })).toThrow(/paid visit/i);
+    expect(state.cookbook.entries.toast.paidPortions).toBe(0);
+    expect(state.careerRun.paidMeals).toBe(0);
+  });
+
   it('rejects malformed legacy enumerations rather than laundering them into an unknown paid event', () => {
     const state = fixture();
     delete state.customers[0].dishOrderSnapshot;
