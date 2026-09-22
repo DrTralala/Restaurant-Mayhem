@@ -252,7 +252,7 @@ function failureReason(actor) {
   return null;
 }
 
-export function settleServiceContracts(state, now) {
+export function settleServiceContracts(state, now, { entry = false } = {}) {
   let active = state.serviceContracts?.active;
   if (!active || pendingDecision(state) || !nonnegative(now) || now < active.acceptedAt) return state;
   const due = now >= active.deadlineAt;
@@ -261,12 +261,14 @@ export function settleServiceContracts(state, now) {
       if (party.status === 'scheduled') active = markMissed(active, party.partyId, 'missed_resume');
     }
   }
-  // Overdue resume uses only persisted progress, not post-deadline world observations.
-  const actors = now <= active.deadlineAt ? liveGuests(state) : [];
+  // Due entry repair uses only persisted progress, including exact-deadline
+  // loads. Ordinary endpoints still reconcile after synchronous checkout.
+  const reconcileActors = now <= active.deadlineAt && !(entry && due);
+  const actors = reconcileActors ? liveGuests(state) : [];
   const guests = active.guests.map(guest => {
     if (guest.status !== 'pending') return guest;
     const actor = actors.find(row => row.id === guest.guestId);
-    const reason = now <= active.deadlineAt ? failureReason(actor) : null;
+    const reason = reconcileActors ? failureReason(actor) : null;
     if (reason) return { ...guest, status: 'failed', reason, resolvedAt: now };
     return due ? { ...guest, status: 'unfinished', reason: 'deadline', resolvedAt: active.deadlineAt } : guest;
   });
@@ -417,21 +419,27 @@ export function validateServiceContractsState(value, state) {
           && !sequences.has(row.paidVisitSequence), 'paid sequence');
         sequences.add(row.paidVisitSequence);
       } else check(row.paidVisitSequence === null, 'nonqualifying sequence');
+      const activeParty = isActive ? instance.parties.find(p => p.partyId === row.partyId) : null;
       if (isActive) {
-        const admitted = instance.parties.find(p => p.partyId === row.partyId);
-        check(admitted.status === 'scheduled' ? row.status === 'scheduled'
-          : admitted.status === 'missed' ? row.status === 'missed' && row.reason === admitted.missedReason
+        check(activeParty.status === 'scheduled' ? row.status === 'scheduled'
+          : activeParty.status === 'missed' ? row.status === 'missed' && row.reason === activeParty.missedReason
             : !['scheduled', 'missed', 'withdrawn', 'unfinished'].includes(row.status), 'atomic party ledger');
       }
-      const matchingActors = actors.filter(actor => actor.id === row.guestId);
+      const matchingActors = actors.filter(actor => actor.id === row.guestId
+        || actor.serviceContractGuestId === row.guestId);
       check(matchingActors.length <= 1, 'duplicate live guest');
+      // Before admission, an unrelated actor may own the textual ID and cause
+      // missed_identity_conflict. Tags claim contract ownership; once admitted,
+      // the ID also remains authoritative so stripped/contradictory tags fail.
+      const ownedActors = matchingActors.filter(actor => activeParty?.status === 'admitted'
+        || actor.serviceContractId === instance.instanceId || actor.serviceContractGuestId === row.guestId);
       if (row.status === 'fulfilled_paid') {
-        for (const actor of matchingActors) {
+        for (const actor of ownedActors) {
           check(actor.paidVisitSequence === row.paidVisitSequence, 'live payment marker');
         }
       }
-      if (isActive) for (const actor of matchingActors) {
-        check(instance.parties.find(p => p.partyId === row.partyId).status === 'admitted'
+      if (isActive) for (const actor of ownedActors) {
+        check(activeParty.status === 'admitted' && actor.id === row.guestId
           && actor.serviceContractId === instance.instanceId && actor.serviceContractGuestId === row.guestId
           && actor.partyId === row.partyId && actor.archetype === row.archetype
           && actor.gender === row.gender && actor.spendingTier === row.spendingTier
