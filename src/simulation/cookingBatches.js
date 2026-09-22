@@ -1,4 +1,5 @@
 import { clearNavigationGoal } from './movement/navigationGoal';
+import { getDishForServiceItem } from './cookbook';
 import {
   getCarriedServiceItemIds,
   getStaffCarryCapacity,
@@ -66,7 +67,7 @@ function stationForBatch(state, batch) {
 }
 
 function dishForItem(state, item) {
-  return (state?.dishes || []).find(dish => sameId(dish?.id, item?.menuItemId));
+  return getDishForServiceItem(state, item);
 }
 
 function equipmentForStation(state, station) {

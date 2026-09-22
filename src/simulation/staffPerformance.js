@@ -1,5 +1,6 @@
 import { ACTIVITY_DURATIONS } from './activity';
 import { getUpgradeEffect } from './balance';
+import { getDishForServiceItem } from './cookbook';
 
 export const STAFF_PERFORMANCE_BASE = 0.5;
 
@@ -48,7 +49,7 @@ export const getMoralePerformanceMultiplier = getStaffPerformanceMultiplier;
 function getDish(state, task) {
   const item = (state?.serviceItems || []).find(candidate =>
     candidate.id === task?.serviceItemId);
-  return (state?.dishes || []).find(candidate => candidate.id === item?.menuItemId);
+  return getDishForServiceItem(state, item);
 }
 
 function getStation(state, task) {
@@ -139,7 +140,10 @@ export function getStaffTaskLegacyRate(state, worker, task = worker?.task) {
 export function getStaffTaskDuration(state, worker, task = worker?.task) {
   if (!task?.type) return null;
   if (task.type === 'prepare_dish') {
-    return getDish(state, task)?.prepTime || 60;
+    const dish = getDish(state, task);
+    const item = (state?.serviceItems || []).find(candidate => candidate.id === task.serviceItemId);
+    if (!dish && item && Object.hasOwn(item, 'dishOrderSnapshot')) return null;
+    return dish?.prepTime || 60;
   }
   return TASK_DURATIONS[task.type] ?? null;
 }
