@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInitialState } from '../state/initialState';
+import { validateSavedState } from '../state/saveValidation';
 import { advanceClock } from './clock';
 import { acceptServiceContract, advanceServiceContractArrivals, createServiceContractsState,
   getNextServiceContractBoundary, getServiceContractOffer, hydrateServiceContractsState,
@@ -191,6 +192,41 @@ describe('absolute boundaries and injected admissions', () => {
 });
 
 describe('canonical payments, reconciliation and settlement', () => {
+  it.each([
+    ['missing', null], ['cancelled', { foodOutcome: 'cancelled' }],
+    ['departing', { state: 'leaving', departureReason: 'closed' }],
+  ])('uses only persisted progress for a %s guest at deadline entry and overdue entry', (_, changes) => {
+    let saved = paid(arrive(accept()), 1);
+    const first = saved.queue[0].members[0];
+    saved = { ...saved, queue: [], customers: changes ? [{ ...first, ...changes }] : [] };
+    const ledger = structuredClone(saved.serviceContracts);
+    for (const now of [40500, 40500.001]) {
+      const state = at(saved, now);
+      expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
+      const after = settleServiceContracts(state, now, { entry: true });
+      const result = after.serviceContracts.results[0];
+      expect(result.guestResults[0]).toEqual({ guestId: 'sc-1-g1', partyId: 'sc-1-p1',
+        status: 'unfinished', reason: 'deadline', paidVisitSequence: null, resolvedAt: 40500 });
+      expect(result.guestResults[1]).toMatchObject({ status: 'fulfilled_paid', paidVisitSequence: 2, resolvedAt: 36900 });
+      expect(result).toMatchObject({ fulfilledCount: 1, bonusPaid: 0, settledAt: now });
+      expect(result.guestResults[2]).toMatchObject({ status: 'missed', reason: 'missed_resume', resolvedAt: 37620 });
+      expect(after.customers).toBe(state.customers);
+      expect(settleServiceContracts(after, now, { entry: true })).toBe(after);
+      expect(() => validateServiceContractsState(after.serviceContracts, after)).not.toThrow();
+      expect(state.serviceContracts).toEqual(ledger);
+    }
+  });
+  it.each([
+    ['missing', null, 'missing_guest'],
+    ['cancelled', { foodOutcome: 'cancelled' }, 'food_cancelled'],
+    ['departing', { state: 'leaving', departureReason: 'closed' }, 'closed'],
+  ])('still reconciles a %s guest at the ordinary deadline endpoint', (_, changes, reason) => {
+    let state = arrive(accept());
+    const first = state.queue[0].members[0];
+    state = at({ ...state, queue: [], customers: changes ? [{ ...first, ...changes }] : [] }, 40500);
+    const after = settleServiceContracts(state, 40500);
+    expect(after.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'failed', reason, resolvedAt: 40500 });
+  });
   it('pays exactly $90 only at the Office deadline for four valid guests; late and replayed facts are inert', () => {
     let state = arrive(accept());
     state = paid(paid(state, 0), 1);
@@ -332,6 +368,50 @@ describe('canonical payments, reconciliation and settlement', () => {
 });
 
 describe('strict save branch validation', () => {
+  it.each(['acceptance', 'identity-conflict miss'])('preserves a valid unrelated ID collision after %s', phase => {
+    const customer = { id: 'sc-1-g1', partyId: 'ordinary-party' };
+    const before = { ...createInitialState(), customers: [customer] };
+    expect(() => validateSavedState(before)).not.toThrow();
+    expect(() => validateServiceContractsState(createServiceContractsState(), before)).not.toThrow();
+    let state = accept(before);
+    if (phase === 'identity-conflict miss') {
+      state = at(state, 36900);
+      const inject = vi.fn(s => ({ state: s, admitted: false, reason: 'identity_conflict' }));
+      state = advanceServiceContractArrivals(state, 36900, { admitParty: inject });
+      expect(state.serviceContracts.active.guests.slice(0, 2).map(g => [g.status, g.reason]))
+        .toEqual([['missed', 'missed_identity_conflict'], ['missed', 'missed_identity_conflict']]);
+      expect(advanceServiceContractArrivals(state, 36900, { admitParty: inject })).toBe(state);
+      expect(inject).toHaveBeenCalledTimes(1);
+    }
+    expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
+    expect(state.customers).toBe(before.customers);
+    expect(state.customers[0]).toBe(customer);
+    expect(customer).toEqual({ id: 'sc-1-g1', partyId: 'ordinary-party' });
+  });
+  it.each([
+    { serviceContractId: 'sc-1', serviceContractGuestId: 'sc-1-g1' },
+    { serviceContractId: 'sc-1', serviceContractGuestId: 'wrong-guest' },
+    { serviceContractGuestId: 'sc-1-g1' },
+    { id: 'foreign-id', serviceContractGuestId: 'sc-1-g1' },
+  ])('does not treat contradictory tagged ownership as an unrelated collision: %j', tags => {
+    const state = accept({ ...createInitialState(), customers: [{ id: 'sc-1-g1', partyId: 'ordinary-party', ...tags }] });
+    expect(() => validateServiceContractsState(state.serviceContracts, state)).toThrow(/service contract/i);
+  });
+  it.each([
+    { serviceContractId: null, serviceContractGuestId: null },
+    { serviceContractId: 'sc-9' }, { serviceContractGuestId: 'sc-1-g2' },
+    { spendingBudget: 99 }, { archetype: 'regular' }, { paidVisitSequence: 999 },
+  ])('still rejects an admitted guest with corrupted identity, profile or payment marker: %j', changes => {
+    const state = paid(arrive(accept()), 0);
+    const queue = state.queue.map(party => ({ ...party,
+      members: party.members.map((member, i) => i === 0 ? { ...member, ...changes } : member) }));
+    expect(() => validateServiceContractsState(state.serviceContracts, { ...state, queue })).toThrow(/service contract/i);
+  });
+  it('still rejects duplicate live admitted guest IDs', () => {
+    const state = arrive(accept());
+    const customers = [{ ...state.queue[0].members[0] }];
+    expect(() => validateServiceContractsState(state.serviceContracts, { ...state, customers })).toThrow(/duplicate live guest/);
+  });
   it('accepts absence and valid snapshots at every lifecycle stage without hydrating progress', () => {
     expect(() => validateServiceContractsState(undefined, createInitialState())).not.toThrow();
     expect(hydrateServiceContractsState(undefined)).toEqual(createServiceContractsState());
