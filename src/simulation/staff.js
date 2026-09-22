@@ -7,7 +7,7 @@ import { recordSeatResidency } from './movement/seatedDeparture';
 import { GRID_SIZE, getCashierCustomerPosition, getCashierWorkPosition, getDefaultStaffPosition, getDoorPosition, getDoors, getRestaurantWorld } from './world';
 import { clampReputation, getTipRate, getUpgradeEffect } from './balance';
 import { clearUnavailableCashierAssignments, getAssignedCashierStation } from './cashiers';
-import { getDrink, getResolvedDrink } from '../data/drinks';
+import { getDrink } from '../data/drinks';
 import { getPlaceableDimensions } from '../data/placeables';
 import {
   createCustomerOrder,
@@ -68,11 +68,18 @@ import {
   recordPartyPayment,
   settlePartyReview,
 } from './partyReviews';
-import { getOrderSnapshotSubtotal } from './menuEconomy';
+import { commitPaidVisit, getCheckoutBill } from './paidVisits';
+import { getDishForServiceItem } from './cookbook';
+import { isCareerDecisionPending } from './careerRun';
 import { getDishwasherStats } from './dishwasherProgression';
 import { findPreparationTarget, isAtPreparationPosition } from './preparationPosition';
 import { allocateStaffPositions } from './navigation/staffAllocation';
 import { positionAvailable, quarantineNavigation } from './navigation/occupancy';
+
+function paidVisitFields(state) {
+  return Object.fromEntries(['paidVisitSequence', 'cookbook', 'serviceContracts', 'careerRun']
+    .filter(key => Object.hasOwn(state, key)).map(key => [key, state[key]]));
+}
 
 export function ensureStaffRuntime(staff, state) {
   const positioned = allocateStaffPositions(state, staff || []);
@@ -801,7 +808,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
         continue;
       }
 
-      const dish = (state.dishes || []).find(candidate => candidate.id === pending.menuItemId);
+      const dish = getDishForServiceItem(state, pending);
       const requiredEquipmentOwned = !dish?.requiredEquipmentId
         || (state.equipment || []).some(candidate =>
           candidate.id === dish.requiredEquipmentId && candidate.owned);
@@ -1370,9 +1377,15 @@ function resolveTask({
     const station = (state.cashierStations || []).find(candidate => candidate.id === staff.task.stationId);
     if (!customer) return { staff: completedStaff, customers, queue, tables, serviceItems };
     const validPhase = ['checkout_moving', 'checkout_processing'].includes(customer.state);
-    const alreadyCompleted = (state.completedCustomers || [])
+    const alreadyCompleted = customer.paidVisitSequence != null || (state.completedCustomers || [])
       .some(payment => payment?.customerId === customer.id);
     if (alreadyCompleted && validPhase) {
+      // Duplicate recovery does not re-enter the commit hook or roll another tip.
+      if (customer.paidVisitSequence != null && (!Number.isSafeInteger(customer.paidVisitSequence)
+        || customer.paidVisitSequence <= 0 || !Number.isSafeInteger(state.paidVisitSequence)
+        || customer.paidVisitSequence > state.paidVisitSequence)) {
+        throw new Error('Invalid paid visit: customer sequence');
+      }
       const updatedCustomers = customers.map(candidate => candidate.id === customer.id
         ? leavingFields({ ...candidate, departureReason: 'served' }, {
             checkoutDeparture: checkoutDepartureFor(candidate, station),
@@ -1447,10 +1460,7 @@ function resolveTask({
     if (paymentProgress.accumulatedWork < ACTIVITY_DURATIONS.takePayment) {
       return { staff: clearNavigationGoal(progressedStaff), customers, queue, tables, serviceItems };
     }
-    const legacyDishPrice = (state.dishes || []).find(candidate => candidate.id === customer.dishId)?.price || 0;
-    const legacyDrinkPrice = getResolvedDrink(state, customer.drinkId)?.price || 0;
-    const snapshotSubtotal = getOrderSnapshotSubtotal(customer);
-    const price = snapshotSubtotal ?? legacyDishPrice + legacyDrinkPrice;
+    const { subtotal: price } = getCheckoutBill({ ...state, customers, serviceItems }, customer);
     const tip = Math.round(price * getTipRate() * 100) / 100;
     const reviewScore = PAID_REVIEW_SCORE;
     const payment = {
@@ -1463,6 +1473,11 @@ function resolveTask({
       totalPaid: price + tip,
       reviewScore,
     };
+    const committed = commitPaidVisit({ ...state, customers, serviceItems }, {
+      customer, payment, paidAt: state.restaurant.gameTime,
+    });
+    if (!committed.outcome) return { staff: completedStaff, customers, queue, tables, serviceItems };
+    payment.paidVisitSequence = committed.outcome.sequence;
     const partyId = getPartyKey(customer);
     const hasPendingTracker = Array.isArray(pendingPartyReviews)
       && pendingPartyReviews.some(record => record?.partyId === partyId);
@@ -1491,7 +1506,7 @@ function resolveTask({
         reputation: clampReputation(restaurant.reputation + reputationGain),
       };
     }
-    let updatedCustomers = customers.map(candidate => candidate.id === customer.id
+    let updatedCustomers = committed.state.customers.map(candidate => candidate.id === customer.id
       ? leavingFields({ ...candidate, departureReason: 'served' }, {
           checkoutDeparture: checkoutDepartureFor(candidate, station),
         })
@@ -1504,6 +1519,7 @@ function resolveTask({
     }
     const recovered = recoverCarriedItemsForCustomer(serviceItems, customer.id);
     return {
+      ...paidVisitFields(committed.state),
       staff: completedStaff, queue,
       customers: updatedCustomers,
       serviceItems: recovered.recoveredItems.filter(item => item.customerId !== customer.id
@@ -2194,7 +2210,8 @@ function resolveTask({
     const item = serviceItems[itemIndex];
     const customer = customers.find(candidate => candidate.id === staff.task.customerId);
     const table = tables.find(candidate => candidate.id === item?.tableId);
-    if (!canDeliverServiceItem(staff, item, customer, table, state.restaurant.gameTime)) {
+    if (!canDeliverServiceItem(staff, item, customer, table, state.restaurant.gameTime)
+      || (item?.kind === 'dish' && Object.hasOwn(item, 'dishOrderSnapshot') && !getDishForServiceItem(state, item))) {
       const carriedIds = getCarriedServiceItemIds(staff);
       const ownsTaskItem = workerOwnsItem(staff, staff.task.serviceItemId);
       const anotherWorkerOwnsTaskItem = anotherWorkerOwnsItem(
@@ -2226,7 +2243,7 @@ function resolveTask({
       };
     }
     const dish = item.kind === 'dish'
-      ? (state.dishes || []).find(candidate => candidate.id === item.menuItemId)
+      ? getDishForServiceItem(state, item)
       : null;
     const equipment = dish?.requiredEquipmentId
       ? state.equipment?.find(candidate => candidate.id === dish.requiredEquipmentId)
@@ -2417,7 +2434,7 @@ function resolveTask({
   if (staff.task.type === 'prepare_dish') {
     const item = serviceItems.find(candidate => candidate.id === staff.task.serviceItemId);
     const dish = item
-      ? (state.dishes || []).find(candidate => candidate.id === item.menuItemId)
+      ? getDishForServiceItem(state, item)
       : null;
     const station = (state.kitchenStations || []).find(candidate =>
       candidate.id === staff.task.stationId);
@@ -2459,8 +2476,7 @@ function resolveTask({
       const readyCandidates = serviceItems
         .map((candidate, index) => ({ candidate, index }))
         .filter(({ candidate }) => {
-          const candidateDish = (state.dishes || []).find(dishCandidate =>
-            dishCandidate.id === candidate.menuItemId);
+          const candidateDish = getDishForServiceItem(state, candidate);
           const candidateCustomer = customers.find(customer =>
             customer.id === candidate.customerId);
           return candidate.id !== item.id
@@ -2811,7 +2827,7 @@ function isPreparationTaskResolvable(state, worker) {
       && (state.serviceTables || []).some(table => sameId(table.id, item.serviceTableId));
   }
   const dish = item
-    ? (state.dishes || []).find(candidate => candidate.id === item.menuItemId)
+    ? getDishForServiceItem(state, item)
     : null;
   const station = (state.kitchenStations || []).find(candidate =>
     candidate.id === task.stationId);
@@ -3153,6 +3169,7 @@ function getStaffBatchEntries(state) {
 }
 
 export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
+  if (isCareerDecisionPending(state)) return state;
   if ((state.serviceItems || []).some(item => item.kind === 'drink')
     || (state.staff || []).some(worker => worker.task?.type === 'prepare_drink')) {
     state = normaliseServiceItemOwnership(state);
@@ -3339,6 +3356,9 @@ export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
       if (resolved.pendingPartyReviews) pendingPartyReviews = resolved.pendingPartyReviews;
       if (resolved.partyReviewHistory) partyReviewHistory = resolved.partyReviewHistory;
       if (resolved.restaurant) restaurant = resolved.restaurant;
+      // Keep the latest atomic feature branches in the base threaded through
+      // every later worker, including release/recovery and final root assembly.
+      if (Object.hasOwn(resolved, 'paidVisitSequence')) state = { ...state, ...paidVisitFields(resolved) };
       if (resolved.floorDirt) floorDirt = resolved.floorDirt;
       if (Object.hasOwn(resolved, 'queueAdmissionGate')) {
         queueAdmissionGate = resolved.queueAdmissionGate;
@@ -3446,6 +3466,7 @@ export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
 }
 
 export function updateStaff(state, timing) {
+  if (isCareerDecisionPending(state)) return state;
   const gameDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.gameDt) || 0);
   const movementDt = Math.max(0, Number.isFinite(timing) ? timing : Number(timing?.movementDt) || 0);
   const positionedStaff = allocateStaffPositions(state, state.staff || []);

@@ -2,6 +2,7 @@ import { DRINKS } from '../data/drinks';
 import { DIRTY_STATES } from './dishwashing';
 import { isCheckoutState } from './checkout';
 import { chooseAffordableBasket } from './menuEconomy';
+import { createDishOrderSnapshot, validateDishOrderSnapshot, validateDishOrderSnapshots } from './cookbook';
 import { clearNavigationGoal } from './movement/navigationGoal';
 import {
   getCarriedServiceItemIds,
@@ -46,8 +47,10 @@ export function hasDuplicateOwner(serviceItems, customerId, kind) {
   return (serviceItems || []).some(item => sameId(item.customerId, customerId) && item.kind === kind);
 }
 
-export function getNextServiceItemId(serviceItems) {
-  const greatest = (serviceItems || []).reduce((maximum, item) => {
+export function getNextServiceItemId(serviceItems, customers = []) {
+  const reserved = customers.flatMap(customer => customer.dishOrderSnapshot
+    ? [{ id: customer.dishOrderSnapshot.serviceItemId }] : []);
+  const greatest = [...(serviceItems || []), ...reserved].reduce((maximum, item) => {
     const match = /^service-item-(\d+)$/.exec(item.id || '');
     return match ? Math.max(maximum, Number(match[1])) : maximum;
   }, 0);
@@ -123,9 +126,9 @@ export function findAvailableServiceSlot(state) {
   return null;
 }
 
-function createServiceItem(serviceItems, customer, kind, menuItemId) {
+function createServiceItem(serviceItems, customer, kind, menuItemId, customers) {
   return {
-    id: getNextServiceItemId(serviceItems),
+    id: getNextServiceItemId(serviceItems, customers),
     kind,
     menuItemId,
     customerId: customer.id,
@@ -147,6 +150,16 @@ function createServiceItem(serviceItems, customer, kind, menuItemId) {
 }
 
 export function createCustomerOrder(state, customer, random = Math.random) {
+  if (!Object.hasOwn(customer, 'dishOrderSnapshot') && (state.serviceItems || []).some(item =>
+    item.kind === 'dish' && item.customerId === customer.id && Object.hasOwn(item, 'dishOrderSnapshot'))) {
+    throw new Error('Invalid dish order: missing customer snapshot copy');
+  }
+  if (Object.hasOwn(customer, 'dishOrderSnapshot')) {
+    validateDishOrderSnapshot(customer.dishOrderSnapshot);
+    validateDishOrderSnapshots({ ...state, customers: [customer,
+      ...(state.customers || []).filter(candidate => candidate.id !== customer.id)] });
+    return { customer, serviceItems: state.serviceItems || [] };
+  }
   if (customer?.foodOutcome === 'cancelled' || customer?.foodOutcome === 'delivered') {
     return { customer, serviceItems: state.serviceItems || [] };
   }
@@ -191,9 +204,23 @@ export function createCustomerOrder(state, customer, random = Math.random) {
     && existingCustomerItems.filter(item => item.kind === kind).length > 1);
   if (ownershipConflict) return { customer: profiledCustomer, serviceItems };
 
+  let dishOrderSnapshot;
   for (const [kind, menuItemId] of selections) {
     if (!menuItemId || hasDuplicateOwner(serviceItems, customer.id, kind)) continue;
-    serviceItems.push(createServiceItem(serviceItems, profiledCustomer, kind, menuItemId));
+    const item = createServiceItem(serviceItems, profiledCustomer, kind, menuItemId, state.customers || []);
+    if (kind === 'dish') {
+      // Preserve deliberately partial pre-feature custom fixtures without making up
+      // identity/stats. Complete new dishes and all authored dishes validate strictly.
+      const complete = ['id', 'name', 'base', 'method', 'cuisine', 'requiredEquipmentId',
+        'price', 'quality', 'prepTime', 'popularity'].every(key => Object.hasOwn(basket.dish, key));
+      if (complete || basket.dish.cookbookId != null) {
+        dishOrderSnapshot = createDishOrderSnapshot(basket.dish, {
+          serviceItemId: item.id, orderedAt: state.restaurant?.gameTime,
+        });
+        item.dishOrderSnapshot = dishOrderSnapshot;
+      }
+    }
+    serviceItems.push(item);
   }
 
   if (serviceItems.length === initialLength) return { customer: profiledCustomer, serviceItems };
@@ -211,6 +238,7 @@ export function createCustomerOrder(state, customer, random = Math.random) {
     orderTime: state.restaurant?.gameTime ?? profiledCustomer.orderTime,
     orderedServiceItemIds: customerItems.map(item => item.id),
     consumedServiceItemIds: [],
+    ...(dishOrderSnapshot ? { dishOrderSnapshot } : {}),
   };
   const withFoodPatience = basket.dish
     ? startFoodPatience(orderCustomer, state.restaurant?.gameTime)

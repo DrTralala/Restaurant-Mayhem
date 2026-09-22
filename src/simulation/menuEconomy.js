@@ -1,5 +1,6 @@
 import { getResolvedDrink } from '../data/drinks';
 import { clampReputation } from './balance';
+import { getResolvedDish } from './cookbook';
 
 export const SPENDING_TIER_RANGES = Object.freeze({
   budget: Object.freeze([6, 18]),
@@ -114,7 +115,8 @@ function toBasket(kind, dish = null, drink = null) {
 export function buildAffordableBaskets(state, customer) {
   const budget = Number(customer?.spendingBudget);
   if (!Number.isFinite(budget) || budget < 0) return [];
-  const dishes = (state?.dishes || []).filter(dish => Number.isFinite(dish?.price));
+  const dishes = (state?.dishes || []).map(dish => getResolvedDish(state, dish.id))
+    .filter(dish => Number.isFinite(dish?.price));
   const drinks = (state?.unlockedDrinkIds || [])
     .map(id => getResolvedDrink(state, id)).filter(Boolean);
   return [
