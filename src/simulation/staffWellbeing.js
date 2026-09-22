@@ -11,12 +11,10 @@ import {
 import { getStaffMovementSpeed } from './staffActivity';
 import { getMovementStatus } from './movement/status';
 import { clearNavigationGoal, setNavigationGoal } from './movement/navigationGoal';
-import {
-  createNavigationWorkspace,
-  isSafeSegment,
-} from './movement/navigationWorkspace';
+import { createNavigationWorkspace } from './movement/navigationWorkspace';
 import { createGrid } from './navigation/grid';
 import { findRoute } from './navigation/router';
+import { isStaticStaffAmenityExit } from './movement/staffAmenityExit';
 import { releaseStaffWork } from './staffTaskLifecycle';
 
 export const STAFF_WELLBEING_CONSTANTS = Object.freeze({
@@ -291,14 +289,17 @@ function isLegalExitPoint(state, worker, amenity, point) {
   const workspace = createNavigationWorkspace(state);
   const grid = createGrid(state, workspace);
   return pointIsFreeForExit(state, worker, point, grid)
-    && isSafeSegment(state, worker, point, { workspace });
+    && isStaticStaffAmenityExit(state, amenity, worker.amenityUse?.slotIndex, point, {
+      workspace, grid,
+    });
 }
 
 /** Return the first legal, free exterior point for a resident staff member. */
 export function selectStaffWellbeingExit(state, staffId) {
   const worker = getWorker(state, staffId);
   const current = worker ? currentAmenity(state, worker) : null;
-  if (!worker || !current || current.slot.occupiedBy == null) return null;
+  if (!worker || !current || !sameId(current.slot.occupiedBy, worker.id)
+    || current.slot.reservedBy != null) return null;
   const geometry = getAmenityGeometry(current.amenity);
   if (!geometry) return null;
   return geometry.exitCandidates.find(point => isLegalExitPoint(state, worker, current.amenity, point))
