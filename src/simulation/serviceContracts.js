@@ -430,20 +430,23 @@ export function validateServiceContractsState(value, state) {
       check(matchingActors.length <= 1, 'duplicate live guest');
       // Before admission, an unrelated actor may own the textual ID and cause
       // missed_identity_conflict. Tags claim contract ownership; once admitted,
-      // the ID also remains authoritative so stripped/contradictory tags fail.
-      const ownedActors = matchingActors.filter(actor => activeParty?.status === 'admitted'
+      // the ID remains authoritative, including admission proven by a retained
+      // result. Stripping tags must not erase known ownership or paid evidence.
+      const wasAdmitted = activeParty?.status === 'admitted'
+        || ['fulfilled_paid', 'not_fulfilled', 'failed', 'unfinished'].includes(row.status);
+      const ownedActors = matchingActors.filter(actor => wasAdmitted
         || actor.serviceContractId === instance.instanceId || actor.serviceContractGuestId === row.guestId);
       if (row.status === 'fulfilled_paid') {
         for (const actor of ownedActors) {
           check(actor.paidVisitSequence === row.paidVisitSequence, 'live payment marker');
         }
       }
-      if (isActive) for (const actor of ownedActors) {
-        check(activeParty.status === 'admitted' && actor.id === row.guestId
+      if (isActive || wasAdmitted) for (const actor of ownedActors) {
+        check((!isActive || activeParty.status === 'admitted') && actor.id === row.guestId
           && actor.serviceContractId === instance.instanceId && actor.serviceContractGuestId === row.guestId
-          && actor.partyId === row.partyId && actor.archetype === row.archetype
-          && actor.gender === row.gender && actor.spendingTier === row.spendingTier
-          && actor.spendingBudget === row.spendingBudget && actor.serviceContractArrivalAt === party.arrivalAt, 'live guest identity/profile');
+          && actor.partyId === row.partyId && actor.archetype === original.archetype
+          && actor.gender === original.gender && actor.spendingTier === original.spendingTier
+          && actor.spendingBudget === original.spendingBudget && actor.serviceContractArrivalAt === party.arrivalAt, 'live guest identity/profile');
       }
     });
   }
