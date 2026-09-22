@@ -203,6 +203,7 @@ describe('atomic paid visit producer', () => {
     const state = fixture();
     delete state.cookbook;
     delete state.careerRun;
+    delete state.serviceContracts;
     const result = commit(state);
     expect(result.state.paidVisitSequence).toBe(1);
     expect(result.state).not.toHaveProperty('cookbook');

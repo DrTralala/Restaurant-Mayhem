@@ -45,6 +45,8 @@ describe('additive v10 feature persistence', () => {
   });
   it('migrates recoverable raw order stats/price before starter adoption with no authored provenance', () => {
     const raw = orderFixture();
+    // Only a complete original bill can opt into strict snapshot checkout.
+    Object.assign(raw.customers[0], { drinkPriceAtOrder: null, orderSubtotal: 9 });
     raw.dishes[0].quality = 4;
     const hydrated = hydrateState(raw, createInitialState());
     const snapshot = hydrated.customers[0].dishOrderSnapshot;
@@ -76,7 +78,7 @@ describe('additive v10 feature persistence', () => {
   it.each([-1, 1.1, Number.MAX_SAFE_INTEGER + 1, null, undefined])('rejects invalid present root sequence %s', value => {
     expect(() => validateSavedState({ ...createInitialState(), paidVisitSequence: value })).toThrow();
   });
-  it.each([0, -1, 2, 0.5, null])('rejects invalid live marker %s against root 1', value => {
+  it.each([0, -1, 2, 0.5, undefined])('rejects invalid live marker %s against root 1', value => {
     const raw = createInitialState();
     raw.paidVisitSequence = 1;
     raw.customers = [{ id: 'paid', state: 'leaving', paidVisitSequence: value }];

@@ -57,6 +57,11 @@ export function getOrderSnapshotSubtotal(customer) {
   if (itemPrices.some(price => price !== null
     && !(Number.isFinite(price) && price >= 0))) return null;
   const presentPrices = itemPrices.filter(price => price !== null);
+  // Food cancellation can legitimately remove the only bill line. Preserve
+  // this explicit zero tuple through normalisation rather than treating it as
+  // missing legacy prices (or recharging the retained historical snapshot).
+  if (!presentPrices.length && customer.foodOutcome === 'cancelled'
+    && customer.dishId === null && customer.drinkId === null && customer.orderSubtotal === 0) return 0;
   if (!presentPrices.length
     || !(Number.isFinite(customer.orderSubtotal) && customer.orderSubtotal >= 0)) return null;
   const subtotal = presentPrices.reduce((sum, price) => sum + price, 0);
