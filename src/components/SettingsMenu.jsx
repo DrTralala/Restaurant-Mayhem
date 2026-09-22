@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDispatch, useGameState } from '../state/GameContext';
 import { createInitialState } from '../state/initialState';
 import { hydrateState } from '../state/persistence';
@@ -17,6 +17,8 @@ export default function SettingsMenu({ isOpen, onToggle, onClose }) {
   const state = useGameState();
   const dispatch = useDispatch();
   const [message, setMessage] = useState('');
+  const firstAction = useRef(null);
+  useEffect(() => { if (isOpen) firstAction.current?.focus(); }, [isOpen]);
 
   const handleSave = async () => {
     try {
@@ -45,7 +47,7 @@ export default function SettingsMenu({ isOpen, onToggle, onClose }) {
   };
 
   const handleNewGame = () => {
-    if (!window.confirm('Start a new game? All progress will be lost.')) return;
+    if (!window.confirm('Start a new sandbox? This replaces your current restaurant, any career and its local autosave. No backup is created. Cancel keeps this restaurant.')) return;
     localStorage.removeItem('restaurant-sim-save');
     dispatch({ type: 'LOAD_STATE', state: createInitialState() });
     onClose?.();
@@ -78,7 +80,7 @@ export default function SettingsMenu({ isOpen, onToggle, onClose }) {
           background: '#0d1528', border: '1px solid #0f3460', borderRadius: 8,
           boxShadow: '0 6px 18px rgba(0,0,0,0.45)',
         }}>
-          <button type="button" onClick={handleSave} style={buttonStyle}>Save game</button>
+          <button ref={firstAction} type="button" onClick={handleSave} style={buttonStyle}>Save game</button>
           <button type="button" onClick={handleLoad} style={buttonStyle}>Load game</button>
           <button
             type="button"

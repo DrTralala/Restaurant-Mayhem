@@ -27,14 +27,22 @@ import {
 import { validateSavedState } from './saveValidation';
 import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
 import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
+import { createDishOrderSnapshot, normaliseCookbookState, validateDishOrderSnapshots } from '../simulation/cookbook';
+import { hydrateServiceContractsState, settleServiceContracts } from '../simulation/serviceContracts';
+import { evaluateCareerRun, normaliseCareerRun } from '../simulation/careerRun';
+import { calculateRevenue } from '../simulation/revenue';
 
+// Boolean outcome lets the provider report unsaved progress without turning a
+// storage failure or navigation quarantine into a gameplay/runtime fault.
 export function saveState(state) {
-  if (state.navigationFault) return;
+  if (state.navigationFault) return false;
   try {
     const serialized = JSON.stringify(movementSaveSnapshot(state));
     localStorage.setItem(SAVE_KEY, serialized);
+    return true;
   } catch (e) {
     console.warn('Failed to save state:', e);
+    return false;
   }
 }
 
@@ -361,6 +369,37 @@ function finishCompletedCheckout(customer, completedCustomerIds, cashierStations
   });
 }
 
+function migrateLegacyDishSnapshots(saved) {
+  let customers = saved.customers || [];
+  let serviceItems = saved.serviceItems || [];
+  for (const item of serviceItems) {
+    if (item.kind !== 'dish' || Object.hasOwn(item, 'dishOrderSnapshot')) continue;
+    const customer = customers.find(actor => actor.id === item.customerId);
+    if (!customer || Object.hasOwn(customer, 'dishOrderSnapshot')) continue;
+    const dish = (saved.dishes || []).find(candidate => candidate.id === item.menuItemId);
+    if (!dish || (customer.dishId !== dish.id && customer.foodOutcome !== 'cancelled')) continue;
+    const orderedAt = customer.foodOrderedAt ?? customer.orderTime;
+    // Raw saved stats only, before cookbook adoption; never resolve today's perk
+    // or fill missing recipe/order facts from the fresh restaurant.
+    let snapshot;
+    try {
+      const price = customer.foodOutcome === 'cancelled' ? dish.price
+        : Object.hasOwn(customer, 'dishPriceAtOrder') ? customer.dishPriceAtOrder : dish.price;
+      snapshot = createDishOrderSnapshot({ ...dish, price, cookbookId: null, masteryPerk: null },
+        { serviceItemId: item.id, orderedAt });
+    } catch {
+      continue; // Incomplete legacy evidence remains absent, never fake authored history.
+    }
+    customers = customers.map(actor => actor.id === customer.id ? { ...actor, dishOrderSnapshot: snapshot } : actor);
+    serviceItems = serviceItems.map(candidate => candidate.id === item.id ? { ...candidate, dishOrderSnapshot: { ...snapshot } } : candidate);
+  }
+  const migrated = { ...saved,
+    ...(saved.customers ? { customers } : {}), ...(saved.serviceItems ? { serviceItems } : {}),
+  };
+  validateDishOrderSnapshots(migrated);
+  return migrated;
+}
+
 export function hydrateState(saved, fresh) {
   // Partial domain fixtures may omit a version; imported saves are version-gated
   // by loadState/Settings before reaching this normalisation boundary.
@@ -370,6 +409,7 @@ export function hydrateState(saved, fresh) {
   validateSavedNavigationGeometry(saved);
   validateSavedServiceItemInventory(saved);
   validateSavedState(saved);
+  saved = migrateLegacyDishSnapshots(saved);
   const staff = (saved.staff || fresh.staff || []).map(character => {
     const { navigationYield, ...withoutYield } = character;
     const clean = samePoint(withoutYield.navigationGoal, navigationYield?.goal)
@@ -429,6 +469,16 @@ export function hydrateState(saved, fresh) {
     floorDirt: Array.isArray(saved.floorDirt) ? saved.floorDirt : fresh.floorDirt,
     washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
   };
+  hydrated.paidVisitSequence = saved.paidVisitSequence ?? 0;
+  const cookbookSource = { ...hydrated };
+  if (!Object.hasOwn(saved, 'cookbook') && Object.hasOwn(saved, 'dishes')) delete cookbookSource.cookbook;
+  Object.assign(hydrated, normaliseCookbookState(cookbookSource, {
+    lastPaidVisitSequence: hydrated.paidVisitSequence,
+  }));
+  hydrated.serviceContracts = hydrateServiceContractsState(saved.serviceContracts);
+  hydrated.careerRun = normaliseCareerRun(saved.careerRun, {
+    gameTime: hydrated.restaurant.gameTime, paidVisitSequence: hydrated.paidVisitSequence,
+  }).run;
   if ('completedCustomers' in saved || 'completedCustomers' in fresh) {
     hydrated.completedCustomers = completedCustomers;
   }
@@ -469,7 +519,7 @@ export function hydrateState(saved, fresh) {
   );
 
   if (saved.dishes || fresh.dishes) {
-    hydrated.dishes = (saved.dishes || fresh.dishes).map((dish, index) => {
+    hydrated.dishes = hydrated.dishes.map((dish, index) => {
       const fallbackPrice = fresh.dishes?.find(candidate => candidate.id === dish?.id)?.price
         ?? fresh.dishes?.[index]?.price
         ?? 1;
@@ -532,6 +582,16 @@ export function hydrateState(saved, fresh) {
   // Small partial domain fixtures used by legacy callers do not contain a
   // navigable fixture world; preserve their historical shape rather than
   // manufacturing an unplaced-staff quarantine for missing context.
-  return Array.isArray(clean.tables) && Array.isArray(clean.doors)
+  let result = Array.isArray(clean.tables) && Array.isArray(clean.doors)
     ? quarantineNavigation(clean) : clean;
+  if (result.careerRun?.status === 'active' && result.restaurant.gameTime === result.careerRun.deadlineAt) {
+    // Only already-committed monetary/ledger facts may settle on entry. No
+    // arrivals, movement, service, payment hook or feature replay occurs here.
+    result = calculateRevenue({ ...result, completedCustomers: result.completedCustomers || [] });
+    if (result.serviceContracts.active?.deadlineAt <= result.restaurant.gameTime) {
+      result = settleServiceContracts(result, result.restaurant.gameTime, { entry: true });
+    }
+    result = { ...result, careerRun: evaluateCareerRun(result.careerRun, result.restaurant) };
+  }
+  return result;
 }

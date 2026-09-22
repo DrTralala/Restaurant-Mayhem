@@ -6,9 +6,16 @@ import { createStaffDutyDefaults } from '../simulation/staffSchedules';
 import { DEFAULT_OPERATING_HOURS } from '../simulation/clock';
 import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
 import { SAVE_VERSION } from './saveVersion';
+import { createCookbookState } from '../simulation/cookbook';
+import { createServiceContractsState } from '../simulation/serviceContracts';
+import { createCareerRun } from '../simulation/careerRun';
 
 export function createInitialState() {
   const state = {
+    cookbook: createCookbookState(),
+    serviceContracts: createServiceContractsState(),
+    paidVisitSequence: 0,
+    careerRun: null,
     restaurant: {
       name: 'My Restaurant',
       funds: 600,
@@ -123,6 +130,7 @@ export function createInitialState() {
     dishes: [
       {
         id: 'starter-toast',
+        cookbookId: 'toast',
         name: 'Toasted Bread',
         base: 'Bread',
         method: 'Toasted',
@@ -156,4 +164,11 @@ export function createInitialState() {
   const staff = allocateStaffPositions(state);
   if (!staff) throw new Error('Starter layout has no safe staff allocation');
   return { ...state, staff };
+}
+
+export function createCareerInitialState({ scenarioId, runId }) {
+  const state = createInitialState();
+  return { ...state, careerRun: createCareerRun({
+    scenarioId, runId, startedAt: state.restaurant.gameTime, paidVisitSequence: state.paidVisitSequence,
+  }) };
 }

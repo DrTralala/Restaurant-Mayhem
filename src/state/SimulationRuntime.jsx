@@ -5,6 +5,7 @@ import { interpolateSimulationState } from '../canvas/interpolation';
 import { useDispatch, useGameGeneration, useGameState } from './GameContext';
 import { TYPOGRAPHY } from '../typography';
 import { useAnimationFrameLoop } from '../hooks/useAnimationFrameLoop';
+import { isCareerDecisionPending } from '../simulation/careerRun';
 
 const RenderStateContext = createContext(null);
 const RuntimeFaultContext = createContext({ fault: null, reportFault: () => {} });
@@ -61,6 +62,13 @@ export default function SimulationRuntime({ children }) {
     let phase = 'simulation';
     try {
       if (faultRef.current) return false;
+      if (isCareerDecisionPending(canonicalRef.current)) {
+        accumulatorRef.current = 0;
+        lastTimestampRef.current = null;
+        previousRef.current = canonicalRef.current;
+        setRenderState(canonicalRef.current);
+        return true;
+      }
 
       const previousTimestamp = lastTimestampRef.current;
       lastTimestampRef.current = timestamp;

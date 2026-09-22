@@ -2,8 +2,9 @@ import { StrictMode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { GameProvider, useDispatch, useGameState } from './GameContext';
-import { createInitialState } from './initialState';
-import SimulationRuntime, { useRenderState } from './SimulationRuntime';
+import { createCareerInitialState, createInitialState } from './initialState';
+import { evaluateCareerRun } from '../simulation/careerRun';
+import SimulationRuntime, { useRenderState, useRuntimeFault } from './SimulationRuntime';
 import RestaurantCanvas from '../canvas/RestaurantCanvas';
 import { runTick } from '../simulation/gameLoop';
 import { interpolateSimulationState } from '../canvas/interpolation';
@@ -25,12 +26,14 @@ vi.mock('../canvas/layers', () => ({
 const frames = new Map();
 let nextFrame;
 let currentState;
+let currentDispatch;
 let errorLog;
 
 function Harness() {
   currentState = useGameState();
   const state = useRenderState();
   const dispatch = useDispatch();
+  currentDispatch = dispatch;
   return <>
     <output data-testid="time">{state.restaurant.gameTime}</output>
     <button onClick={() => dispatch({ type: 'LOAD_STATE', state: createInitialState() })}>New Game</button>
@@ -74,6 +77,27 @@ beforeEach(() => {
   }));
   interpolateSimulationState.mockReset().mockImplementation((_previous, state) => state);
   drawFloorLayer.mockReset();
+});
+
+it('Continue preserves a latched technical fault and only a genuinely new career resets it', () => {
+  const state = createCareerInitialState({ scenarioId: 'opening-week', runId: 'faulted' });
+  state.restaurant = { ...state.restaurant, gameTime: 640800, day: 8 };
+  state.careerRun = evaluateCareerRun(state.careerRun, state.restaurant);
+  localStorage.setItem('restaurant-sim-save', JSON.stringify(state));
+  function FaultButton() {
+    const { reportFault } = useRuntimeFault();
+    return <button onClick={() => reportFault(new Error('injected terminal fault'), 'render')}>Inject fault</button>;
+  }
+  render(<GameProvider><SimulationRuntime><Harness /><FaultButton /></SimulationRuntime></GameProvider>);
+  fireEvent.click(screen.getByText('Inject fault'));
+  expect(screen.getByRole('alert')).toBeInTheDocument();
+  act(() => currentDispatch({ type: 'CONTINUE_CAREER_AS_SANDBOX', expectedRunId: 'faulted' }));
+  expect(currentState.careerRun.status).toBe('continued');
+  expect(screen.getByRole('alert')).toBeInTheDocument();
+  frame(10000);
+  expect(runTick).not.toHaveBeenCalled();
+  act(() => currentDispatch({ type: 'START_CAREER', scenarioId: 'opening-week', runId: 'new', confirmedReplace: true }));
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });
 
 afterEach(() => {

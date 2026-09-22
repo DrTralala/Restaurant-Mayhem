@@ -11,6 +11,8 @@ import { getCarriedServiceItemIds } from '../simulation/staffInventory';
 import { isStaffTaskRoleAllowed } from '../simulation/taskRoles';
 import { validateSavedNavigationGeometry } from './movementPersistence';
 import { SAVE_VERSION } from './saveVersion';
+import { validateCookbookState, validateDishOrderSnapshots } from '../simulation/cookbook';
+import { validateServiceContractsState } from '../simulation/serviceContracts';
 
 const STAFF_ROLES = new Set(['cook', 'waiter', 'janitor']);
 const STAFF_DUTIES = new Set(['work', 'rest', 'pto']);
@@ -231,7 +233,8 @@ function validateVersionedShape(state) {
       if (!has(worker, key)) fail(`${path}.${key}`, 'is required in version 10 saves');
     }
   });
-  validateVersionedIdRepresentations(state, 'save');
+  const { careerRun, ...strictState } = state;
+  validateVersionedIdRepresentations(strictState, 'save');
 }
 
 function validatePositionFields(record, path, { allowNull = false } = {}) {
@@ -1306,6 +1309,17 @@ function validateActorIdentityUniqueness(state, queueActors, departureActors) {
  */
 export function validateSavedState(state) {
   validateObject(state, 'save');
+  validatePaidVisitSequences(state);
+  // Validate the raw queue/actor identities, not a normalised copy which might
+  // conceal contradictory contract tags. Career-only corruption is handled by
+  // its graceful normaliser during hydration, never by these strict validators.
+  try {
+    validateCookbookState(state);
+    validateDishOrderSnapshots({ ...state, customers: paidVisitActors(state) });
+    validateServiceContractsState(state.serviceContracts, state);
+  } catch (error) {
+    fail('progression', error.message);
+  }
   validateVersionedShape(state);
   if (state.version === SAVE_VERSION) validateSavedNavigationGeometry(state);
   validateRestaurant(state);
@@ -1330,6 +1344,43 @@ export function validateSavedState(state) {
   validateCarriersAndReservations(state, serviceItems, fixtures);
   validateCrossDomainFoodHistory(state, serviceItems);
   return { valid: true, itemIds };
+}
+
+function paidVisitActors(state) {
+  return [...(Array.isArray(state.customers) ? state.customers : []),
+    ...(Array.isArray(state.queue) ? state.queue.flatMap(party => party.members || [party]) : []),
+    ...(Array.isArray(state.queueDepartures) ? state.queueDepartures : [])];
+}
+
+function validatePaidVisitSequences(state) {
+  const root = Object.hasOwn(state, 'paidVisitSequence') ? state.paidVisitSequence : 0;
+  if (!Number.isSafeInteger(root) || root < 0) fail('paidVisitSequence', 'must be a non-negative safe integer');
+  const actors = paidVisitActors(state);
+  const markers = new Set();
+  const check = (value, path) => {
+    if (!Number.isSafeInteger(value) || value <= 0 || value > root) fail(path, 'must be a committed sequence within the root counter');
+  };
+  for (const actor of actors) {
+    if (!actor || !Object.hasOwn(actor, 'paidVisitSequence')) continue;
+    check(actor.paidVisitSequence, 'customer.paidVisitSequence');
+    if (markers.has(actor.paidVisitSequence)) fail('customer.paidVisitSequence', 'is shared by multiple live customers');
+    markers.add(actor.paidVisitSequence);
+  }
+  const receipts = new Set();
+  for (const receipt of Array.isArray(state.completedCustomers) ? state.completedCustomers : []) {
+    if (!receipt || !Object.hasOwn(receipt, 'paidVisitSequence')) continue;
+    if (typeof receipt.customerId !== 'string' || !receipt.customerId.trim()
+      || !Number.isFinite(receipt.revenue) || receipt.revenue < 0) {
+      fail('completedCustomers', 'correlated receipts require a customer ID and non-negative finite revenue');
+    }
+    check(receipt.paidVisitSequence, 'completedCustomers.paidVisitSequence');
+    if (receipts.has(receipt.paidVisitSequence)) fail('completedCustomers.paidVisitSequence', 'is duplicated');
+    receipts.add(receipt.paidVisitSequence);
+    const actor = actors.find(customer => customer.id === receipt.customerId);
+    if (actor && actor.paidVisitSequence !== receipt.paidVisitSequence) {
+      fail('completedCustomers.paidVisitSequence', 'contradicts the live payment marker');
+    }
+  }
 }
 
 export function isSaveValidationError(error) {
