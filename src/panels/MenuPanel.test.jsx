@@ -2,6 +2,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import MenuPanel from './MenuPanel';
 import { useDispatch, useGameState } from '../state/GameContext';
+import { createInitialState } from '../state/initialState';
+import { normaliseCookbookState } from '../simulation/cookbook';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
@@ -16,6 +18,7 @@ describe('MenuPanel drinks', () => {
         quality: 2, popularity: 45,
       }],
       recipeSlots: 1,
+      equipment: [{ id: 'eq1', name: 'Toaster', owned: true }],
       unlockedDrinkIds: ['water'],
       drinkOverrides: { water: { price: 8, quality: 3 } },
       upgrades: [],
@@ -98,5 +101,61 @@ describe('MenuPanel drinks', () => {
     expect(headingRow).toHaveStyle({ paddingRight: '40px' });
     expect(within(headingRow).getByRole('button', { name: '+ New dish' }))
       .toBeInTheDocument();
+  });
+
+  it('browses the cookbook child and returns without losing creator or drink controls', () => {
+    render(<MenuPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
+    expect(screen.getByRole('heading', { name: 'Cookbook' })).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(6);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
+    expect(screen.getByRole('button', { name: '+ New dish' })).toBeEnabled();
+    expect(screen.getByLabelText('Water price')).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
+    expect(screen.getByRole('heading', { name: 'Create new dish' })).toBeInTheDocument();
+  });
+
+  it('shows authored effective seconds, popularity and mastery separately from custom dishes', () => {
+    let state = createInitialState();
+    state = { ...state, ...normaliseCookbookState(state, { legacy: true }) };
+    Object.assign(state.cookbook.entries.toast, { paidPortions: 15, perk: 'speed' });
+    state.dishes.push({ ...state.dishes[0], cookbookId: null, id: 'custom', name: 'Custom Toast', prepTime: 180 });
+    useGameState.mockReturnValue(state);
+    render(<MenuPanel />);
+    const toast = within(screen.getByRole('article', { name: 'Toasted Bread menu item' }));
+    expect(toast.getByText('$12 · 51s cook')).toBeInTheDocument();
+    expect(toast.getByText('Popularity: 50%')).toBeInTheDocument();
+    expect(toast.getByText('Cookbook recipe · Signature: Quick Service')).toBeInTheDocument();
+    expect(screen.getByText('Custom recipe')).toBeInTheDocument();
+    expect(screen.getByText(/base cooking work, not the complete wait time/)).toBeInTheDocument();
+  });
+
+  it('career decision blocks dish, drink and creator mutations while allowing cookbook browsing', () => {
+    const state = useGameState();
+    useGameState.mockReturnValue({ ...state, careerRun: { needsDecision: true } });
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    render(<MenuPanel />);
+    expect(screen.getByText(/Career decision pending/)).toBeInTheDocument();
+    for (const name of ['+ New dish', 'Upgrade Toast quality ($50)', 'Remove', 'Upgrade Water quality ($50)', 'Unlock Tea ($150)']) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(screen.getByLabelText('Toast price')).toBeDisabled();
+    expect(screen.getByLabelText('Water price')).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Toast price'), { target: { value: '99' } });
+    fireEvent.change(screen.getByLabelText('Water price'), { target: { value: '99' } });
+    expect(dispatch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
+    expect(screen.getByRole('button', { name: 'Back to menu' })).toBeEnabled();
+  });
+
+  it('suppresses an already-open custom creator when the parent gate becomes read-only', () => {
+    const view = render(<MenuPanel />);
+    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
+    view.rerender(<MenuPanel readOnly />);
+    expect(screen.queryByRole('heading', { name: 'Create new dish' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '+ New dish' })).toBeDisabled();
   });
 });
