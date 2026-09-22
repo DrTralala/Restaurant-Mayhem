@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import UpgradePanel from './UpgradePanel';
 import ItemsPanel from './ItemsPanel';
 import StaffPanel from './StaffPanel';
 import MilestonePanel from './MilestonePanel';
 import StatsPanel from './StatsPanel';
 import HoursPanel from './HoursPanel';
+import ServiceContractsPanel from './ServiceContractsPanel';
+import CareerPanel from './CareerPanel';
 import { TYPOGRAPHY } from '../typography';
 
 const TABS = [
@@ -14,10 +16,14 @@ const TABS = [
   { key: 'milestones', label: 'Milestones' },
   { key: 'stats', label: 'Stats' },
   { key: 'hours', label: 'Hours' },
+  { key: 'contracts', label: 'Contracts' },
+  { key: 'career', label: 'Opening Week' },
 ];
 
-export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
-  const [tab, setTab] = useState('upgrades');
+export default function ManagementModal({ isOpen, onClose, onStartPlacement,
+  initialTab = 'upgrades', onStartCareer, onShowCareerResult }) {
+  const [tab, setTab] = useState(initialTab);
+  useEffect(() => { if (isOpen) setTab(initialTab); }, [isOpen, initialTab]);
 
   if (!isOpen) return null;
 
@@ -73,6 +79,8 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement }) {
           {tab === 'milestones' && <MilestonePanel />}
           {tab === 'stats' && <StatsPanel />}
           {tab === 'hours' && <HoursPanel />}
+          {tab === 'contracts' && <ServiceContractsPanel />}
+          {tab === 'career' && <CareerPanel onStartRequested={onStartCareer} onShowResult={onShowCareerResult} />}
         </div>
       </div>
     </div>

@@ -14,6 +14,8 @@ import { createGrid } from '../simulation/navigation/grid';
 import { isAtPreparationPosition } from '../simulation/preparationPosition';
 import { findAvailableServiceSlot } from '../simulation/serviceItems';
 import { validateSavedState } from './saveValidation';
+import { createCookbookState } from '../simulation/cookbook';
+import { createServiceContractsState } from '../simulation/serviceContracts';
 
 beforeEach(() => {
   localStorage.clear();
@@ -1149,6 +1151,11 @@ describe('hydrateState', () => {
 
     expect(hydrateState(saved, fresh)).toEqual({
       version: SAVE_VERSION,
+      careerRun: null,
+      paidVisitSequence: 0,
+      cookbook: createCookbookState(),
+      serviceContracts: createServiceContractsState(),
+      dishes: [],
       movementCoordinator: createMovementCoordinator(),
       restaurant: { funds: 999, totalServed: 0, openHour: 0, closeHour: 0 },
       staff: [{ id: 'custom-cook', gender: 'male', carryingServiceItemIds: [] }],
@@ -1426,7 +1433,7 @@ describe('hydrateState', () => {
         { id: 'rounded', name: 'Rounded', price: 37.6 },
         { id: 'low', name: 'Low', price: -20 },
         { id: 'high', name: 'High', price: 101 },
-        { ...fresh.dishes[0], price: Number.POSITIVE_INFINITY },
+        { ...fresh.dishes[0], cookbookId: null, price: Number.POSITIVE_INFINITY },
         { id: 'nan', name: 'NaN', price: Number.NaN },
         { id: 'null', name: 'Null', price: null },
         { id: 'string', name: 'String', price: '12' },

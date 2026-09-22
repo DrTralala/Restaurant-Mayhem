@@ -67,6 +67,20 @@ it('advances canonical state with one fixed timing object', () => {
   expect(screen.getByTestId('render-time')).toHaveTextContent('2');
 });
 
+it('does not enter fixed-step service while a career decision is pending and resumes without generation reset', () => {
+  gameState = { ...gameState, careerRun: { needsDecision: true } };
+  const view = render(<SimulationRuntime><Harness /></SimulationRuntime>);
+  act(() => frames.shift()(0));
+  act(() => frames.shift()(1000));
+  expect(runTick).not.toHaveBeenCalled();
+  expect(dispatch).not.toHaveBeenCalled();
+  gameState = { ...gameState, careerRun: { needsDecision: false } };
+  view.rerender(<SimulationRuntime><Harness /></SimulationRuntime>);
+  act(() => frames.shift()(2000));
+  act(() => frames.shift()(2000 + FIXED_STEP_SECONDS * 1000));
+  expect(runTick).toHaveBeenCalled();
+});
+
 it('stops scheduling after a tick fault and restarts after generation changes', () => {
   const view = render(<SimulationRuntime><Harness /></SimulationRuntime>);
   act(() => frames.shift()(0));
