@@ -359,6 +359,16 @@ function availableChairsForTable(state, table) {
   });
 }
 
+function* chairSelections(chairs, count, start = 0, selected = []) {
+  if (count === 0) {
+    yield selected;
+    return;
+  }
+  for (let index = start; index <= chairs.length - count; index += 1) {
+    yield* chairSelections(chairs, count - 1, index + 1, [...selected, chairs[index].id]);
+  }
+}
+
 function planForParty(state, party) {
   const partySize = party.members.length;
   for (const table of state.tables || []) {
@@ -370,10 +380,12 @@ function planForParty(state, party) {
     if ((table.seats || chairCount) < partySize) continue;
     const chairs = availableChairsForTable(state, table);
     if (chairs.length < partySize) continue;
-    const chairIds = chairs.slice(0, partySize).map(chair => chair.id);
-    for (const door of getDoorsForFlow(state, 'ingress')) {
-      const plan = planQueuePartyAdmission(state, { party, door, tableId: table.id, chairIds });
-      if (plan) return { table, plan };
+    // An unavailable approach to one chair must not hide other usable seats.
+    for (const chairIds of chairSelections(chairs, partySize)) {
+      for (const door of getDoorsForFlow(state, 'ingress')) {
+        const plan = planQueuePartyAdmission(state, { party, door, tableId: table.id, chairIds });
+        if (plan) return { table, plan };
+      }
     }
   }
   return null;

@@ -81,6 +81,50 @@ describe('self seating admission', () => {
     expect(prepareSelfSeating(next).customers).toHaveLength(1);
   });
 
+  it('uses another empty chair when the first chair has no available approach', () => {
+    const state = queuedState({
+      staff: [
+        { id: 'west', x: 180, y: 180 },
+        { id: 'east', x: 220, y: 180 },
+        { id: 'north', x: 200, y: 160 },
+      ],
+    });
+    // The table blocks the south approach to ch1; ch2 remains reachable.
+    const control = prepareSelfSeating({ ...state, chairs: [...state.chairs].reverse() });
+    expect(control.customers[0]).toMatchObject({ state: 'entering', chairId: 'ch2' });
+
+    const next = prepareSelfSeating(state);
+    expect(next.queue).toHaveLength(0);
+    expect(next.customers[0]).toMatchObject({ state: 'entering', chairId: 'ch2' });
+    expect(next.tables[0]).toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
+  });
+
+  it('tries alternative chair combinations for a whole party', () => {
+    const fresh = createInitialState();
+    const state = queuedState({
+      tables: fresh.tables.filter(table => table.id === 't3'),
+      chairs: fresh.chairs.filter(chair => chair.tableId === 't3'),
+      queue: [partyOf(2)],
+      staff: [
+        { id: 'west', x: 180, y: 340 },
+        { id: 'east', x: 220, y: 340 },
+        { id: 'north', x: 200, y: 320 },
+      ],
+    });
+    const next = prepareSelfSeating(state);
+    expect(next.queue).toHaveLength(0);
+    expect(next.customers).toHaveLength(2);
+    expect(next.customers.map(customer => customer.chairId)).toEqual(['ch6', 'ch7']);
+    expect(next.customers.every(customer => customer.state === 'entering')).toBe(true);
+    expect(next.tables[0].diningCustomerIds).toEqual(['p1-c1', 'p1-c2']);
+
+    // Only one usable chair cannot admit any part of this two-person party.
+    const insufficient = prepareSelfSeating({ ...state, chairs: state.chairs.slice(0, 2) });
+    expect(insufficient.queue).toHaveLength(1);
+    expect(insufficient.customers).toHaveLength(0);
+    expect(insufficient.tables[0].status).toBe('empty');
+  });
+
   it.each(['dirty', 'occupied', 'reserved'])('will not admit to %s tables', status => {
     const state = queuedState();
     state.tables = state.tables.map(table => ({ ...table, status }));
