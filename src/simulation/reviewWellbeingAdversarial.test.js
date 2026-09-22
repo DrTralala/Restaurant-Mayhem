@@ -134,16 +134,28 @@ it('round-trips actual runTick amenity occupancy without losing ownership', () =
   expect(restored.staff[0].movementResidency).toEqual(state.staff[0].movementResidency);
 });
 
-it('does not route a real resident out of a couch after its session ends', () => {
+it('routes a real resident out of a couch before returning to work', () => {
   let state = liveState();
   state = runTick(state, { gameDt: 1, movementDt: 1 });
   expect(state.staff[0].amenityUse?.phase).toBe('occupied');
+  const workSchedule = Array.from({ length: 48 }, () => 'work');
+  state = {
+    ...state,
+    staff: [{ ...state.staff[0], schedule: workSchedule }],
+  };
   state = runTick(state, { gameDt: 900, movementDt: 0 });
   expect(state.staff[0].dutyPhase).toBe('exiting');
-  expect(state.staff[0].navigationGoal).toBeTruthy();
-  state = runTick(state, { gameDt: 30, movementDt: 1_000 });
-  expect(state.staff[0].amenityUse?.phase).toBe('occupied');
-  expect(state.movementCoordinator.statuses.get('starter-cook')?.plan).toBe('unreachable');
+  const exit = state.staff[0].navigationGoal;
+  expect(exit).toBeTruthy();
+  state = runTick(state, { gameDt: 1, movementDt: 1 });
+  expect(state.staff[0]).toMatchObject({
+    effectiveDuty: 'work', dutyPhase: 'available', amenityUse: null,
+  });
+  expect(state.staff[0].movementResidency).toBeUndefined();
+  expect(state.staff[0]).toMatchObject({ x: exit.x, y: exit.y });
+  expect(state.staffAmenities[0].slots[0]).toEqual({
+    index: 0, reservedBy: null, occupiedBy: null,
+  });
 });
 
 it('rejects v10 saves with an out-of-floor, overlapping amenity', () => {

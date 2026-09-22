@@ -2,9 +2,12 @@ import { createGrid } from './grid';
 import { cellToWorld, worldToCell } from '../movement/navigationWorkspace';
 import { getDoorPosition, getDoors, isDoorCrossing, isDoorRoleForFlow } from '../world';
 import { recordSeatResidency } from '../movement/seatedDeparture';
+import { getAmenityGeometry } from '../../data/staffAmenities';
+import { isStaticStaffAmenityExit } from '../movement/staffAmenityExit';
 
 const finite = p => p && Number.isFinite(p.x) && Number.isFinite(p.y);
 const same = (a, b) => finite(a) && finite(b) && a.x === b.x && a.y === b.y;
+const sameId = (left, right) => left != null && right != null && String(left) === String(right);
 const point = p => ({ x: p.x, y: p.y });
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const EXIT_DISTANCE = 120;
@@ -103,9 +106,96 @@ function outdoorFadeGrid(actor, base) {
   });
 }
 
+function sameOptionalPoint(left, right) {
+  return left == null && right == null || same(left, right);
+}
+
+function sameAmenityUse(left, right) {
+  return left?.phase === right?.phase
+    && sameId(left?.amenityId, right?.amenityId)
+    && left?.slotIndex === right?.slotIndex;
+}
+
+function sameMovementResidency(left, right) {
+  return left?.kind === right?.kind
+    && sameId(left?.amenityId, right?.amenityId)
+    && left?.slotIndex === right?.slotIndex;
+}
+
+function authenticStaffExitActor(state, actor) {
+  if (actor?.role === 'customer'
+    || (state.customers || []).some(customer => sameId(customer?.id, actor?.id))) return null;
+  const matches = (state.staff || []).filter(worker => sameId(worker?.id, actor?.id));
+  if (matches.length !== 1) return null;
+  const authority = matches[0];
+  if (!same(authority, actor)
+    || authority.dutyPhase !== actor.dutyPhase
+    || !sameAmenityUse(authority.amenityUse, actor.amenityUse)
+    || !sameMovementResidency(authority.movementResidency, actor.movementResidency)
+    || !sameOptionalPoint(authority.navigationGoal, actor.navigationGoal)) return null;
+  return authority;
+}
+
+function staffAmenityExitGrid(state, actor, base) {
+  const authority = authenticStaffExitActor(state, actor);
+  if (!authority) return null;
+  const use = actor?.amenityUse;
+  const residency = actor?.movementResidency;
+  if (actor?.dutyPhase !== 'exiting' || use?.phase !== 'occupied'
+    || residency?.kind !== 'staff_amenity'
+    || String(residency.amenityId) !== String(use.amenityId)
+    || residency.slotIndex !== use.slotIndex) return null;
+
+  const amenity = (state.staffAmenities || []).find(candidate =>
+    String(candidate?.id) === String(use.amenityId));
+  const geometry = getAmenityGeometry(amenity);
+  const slot = Array.isArray(amenity?.slots)
+    ? amenity.slots.find(candidate => candidate?.index === use.slotIndex) : null;
+  const origin = geometry?.slotAnchors?.[use.slotIndex];
+  const goal = actor.navigationGoal;
+  if (!slot || !['couch', 'bed'].includes(amenity?.type)
+    || !sameId(slot.occupiedBy, actor.id) || slot.reservedBy != null
+    || !origin || !finite(goal)
+    || !isStaticStaffAmenityExit(state, amenity, use.slotIndex, goal, { grid: base })) return null;
+
+  const startFraction = fractionOnSegment(actor, origin, goal);
+  if (startFraction === null || startFraction < 0 || startFraction > 1) return null;
+
+  // Only the resident's own footprint is opened, and only for the already
+  // selected exit segment. Other fixtures stay solid and the coordinator still
+  // arbitrates this segment against every other actor reservation.
+  const cleared = createGrid({
+    ...state,
+    staffAmenities: (state.staffAmenities || []).filter(candidate => candidate !== amenity),
+  });
+  if (!cleared.isOpen(origin) || !cleared.isOpen(goal)
+    || !cleared.segmentClear(origin, goal)) return null;
+
+  const fraction = point => fractionOnSegment(point, origin, goal);
+  const onExitSegment = point => {
+    const value = fraction(point);
+    return value !== null && value >= startFraction && value <= 1 && cleared.isOpen(point);
+  };
+  const segmentClear = (from, to) => {
+    const fromFraction = fraction(from);
+    const toFraction = fraction(to);
+    return fromFraction !== null && toFraction !== null
+      && fromFraction >= startFraction && toFraction >= fromFraction
+      && toFraction <= 1 && cleared.segmentClear(from, to);
+  };
+  return Object.freeze({ ...base,
+    signature: `${base.signature}:staff-amenity-exit:${actor.id}:${amenity.id}:${use.slotIndex}:${JSON.stringify([origin, goal])}`,
+    isOpen: onExitSegment,
+    segmentClear,
+    neighbours: point => onExitSegment(point) && !same(point, goal) ? [{ ...goal }] : [],
+    connectors: () => [],
+  });
+}
+
 export function createActorGrid(state, actor, base = createGrid(state), doorFlow = null) {
   const matches = (state.customers || []).filter(customer => String(customer.id) === String(actor.id));
-  if (matches.length !== 1 || !same(matches[0], actor)) return base;
+  if (matches.length !== 1) return staffAmenityExitGrid(state, actor, base) || base;
+  if (!same(matches[0], actor)) return base;
   const exit = exitGrid(state, actor, base);
   if (exit) return exit;
   const outdoorFade = outdoorFadeGrid(actor, base);
