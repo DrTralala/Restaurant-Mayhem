@@ -5,6 +5,7 @@ import {
 } from '../data/staffAmenities';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { SERVICE_COUNTER_CAPACITY } from '../simulation/serviceCounter';
+import { isStaticStaffAmenityExit } from '../simulation/movement/staffAmenityExit';
 import { validateStaffSchedule } from '../simulation/staffSchedules';
 import { getCarriedServiceItemIds } from '../simulation/staffInventory';
 import { isStaffTaskRoleAllowed } from '../simulation/taskRoles';
@@ -1019,6 +1020,26 @@ function validateForeignKeys(state, serviceItems, fixtures) {
   }
 }
 
+function validStaffAmenityExitPosition(state, worker, amenity, slot, geometry) {
+  if (worker.dutyPhase !== 'exiting') return false;
+  const origin = geometry?.slotAnchors?.[slot.index];
+  const goal = worker.navigationGoal;
+  if (!origin || !Number.isFinite(goal?.x) || !Number.isFinite(goal?.y)
+    || !isStaticStaffAmenityExit(state, amenity, slot.index, goal)) {
+    return false;
+  }
+  const dx = goal.x - origin.x;
+  const dy = goal.y - origin.y;
+  const squared = dx * dx + dy * dy;
+  const fraction = squared
+    ? ((worker.x - origin.x) * dx + (worker.y - origin.y) * dy) / squared
+    : NaN;
+  if (fraction < 0 || fraction > 1
+    || Math.hypot(worker.x - origin.x - fraction * dx,
+      worker.y - origin.y - fraction * dy) > 1e-9) return false;
+  return true;
+}
+
 function validateAmenities(state, staff) {
   if (!has(state, 'staffAmenities')) return;
   validateArray(state.staffAmenities, 'staffAmenities');
@@ -1100,7 +1121,11 @@ function validateAmenities(state, staff) {
             fail(`${path}.movementResidency`, 'must point to the occupied amenity slot');
           }
           const anchor = geometry?.slotAnchors?.[slot.index];
-          if (!anchor || worker.x !== anchor.x || worker.y !== anchor.y) {
+          const atAnchor = anchor && worker.x === anchor.x && worker.y === anchor.y;
+          const validAnchorState = atAnchor && (worker.dutyPhase !== 'exiting'
+            || (worker.navigationGoal == null && worker.dutyBlockReason === 'blocked-exit'));
+          if (!validAnchorState
+            && !validStaffAmenityExitPosition(state, worker, amenity, slot, geometry)) {
             fail(`${path}.movementResidency`, 'must preserve the occupied slot anchor position');
           }
         } else {
