@@ -45,6 +45,7 @@ const paid = (state, index, changes) => {
 describe('offers and immutable acceptance', () => {
   it('defaults absent features without mutation, RNG, bookings or rewards', () => {
     const state = createInitialState();
+    delete state.serviceContracts; // Explicit v10 legacy absence, not a fresh-game default.
     const random = vi.spyOn(Math, 'random').mockImplementation(() => { throw new Error('RNG'); });
     expect(createServiceContractsState()).toEqual({ version: 1, nextInstanceSerial: 1,
       lastAcceptedDayByTemplate: {}, active: null, results: [] });
@@ -57,6 +58,7 @@ describe('offers and immutable acceptance', () => {
   });
   it('snapshots all Office profiles and IDs, without funds or physical actor changes', () => {
     const before = createInitialState();
+    const originalContracts = structuredClone(before.serviceContracts);
     const state = accept(before);
     const active = state.serviceContracts.active;
     expect(active).toMatchObject({ instanceId: 'sc-1', templateId: 'office-lunch', rulesVersion: 1,
@@ -75,7 +77,8 @@ describe('offers and immutable acceptance', () => {
     })));
     expect(state.restaurant).toBe(before.restaurant);
     expect(state.queue).toBe(before.queue);
-    expect(before.serviceContracts).toBeUndefined();
+    expect(before.serviceContracts).toEqual(originalContracts);
+    expect(state.serviceContracts).not.toBe(before.serviceContracts);
     expect(hydrateServiceContractsState(state.serviceContracts)).toEqual(state.serviceContracts);
     expect(hydrateServiceContractsState(state.serviceContracts).active.guests).not.toBe(active.guests);
   });
