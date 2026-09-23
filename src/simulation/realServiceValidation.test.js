@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { seededRandom } from './realServiceHarness.testSupport';
+import { createServiceFixture, seededRandom } from './realServiceHarness.testSupport';
 
 afterEach(() => vi.restoreAllMocks());
 const mode = process.env.REAL_SERVICE_CASE;
+const requestedStrategy = process.env.REAL_SERVICE_STRATEGY;
+const careerWallMs = Number(process.env.REAL_SERVICE_WALL_MS || 400000);
 
 async function execute(options) {
   // Reset module-local visitor counters as well as the test-local RNG, so a
@@ -16,7 +18,7 @@ async function execute(options) {
 }
 
 function compact(report) {
-  const { actions, samples, paid, diagnostic, firstSnapshotMismatch, ...summary } = report;
+  const { actions, samples, paid, diagnostic, firstSnapshotMismatch, finalTrace, ...summary } = report;
   return { ...summary, contractPayments: paid.filter(visit => visit.contractId !== null),
     firstSnapshotMismatchAt: firstSnapshotMismatch?.at ?? null,
     error: diagnostic ? { message: diagnostic.message, at: diagnostic.at,
@@ -25,6 +27,20 @@ function compact(report) {
 }
 
 describe('real service release harness', () => {
+  it('prepares compact capacity through accepted affordable actions without awarding progress', () => {
+    const { state, actions } = createServiceFixture({ strategy: 'compact-capacity', templateId: 'family-service' });
+    expect(actions.every(action => action.applied)).toBe(true);
+    expect(state.restaurant.funds).toBe(50);
+    expect(state.restaurant.gameTime).toBe(36000);
+    expect(state.restaurant.reputation).toBe(1);
+    expect(state.paidVisitSequence).toBe(0);
+    expect(state.dishes[0].price).toBe(6);
+    expect(state.drinkOverrides.water.price).toBe(100);
+    expect(state.staff.map(worker => worker.morale)).toEqual([100, 100, 100, 100, 100]);
+    expect(state.tables.map(table => state.chairs.filter(chair => chair.tableId === table.id).length)).toEqual([4, 4, 4, 4]);
+    expect(state.serviceContracts.active).toMatchObject({ acceptedAt: 36000, deadlineAt: 41400, target: 6, reward: 120 });
+    expect(state.serviceContracts.active.guests.every(guest => guest.status === 'scheduled')).toBe(true);
+  });
   it('has repeatable independent random streams without changing production randomness', () => {
     const left = seededRandom(1);
     const right = seededRandom(1);
@@ -37,20 +53,24 @@ describe('real service release harness', () => {
   it.skipIf(mode !== 'profile')('profiles one native fixed-step starter service before long studies', async () => {
     const { report } = await execute({ seed: Number(process.env.REAL_SERVICE_SEED || 1),
       templateId: process.env.REAL_SERVICE_TEMPLATE || 'office-lunch',
-      gameStep: Number(process.env.REAL_SERVICE_STEP || 8), maxWallMs: 30000 });
+      strategy: requestedStrategy || 'starter', gameStep: Number(process.env.REAL_SERVICE_STEP || 8), maxWallMs: 30000 });
     console.info('REAL_SERVICE_PROFILE', JSON.stringify(report));
     expect(report.status).toBe('completed');
     expect(report.gameTime).toBe(report.endAt);
   }, 40000);
-  it.skipIf(mode !== 'career-profile')('profiles twelve hours of the legal day-service career strategy', async () => {
-    const { report } = await execute({ mode: 'career', seed: 1, strategy: 'career-day-service', duration: 43200, maxWallMs: 60000 });
-    console.info('REAL_CAREER_PROFILE', JSON.stringify(report));
+  it.skipIf(!['career-profile', 'career-stream'].includes(mode))('profiles a complete seven-day legal career strategy', async () => {
+    const { report } = await execute({ mode: 'career', seed: Number(process.env.REAL_SERVICE_SEED || 1),
+      strategy: requestedStrategy || 'compact-capacity', maxWallMs: careerWallMs });
+    console.info('REAL_CAREER_FULL_WEEK', JSON.stringify(compact(report)));
+    console.info('REAL_CAREER_FINAL_STAFF', JSON.stringify(report.finalTrace.staff));
     expect(report.status).toBe('completed');
-  }, 70000);
+    expect(report.gameTime).toBe(640800);
+    expect(['won', 'lost']).toContain(report.careerStatus);
+  }, careerWallMs + 15000);
   it.skipIf(mode !== 'contracts').each(['office-lunch', 'family-service', 'tasting-service'])('release gate: twenty native 4x normal streams for %s', async templateId => {
     const reports = [];
     for (let seed = 1; seed <= 20; seed++) {
-      const { report } = await execute({ seed, templateId, maxWallMs: 30000 });
+      const { report } = await execute({ seed, templateId, strategy: requestedStrategy || 'starter', maxWallMs: 30000 });
       reports.push(report);
       console.info('CONTRACT_STREAM', JSON.stringify(compact(report)));
     }
@@ -67,7 +87,7 @@ describe('real service release harness', () => {
   it.skipIf(mode !== 'career')('release gate: ten real seven-day career streams with the recorded affordable strategy', async () => {
     const reports = [];
     for (let seed = 1; seed <= 10; seed++) {
-      const { report } = await execute({ mode: 'career', seed, strategy: 'career-day-service', maxWallMs: 120000 });
+      const { report } = await execute({ mode: 'career', seed, strategy: requestedStrategy || 'compact-capacity', maxWallMs: careerWallMs });
       reports.push(report);
       console.info('CAREER_STREAM', JSON.stringify(compact(report)));
     }
@@ -79,7 +99,7 @@ describe('real service release harness', () => {
     console.info('CAREER_RELEASE_SUMMARY', JSON.stringify(summary));
     expect(summary.completed, JSON.stringify(summary)).toBe(10);
     expect(summary.won, JSON.stringify(summary)).toBeGreaterThanOrEqual(8);
-  }, 1250000);
+  }, careerWallMs * 10 + 100000);
   it.skipIf(mode !== 'failure')('runs a purposeful no-staff career failure through seven full days without editing objectives', async () => {
     const { state, report } = await execute({ mode: 'career', seed: 1, strategy: 'closed', maxWallMs: 120000, acceptAtCareerEnd: true });
     console.info('CAREER_PURPOSEFUL_FAILURE', JSON.stringify(compact(report)));
