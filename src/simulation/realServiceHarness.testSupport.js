@@ -1,6 +1,7 @@
 import { createInitialState, createCareerInitialState } from '../state/initialState';
 import { gameReducer } from '../state/GameContext';
 import { runTick } from './gameLoop';
+import { getCharacterMovementStatus } from './movement';
 import { hydrateState, saveState, loadState } from '../state/persistence';
 import { validateSavedState } from '../state/saveValidation';
 
@@ -24,6 +25,8 @@ export function serviceTrace(state) {
       id: m.id, patience: m.queuePatience, contract: m.serviceContractId,
     })) })),
     customers: state.customers.map(c => ({ id: c.id, partyId: c.partyId, state: c.state, x: c.x, y: c.y,
+      paymentReady: c.paymentReady, cashierStationId: c.cashierStationId, checkoutQueueIndex: c.checkoutQueueIndex,
+      navigationGoal: c.navigationGoal, movementStatus: getCharacterMovementStatus(state, c.id),
       foodOutcome: c.foodOutcome, foodDeadlineAt: c.foodDeadlineAt, paidVisitSequence: c.paidVisitSequence,
       menuOutcome: c.menuOutcome, dishId: c.dishId, dishPriceAtOrder: c.dishPriceAtOrder,
       drinkId: c.drinkId, drinkPriceAtOrder: c.drinkPriceAtOrder, orderSubtotal: c.orderSubtotal,
@@ -31,7 +34,8 @@ export function serviceTrace(state) {
       cancelledServiceItemIds: c.cancelledServiceItemIds, consumedServiceItemIds: c.consumedServiceItemIds,
       dishOrderSnapshot: c.dishOrderSnapshot })),
     staff: state.staff.map(s => ({ id: s.id, x: s.x, y: s.y, morale: s.morale,
-      task: s.task, duty: s.effectiveDuty, phase: s.dutyPhase })),
+      task: s.task, duty: s.effectiveDuty, phase: s.dutyPhase, amenityUse: s.amenityUse,
+      navigationGoal: s.navigationGoal, movementStatus: getCharacterMovementStatus(state, s.id) })),
     serviceItems: state.serviceItems.map(i => ({ id: i.id, customerId: i.customerId, menuItemId: i.menuItemId, state: i.state,
       kind: i.kind, assignedStaffId: i.assignedStaffId, dishOrderSnapshot: i.dishOrderSnapshot })),
   };
@@ -50,6 +54,35 @@ export function createServiceFixture({ mode = 'contract', templateId = 'office-l
     ? createCareerInitialState({ scenarioId: 'opening-week', runId: `real-week-${seed}` }) : createInitialState();
   const actions = [];
   state = applyAction(state, { type: 'SET_SPEED', speed }, actions);
+  if (['compact-service', 'compact-capacity'].includes(strategy)) {
+    // Chosen only after the recorded seed-1 preparation comparison demonstrated
+    // four genuine Office payments. Every relocation is a normal player action.
+    state = applyAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 6 } }, actions);
+    state = applyAction(state, { type: 'UPDATE_DRINK', id: 'water', changes: { price: 100 } }, actions);
+    for (const [id, x, y] of [['starter-cook', 390, 100], ['starter-waiter', 460, 480],
+      ['starter-host', 500, 480], ['starter-janitor', 540, 480]]) {
+      state = applyAction(state, { type: 'MOVE_STAFF', id, x, y }, actions);
+    }
+    state = applyAction(state, { type: 'MOVE_FIXTURES', items: [
+      ...state.tables.map(table => ({ type: 'table', id: table.id, x: table.x + 300, y: table.y })),
+      ...state.chairs.map(chair => ({ type: 'chair', id: chair.id, x: chair.x + 300, y: chair.y, rotation: chair.rotation })),
+      { type: 'kitchenStation', id: 'k1', x: 400, y: 120 },
+      { type: 'serviceTable', id: 'st1', x: 440, y: 120 },
+      { type: 'washStation', id: 'wash1', x: 600, y: 120 },
+    ] }, actions);
+    for (const worker of state.staff) state = applyAction(state, { type: 'GIVE_BONUS', id: worker.id }, actions);
+    state = applyAction(state, { type: 'UPGRADE_EQUIPMENT', id: 'eq1' }, actions);
+    if (strategy === 'compact-capacity') {
+      for (const [x, y, rotation] of [[480, 210, 1], [540, 210, 3], [640, 210, 1], [700, 210, 3]]) {
+        state = applyAction(state, { type: 'PLACE_ITEM', itemType: 'chair', x, y, rotation }, actions);
+      }
+      if (mode === 'career') {
+        // Full-week seed-1 probe passed with the unchanged all-work schedules:
+        // bought morale reserves stayed above 82, without amenity handoffs.
+        state = applyAction(state, { type: 'SET_OPERATING_HOURS', openHour: 10, closeHour: 20 }, actions);
+      }
+    }
+  }
   if (strategy === 'career-day-service') {
     state = applyAction(state, { type: 'SET_OPERATING_HOURS', openHour: 10, closeHour: 20 }, actions);
     state = applyAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 6 } }, actions);
@@ -187,5 +220,6 @@ export function runRealService({ mode = 'contract', templateId = 'office-lunch',
     reputation: state.restaurant.reputation, funds: state.restaurant.funds, sequence: state.paidVisitSequence,
     ordinaryRevenue: revenue - (result?.bonusPaid ?? 0), queuePeak, reloaded, reloadFacts, boundaryPaymentStep, actions, samples, paid,
     firstSnapshotMismatch, diagnostic,
+    finalTrace: mode === 'career' ? serviceTrace(state) : null,
   } };
 }
