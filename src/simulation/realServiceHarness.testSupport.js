@@ -209,6 +209,8 @@ export function runRealService({ mode = 'contract', templateId = 'office-lunch',
     breakdown[key] = (breakdown[key] || 0) + 1;
   }
   const revenue = state.dailyHistory.reduce((sum, day) => sum + day.revenue, 0) + state.restaurant.dailyRevenue;
+  const contractCash = state.serviceContracts.results.reduce((sum, row) => sum + row.bonusPaid
+    - (row.compensationPaid ?? 0), 0) + (state.serviceContracts.active?.depositPaid ?? 0);
   return { state, report: {
     mode, templateId: mode === 'contract' ? templateId : null, seed, strategy, gameStep, movementRatio: 60,
     status, navigationFault: state.navigationFault ?? null, ticks, wallMs: Math.round(performance.now() - startedWall),
@@ -219,7 +221,7 @@ export function runRealService({ mode = 'contract', templateId = 'office-lunch',
     target: result?.target ?? state.serviceContracts.active?.target ?? null, bonus: result?.bonusPaid ?? 0, breakdown,
     careerStatus: state.careerRun?.status ?? null, careerMeals: state.careerRun?.paidMeals ?? null,
     reputation: state.restaurant.reputation, funds: state.restaurant.funds, sequence: state.paidVisitSequence,
-    ordinaryRevenue: revenue - (result?.bonusPaid ?? 0), queuePeak, reloaded, reloadFacts, boundaryPaymentStep, actions, samples, paid,
+    ordinaryRevenue: revenue - contractCash, contractCash, queuePeak, reloaded, reloadFacts, boundaryPaymentStep, actions, samples, paid,
     firstSnapshotMismatch, diagnostic,
     finalTrace: mode === 'career' ? serviceTrace(state) : null,
   } };

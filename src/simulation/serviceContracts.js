@@ -2,6 +2,8 @@ import { SERVICE_CONTRACTS, SERVICE_CONTRACT_PREP_SECONDS, SERVICE_CONTRACT_RESU
   SERVICE_CONTRACT_RULES_VERSION, getServiceContractTemplate } from '../data/serviceContracts';
 import { isRestaurantOpen } from './clock';
 import { normaliseCustomerQueue, QUEUE_PARTY_CAPACITY } from './customerQueue';
+import { clampReputation } from './balance';
+import { getServiceContractTerms, getServiceContractSettlement } from './serviceContractFinance';
 
 const nonnegative = value => Number.isFinite(value) && value >= 0;
 const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
@@ -59,7 +61,8 @@ export function getServiceContractOffer(state, templateId) {
     || branch.nextInstanceSerial >= Number.MAX_SAFE_INTEGER) blockedReason = 'serial_exhausted';
   else if (branch.active) blockedReason = 'active_contract';
   else if (branch.lastAcceptedDayByTemplate[templateId] === day) blockedReason = 'used_today';
-  return { template, canAccept: blockedReason === null, blockedReason,
+  return { template, terms: getServiceContractTerms(templateId, SERVICE_CONTRACT_RULES_VERSION),
+    canAccept: blockedReason === null, blockedReason,
     warnings: preview ? readinessWarnings(state, template, preview) : [], preview };
 }
 
@@ -86,14 +89,16 @@ export function acceptServiceContract(state, { templateId } = {}) {
   const offer = getServiceContractOffer(state, templateId);
   if (!offer.canAccept) return state;
   const branch = state.serviceContracts || createServiceContractsState();
-  const { template, preview } = offer;
+  const { template, preview, terms } = offer;
   const instanceId = `sc-${branch.nextInstanceSerial}`;
   const active = { instanceId, templateId, rulesVersion: SERVICE_CONTRACT_RULES_VERSION,
     acceptedDay: state.restaurant.day, acceptedAt: preview.acceptedAt,
     serviceStartAt: preview.serviceStartAt, deadlineAt: preview.deadlineAt,
-    phase: 'preparing', target: template.target, reward: template.reward,
+    phase: 'preparing', target: template.target, reward: template.reward, depositPaid: terms.deposit,
     ...createRoster(template, instanceId, preview.serviceStartAt) };
-  return { ...state, serviceContracts: { ...branch, active,
+  return { ...state, restaurant: { ...state.restaurant,
+    funds: state.restaurant.funds + terms.deposit, dailyRevenue: state.restaurant.dailyRevenue + terms.deposit },
+    serviceContracts: { ...branch, active,
     nextInstanceSerial: branch.nextInstanceSerial + 1,
     lastAcceptedDayByTemplate: { ...branch.lastAcceptedDayByTemplate, [templateId]: state.restaurant.day } } };
 }
@@ -105,24 +110,29 @@ function withActive(state, active) {
 
 function finishContract(state, active, status, now) {
   const count = fulfilledCount(active.guests);
-  const bonusPaid = status === 'succeeded' ? active.reward : 0;
+  const { cashDelta, bonusPaid, ...financialEvidence } = getServiceContractSettlement(active, status);
   const result = { instanceId: active.instanceId, templateId: active.templateId,
     rulesVersion: active.rulesVersion,
     acceptedDay: active.acceptedDay, acceptedAt: active.acceptedAt, serviceStartAt: active.serviceStartAt,
     deadlineAt: active.deadlineAt, settledAt: now, status, target: active.target, reward: active.reward,
-    bonusPaid, fulfilledCount: count,
+    bonusPaid, fulfilledCount: count, ...(active.rulesVersion === 3 ? financialEvidence : {}),
     guestResults: active.guests.map(({ guestId, partyId, status: guestStatus, reason, paidVisitSequence, resolvedAt }) =>
       ({ guestId, partyId, status: guestStatus, reason, paidVisitSequence, resolvedAt })) };
   const title = getServiceContractTemplate(active.templateId, active.rulesVersion).title;
+  const paymentMessage = active.rulesVersion < 3
+    ? (bonusPaid ? `Bonus $${bonusPaid}.` : 'No contract bonus.')
+    : status === 'succeeded' ? `$${cashDelta} balance paid; $${bonusPaid} total reward.`
+      : `$${financialEvidence.depositRefunded} deposit repaid + $${financialEvidence.compensationPaid} compensation. Reputation -0.25 (minimum 1).`;
   return { ...state,
-    restaurant: bonusPaid ? { ...state.restaurant, funds: state.restaurant.funds + bonusPaid,
-      dailyRevenue: state.restaurant.dailyRevenue + bonusPaid } : state.restaurant,
+    restaurant: cashDelta || financialEvidence.reputationPenalty ? { ...state.restaurant,
+      funds: state.restaurant.funds + cashDelta, dailyRevenue: state.restaurant.dailyRevenue + cashDelta,
+      reputation: clampReputation(state.restaurant.reputation - financialEvidence.reputationPenalty) } : state.restaurant,
     serviceContracts: { ...state.serviceContracts, active: null,
       results: [...state.serviceContracts.results, result].slice(-SERVICE_CONTRACT_RESULT_LIMIT) },
     notifications: [...(state.notifications || []).filter(notification =>
       !String(notification.id).startsWith('service-contract-result:')),
     { id: `service-contract-result:${active.instanceId}`,
-      message: `${title}: ${status}. ${count}/${active.target} fulfilled meals. ${bonusPaid ? `Bonus $${bonusPaid}.` : 'No contract bonus.'}`,
+      message: `${title}: ${status}. ${count}/${active.target} fulfilled meals. ${paymentMessage}`,
       time: now }] };
 }
 
@@ -286,6 +296,7 @@ export function selectServiceContractView(state) {
   const source = branch.active;
   const now = state.restaurant?.gameTime || 0;
   const active = source ? { ...source, title: getServiceContractTemplate(source.templateId, source.rulesVersion).title,
+    terms: getServiceContractTerms(source.templateId, source.rulesVersion),
     fulfilledCount: fulfilledCount(source.guests), targetMet: fulfilledCount(source.guests) >= source.target,
     admittedCount: source.parties.filter(party => party.status === 'admitted').reduce((n, party) => n + party.size, 0),
     totalGuests: source.guests.length, unresolvedCount: source.guests.filter(unresolved).length,
@@ -326,7 +337,8 @@ export function validateServiceContractsState(value, state) {
   if (value === undefined) return;
   exactKeys(value, ['version', 'nextInstanceSerial', 'lastAcceptedDayByTemplate', 'active', 'results'], 'branch shape');
   check(value.version === 1 && positiveInteger(value.nextInstanceSerial), 'version/serial');
-  check(object(value.lastAcceptedDayByTemplate) && Object.keys(value.lastAcceptedDayByTemplate).length <= 3, 'day markers');
+  check(object(value.lastAcceptedDayByTemplate)
+    && Object.keys(value.lastAcceptedDayByTemplate).length <= SERVICE_CONTRACTS.length, 'day markers');
   const now = state.restaurant.gameTime;
   const day = state.restaurant.day;
   const maxSequence = state.paidVisitSequence ?? 0;
@@ -343,15 +355,17 @@ export function validateServiceContractsState(value, state) {
 
   function validateInstance(instance, isActive) {
     const hasRulesVersion = object(instance) && Object.hasOwn(instance, 'rulesVersion');
+    const rulesVersion = isActive || hasRulesVersion ? instance?.rulesVersion : 1;
+    check([1, 2, 3].includes(rulesVersion), 'rules version');
     exactKeys(instance, [...commonKeys, ...(isActive
       ? ['rulesVersion', 'phase', 'parties', 'guests']
       : ['settledAt', 'status', 'bonusPaid', 'fulfilledCount', 'guestResults',
-        ...(hasRulesVersion ? ['rulesVersion'] : [])])], 'instance shape');
+        ...(hasRulesVersion ? ['rulesVersion'] : [])]),
+      ...(rulesVersion === 3 ? (isActive ? ['depositPaid']
+        : ['depositPaid', 'depositRefunded', 'compensationPaid', 'reputationPenalty']) : [])], 'instance shape');
     // Only historical results may omit the revision, and absence always means
     // v1. Never infer current rules from a modified duration or default a present
     // invalid value through the catalogue selector's optional argument.
-    const rulesVersion = isActive || hasRulesVersion ? instance.rulesVersion : 1;
-    check(rulesVersion === 1 || rulesVersion === SERVICE_CONTRACT_RULES_VERSION, 'rules version');
     const serial = instanceSerial(instance.instanceId);
     check(serial < value.nextInstanceSerial && !instances.has(instance.instanceId), 'duplicate/exhausted instance');
     check(serial > previousSerial && instance.acceptedAt >= previousSettledAt, 'instance chronology');
@@ -372,6 +386,15 @@ export function validateServiceContractsState(value, state) {
       && instance.deadlineAt === instance.serviceStartAt + template.serviceDuration
       && instance.serviceStartAt > instance.acceptedAt && instance.deadlineAt > instance.serviceStartAt, 'schedule');
     check(instance.target === template.target && instance.reward === template.reward, 'target/reward');
+    if (rulesVersion === 3) {
+      const expectedFinance = isActive
+        ? { depositPaid: getServiceContractTerms(instance.templateId, rulesVersion).deposit }
+        : getServiceContractSettlement(instance, instance.status);
+      for (const key of isActive ? ['depositPaid']
+        : ['depositPaid', 'depositRefunded', 'compensationPaid', 'reputationPenalty']) {
+        check(instance[key] === expectedFinance[key], `financial ${key}`);
+      }
+    }
     const expected = createRoster(template, instance.instanceId, instance.serviceStartAt);
     const rows = isActive ? instance.guests : instance.guestResults;
     check(Array.isArray(rows) && rows.length === expected.guests.length, 'guest count');

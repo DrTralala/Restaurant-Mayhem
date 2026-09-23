@@ -142,7 +142,7 @@ describe('additive v10 feature persistence', () => {
     let raw = createCareerInitialState({ scenarioId: 'opening-week', runId: 'run' });
     raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 635700, reputation: 2 };
     raw = acceptServiceContract(raw, { templateId: 'office-lunch' });
-    // New v2 Office lasts 900 prep + 4200 service: its deadline coincides with Opening Week.
+    // Office lasts 900 prep + 4200 service: its deadline coincides with Opening Week.
     expect(raw.serviceContracts.active.deadlineAt).toBe(640800);
     raw.restaurant.gameTime = 640800;
     raw.paused = true;
@@ -151,15 +151,15 @@ describe('additive v10 feature persistence', () => {
     raw.cookbook.lastAppliedPaidVisitSequence = 80;
     raw.completedCustomers = [{ customerId: 'legacy-payment', revenue: 25 }];
     const hydrated = hydrateState(raw, createInitialState());
-    expect(hydrated.restaurant).toMatchObject({ funds: 625, gameTime: 640800 });
+    expect(hydrated.restaurant).toMatchObject({ funds: 580, gameTime: 640800, reputation: 1.75 });
     expect(hydrated.completedCustomers).toEqual([]);
-    expect(hydrated.careerRun).toMatchObject({ status: 'won', paidMeals: 80, needsDecision: true });
+    expect(hydrated.careerRun).toMatchObject({ status: 'lost', paidMeals: 80, needsDecision: true });
     expect(hydrated.cookbook.entries.toast.paidPortions).toBe(0);
     expect(hydrated.serviceContracts.active).toBeNull();
     expect(hydrated.serviceContracts.results[0]).toMatchObject({ status: 'failed', bonusPaid: 0 });
     expect(hydrated.paused).toBe(true);
     const again = hydrateState(hydrated, createInitialState());
-    expect(again.restaurant.funds).toBe(625);
+    expect(again.restaurant.funds).toBe(580);
     expect(again.careerRun).toEqual(hydrated.careerRun);
   });
   it('retains future booked arrivals at the cutoff without admission or missed-resume changes', () => {
