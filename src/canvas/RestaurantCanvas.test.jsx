@@ -864,6 +864,45 @@ describe('RestaurantCanvas object movement', () => {
     );
   });
 
+  it.each([
+    [50, 57, 170, 147],
+    [170, 147, 50, 57],
+  ])('keeps the drag rectangle canvas-local from (%i, %i) to (%i, %i)', (startX, startY, endX, endY) => {
+    useGameState.mockReturnValue({
+      ...state,
+      tables: [{ id: 't1', seats: 2, x: 60, y: 60, status: 'empty' }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 70, rotation: 0 }],
+    });
+    const { container } = render(<RestaurantCanvas />);
+    const canvas = container.querySelector('canvas');
+    // jsdom has no layout; supply the game area's offset beneath the stats bar.
+    canvas.getBoundingClientRect = () => ({ left: 40, top: 47 });
+
+    fireEvent.mouseDown(canvas, { clientX: startX, clientY: startY, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: endX, clientY: endY, buttons: 1 });
+
+    const rectangle = container.querySelector('div[style*="pointer-events: none"]');
+    expect(rectangle).toHaveStyle({
+      position: 'absolute', left: '10px', top: '10px', width: '120px', height: '90px',
+    });
+
+    fireEvent.mouseUp(canvas, { clientX: endX, clientY: endY, button: 0 });
+    expect(rectangle).not.toBeInTheDocument();
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+  });
+
+  it('positions the context menu beside the click within an offset canvas', () => {
+    const { container } = render(<RestaurantCanvas />);
+    const canvas = container.querySelector('canvas');
+    canvas.getBoundingClientRect = () => ({ left: 40, top: 47 });
+
+    fireEvent.click(canvas, { clientX: 200, clientY: 150 });
+
+    expect(screen.getByRole('button', { name: 'Move' }).parentElement).toHaveStyle({
+      position: 'absolute', left: '168px', top: '111px',
+    });
+  });
+
   it('drag-selects multiple furniture items and exposes shared actions', () => {
     useGameState.mockReturnValue({
       ...state,

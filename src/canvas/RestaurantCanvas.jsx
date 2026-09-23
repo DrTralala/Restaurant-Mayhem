@@ -266,11 +266,17 @@ export default function RestaurantCanvas({
   const dragRef = useRef(null);
   const suppressClickRef = useRef(false);
 
-  const getWorldPos = (e) => {
+  // DOM overlays share the canvas wrapper's origin, not the viewport's.
+  const getCanvasPos = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  };
+
+  const getWorldPos = (e) => {
+    const point = getCanvasPos(e);
     const camera = cameraRef.current;
-    return screenToWorld(camera, e.clientX - rect.left, e.clientY - rect.top);
+    return screenToWorld(camera, point.x, point.y);
   };
 
   const draw = useCallback((timeMs = 0) => {
@@ -540,19 +546,20 @@ export default function RestaurantCanvas({
     }
     if (dragRef.current && (e.buttons & 1) === 1) {
       const world = getWorldPos(e);
+      const screen = getCanvasPos(e);
       dragRef.current.currentWorld = world;
-      dragRef.current.currentScreen = { x: e.clientX, y: e.clientY };
+      dragRef.current.currentScreen = screen;
       const distance = Math.hypot(
-        e.clientX - dragRef.current.startScreen.x,
-        e.clientY - dragRef.current.startScreen.y,
+        screen.x - dragRef.current.startScreen.x,
+        screen.y - dragRef.current.startScreen.y,
       );
       if (distance >= 4) {
         dragRef.current.dragging = true;
         setSelectionRect({
           x1: dragRef.current.startScreen.x,
           y1: dragRef.current.startScreen.y,
-          x2: e.clientX,
-          y2: e.clientY,
+          x2: screen.x,
+          y2: screen.y,
         });
       }
       return;
@@ -664,8 +671,8 @@ export default function RestaurantCanvas({
       setSelectedStaffId(null);
       setSelectedItems([]);
       setMenu({
-        x: e.clientX,
-        y: e.clientY,
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
         type: hit.type,
         data: hit.data,
       });
@@ -681,11 +688,12 @@ export default function RestaurantCanvas({
   const handleMouseDown = (e) => {
     if (e.button !== 0 || moveRef.current || copyRef.current || staffMoveRef.current || placementRef.current) return;
     const world = getWorldPos(e);
+    const screen = getCanvasPos(e);
     dragRef.current = {
       startWorld: world,
       currentWorld: world,
-      startScreen: { x: e.clientX, y: e.clientY },
-      currentScreen: { x: e.clientX, y: e.clientY },
+      startScreen: screen,
+      currentScreen: screen,
       dragging: false,
     };
   };
@@ -829,7 +837,7 @@ export default function RestaurantCanvas({
       {/* Context menu */}
       {menu && (
         <div style={{
-          position: 'fixed', left: menu.x + 8, top: menu.y + 8, zIndex: 300,
+          position: 'absolute', left: menu.x + 8, top: menu.y + 8, zIndex: 300,
           background: '#16213e', border: '1px solid #0f3460', borderRadius: 8,
           padding: 6, display: 'flex', flexDirection: 'column', gap: 4,
           minWidth: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
@@ -895,7 +903,7 @@ export default function RestaurantCanvas({
       {selectionRect && (() => {
         const rect = normaliseSelectionRect(selectionRect);
         return <div style={{
-          position: 'fixed', pointerEvents: 'none', zIndex: 250,
+          position: 'absolute', pointerEvents: 'none', zIndex: 250,
           left: rect.left, top: rect.top,
           width: rect.right - rect.left, height: rect.bottom - rect.top,
           border: '1px solid #f0a500', background: 'rgba(240,165,0,0.12)',
