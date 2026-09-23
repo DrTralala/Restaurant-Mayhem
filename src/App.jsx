@@ -104,6 +104,7 @@ function AppSession() {
         /></div>
         <SettingsMenu
           isOpen={settingsOpen}
+          modal={decisionPending}
           onToggle={() => {
             setModalOpen(false);
             setMenuOpen(false);
