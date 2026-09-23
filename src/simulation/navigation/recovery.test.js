@@ -55,6 +55,27 @@ it('releases a passing bay once the peer has cleared the conflict, not only its 
   expect(records.get('yielding').recovery.peers).toHaveLength(1);
 });
 
+it('retains an early yield until the peer has passed the selected bay', () => {
+  const grid = createGrid({ restaurant: { expansionLevel: 1 }, tables: [], chairs: [] });
+  const goal = { x: 580, y: 300 };
+  const recovery = {
+    origin: { x: 462, y: 300 },
+    goal: { x: 420, y: 280 },
+    release: { x: 420, y: 280 },
+    peers: [{ id: 'passing', start: { x: 518, y: 300 }, goal: { x: 400, y: 300 } }],
+  };
+  const check = (x, yieldingStart = { x: 420, y: 280 }) => chooseRecoveries({ grid, records: new Map([['yielding', { goal, recovery }]]),
+    statuses: new Map(), budget: 0,
+    requests: new Map([
+      ['yielding', { id: 'yielding', start: yieldingStart, goal, speed: 60, waitingTicks: 0 }],
+      ['passing', { id: 'passing', start: { x, y: 300 }, goal: { x: 400, y: 300 }, speed: 60, waitingTicks: 0 }],
+    ]) }).recoveries;
+
+  expect(check(446).has('yielding')).toBe(true);
+  expect(check(404).has('yielding')).toBe(false);
+  expect(check(404, { x: 460, y: 300 }).has('yielding')).toBe(true);
+});
+
 it('uses the requesting actor grid when retaining a recovery', () => {
   const state = { restaurant: { expansionLevel: 1 }, tables: [], chairs: [] };
   const grid = createGrid(state);

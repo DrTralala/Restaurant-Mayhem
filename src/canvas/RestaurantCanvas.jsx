@@ -787,7 +787,7 @@ export default function RestaurantCanvas({
     moveRef.current = {
       originalItems: items,
       items: items.map(item => ({ ...item })),
-      anchor: null,
+      anchor: { x: items[0].x, y: items[0].y },
       validation: null,
     };
     copyRef.current = null;
