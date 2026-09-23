@@ -107,12 +107,13 @@ function finishContract(state, active, status, now) {
   const count = fulfilledCount(active.guests);
   const bonusPaid = status === 'succeeded' ? active.reward : 0;
   const result = { instanceId: active.instanceId, templateId: active.templateId,
+    rulesVersion: active.rulesVersion,
     acceptedDay: active.acceptedDay, acceptedAt: active.acceptedAt, serviceStartAt: active.serviceStartAt,
     deadlineAt: active.deadlineAt, settledAt: now, status, target: active.target, reward: active.reward,
     bonusPaid, fulfilledCount: count,
     guestResults: active.guests.map(({ guestId, partyId, status: guestStatus, reason, paidVisitSequence, resolvedAt }) =>
       ({ guestId, partyId, status: guestStatus, reason, paidVisitSequence, resolvedAt })) };
-  const title = getServiceContractTemplate(active.templateId).title;
+  const title = getServiceContractTemplate(active.templateId, active.rulesVersion).title;
   return { ...state,
     restaurant: bonusPaid ? { ...state.restaurant, funds: state.restaurant.funds + bonusPaid,
       dailyRevenue: state.restaurant.dailyRevenue + bonusPaid } : state.restaurant,
@@ -284,7 +285,7 @@ export function selectServiceContractView(state) {
   const branch = state.serviceContracts || createServiceContractsState();
   const source = branch.active;
   const now = state.restaurant?.gameTime || 0;
-  const active = source ? { ...source, title: getServiceContractTemplate(source.templateId).title,
+  const active = source ? { ...source, title: getServiceContractTemplate(source.templateId, source.rulesVersion).title,
     fulfilledCount: fulfilledCount(source.guests), targetMet: fulfilledCount(source.guests) >= source.target,
     admittedCount: source.parties.filter(party => party.status === 'admitted').reduce((n, party) => n + party.size, 0),
     totalGuests: source.guests.length, unresolvedCount: source.guests.filter(unresolved).length,
@@ -341,16 +342,23 @@ export function validateServiceContractsState(value, state) {
   check(Array.isArray(value.results) && value.results.length <= SERVICE_CONTRACT_RESULT_LIMIT, 'result bound');
 
   function validateInstance(instance, isActive) {
+    const hasRulesVersion = object(instance) && Object.hasOwn(instance, 'rulesVersion');
     exactKeys(instance, [...commonKeys, ...(isActive
       ? ['rulesVersion', 'phase', 'parties', 'guests']
-      : ['settledAt', 'status', 'bonusPaid', 'fulfilledCount', 'guestResults'])], 'instance shape');
+      : ['settledAt', 'status', 'bonusPaid', 'fulfilledCount', 'guestResults',
+        ...(hasRulesVersion ? ['rulesVersion'] : [])])], 'instance shape');
+    // Only historical results may omit the revision, and absence always means
+    // v1. Never infer current rules from a modified duration or default a present
+    // invalid value through the catalogue selector's optional argument.
+    const rulesVersion = isActive || hasRulesVersion ? instance.rulesVersion : 1;
+    check(rulesVersion === 1 || rulesVersion === SERVICE_CONTRACT_RULES_VERSION, 'rules version');
     const serial = instanceSerial(instance.instanceId);
     check(serial < value.nextInstanceSerial && !instances.has(instance.instanceId), 'duplicate/exhausted instance');
     check(serial > previousSerial && instance.acceptedAt >= previousSettledAt, 'instance chronology');
     previousSerial = serial;
     previousSettledAt = isActive ? instance.acceptedAt : instance.settledAt;
     instances.add(instance.instanceId);
-    const template = getServiceContractTemplate(instance.templateId);
+    const template = getServiceContractTemplate(instance.templateId, rulesVersion);
     check(template, 'unknown template');
     check(positiveInteger(instance.acceptedDay) && instance.acceptedDay <= day
       && value.lastAcceptedDayByTemplate[instance.templateId] >= instance.acceptedDay, 'accepted day');
@@ -368,8 +376,7 @@ export function validateServiceContractsState(value, state) {
     const rows = isActive ? instance.guests : instance.guestResults;
     check(Array.isArray(rows) && rows.length === expected.guests.length, 'guest count');
     if (isActive) {
-      check(instance.rulesVersion === SERVICE_CONTRACT_RULES_VERSION
-        && ['preparing', 'service'].includes(instance.phase), 'rules/phase');
+      check(['preparing', 'service'].includes(instance.phase), 'phase');
       check(instance.phase !== 'service' || now >= instance.serviceStartAt, 'future service phase');
       check(Array.isArray(instance.parties) && instance.parties.length === expected.parties.length, 'party count');
       instance.parties.forEach((party, index) => {

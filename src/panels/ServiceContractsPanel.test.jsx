@@ -24,7 +24,9 @@ describe('ServiceContractsPanel', () => {
     expect(screen.getByText(/choose from affordable menu options and may order only drinks/)).toBeInTheDocument();
     const card = screen.getByRole('region', { name: 'Office lunch offer' });
     expect(within(card).getByText(/Arrival 3: couple, 2 guests.*rusher.*\$24.*24 game minutes/)).toBeInTheDocument();
-    expect(within(card).getByText(/Day 1, 11:15 AM/)).toBeInTheDocument();
+    expect(within(card).getByText(/Day 1, 11:25 AM/)).toBeInTheDocument();
+    expect(within(card).getByText(/70 game minutes of service/)).toBeInTheDocument();
+    expect(screen.getByText(/100 game minutes of service/)).toBeInTheDocument();
     unmount();
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -62,6 +64,16 @@ describe('ServiceContractsPanel', () => {
     expect(screen.getByRole('status')).not.toHaveTextContent('minutes');
     expect(screen.getByRole('button', { name: 'Review Family service' })).toBeDisabled();
   });
+  it('keeps a loaded v1 deadline visible while current offer cards advertise v2 windows', () => {
+    state = acceptServiceContract(state, { templateId: 'office-lunch' });
+    state.serviceContracts.active = { ...state.serviceContracts.active, rulesVersion: 1, deadlineAt: 40500 };
+    render(<ServiceContractsPanel />);
+    expect(within(screen.getByRole('region', { name: 'Active contract' }))
+      .getByText('Deadline: Day 1, 11:15 AM')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Office lunch offer' }))
+      .getByText(/70 game minutes of service/)).toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
   it('confirms withdrawal, keeps cancellation inert and shows the retained result and daily lock', () => {
     state = acceptServiceContract(state, { templateId: 'office-lunch' });
     const { rerender } = render(<ServiceContractsPanel />);
@@ -89,7 +101,7 @@ describe('ServiceContractsPanel', () => {
   });
   it('leaves overdue loaded contracts to guarded settlement rather than exposing a withdrawal shortcut', () => {
     state = acceptServiceContract(state, { templateId: 'office-lunch' });
-    state = { ...state, paused: true, restaurant: { ...state.restaurant, gameTime: 41000 } };
+    state = { ...state, paused: true, restaurant: { ...state.restaurant, gameTime: 42000 } };
     render(<ServiceContractsPanel />);
     expect(screen.getByRole('button', { name: 'Withdraw contract' })).toBeDisabled();
     expect(screen.getByText('Deadline reached — resume the simulation to settle this contract.')).toBeInTheDocument();
@@ -112,7 +124,7 @@ describe('ServiceContractsPanel', () => {
       });
     }
     const { rerender } = render(<ServiceContractsPanel />);
-    expect(screen.getByText(/Target met — bonus settles at Day 1, 11:15 AM/)).toHaveTextContent('Pending bonus $90; no bonus has been paid yet.');
+    expect(screen.getByText(/Target met — bonus settles at Day 1, 11:25 AM/)).toHaveTextContent('Pending bonus $90; no bonus has been paid yet.');
     expect(screen.getByText('4/4 fulfilled meals')).toBeInTheDocument();
     const announcement = screen.getByRole('status').textContent;
     state = { ...state, restaurant: { ...state.restaurant, gameTime: 37680 } };
