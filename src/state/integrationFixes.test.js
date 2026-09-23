@@ -212,7 +212,7 @@ describe('real-service save boundaries at the original failures', () => {
       contractStatus: report.contractStatus, reloadFacts: report.reloadFacts,
       firstSnapshotMismatch: report.firstSnapshotMismatch, diagnostic: report.diagnostic?.message ?? null }));
     expect(report.status).toBe('completed');
-    expect(report.gameTime).toBe(40500);
+    expect(report.gameTime).toBe(41100);
     expect(report.firstSnapshotMismatch).toBeNull();
     expect(report.reloadFacts).toMatchObject({ at: 36000 + reloadAt, contractLedgerEqual: true, cookbookEqual: true });
     expect(report.reloadFacts.sequenceAfter).toBe(report.reloadFacts.sequenceBefore);

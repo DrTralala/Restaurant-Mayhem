@@ -94,7 +94,7 @@ describe('real career and contract scheduling composition', () => {
     const settle = vi.spyOn(contracts, 'settleServiceContracts');
     const evaluate = vi.spyOn(career, 'evaluateCareerRun');
     const payments = vi.spyOn(revenue, 'calculateRevenue');
-    const state = runTick(contractAt(DEADLINE - 4500), { gameDt: 5000, movementDt: 0 });
+    const state = runTick(contractAt(DEADLINE - 5100), { gameDt: 5600, movementDt: 0 });
     expect(state.restaurant.gameTime).toBe(DEADLINE);
     expect(state.serviceContracts.active).toBe(null);
     expect(state.serviceContracts.results[0]).toMatchObject({ settledAt: DEADLINE, status: 'failed', bonusPaid: 0 });
@@ -105,7 +105,7 @@ describe('real career and contract scheduling composition', () => {
   it('exact-deadline load drains only existing receipts and due ledger results, without service or progression replay', () => {
     vi.spyOn(Math, 'random').mockImplementation(() => { throw new Error('No service on career load finalisation'); });
     const prepare = vi.spyOn(customers, 'prepareCustomersForMovement');
-    const initial = contractAt(DEADLINE - 4500);
+    const initial = contractAt(DEADLINE - 5100);
     const state = { ...initial, restaurant: { ...initial.restaurant, gameTime: DEADLINE },
       completedCustomers: [{ customerId: 'legacy-receipt', revenue: 17 }] };
     const after = runTick(state, { gameDt: 200, movementDt: 1 });
@@ -120,7 +120,7 @@ describe('real career and contract scheduling composition', () => {
     expect(runTick(after, { gameDt: 1, movementDt: 0 })).toBe(after);
   });
   it('overdue career data becomes a non-scoring decision before contract repairs or receipt draining', () => {
-    const initial = contractAt(DEADLINE - 4500);
+    const initial = contractAt(DEADLINE - 5100);
     const state = { ...initial, restaurant: { ...initial.restaurant, gameTime: DEADLINE + 1 },
       completedCustomers: [{ customerId: 'legacy-receipt', revenue: 17 }] };
     const after = runTick(state, { gameDt: 100, movementDt: 0 });

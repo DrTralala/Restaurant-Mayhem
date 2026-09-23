@@ -135,10 +135,10 @@ describe('real contract tick scheduling', () => {
   it('keeps the requested movement budget proportional across every contract split', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     const move = vi.spyOn(movement, 'advanceCharacterMovementBatch');
-    runTick(accepted(), { gameDt: 5000, movementDt: 5 });
+    runTick(accepted(), { gameDt: 5600, movementDt: 5.6 });
     expect(move.mock.calls).toHaveLength(5);
-    [0.9, 0.72, 0.72, 2.16, 0.5].forEach((expected, index) => expect(move.mock.calls[index][2]).toBeCloseTo(expected));
-    expect(move.mock.calls.reduce((sum, args) => sum + args[2], 0)).toBeCloseTo(5);
+    [0.9, 0.72, 0.72, 2.76, 0.5].forEach((expected, index) => expect(move.mock.calls[index][2]).toBeCloseTo(expected));
+    expect(move.mock.calls.reduce((sum, args) => sum + args[2], 0)).toBeCloseTo(5.6);
   });
   it('expires food before the arrival helper sees that endpoint', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
@@ -152,11 +152,11 @@ describe('real contract tick scheduling', () => {
   });
   it('produces the same booking failure ledger for one boundary-spanning tick and its exact segments', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
-    const large = runTick(accepted(), { gameDt: 5000, movementDt: 0 });
+    const large = runTick(accepted(), { gameDt: 5600, movementDt: 0 });
     let segmented = accepted();
-    for (const gameDt of [900, 720, 720, 2160, 500]) segmented = runTick(segmented, { gameDt, movementDt: 0 });
+    for (const gameDt of [900, 720, 720, 2760, 500]) segmented = runTick(segmented, { gameDt, movementDt: 0 });
     expect(segmented.serviceContracts.results).toEqual(large.serviceContracts.results);
-    expect(segmented.restaurant.gameTime).toBe(41000);
+    expect(segmented.restaurant.gameTime).toBe(41600);
   });
   it('admits nothing during preparation, admits exactly once at the wave, and preserves fresh patience', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
@@ -183,10 +183,10 @@ describe('real contract tick scheduling', () => {
   it('processes all waves and deadline in a single large tick without retroactive misses or false success', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     const ticks = vi.spyOn(clock, 'advanceClock'); // call-through: actual simulation runs
-    const state = runTick(accepted(), { gameDt: 5000, movementDt: 0 });
-    expect(ticks.mock.calls.map(([s, dt]) => s.restaurant.gameTime + dt)).toEqual([36900, 37620, 38340, 40500, 41000]);
+    const state = runTick(accepted(), { gameDt: 5600, movementDt: 0 });
+    expect(ticks.mock.calls.map(([s, dt]) => s.restaurant.gameTime + dt)).toEqual([36900, 37620, 38340, 41100, 41600]);
     const result = state.serviceContracts.results[0];
-    expect(result).toMatchObject({ status: 'failed', fulfilledCount: 0, bonusPaid: 0, settledAt: 40500 });
+    expect(result).toMatchObject({ status: 'failed', fulfilledCount: 0, bonusPaid: 0, settledAt: 41100 });
     expect(result.guestResults).toHaveLength(6);
     expect(result.guestResults.every(g => g.status === 'failed' && ['abandoned', 'left_unpaid'].includes(g.reason))).toBe(true);
     expect(state.restaurant.funds).toBe(600);
@@ -222,12 +222,12 @@ describe('real contract tick scheduling', () => {
     expect(state.serviceContracts.active.parties.map(p => p.status)).toEqual(['missed', 'admitted', 'scheduled']);
     expect(state.queue[0].partyId).toBe('sc-1-p2');
   });
-  it.each([40500, 40500.001])('repairs loaded due contracts at %s from the ledger before service', now => {
+  it.each([41100, 41100.001])('repairs loaded due contracts at %s from the ledger before service', now => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     let state = runTick(accepted(), { gameDt: 900, movementDt: 0 });
     state = { ...state, queue: [], queueSlots: [], restaurant: { ...state.restaurant, gameTime: now } };
     const after = runTick(state, { gameDt: 1, movementDt: 0 });
-    expect(after.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'unfinished', reason: 'deadline', resolvedAt: 40500 });
+    expect(after.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'unfinished', reason: 'deadline', resolvedAt: 41100 });
     expect(after.serviceContracts.results[0].guestResults[2]).toMatchObject({ status: 'missed', reason: 'missed_resume', resolvedAt: 37620 });
     expect(runTick(after, { gameDt: 1, movementDt: 0 }).serviceContracts.results).toHaveLength(1);
   });
@@ -241,7 +241,7 @@ describe('real contract tick scheduling', () => {
   });
   it.each([{ paused: true }, { navigationFault: { issues: [] } }, { careerRun: { needsDecision: true } }])('defers entry repairs behind %j', guard => {
     const initial = accepted();
-    const state = { ...initial, ...guard, restaurant: { ...initial.restaurant, gameTime: 41000 } };
+    const state = { ...initial, ...guard, restaurant: { ...initial.restaurant, gameTime: 42000 } };
     expect(runTick(state, { gameDt: 100, movementDt: 1 })).toBe(state);
   });
 });

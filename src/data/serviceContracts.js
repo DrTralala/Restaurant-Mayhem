@@ -1,4 +1,4 @@
-export const SERVICE_CONTRACT_RULES_VERSION = 1;
+export const SERVICE_CONTRACT_RULES_VERSION = 2;
 export const SERVICE_CONTRACT_PREP_SECONDS = 900;
 export const SERVICE_CONTRACT_RESULT_LIMIT = 10;
 
@@ -9,7 +9,7 @@ function freezeTemplate(template) {
 
 // These v1 snapshots are also the save-validation authority. Balance revisions
 // must introduce new rules rather than changing the content of existing saves.
-export const SERVICE_CONTRACTS = Object.freeze([
+const SERVICE_CONTRACTS_V1 = Object.freeze([
   { id: 'office-lunch', title: 'Office lunch', guestLabel: 'Office guest',
     profile: { archetype: 'rusher', spendingTier: 'value', spendingBudget: 24 },
     parties: [0, 720, 1440].map(arrivalOffset => ({ partyType: 'couple', size: 2, arrivalOffset })),
@@ -24,6 +24,16 @@ export const SERVICE_CONTRACTS = Object.freeze([
     serviceDuration: 4200, target: 3, reward: 100 },
 ].map(freezeTemplate));
 
-export function getServiceContractTemplate(templateId) {
-  return SERVICE_CONTRACTS.find(template => template.id === templateId) || null;
+// V2 changes only new offers' service windows. Never overwrite v1 definitions:
+// accepted rosters and historical results still validate against those rules.
+export const SERVICE_CONTRACTS = Object.freeze(SERVICE_CONTRACTS_V1.map(template => freezeTemplate({
+  ...template,
+  serviceDuration: template.id === 'office-lunch' ? 4200
+    : template.id === 'family-service' ? 6000 : template.serviceDuration,
+})));
+
+export function getServiceContractTemplate(templateId, rulesVersion = SERVICE_CONTRACT_RULES_VERSION) {
+  const catalogue = rulesVersion === 1 ? SERVICE_CONTRACTS_V1
+    : rulesVersion === 2 ? SERVICE_CONTRACTS : null;
+  return catalogue?.find(template => template.id === templateId) || null;
 }

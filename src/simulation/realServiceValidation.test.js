@@ -38,7 +38,7 @@ describe('real service release harness', () => {
     expect(state.drinkOverrides.water.price).toBe(100);
     expect(state.staff.map(worker => worker.morale)).toEqual([100, 100, 100, 100, 100]);
     expect(state.tables.map(table => state.chairs.filter(chair => chair.tableId === table.id).length)).toEqual([4, 4, 4, 4]);
-    expect(state.serviceContracts.active).toMatchObject({ acceptedAt: 36000, deadlineAt: 41400, target: 6, reward: 120 });
+    expect(state.serviceContracts.active).toMatchObject({ rulesVersion: 2, acceptedAt: 36000, deadlineAt: 42900, target: 6, reward: 120 });
     expect(state.serviceContracts.active.guests.every(guest => guest.status === 'scheduled')).toBe(true);
   });
   it('has repeatable independent random streams without changing production randomness', () => {

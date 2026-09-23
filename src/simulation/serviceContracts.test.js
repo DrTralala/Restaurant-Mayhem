@@ -61,8 +61,8 @@ describe('offers and immutable acceptance', () => {
     const originalContracts = structuredClone(before.serviceContracts);
     const state = accept(before);
     const active = state.serviceContracts.active;
-    expect(active).toMatchObject({ instanceId: 'sc-1', templateId: 'office-lunch', rulesVersion: 1,
-      acceptedDay: 1, acceptedAt: 36000, serviceStartAt: 36900, deadlineAt: 40500,
+    expect(active).toMatchObject({ instanceId: 'sc-1', templateId: 'office-lunch', rulesVersion: 2,
+      acceptedDay: 1, acceptedAt: 36000, serviceStartAt: 36900, deadlineAt: 41100,
       phase: 'preparing', target: 4, reward: 90 });
     expect(active.parties).toEqual([0, 720, 1440].map((arrivalOffset, i) => ({
       partyId: `sc-1-p${i + 1}`, partyType: 'couple', size: 2, arrivalOffset,
@@ -114,7 +114,7 @@ describe('offers and immutable acceptance', () => {
       queue: Array.from({ length: 8 }, (_, i) => ({ id: `q${i}` })), dishes: [], tables: [], staff: [] };
     const offer = getServiceContractOffer(state, 'family-service');
     expect(offer.canAccept).toBe(true);
-    expect(offer.preview).toMatchObject({ acceptedAt: 36000, serviceStartAt: 36900, deadlineAt: 41400,
+    expect(offer.preview).toMatchObject({ acceptedAt: 36000, serviceStartAt: 36900, deadlineAt: 42900,
       partyArrivals: [36900, 38100] });
     expect(offer.warnings).toEqual(expect.arrayContaining(['closed_at_arrival', 'queue_full',
       'no_affordable_dish', 'no_suitable_table', 'no_cook', 'no_waiter', 'no_staffed_checkout']));
@@ -139,7 +139,7 @@ describe('absolute boundaries and injected admissions', () => {
     expect(state.serviceContracts.active.phase).toBe('service');
     expect(state.serviceContracts.active.guests.map(g => g.status)).toEqual(['pending', 'pending', 'scheduled', 'scheduled', 'scheduled', 'scheduled']);
     expect(advanceServiceContractArrivals(state, 36900, { admitParty: inject })).toBe(state);
-    expect(getNextServiceContractBoundary(state, 36900, 40500)).toBe(37620);
+    expect(getNextServiceContractBoundary(state, 36900, 41100)).toBe(37620);
   });
   it.each(['closed', 'queue_full', 'identity_conflict'])('records a whole-party %s miss once', reason => {
     let state = at(accept(), 36900);
@@ -163,18 +163,18 @@ describe('absolute boundaries and injected admissions', () => {
     let state = arrive(accept());
     state = { ...state, queue: [] };
     const inject = vi.fn(admitParty);
-    const after = advanceServiceContractArrivals(at(state, 41000), 41000, { admitParty: inject });
+    const after = advanceServiceContractArrivals(at(state, 42000), 42000, { admitParty: inject });
     expect(inject).not.toHaveBeenCalled();
     expect(after.serviceContracts.active).toBe(null);
-    expect(after.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'unfinished', resolvedAt: 40500 });
+    expect(after.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'unfinished', resolvedAt: 41100 });
     expect(after.serviceContracts.results[0].guestResults[2]).toMatchObject({ status: 'missed', reason: 'missed_resume', resolvedAt: 37620 });
-    expect(settleServiceContracts(after, 41000)).toBe(after);
+    expect(settleServiceContracts(after, 42000)).toBe(after);
   });
   it('consumes a large interval by exact boundary calls through every wave and deadline', () => {
     let state = accept();
     const inject = vi.fn(admitParty);
     let boundary;
-    while ((boundary = getNextServiceContractBoundary(state, state.restaurant.gameTime, 41000)) !== null) {
+    while ((boundary = getNextServiceContractBoundary(state, state.restaurant.gameTime, 42000)) !== null) {
       state = at(state, boundary);
       state = advanceServiceContractArrivals(state, boundary, { admitParty: inject });
       state = settleServiceContracts(state, boundary);
@@ -203,13 +203,13 @@ describe('canonical payments, reconciliation and settlement', () => {
     const first = saved.queue[0].members[0];
     saved = { ...saved, queue: [], customers: changes ? [{ ...first, ...changes }] : [] };
     const ledger = structuredClone(saved.serviceContracts);
-    for (const now of [40500, 40500.001]) {
+    for (const now of [41100, 41100.001]) {
       const state = at(saved, now);
       expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
       const after = settleServiceContracts(state, now, { entry: true });
       const result = after.serviceContracts.results[0];
       expect(result.guestResults[0]).toEqual({ guestId: 'sc-1-g1', partyId: 'sc-1-p1',
-        status: 'unfinished', reason: 'deadline', paidVisitSequence: null, resolvedAt: 40500 });
+        status: 'unfinished', reason: 'deadline', paidVisitSequence: null, resolvedAt: 41100 });
       expect(result.guestResults[1]).toMatchObject({ status: 'fulfilled_paid', paidVisitSequence: 2, resolvedAt: 36900 });
       expect(result).toMatchObject({ fulfilledCount: 1, bonusPaid: 0, settledAt: now });
       expect(result.guestResults[2]).toMatchObject({ status: 'missed', reason: 'missed_resume', resolvedAt: 37620 });
@@ -226,9 +226,9 @@ describe('canonical payments, reconciliation and settlement', () => {
   ])('still reconciles a %s guest at the ordinary deadline endpoint', (_, changes, reason) => {
     let state = arrive(accept());
     const first = state.queue[0].members[0];
-    state = at({ ...state, queue: [], customers: changes ? [{ ...first, ...changes }] : [] }, 40500);
-    const after = settleServiceContracts(state, 40500);
-    expect(after.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'failed', reason, resolvedAt: 40500 });
+    state = at({ ...state, queue: [], customers: changes ? [{ ...first, ...changes }] : [] }, 41100);
+    const after = settleServiceContracts(state, 41100);
+    expect(after.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'failed', reason, resolvedAt: 41100 });
   });
   it('pays exactly $90 only at the Office deadline for four valid guests; late and replayed facts are inert', () => {
     let state = arrive(accept());
@@ -241,7 +241,7 @@ describe('canonical payments, reconciliation and settlement', () => {
     expect(before.restaurant.funds).toBe(600);
     state = arrive(before, 2);
     const fact = outcome(state, 4);
-    state = settleServiceContracts(at(state, 40500), 40500);
+    state = settleServiceContracts(at(state, 41100), 41100);
     expect(state.restaurant.funds - before.restaurant.funds).toBe(90);
     expect(state.restaurant.dailyRevenue).toBe(90);
     expect(state.restaurant.totalServed).toBe(0);
@@ -254,8 +254,8 @@ describe('canonical payments, reconciliation and settlement', () => {
     expect(state.queue).toHaveLength(3);
   });
   it.each([[-0.001, 'fulfilled_paid'], [0, 'fulfilled_paid'], [0.001, 'pending']])('payment deadline offset %s yields %s', (offset, status) => {
-    const state = at(arrive(accept()), 40500 + offset);
-    const after = paid(state, 0, { paidAt: 40500 + offset });
+    const state = at(arrive(accept()), 41100 + offset);
+    const after = paid(state, 0, { paidAt: 41100 + offset });
     expect(after.serviceContracts.active.guests[0].status).toBe(status);
   });
   it.each([
@@ -338,11 +338,11 @@ describe('canonical payments, reconciliation and settlement', () => {
     const state = { ...arrive(accept()), careerRun: { needsDecision: true }, paidVisitSequence: 1 };
     expect(advanceServiceContractArrivals(state, 37620, { admitParty })).toBe(state);
     expect(recordServiceContractPaidVisit(state, outcome(state, 0))).toBe(state);
-    expect(settleServiceContracts(state, 40500)).toBe(state);
+    expect(settleServiceContracts(state, 41100)).toBe(state);
     expect(withdrawServiceContract(state, { instanceId: 'sc-1' })).toBe(state);
   });
   it('does not use a stale withdrawal to bypass guarded settlement of an expired paused save', () => {
-    const state = { ...at(accept(), 41000), paused: true };
+    const state = { ...at(accept(), 42000), paused: true };
     expect(withdrawServiceContract(state, { instanceId: 'sc-1' })).toBe(state);
   });
   it('leaves exact-deadline endpoint settlement until after synchronous checkout', () => {
@@ -350,15 +350,15 @@ describe('canonical payments, reconciliation and settlement', () => {
     state = paid(paid(state, 0), 1);
     state = arrive(state, 1);
     state = paid(state, 2);
-    state = at(state, 40500);
-    state = advanceServiceContractArrivals(state, 40500, { admitParty });
+    state = at(state, 41100);
+    state = advanceServiceContractArrivals(state, 41100, { admitParty });
     expect(state.serviceContracts.active).not.toBe(null);
     state = paid(state, 3);
-    state = settleServiceContracts(state, 40500);
+    state = settleServiceContracts(state, 41100);
     expect(state.serviceContracts.results[0]).toMatchObject({ status: 'succeeded', bonusPaid: 90 });
   });
   it('adds a midnight bonus to the new day after ordinary payroll, even with negative funds', () => {
-    let state = arrive(accept(at(createInitialState(), 81900)));
+    let state = arrive(accept(at(createInitialState(), 81300)));
     state = paid(paid(state, 0), 1);
     state = arrive(state, 1);
     state = paid(paid(state, 2), 3);
@@ -386,7 +386,7 @@ describe('strict save branch validation', () => {
       expect(advanceServiceContractArrivals(state, 36900, { admitParty: inject })).toBe(state);
       expect(inject).toHaveBeenCalledTimes(1);
     }
-    if (phase === 'retained missed result') state = settleServiceContracts(at(state, 40500), 40500, { entry: true });
+    if (phase === 'retained missed result') state = settleServiceContracts(at(state, 41100), 41100, { entry: true });
     expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
     expect(state.customers).toBe(before.customers);
     expect(state.customers[0]).toBe(customer);
@@ -420,7 +420,7 @@ describe('strict save branch validation', () => {
     expect(() => validateServiceContractsState(undefined, createInitialState())).not.toThrow();
     expect(hydrateServiceContractsState(undefined)).toEqual(createServiceContractsState());
     let state = accept();
-    for (const transition of [s => s, arrive, s => paid(s, 0), s => settleServiceContracts(at(s, 40500), 40500)]) {
+    for (const transition of [s => s, arrive, s => paid(s, 0), s => settleServiceContracts(at(s, 41100), 41100)]) {
       state = transition(state);
       expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
       expect(hydrateServiceContractsState(state.serviceContracts)).toEqual(state.serviceContracts);
@@ -429,7 +429,7 @@ describe('strict save branch validation', () => {
   it.each([
     s => { s.version = 2; }, s => { s.nextInstanceSerial = 1; },
     s => { s.lastAcceptedDayByTemplate.fake = 1; }, s => { s.lastAcceptedDayByTemplate['office-lunch'] = 2; },
-    s => { s.active.templateId = 'fake'; }, s => { s.active.rulesVersion = 2; },
+    s => { s.active.templateId = 'fake'; }, s => { s.active.rulesVersion = 3; },
     s => { s.active.target = 1; }, s => { s.active.reward = 999; },
     s => { s.active.deadlineAt++; }, s => { s.active.serviceStartAt++; },
     s => { s.active.acceptedAt = Infinity; }, s => { s.active.acceptedDay = 2; },
@@ -453,7 +453,7 @@ describe('strict save branch validation', () => {
     expect(() => validateServiceContractsState(state.serviceContracts, { ...state, paidVisitSequence: 1 })).toThrow();
     const badActors = { ...state, queue: state.queue.map(p => ({ ...p, members: p.members.map(m => ({ ...m, spendingBudget: 999 })) })) };
     expect(() => validateServiceContractsState(state.serviceContracts, badActors)).toThrow();
-    state = settleServiceContracts(at(state, 40500), 40500);
+    state = settleServiceContracts(at(state, 41100), 41100);
     for (const change of [{ fulfilledCount: 4 }, { bonusPaid: 90 }, { status: 'succeeded' }, { settledAt: 36900 }]) {
       const branch = structuredClone(state.serviceContracts);
       Object.assign(branch.results[0], change);
@@ -469,7 +469,7 @@ describe('strict save branch validation', () => {
     [null, 'live payment marker'], [undefined, 'live payment marker'],
     [2, 'live payment marker'], [1, 'live guest identity/profile'],
   ])('retained paid guest with stripped tags still validates ownership and marker %s', (paidVisitSequence, error) => {
-    let state = settleServiceContracts(at(paid(arrive(accept()), 0), 40500), 40500);
+    let state = settleServiceContracts(at(paid(arrive(accept()), 0), 41100), 41100);
     state = { ...state, paidVisitSequence: 2 };
     expect(state.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'fulfilled_paid', paidVisitSequence: 1 });
     expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
@@ -484,7 +484,7 @@ describe('strict save branch validation', () => {
         members: party.members.map((member, i) => i === 0 ? { ...member, foodOutcome: 'cancelled' } : member) })) };
       state = settleServiceContracts(state, 36900);
     } else if (status === 'not_fulfilled') state = paid(state, 0, { dish: null, foodOutcome: 'none' });
-    state = settleServiceContracts(at(state, 40500), 40500);
+    state = settleServiceContracts(at(state, 41100), 41100);
     expect(state.serviceContracts.results[0].guestResults[0].status).toBe(status);
     expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
     const queue = state.queue.map(party => ({ ...party, members: party.members.map((member, i) => i === 0

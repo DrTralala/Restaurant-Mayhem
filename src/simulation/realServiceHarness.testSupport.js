@@ -213,6 +213,7 @@ export function runRealService({ mode = 'contract', templateId = 'office-lunch',
     mode, templateId: mode === 'contract' ? templateId : null, seed, strategy, gameStep, movementRatio: 60,
     status, navigationFault: state.navigationFault ?? null, ticks, wallMs: Math.round(performance.now() - startedWall),
     startedAt, endAt, gameTime: state.restaurant.gameTime,
+    rulesVersion: result?.rulesVersion ?? state.serviceContracts.active?.rulesVersion ?? null,
     contractStatus: result?.status ?? null, fulfilled: result?.fulfilledCount
       ?? state.serviceContracts.active?.guests.filter(g => g.status === 'fulfilled_paid').length ?? null,
     target: result?.target ?? state.serviceContracts.active?.target ?? null, bonus: result?.bonusPaid ?? 0, breakdown,
