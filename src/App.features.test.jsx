@@ -64,7 +64,7 @@ describe('shared feature UI routes', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Accept and start preparation' }));
     expect(screen.getByRole('button', { name: 'View contracts' })).toBeInTheDocument();
   });
-  it('keeps the decision gated while Settings replaces the focus trap, then Continue restores entry focus', () => {
+  it.each(['Escape', 'Settings toggle'])('keeps one Settings focus owner and restores the pending result via %s', closeRoute => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(<App />);
     startCareer();
@@ -72,15 +72,27 @@ describe('shared feature UI routes', () => {
     let dialog = screen.getByRole('dialog', { name: 'Opening Week target missed' });
     expect(screen.getByTestId('canvas').parentElement).toHaveAttribute('inert');
     expect(screen.getByRole('button', { name: 'Pause game' })).toBeDisabled();
+    const terminalSave = localStorage.getItem('restaurant-sim-save');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Settings' }));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Opening Week target missed' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Load game' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save game' })).toHaveFocus();
     expect(screen.getByTestId('run-status')).toHaveTextContent('lost');
     expect(screen.getByTestId('canvas').parentElement).toHaveAttribute('inert');
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    screen.getByRole('button', { name: 'New game' }).focus();
+    fireEvent.keyDown(document.activeElement, { key: 'Tab' });
+    expect(screen.getByRole('button', { name: 'Save game' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: 'Tab', shiftKey: true });
+    expect(screen.getByRole('button', { name: 'New game' })).toHaveFocus();
+    if (closeRoute === 'Escape') fireEvent.keyDown(document.activeElement, { key: 'Escape' });
+    else fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAccessibleName('Opening Week target missed');
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect(within(dialog).getByRole('heading')).toHaveFocus();
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(terminalSave);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Continue as sandbox' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByTestId('run-status')).toHaveTextContent('continued');
