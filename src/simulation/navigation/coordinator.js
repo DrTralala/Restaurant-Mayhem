@@ -6,6 +6,7 @@ import { actionsConflict, positionAt } from './reservations';
 import { arbitrateDestinations, orderTrafficRequests } from './traffic';
 import { chooseRecoveries } from './recovery';
 import { createActorGrid, commitActorPosition } from './domainGrid';
+import { CHARACTER_CLEARANCE } from './destinations';
 import { stationaryTrajectory, trajectorySegment } from '../movement/trajectory';
 import { noteNavigation } from './telemetry';
 import { getQueueVisibleMembers } from '../customerQueue';
@@ -19,8 +20,119 @@ const samePoint = (a, b) => a && b && a.x === b.x && a.y === b.y;
 const copyPoint = point => ({ x: point.x, y: point.y });
 const hold = (point, horizon) => [{ from: copyPoint(point), to: copyPoint(point), start: 0, end: horizon }];
 
+function pairKey(left, right) {
+  const ids = [String(left), String(right)].sort();
+  return `${ids[0]}\u0000${ids[1]}`;
+}
+
+function pairIds(key) {
+  return key.split('\u0000');
+}
+
+function movementRequestCanYield(request) {
+  return Boolean(request?.goal && request.speed > 0 && !request.checkoutAdvance);
+}
+
+function goalsConverge(left, right) {
+  const separation = { x: right.start.x - left.start.x, y: right.start.y - left.start.y };
+  const separationLength = Math.hypot(separation.x, separation.y);
+  const leftDirection = { x: left.goal.x - left.start.x, y: left.goal.y - left.start.y };
+  const rightDirection = { x: right.goal.x - right.start.x, y: right.goal.y - right.start.y };
+  const leftCross = leftDirection.x * separation.y - leftDirection.y * separation.x;
+  const rightCross = rightDirection.x * separation.y - rightDirection.y * separation.x;
+  const leftApproach = (leftDirection.x * separation.x + leftDirection.y * separation.y) / separationLength;
+  const rightApproach = (rightDirection.x * separation.x + rightDirection.y * separation.y) / separationLength;
+  // Only coordinate when intended travel would enter the clearance margin;
+  // actors whose goals leave a safe stopping gap do not need to pass.
+  return separationLength > 0 && leftApproach > 0 && rightApproach < 0
+    && leftCross === 0 && rightCross === 0
+    && leftApproach - rightApproach > separationLength - CHARACTER_CLEARANCE;
+}
+
+function collectTrafficEdges(requests, statuses) {
+  const edges = new Map();
+  for (const [id, status] of statuses) {
+    const request = requests.get(id);
+    if (!movementRequestCanYield(request) || status?.reason !== 'traffic') continue;
+    for (const otherId of status.blockers || []) {
+      const other = requests.get(otherId);
+      if (!movementRequestCanYield(other) || otherId === id) continue;
+      const key = pairKey(id, otherId);
+      edges.set(key, edges.get(key) || { ids: pairIds(key) });
+    }
+  }
+  return edges;
+}
+
+function goalsMatch(evidence, requests) {
+  return evidence.ids.every(id => samePoint(evidence.goals.get(id), requests.get(id)?.goal));
+}
+
+function isolatedConflict(evidence, conflicts, statuses) {
+  const ids = new Set(evidence.ids);
+  const related = [...conflicts.values()].filter(other => other.ids.some(id => ids.has(id)));
+  const hasTrafficEdge = evidence.ids.some((id, index) =>
+    statuses.get(id)?.reason === 'traffic'
+      && (statuses.get(id)?.blockers || []).includes(evidence.ids[1 - index]));
+  return related.length === 1 && hasTrafficEdge && evidence.ids.every(id =>
+    (statuses.get(id)?.blockers || []).every(blocker => ids.has(blocker)));
+}
+
+function updateTrafficConflicts(requests, statuses, moved) {
+  const currentEdges = collectTrafficEdges(requests, statuses);
+  const next = new Map();
+
+  for (const [key] of currentEdges) {
+    const ids = pairIds(key);
+    const left = requests.get(ids[0]);
+    const right = requests.get(ids[1]);
+    if (!movementRequestCanYield(left) || !movementRequestCanYield(right)) continue;
+    if (!goalsConverge(left, right)) continue;
+    const leftPosition = moved.get(ids[0]) || left;
+    const rightPosition = moved.get(ids[1]) || right;
+    if (samePoint(leftPosition, left.goal) || samePoint(rightPosition, right.goal)
+      || statuses.get(ids[0])?.plan === 'arrived' || statuses.get(ids[1])?.plan === 'arrived') continue;
+    const goals = new Map([[ids[0], copyPoint(left.goal)], [ids[1], copyPoint(right.goal)]]);
+    next.set(key, {
+      ids,
+      goals,
+    });
+  }
+  return next;
+}
+
+function trafficRecoveryInputs(requests, statuses, conflicts, movementDt) {
+  const recoveryRequests = new Map(requests);
+  const recoveryStatuses = new Map(statuses);
+  for (const evidence of conflicts instanceof Map ? conflicts.values() : []) {
+    if (!isolatedConflict(evidence, conflicts, statuses)) continue;
+    const [leftId, rightId] = evidence.ids;
+    const left = requests.get(leftId);
+    const right = requests.get(rightId);
+    if (!movementRequestCanYield(left) || !movementRequestCanYield(right)) continue;
+    if (!goalsMatch(evidence, requests)) continue;
+    if (!goalsConverge(left, right)
+      || samePoint(left.start, left.goal) || samePoint(right.start, right.goal)
+      || Math.hypot(left.start.x - left.goal.x, left.start.y - left.goal.y) <= left.speed * movementDt + 1e-9
+      || Math.hypot(right.start.x - right.goal.x, right.start.y - right.goal.y) <= right.speed * movementDt + 1e-9) continue;
+    for (const [request, peer] of [[left, right], [right, left]]) {
+      recoveryRequests.set(request.id, {
+        ...request,
+        temporaryYield: true,
+      });
+      const prior = recoveryStatuses.get(request.id) || { blockers: [], motion: 'holding', plan: 'waiting' };
+      recoveryStatuses.set(request.id, {
+        ...prior,
+        motion: 'holding',
+        blockers: [...new Set([...(prior.blockers || []), peer.id])].sort(),
+      });
+    }
+  }
+  return { requests: recoveryRequests, statuses: recoveryStatuses };
+}
+
 export function createMovementCoordinator() {
-  return { version: 1, tick: 0, elapsedMovementSeconds: 0, requests: new Map(), statuses: new Map(), claims: new Map(),
+  return { version: 1, tick: 0, elapsedMovementSeconds: 0, requests: new Map(), statuses: new Map(), claims: new Map(), conflicts: new Map(),
     records: new Map(), plans: new Map(), diagnostics: { expansionsThisTick: 0 } };
 }
 
@@ -157,8 +269,9 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
   const baseGrid = createGrid(state);
   const requests = normalise(state, entries, previous);
   next.requests = requests;
-  const recoveryResult = chooseRecoveries({ requests, records: previous.records,
-    statuses: previous.statuses, grid: baseGrid,
+  const recoveryInputs = trafficRecoveryInputs(requests, previous.statuses, previous.conflicts, dt);
+  const recoveryResult = chooseRecoveries({ requests: recoveryInputs.requests, records: previous.records,
+    statuses: recoveryInputs.statuses, grid: baseGrid,
     gridFor: request => createActorGrid(state, request.character, baseGrid, request.doorFlow),
     budget: 512 });
   const effectiveGoal = request => request.checkoutAdvance
@@ -308,6 +421,7 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
     trajectories.set(id, trajectory(actions, dt, character));
     if (metrics) executorMilliseconds += performance.now() - executorStarted;
   }
+  next.conflicts = updateTrafficConflicts(requests, next.statuses, moved);
   next.diagnostics = diagnostics;
   if (metrics) {
     const elapsed = performance.now() - batchStarted;

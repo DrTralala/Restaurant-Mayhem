@@ -190,6 +190,192 @@ describe('bounded traffic coordinator', () => {
     expect(state.staff[1]).toMatchObject({ x: 400, y: 300 });
   });
 
+  it('uses immediate mutual obstruction evidence to yield before the measured oscillation', () => {
+    let state = world([actor('a', 400, 300, { x: 580, y: 300 }), actor('b', 580, 300, { x: 400, y: 300 })]);
+    state.chairs = [];
+    for (let x = 60; x <= 1020; x += 20) {
+      for (const y of [260, 280, 320]) {
+        if (x === 420 && y === 280) continue;
+        state.chairs.push({ id: `${x}:${y}`, x, y });
+      }
+    }
+    state.chairs.push({ id: 'left-end', x: 380, y: 300 }, { id: 'right-end', x: 600, y: 300 });
+
+    let firstBayTick = null;
+    let firstRecoveryTick = null;
+    let arrivalTick = null;
+    let sawRecovery = false;
+    let recoveryEpisodes = 0;
+    let recovering = false;
+    const recoveryActors = new Set();
+    let minimumSeparation = Infinity;
+    for (let tickNumber = 1; tickNumber <= 450; tickNumber += 1) {
+      const result = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
+      expect(result.diagnostics.expansionsThisTick).toBeLessThanOrEqual(2048);
+      const staff = state.staff.map(worker => result.moved.get(worker.id) || worker);
+      minimumSeparation = Math.min(minimumSeparation,
+        Math.hypot(staff[0].x - staff[1].x, staff[0].y - staff[1].y),
+        minimumTrajectoryDistance(result.trajectories.get('a'), result.trajectories.get('b')));
+      if (firstBayTick === null && staff.some(worker => worker.y < 300)) firstBayTick = tickNumber;
+      if (firstRecoveryTick === null && result.diagnostics.recoveries.size > 0) {
+        firstRecoveryTick = tickNumber;
+      }
+      sawRecovery ||= result.diagnostics.recoveries.size > 0;
+      for (const id of result.diagnostics.recoveries.keys()) recoveryActors.add(id);
+      const nextRecovering = result.diagnostics.recoveries.size > 0;
+      if (nextRecovering && !recovering) recoveryEpisodes += 1;
+      recovering = nextRecovering;
+      state = { ...state, staff, movementCoordinator: result.coordinator };
+      if (state.staff.every(worker => worker.x === worker.navigationGoal.x
+        && worker.y === worker.navigationGoal.y)) {
+        arrivalTick = tickNumber;
+        break;
+      }
+    }
+
+    expect(firstBayTick).toBeLessThanOrEqual(30);
+    expect(firstRecoveryTick).toBeLessThan(74);
+    expect(recoveryEpisodes).toBe(1);
+    expect([...recoveryActors]).toEqual(['a']);
+    // The only clear bay is 20px off the lane. Keeping it reserved until the
+    // peer clears the 16px swept-clearance margin makes 180 ticks the geometry
+    // bound for this fixture; the earlier bay decision is the regression target.
+    expect(arrivalTick).toBeLessThanOrEqual(180);
+    expect(sawRecovery).toBe(true);
+    expect(minimumSeparation).toBeGreaterThanOrEqual(16 - 1e-9);
+  });
+
+  it('does not yield when converging actors can stop with clearance before passing', () => {
+    const coordinator = createMovementCoordinator();
+    coordinator.statuses = new Map([
+      ['a', { blockers: ['b'], motion: 'holding', plan: 'waiting', reason: 'traffic' }],
+      ['b', { blockers: ['a'], motion: 'holding', plan: 'waiting', reason: 'traffic' }],
+    ]);
+    coordinator.conflicts.set('a\u0000b', {
+      ids: ['a', 'b'],
+      goals: new Map([['a', { x: 480, y: 300 }], ['b', { x: 500, y: 300 }]]),
+    });
+    const state = {
+      ...world([actor('a', 400, 300, { x: 480, y: 300 }), actor('b', 580, 300, { x: 500, y: 300 })]),
+      movementCoordinator: coordinator,
+    };
+
+    const result = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
+
+    expect(result.diagnostics.recoveries.size).toBe(0);
+  });
+
+  it('does not create conflict evidence for productive open movement', () => {
+    let state = world([actor('worker', 400, 300, { x: 500, y: 300 })]);
+    for (let tickNumber = 0; tickNumber < 60; tickNumber += 1) {
+      const result = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
+      expect(result.diagnostics.recoveries.size).toBe(0);
+      expect(result.coordinator.conflicts.size).toBe(0);
+      state = {
+        ...state,
+        staff: state.staff.map(worker => result.moved.get(worker.id) || worker),
+        movementCoordinator: result.coordinator,
+      };
+    }
+    expect(state.staff[0]).toMatchObject({ x: 500, y: 300 });
+  });
+
+  it('does not grant an early yield to productive same-direction traffic', () => {
+    let state = world([actor('leader', 400, 300, { x: 580, y: 300 }), actor('follower', 420, 300, { x: 600, y: 300 })]);
+    let recoveries = 0;
+    for (let tickNumber = 0; tickNumber < 120; tickNumber += 1) {
+      const result = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
+      recoveries += result.diagnostics.recoveries.size;
+      state = {
+        ...state,
+        staff: state.staff.map(worker => result.moved.get(worker.id) || worker),
+        movementCoordinator: result.coordinator,
+      };
+    }
+    expect(recoveries).toBe(0);
+    expect(state.staff).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'leader', x: 580, y: 300 }),
+      expect.objectContaining({ id: 'follower', x: 600, y: 300 }),
+    ]));
+  });
+
+  it('clears conflict evidence when goals now produce productive same-direction movement', () => {
+    const coordinator = createMovementCoordinator();
+    coordinator.conflicts.set('a\u0000b', {
+      ids: ['a', 'b'],
+      goals: new Map([['a', { x: 500, y: 300 }], ['b', { x: 524, y: 300 }]]),
+    });
+    let state = {
+      ...world([actor('a', 400, 300, { x: 500, y: 300 }), actor('b', 424, 300, { x: 524, y: 300 })]),
+      movementCoordinator: coordinator,
+    };
+
+    const result = advanceCharacterMovementBatch(state, entries(state), 0);
+
+    expect(result.coordinator.conflicts.size).toBe(0);
+    expect(result.diagnostics.recoveries.size).toBe(0);
+  });
+
+  it('clears converging conflict evidence after traffic disappears', () => {
+    const coordinator = createMovementCoordinator();
+    coordinator.conflicts.set('a\u0000b', {
+      ids: ['a', 'b'],
+      goals: new Map([['a', { x: 500, y: 300 }], ['b', { x: 400, y: 300 }]]),
+    });
+    const state = {
+      ...world([actor('a', 400, 300, { x: 500, y: 300 }), actor('b', 424, 300, { x: 400, y: 300 })]),
+      movementCoordinator: coordinator,
+    };
+
+    const result = advanceCharacterMovementBatch(state, entries(state), 0);
+
+    expect(result.coordinator.conflicts.size).toBe(0);
+    expect(result.diagnostics.recoveries.size).toBe(0);
+  });
+
+  it('clears conflict evidence when a goal changes or the pair separates', () => {
+    const makeCoordinator = () => {
+      const coordinator = createMovementCoordinator();
+      coordinator.conflicts.set('a\u0000b', {
+        ids: ['a', 'b'],
+        goals: new Map([['a', { x: 500, y: 300 }], ['b', { x: 400, y: 300 }]]),
+      });
+      return coordinator;
+    };
+    const changedGoal = {
+      ...world([actor('a', 400, 300, { x: 520, y: 300 }), actor('b', 424, 300, { x: 400, y: 300 })]),
+      movementCoordinator: makeCoordinator(),
+    };
+    const separated = {
+      ...world([actor('a', 400, 300, { x: 500, y: 300 }), actor('b', 460, 300, { x: 400, y: 300 })]),
+      movementCoordinator: makeCoordinator(),
+    };
+
+    const changedResult = advanceCharacterMovementBatch(changedGoal, entries(changedGoal), 0);
+    const separatedResult = advanceCharacterMovementBatch(separated, entries(separated), 0);
+    expect(changedResult.coordinator.conflicts.size).toBe(0);
+    expect(changedResult.diagnostics.recoveries.size).toBe(0);
+    expect(separatedResult.coordinator.conflicts.size).toBe(0);
+    expect(separatedResult.diagnostics.recoveries.size).toBe(0);
+  });
+
+  it('clears conflict evidence when an actor reaches its goal', () => {
+    const coordinator = createMovementCoordinator();
+    coordinator.conflicts.set('a\u0000b', {
+      ids: ['a', 'b'],
+      goals: new Map([['a', { x: 402, y: 300 }], ['b', { x: 400, y: 300 }]]),
+    });
+    const state = {
+      ...world([actor('a', 400, 300, { x: 402, y: 300 }), actor('b', 424, 300, { x: 400, y: 300 })]),
+      movementCoordinator: coordinator,
+    };
+
+    const result = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
+
+    expect(result.coordinator.conflicts.size).toBe(0);
+    expect(result.diagnostics.recoveries.size).toBe(0);
+  });
+
   it('follows a long static detour even when it initially increases distance to the goal', () => {
     let state = world([actor('worker', 400, 300, { x: 500, y: 300 })]);
     state.tables = Array.from({ length: 11 }, (_, index) => ({ id: `wall-${index}`, x: 440, y: 100 + index * 40 }));
@@ -267,6 +453,7 @@ describe('bounded traffic coordinator', () => {
       const result = advanceCharacterMovementBatch(state, checkoutEntries(state), 1 / 30);
       expect(result.moved.get('next').x).toBe(840);
       expect(result.coordinator.diagnostics.recoveries.has('next')).toBe(false);
+      expect(result.coordinator.conflicts.size).toBe(0);
       state = {
         ...state,
         customers: state.customers.map(customer => result.moved.get(customer.id)),

@@ -22,6 +22,8 @@ function passedConflict(peer, current, origin) {
   return length > 0 && ((current.start.x - origin.x) * dx + (current.start.y - origin.y) * dy) / length >= 16;
 }
 
+const cycleEligible = request => request?.temporaryYield === true || (request?.waitingTicks || 0) >= 8;
+
 function cycles(requests, statuses) {
   const groups = [];
   const indices = new Map();
@@ -35,7 +37,7 @@ function cycles(requests, statuses) {
     stack.push(id);
     active.add(id);
     for (const other of statuses.get(id)?.blockers || []) {
-      if (!requests.has(other) || (requests.get(other).waitingTicks || 0) < 8) continue;
+      if (!requests.has(other) || !cycleEligible(requests.get(other))) continue;
       if (!indices.has(other)) {
         visit(other);
         low.set(id, Math.min(low.get(id), low.get(other)));
@@ -48,7 +50,7 @@ function cycles(requests, statuses) {
     if (group.length > 1) groups.push(group.sort());
   };
   for (const id of [...requests.keys()].sort()) {
-    if (requests.get(id).waitingTicks >= 8 && !indices.has(id)) visit(id);
+    if (cycleEligible(requests.get(id)) && !indices.has(id)) visit(id);
   }
   return groups;
 }
@@ -64,7 +66,10 @@ export function chooseRecoveries({ requests, records, statuses, grid, gridFor = 
       const current = requests.get(peer.id);
       return current?.goal && samePoint(current.goal, peer.goal) && !samePoint(current.start, current.goal)
         && !current.checkoutAdvance
-        && !passedConflict(peer, current, old.recovery.origin);
+        && (old.recovery.release
+          ? !samePoint(request.start, old.recovery.goal)
+            || !passedConflict(peer, current, old.recovery.release)
+          : !passedConflict(peer, current, old.recovery.origin));
     });
     if (outstanding.length) recoveries.set(id, { ...old.recovery, peers: outstanding });
   }
@@ -120,12 +125,19 @@ export function chooseRecoveries({ requests, records, statuses, grid, gridFor = 
         let length = 0;
         let previous = request.start;
         for (const step of route.points) { length += distance(previous, step); previous = step; }
-        if (!best || length < best.length) best = { id, length, goal: point, origin: { ...request.start },
-          peers: peers.map(peer => ({ id: peer.id, start: { ...peer.start }, goal: { ...peer.goal } })) };
+        if (!best || length < best.length) {
+          best = { id, length, goal: point, origin: { ...request.start },
+            peers: peers.map(peer => ({ id: peer.id, start: { ...peer.start }, goal: { ...peer.goal } })) };
+          if (request.temporaryYield) best.release = { ...point };
+        }
         break;
       }
     }
-    if (best) recoveries.set(best.id, { goal: best.goal, origin: best.origin, peers: best.peers });
+    if (best) {
+      const recovery = { goal: best.goal, origin: best.origin, peers: best.peers };
+      if (best.release) recovery.release = best.release;
+      recoveries.set(best.id, recovery);
+    }
   }
   return { recoveries, expansions };
 }
