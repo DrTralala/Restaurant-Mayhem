@@ -30,7 +30,7 @@ describe('real service release harness', () => {
   it('prepares compact capacity through accepted affordable actions without awarding progress', () => {
     const { state, actions } = createServiceFixture({ strategy: 'compact-capacity', templateId: 'family-service' });
     expect(actions.every(action => action.applied)).toBe(true);
-    expect(state.restaurant.funds).toBe(50);
+    expect(state.restaurant.funds).toBe(80);
     expect(state.restaurant.gameTime).toBe(36000);
     expect(state.restaurant.reputation).toBe(1);
     expect(state.paidVisitSequence).toBe(0);
@@ -38,7 +38,7 @@ describe('real service release harness', () => {
     expect(state.drinkOverrides.water.price).toBe(100);
     expect(state.staff.map(worker => worker.morale)).toEqual([100, 100, 100, 100, 100]);
     expect(state.tables.map(table => state.chairs.filter(chair => chair.tableId === table.id).length)).toEqual([4, 4, 4, 4]);
-    expect(state.serviceContracts.active).toMatchObject({ rulesVersion: 2, acceptedAt: 36000, deadlineAt: 42900, target: 6, reward: 120 });
+    expect(state.serviceContracts.active).toMatchObject({ rulesVersion: 3, acceptedAt: 36000, deadlineAt: 42900, target: 6, reward: 120, depositPaid: 30 });
     expect(state.serviceContracts.active.guests.every(guest => guest.status === 'scheduled')).toBe(true);
   });
   it('has repeatable independent random streams without changing production randomness', () => {
@@ -50,6 +50,11 @@ describe('real service release harness', () => {
     expect(a).not.toEqual(Array.from({ length: 20 }, other));
     expect(a.every(n => n >= 0 && n < 1)).toBe(true);
   });
+  it('excludes the acceptance advance from ordinary service revenue', async () => {
+    const { report } = await execute({ seed: 1, templateId: 'party-rush', duration: 0 });
+    expect(report.ordinaryRevenue).toBe(0);
+    expect(report.contractCash).toBe(45);
+  });
   it.skipIf(mode !== 'profile')('profiles one native fixed-step starter service before long studies', async () => {
     const { report } = await execute({ seed: Number(process.env.REAL_SERVICE_SEED || 1),
       templateId: process.env.REAL_SERVICE_TEMPLATE || 'office-lunch',
@@ -58,6 +63,23 @@ describe('real service release harness', () => {
     expect(report.status).toBe('completed');
     expect(report.gameTime).toBe(report.endAt);
   }, 40000);
+  it.skipIf(process.env.PARTY_RUSH_BALANCE !== '1')('balances Party rush over five prepared and five starter real-service streams', async () => {
+    const reports = [];
+    for (const strategy of ['compact-service', 'starter']) {
+      for (let seed = 1; seed <= 5; seed++) {
+        const { report } = await execute({ seed, templateId: 'party-rush', strategy, maxWallMs: 30000 });
+        reports.push(report);
+        console.info('PARTY_RUSH_BALANCE', JSON.stringify(compact(report)));
+        expect(report.status).toBe('completed');
+        expect(report.rulesVersion).toBe(3);
+        expect(report.firstSnapshotMismatch).toBeNull();
+        expect(report.ordinaryRevenue).toBeGreaterThanOrEqual(0);
+        expect(report.contractCash).toBe(report.contractStatus === 'succeeded' ? 180 : -90);
+      }
+    }
+    expect(reports.filter(r => r.strategy === 'compact-service' && r.contractStatus === 'succeeded').length).toBeGreaterThanOrEqual(4);
+    expect(reports.filter(r => r.strategy === 'starter' && r.contractStatus === 'failed').length).toBeGreaterThanOrEqual(3);
+  }, 330000);
   it.skipIf(!['career-profile', 'career-stream'].includes(mode))('profiles a complete seven-day legal career strategy', async () => {
     const { report } = await execute({ mode: 'career', seed: Number(process.env.REAL_SERVICE_SEED || 1),
       strategy: requestedStrategy || 'compact-capacity', maxWallMs: careerWallMs });

@@ -56,12 +56,12 @@ describe('offers and immutable acceptance', () => {
     expect(state.serviceContracts).toBeUndefined();
     expect(random).not.toHaveBeenCalled();
   });
-  it('snapshots all Office profiles and IDs, without funds or physical actor changes', () => {
+  it('snapshots all Office profiles and IDs, crediting only the advance without physical actor changes', () => {
     const before = createInitialState();
     const originalContracts = structuredClone(before.serviceContracts);
     const state = accept(before);
     const active = state.serviceContracts.active;
-    expect(active).toMatchObject({ instanceId: 'sc-1', templateId: 'office-lunch', rulesVersion: 2,
+    expect(active).toMatchObject({ instanceId: 'sc-1', templateId: 'office-lunch', rulesVersion: 3, depositPaid: 22.5,
       acceptedDay: 1, acceptedAt: 36000, serviceStartAt: 36900, deadlineAt: 41100,
       phase: 'preparing', target: 4, reward: 90 });
     expect(active.parties).toEqual([0, 720, 1440].map((arrivalOffset, i) => ({
@@ -75,7 +75,7 @@ describe('offers and immutable acceptance', () => {
       spendingTier: 'value', spendingBudget: 24, status: 'scheduled', reason: null,
       paidVisitSequence: null, resolvedAt: null,
     })));
-    expect(state.restaurant).toBe(before.restaurant);
+    expect(state.restaurant).toEqual({ ...before.restaurant, funds: 622.5, dailyRevenue: 22.5 });
     expect(state.queue).toBe(before.queue);
     expect(before.serviceContracts).toEqual(originalContracts);
     expect(state.serviceContracts).not.toBe(before.serviceContracts);
@@ -118,7 +118,7 @@ describe('offers and immutable acceptance', () => {
       partyArrivals: [36900, 38100] });
     expect(offer.warnings).toEqual(expect.arrayContaining(['closed_at_arrival', 'queue_full',
       'no_affordable_dish', 'no_suitable_table', 'no_cook', 'no_waiter', 'no_staffed_checkout']));
-    expect(accept(state, 'family-service').restaurant.funds).toBe(-500);
+    expect(accept(state, 'family-service').restaurant.funds).toBe(-470);
   });
 });
 
@@ -230,7 +230,7 @@ describe('canonical payments, reconciliation and settlement', () => {
     const after = settleServiceContracts(state, 41100);
     expect(after.serviceContracts.results[0].guestResults[0]).toMatchObject({ status: 'failed', reason, resolvedAt: 41100 });
   });
-  it('pays exactly $90 only at the Office deadline for four valid guests; late and replayed facts are inert', () => {
+  it('pays the remaining $67.50 at the Office deadline for four valid guests; late and replayed facts are inert', () => {
     let state = arrive(accept());
     state = paid(paid(state, 0), 1);
     state = arrive(state, 1);
@@ -238,14 +238,16 @@ describe('canonical payments, reconciliation and settlement', () => {
     expect(state.serviceContracts.active.guests).toHaveLength(6);
     expect(selectServiceContractView(state).active).toMatchObject({ fulfilledCount: 4, targetMet: true });
     const before = settleServiceContracts(state, 37620);
-    expect(before.restaurant.funds).toBe(600);
+    expect(before.restaurant.funds).toBe(622.5);
     state = arrive(before, 2);
     const fact = outcome(state, 4);
     state = settleServiceContracts(at(state, 41100), 41100);
-    expect(state.restaurant.funds - before.restaurant.funds).toBe(90);
+    expect(state.restaurant.funds - before.restaurant.funds).toBe(67.5);
+    expect(state.restaurant.funds).toBe(690);
     expect(state.restaurant.dailyRevenue).toBe(90);
     expect(state.restaurant.totalServed).toBe(0);
-    expect(state.serviceContracts.results[0]).toMatchObject({ status: 'succeeded', fulfilledCount: 4, bonusPaid: 90 });
+    expect(state.serviceContracts.results[0]).toMatchObject({ status: 'succeeded', fulfilledCount: 4, bonusPaid: 90,
+      depositPaid: 22.5, depositRefunded: 0, compensationPaid: 0, reputationPenalty: 0 });
     expect(state.serviceContracts.results[0].guestResults.slice(4).map(g => g.status)).toEqual(['unfinished', 'unfinished']);
     expect(settleServiceContracts(state, 50000)).toBe(state);
     expect(recordServiceContractPaidVisit(state, fact)).toBe(state);
@@ -312,7 +314,7 @@ describe('canonical payments, reconciliation and settlement', () => {
     expect(state.serviceContracts.active.guests[0].status).toBe('fulfilled_paid');
     expect(state.serviceContracts.active.guests[1].reason).toBe('missing_guest');
   });
-  it('withdraws without touching guests or money; bounds results and contract notifications', () => {
+  it('withdraws with one charge without touching physical guests; bounds results and notifications', () => {
     let state = createInitialState();
     state.notifications = [{ id: 'other', message: 'Keep me' }];
     for (let i = 0; i < 12; i++) {
@@ -320,7 +322,7 @@ describe('canonical payments, reconciliation and settlement', () => {
       const active = state.serviceContracts.active;
       const before = state;
       state = withdrawServiceContract(state, { instanceId: active.instanceId });
-      expect(state.restaurant).toBe(before.restaurant);
+      expect(state.restaurant.funds).toBe(before.restaurant.funds - 67.5);
       expect(state.queue).toBe(before.queue);
       expect(withdrawServiceContract(state, { instanceId: active.instanceId })).toBe(state);
     }
@@ -363,10 +365,10 @@ describe('canonical payments, reconciliation and settlement', () => {
     state = arrive(state, 1);
     state = paid(paid(state, 2), 3);
     state = at(state, 86400);
-    expect(state.restaurant.funds).toBe(-170);
+    expect(state.restaurant.funds).toBe(-147.5);
     state = settleServiceContracts(state, 86400);
-    expect(state.restaurant).toMatchObject({ day: 2, funds: -80, dailyRevenue: 90 });
-    expect(state.dailyHistory).toEqual([{ day: 1, revenue: 0, payroll: 770, profit: -770 }]);
+    expect(state.restaurant).toMatchObject({ day: 2, funds: -80, dailyRevenue: 67.5 });
+    expect(state.dailyHistory).toEqual([{ day: 1, revenue: 22.5, payroll: 770, profit: -747.5 }]);
   });
 });
 
@@ -429,7 +431,7 @@ describe('strict save branch validation', () => {
   it.each([
     s => { s.version = 2; }, s => { s.nextInstanceSerial = 1; },
     s => { s.lastAcceptedDayByTemplate.fake = 1; }, s => { s.lastAcceptedDayByTemplate['office-lunch'] = 2; },
-    s => { s.active.templateId = 'fake'; }, s => { s.active.rulesVersion = 3; },
+    s => { s.active.templateId = 'fake'; }, s => { s.active.rulesVersion = 4; },
     s => { s.active.target = 1; }, s => { s.active.reward = 999; },
     s => { s.active.deadlineAt++; }, s => { s.active.serviceStartAt++; },
     s => { s.active.acceptedAt = Infinity; }, s => { s.active.acceptedDay = 2; },

@@ -5,7 +5,7 @@ import * as clock from './clock';
 import * as movement from './movement';
 import { runTick } from './gameLoop';
 import { advanceFixedStep } from './fixedStep';
-import { acceptServiceContract, createServiceContractsState, validateServiceContractsState } from './serviceContracts';
+import { acceptServiceContract, advanceServiceContractArrivals, createServiceContractsState, validateServiceContractsState } from './serviceContracts';
 
 afterEach(() => vi.restoreAllMocks());
 // Real simulation without service resources: these are scheduling/failure
@@ -116,6 +116,34 @@ describe('real scheduled logical admission', () => {
 });
 
 describe('real contract tick scheduling', () => {
+  it('admits all six Party rush groups once across clustered boundaries in a large tick', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(1);
+    const state = runTick(accepted('party-rush'), { gameDt: 1200, movementDt: 0 });
+    expect(state.serviceContracts.active.parties.map(p => [p.admittedAt, p.status]))
+      .toEqual([36900, 36900, 37020, 37020, 37140, 37140].map(time => [time, 'admitted']));
+    expect(state.queue).toHaveLength(6);
+    expect(state.queue.flatMap(p => p.members)).toHaveLength(12);
+    const again = runTick(state, { gameDt: 0, movementDt: 0 });
+    expect(again.queue).toHaveLength(6);
+    expect(() => validateServiceContractsState(again.serviceContracts, again)).not.toThrow();
+  });
+  it('processes simultaneous groups sequentially without overflowing seven waiting parties', () => {
+    let state = accepted('party-rush');
+    state = { ...state, queue: waitingParties(7), restaurant: { ...state.restaurant, gameTime: 36900 } };
+    const after = advanceServiceContractArrivals(state, 36900, { admitParty: customers.admitScheduledServiceParty });
+    expect(after.queue).toHaveLength(8);
+    expect(after.serviceContracts.active.parties.slice(0, 2).map(p => [p.status, p.missedReason]))
+      .toEqual([['admitted', null], ['missed', 'missed_queue_full']]);
+    expect(after.serviceContracts.active.guests.slice(2, 4).every(g => g.reason === 'missed_queue_full')).toBe(true);
+  });
+  it('marks both simultaneous groups missed when closed', () => {
+    let state = accepted('party-rush');
+    state = { ...state, restaurant: { ...state.restaurant, gameTime: 36900, openHour: 12, closeHour: 13 } };
+    const after = advanceServiceContractArrivals(state, 36900, { admitParty: customers.admitScheduledServiceParty });
+    expect(after.queue).toHaveLength(0);
+    expect(after.serviceContracts.active.parties.slice(0, 2).map(p => p.missedReason))
+      .toEqual(['missed_closed', 'missed_closed']);
+  });
   it.each([1, 2, 4])('keeps the exact wave timestamp during fixed-step catch-up at speed %s', speed => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
     const initial = accepted();
@@ -189,7 +217,7 @@ describe('real contract tick scheduling', () => {
     expect(result).toMatchObject({ status: 'failed', fulfilledCount: 0, bonusPaid: 0, settledAt: 41100 });
     expect(result.guestResults).toHaveLength(6);
     expect(result.guestResults.every(g => g.status === 'failed' && ['abandoned', 'left_unpaid'].includes(g.reason))).toBe(true);
-    expect(state.restaurant.funds).toBe(600);
+    expect(state.restaurant.funds).toBe(555);
     expect(state.navigationFault).toBeUndefined();
     expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
   });

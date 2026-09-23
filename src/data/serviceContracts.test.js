@@ -3,8 +3,8 @@ import { SERVICE_CONTRACTS, SERVICE_CONTRACT_PREP_SECONDS, SERVICE_CONTRACT_RESU
   SERVICE_CONTRACT_RULES_VERSION, getServiceContractTemplate } from './serviceContracts';
 
 describe('service contract catalogue', () => {
-  it('offers approved v2 windows with all other content stable and deeply frozen', () => {
-    expect(SERVICE_CONTRACT_RULES_VERSION).toBe(2);
+  it('offers Party rush alongside the unchanged service windows, deeply frozen', () => {
+    expect(SERVICE_CONTRACT_RULES_VERSION).toBe(3);
     expect(SERVICE_CONTRACT_PREP_SECONDS).toBe(900);
     expect(SERVICE_CONTRACT_RESULT_LIMIT).toBe(10);
     expect(SERVICE_CONTRACTS).toEqual([
@@ -20,6 +20,10 @@ describe('service contract catalogue', () => {
         profile: { archetype: 'foodie', spendingTier: 'premium', spendingBudget: 45 },
         parties: [0, 600, 1200, 1800].map(arrivalOffset => ({ partyType: 'solo', size: 1, arrivalOffset })),
         serviceDuration: 4200, target: 3, reward: 100 },
+      { id: 'party-rush', title: 'Party rush', guestLabel: 'Party guest',
+        profile: { archetype: 'regular', spendingTier: 'value', spendingBudget: 30 },
+        parties: [0, 0, 120, 120, 240, 240].map(arrivalOffset => ({ partyType: 'couple', size: 2, arrivalOffset })),
+        serviceDuration: 6000, target: 6, reward: 180 },
     ]);
     const frozen = value => {
       expect(Object.isFrozen(value)).toBe(true);
@@ -36,8 +40,11 @@ describe('service contract catalogue', () => {
       expect(Object.isFrozen(legacy)).toBe(true);
       expect(Object.isFrozen(legacy.parties)).toBe(true);
       expect(Object.isFrozen(legacy.profile)).toBe(true);
-      expect(getServiceContractTemplate(id, 3)).toBe(null);
+      expect(getServiceContractTemplate(id, 3)).toEqual(getServiceContractTemplate(id, 2));
+      expect(getServiceContractTemplate(id, 4)).toBe(null);
       expect(getServiceContractTemplate(id, '2')).toBe(null);
     }
+    expect(getServiceContractTemplate('party-rush', 1)).toBe(null);
+    expect(getServiceContractTemplate('party-rush', 2)).toBe(null);
   });
 });

@@ -110,7 +110,7 @@ describe('real career and contract scheduling composition', () => {
       completedCustomers: [{ customerId: 'legacy-receipt', revenue: 17 }] };
     const after = runTick(state, { gameDt: 200, movementDt: 1 });
     expect(after.restaurant.gameTime).toBe(DEADLINE);
-    expect(after.restaurant.funds).toBe(617);
+    expect(after.restaurant.funds).toBe(572); // $600 + $22.50 advance + $17 receipt - $67.50 settlement
     expect(after.completedCustomers).toEqual([]);
     expect(after.serviceContracts.results[0].fulfilledCount).toBe(0);
     expect(after.careerRun).toMatchObject({ status: 'lost', needsDecision: true, paidMeals: 0, lastPaidVisitSequence: 0 });
