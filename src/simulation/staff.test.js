@@ -575,11 +575,13 @@ describe('updateStaff', () => {
     });
     expect(result.partyReviewHistory.at(-1)).toMatchObject({
       partyId: 'p1', score: -5, memberCount: 2, paidCount: 1,
-      unaffordableCount: 1, reputationDelta: -0.002,
+      unaffordableCount: 1,
     });
+    expect(result.partyReviewHistory.at(-1).reputationDelta).toBeCloseTo(0.003, 4);
     expect(result.pendingPartyReviews).toEqual([]);
     expect(result.completedCustomers).toHaveLength(1);
-    expect(result.restaurant).toMatchObject({ totalServed: 1, reputation: 2.998 });
+    expect(result.restaurant.totalServed).toBe(1);
+    expect(result.restaurant.reputation).toBeCloseTo(3.003, 4);
 
     const repeated = updateStaff(result, 0);
     expect(repeated.partyReviewHistory).toHaveLength(1);
@@ -696,10 +698,11 @@ describe('updateStaff', () => {
     expect(result.partyReviewHistory).toEqual([
       expect.objectContaining({
         partyId: 'p1', score: 100, memberCount: 2, paidCount: 2,
-        unaffordableCount: 0, reputationDelta: 0.0408,
+        unaffordableCount: 0,
       }),
     ]);
-    expect(result.restaurant.reputation).toBe(3.0408);
+    expect(result.partyReviewHistory[0].reputationDelta).toBeCloseTo(0.051, 4);
+    expect(result.restaurant.reputation).toBeCloseTo(3.051, 4);
     expect(result.pendingPartyReviews).toEqual([]);
   });
 
@@ -2282,7 +2285,7 @@ describe('updateStaff', () => {
   });
 
   it('happy payment increases reputation with configured gain effects', () => {
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
     const cashier = {
       id: 'cw1', role: 'waiter', morale: 80, x: 840, y: 100, task: { type: 'take_payment', customerId: 'c1', stationId: 'cashier1', startedAt: 0 },
     };
@@ -2299,13 +2302,15 @@ describe('updateStaff', () => {
 
     const result = updateStaff(state, 0);
 
-    expect(result.completedCustomers[0].reviewScore).toBe(100);
-    expect(result.restaurant.reputation).toBeCloseTo(4.9204);
+    expect(result.completedCustomers[0].reviewScore).toBe(80);
+    expect(result.completedCustomers[0]).toMatchObject({ tip: 2.4, totalPaid: 14.4 });
+    expect(result.restaurant.reputation).toBeCloseTo(4.9204, 4);
+    expect(randomSpy).toHaveBeenCalledTimes(1);
     expect(result.completedCustomers[0].tip).toBe(2.4);
   });
 
   it.each([0, 25, 100])(
-    'records a fixed review and random tip for a tracked party payment at patience/happiness %s',
+    'records happiness and a random tip for a tracked party payment at %s happiness',
     value => {
       vi.spyOn(Math, 'random').mockReturnValue(0.5);
       const state = partyPaymentState({
@@ -2327,14 +2332,14 @@ describe('updateStaff', () => {
       const result = updateStaff(state, 0);
 
       expect(result.completedCustomers[0]).toMatchObject({
-        reviewScore: 100, tip: 2.4, totalPaid: 14.4, revenue: 14.4,
+        reviewScore: value, tip: 2.4, totalPaid: 14.4, revenue: 14.4,
       });
-      expect(result.restaurant.reputation).toBeCloseTo(3.02);
+      expect(result.restaurant.reputation).toBeCloseTo(3 + value / 4000, 4);
     },
   );
 
   it.each([0, 25, 100])(
-    'records a fixed review and random tip for an untracked payment at patience/happiness %s',
+    'records happiness and a random tip for a legacy payment at %s happiness',
     value => {
       vi.spyOn(Math, 'random').mockReturnValue(0.5);
       const state = partyPaymentState({
@@ -2353,11 +2358,33 @@ describe('updateStaff', () => {
       const result = updateStaff(state, 0);
 
       expect(result.completedCustomers[0]).toMatchObject({
-        reviewScore: 100, tip: 2.4, totalPaid: 14.4, revenue: 14.4,
+        reviewScore: value, tip: 2.4, totalPaid: 14.4, revenue: 14.4,
       });
-      expect(result.restaurant.reputation).toBeCloseTo(3.02);
+      expect(result.restaurant.reputation).toBeCloseTo(3 + value / 4000, 4);
     },
   );
+
+  it('uses happiness64 for a tracked paid contribution without changing bill or tip', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const result = updateStaff(partyPaymentState({
+      customers: [{
+        id: 'a', partyId: 'p1', state: 'checkout_processing', menuOutcome: 'ordered',
+        cashierStationId: 'cashier1', paymentReady: false, x: 840, y: 180,
+        happiness: 64, dishId: 'toast', drinkId: null,
+        dishPriceAtOrder: 12, drinkPriceAtOrder: null, orderSubtotal: 12,
+        tableId: 't1',
+      }],
+      pendingPartyReviews: [{
+        partyId: 'p1', memberIds: ['a'], orderedMemberIds: ['a'],
+        unaffordableMemberIds: [], paidReviews: [],
+      }],
+    }), 0);
+
+    expect(result.completedCustomers[0]).toMatchObject({
+      reviewScore: 64, tip: 2.4, totalPaid: 14.4, revenue: 14.4,
+    });
+    expect(result.partyReviewHistory[0]).toMatchObject({ score: 64, reputationDelta: 0.016 });
+  });
 
   it('rounds a random tip to cents for a 12.35 subtotal', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);

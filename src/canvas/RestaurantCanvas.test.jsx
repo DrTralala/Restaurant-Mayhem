@@ -1,8 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import RestaurantCanvas from './RestaurantCanvas';
-import { drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawStaffLayer } from './layers';
-import { calculateFitCamera } from './camera';
+import RestaurantCanvas, { drawCopyPreview } from './RestaurantCanvas';
+import {
+  drawCustomerLayer,
+  drawFloorLayer,
+  drawFurnitureLayer,
+  drawPlacementPreview,
+  drawQueueLayer,
+  drawSelectionLayer,
+  drawStaffLayer,
+} from './layers';
+import { adjustCameraZoom, calculateFitCamera } from './camera';
 import { useDispatch, useGameState } from '../state/GameContext';
 import { useRenderState, useRuntimeFault } from '../state/SimulationRuntime';
 import { findClickedEntity } from './interaction';
@@ -10,6 +18,7 @@ import { getRestaurantWorld } from '../simulation/world';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { FONT_FAMILY } from '../typography';
 import { loadSprites } from './sprites';
+import { createRenderIndexes } from './renderIndexes';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
@@ -39,6 +48,10 @@ vi.mock('./layers', () => ({
   drawPlacementPreview: vi.fn(),
 }));
 vi.mock('./interaction', () => ({ findClickedEntity: vi.fn() }));
+vi.mock('./renderIndexes', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, createRenderIndexes: vi.fn(actual.createRenderIndexes) };
+});
 
 const chair = { id: 'ch1', tableId: 't1', x: 150, y: 80, rotation: 0 };
 const state = {
@@ -124,6 +137,44 @@ function makeFixtureMovementState(type) {
   return movementState;
 }
 
+function drawingContext() {
+  return {
+    clearRect: vi.fn(),
+    fillText: vi.fn(),
+    setTransform: vi.fn(),
+  };
+}
+
+function trackCanvasDimensions(canvas) {
+  const writes = { width: [], height: [] };
+  for (const dimension of ['width', 'height']) {
+    let value = canvas[dimension];
+    Object.defineProperty(canvas, dimension, {
+      configurable: true,
+      get: () => value,
+      set(next) {
+        writes[dimension].push(next);
+        value = next;
+      },
+    });
+  }
+  return writes;
+}
+
+function trackStyleDimension(style, dimension) {
+  let value = style[dimension];
+  const writes = [];
+  Object.defineProperty(style, dimension, {
+    configurable: true,
+    get: () => value,
+    set(next) {
+      writes.push(next);
+      value = next;
+    },
+  });
+  return writes;
+}
+
 const fixtureMovementCases = [
   ['table', 't1', 'Dining table'],
   ['chair', 'ch1', 'Chair'],
@@ -143,6 +194,11 @@ describe('RestaurantCanvas object movement', () => {
     useRenderState.mockImplementation(() => useGameState());
     useDispatch.mockReturnValue(vi.fn());
     findClickedEntity.mockReturnValue({ type: 'chair', data: chair, text: 'Chair' });
+    adjustCameraZoom.mockReset();
+    calculateFitCamera.mockReset().mockReturnValue({ x: 0, y: 0, zoom: 1 });
+    [drawFloorLayer, drawFurnitureLayer, drawStaffLayer, drawCustomerLayer,
+      drawQueueLayer, drawSelectionLayer, drawPlacementPreview].forEach(layer => layer.mockReset());
+    createRenderIndexes.mockClear();
   });
 
   it('initialises sprites once per mounted canvas across rerenders', () => {
@@ -152,6 +208,214 @@ describe('RestaurantCanvas object movement', () => {
     expect(loadSprites).toHaveBeenCalledTimes(1);
     rerender(<RestaurantCanvas managementOpen />);
     expect(loadSprites).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets backing dimensions only when needed, uses absolute DPR transforms, and preserves a manual camera on DPR changes', () => {
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    let cssWidth = 801;
+    let cssHeight = 601;
+    Object.defineProperty(canvas, 'clientWidth', { configurable: true, get: () => cssWidth });
+    Object.defineProperty(canvas, 'clientHeight', { configurable: true, get: () => cssHeight });
+    const dimensions = trackCanvasDimensions(canvas);
+    const styleWidths = trackStyleDimension(canvas.style, 'width');
+    const styleHeights = trackStyleDimension(canvas.style, 'height');
+    const context = drawingContext();
+    canvas.getContext = vi.fn(() => context);
+    calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+    const dpr = vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(1.25);
+
+    const runFrame = timestamp => act(() => requestAnimationFrame.mock.calls.at(-1)[0](timestamp));
+    runFrame(0);
+    expect(dimensions).toEqual({ width: [1001], height: [751] });
+    expect(styleWidths).toEqual([]);
+    expect(styleHeights).toEqual([]);
+    expect(canvas.style.width).toBe('100%');
+    expect(canvas.style.height).toBe('100%');
+    expect(context.setTransform).toHaveBeenLastCalledWith(1.25, 0, 0, 1.25, 0, 0);
+    expect(context.clearRect).toHaveBeenLastCalledWith(0, 0, 801, 601);
+
+    runFrame(16);
+    expect(dimensions).toEqual({ width: [1001], height: [751] });
+    expect(styleWidths).toEqual([]);
+    expect(styleHeights).toEqual([]);
+    expect(context.setTransform).toHaveBeenLastCalledWith(1.25, 0, 0, 1.25, 0, 0);
+    expect(context.setTransform).toHaveBeenCalledTimes(2);
+    expect(context.clearRect).toHaveBeenCalledTimes(2);
+
+    adjustCameraZoom.mockImplementation(camera => { camera.manual = true; });
+    fireEvent.wheel(canvas, { deltaY: -1 });
+    calculateFitCamera.mockClear();
+    dpr.mockReturnValue(2);
+    runFrame(32);
+    expect(dimensions.width).toEqual([1001, 1602]);
+    expect(dimensions.height).toEqual([751, 1202]);
+    expect(styleWidths).toEqual([]);
+    expect(styleHeights).toEqual([]);
+    expect(context.setTransform).toHaveBeenLastCalledWith(2, 0, 0, 2, 0, 0);
+    expect(context.clearRect).toHaveBeenLastCalledWith(0, 0, 801, 601);
+    expect(calculateFitCamera).not.toHaveBeenCalled();
+
+    cssWidth = 802;
+    cssHeight = 602;
+    runFrame(48);
+    expect(dimensions.width).toEqual([1001, 1602, 1604]);
+    expect(dimensions.height).toEqual([751, 1202, 1204]);
+    expect(styleWidths).toEqual([]);
+    expect(styleHeights).toEqual([]);
+    expect(canvas.style.width).toBe('100%');
+    expect(canvas.style.height).toBe('100%');
+    expect(context.clearRect).toHaveBeenLastCalledWith(0, 0, 802, 602);
+    expect(calculateFitCamera).toHaveBeenCalledTimes(1);
+    dpr.mockRestore();
+  });
+
+  it('keeps canvas CSS dimensions responsive to its flex parent across viewport resizes', () => {
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    const parent = canvas.parentElement;
+    let parentWidth = 1280;
+    let parentHeight = 495;
+    Object.defineProperty(parent, 'clientWidth', {
+      configurable: true,
+      get: () => Math.round(parentWidth),
+    });
+    Object.defineProperty(parent, 'clientHeight', {
+      configurable: true,
+      get: () => Math.round(parentHeight),
+    });
+    Object.defineProperty(canvas, 'clientWidth', {
+      configurable: true,
+      get: () => canvas.style.width.endsWith('%')
+        ? Math.round(parent.clientWidth * Number.parseFloat(canvas.style.width) / 100)
+        : Number.parseInt(canvas.style.width, 10),
+    });
+    Object.defineProperty(canvas, 'clientHeight', {
+      configurable: true,
+      get: () => canvas.style.height.endsWith('%')
+        ? Math.round(parent.clientHeight * Number.parseFloat(canvas.style.height) / 100)
+        : Number.parseInt(canvas.style.height, 10),
+    });
+    const dimensions = trackCanvasDimensions(canvas);
+    const context = drawingContext();
+    canvas.getContext = vi.fn(() => context);
+    const dpr = vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(2);
+    calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+    const runFrame = timestamp => act(() => requestAnimationFrame.mock.calls.at(-1)[0](timestamp));
+
+    try {
+      runFrame(0);
+      expect(dimensions).toEqual({ width: [2560], height: [990] });
+      adjustCameraZoom.mockImplementation(camera => { camera.manual = true; });
+      fireEvent.wheel(canvas, { deltaY: -1 });
+      calculateFitCamera.mockClear();
+      parentWidth = 1024;
+      parentHeight = 685.75;
+
+      runFrame(16);
+
+      expect([canvas.clientWidth, canvas.clientHeight]).toEqual([1024, 686]);
+      expect(canvas.style.width).toBe('100%');
+      expect(canvas.style.height).toBe('100%');
+      expect(dimensions).toEqual({ width: [2560, 2048], height: [990, 1372] });
+      expect(context.clearRect).toHaveBeenLastCalledWith(0, 0, 1024, 686);
+      expect(calculateFitCamera).toHaveBeenCalledWith(expect.objectContaining({
+        viewportWidth: 1024,
+        viewportHeight: 686,
+      }));
+    } finally {
+      dpr.mockRestore();
+    }
+  });
+
+  it.each([0, -1, NaN, Infinity])('falls back to DPR 1 for invalid DPR %s', invalidDpr => {
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { configurable: true, value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { configurable: true, value: 600 });
+    const dimensions = trackCanvasDimensions(canvas);
+    const context = drawingContext();
+    canvas.getContext = vi.fn(() => context);
+    const dpr = vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(invalidDpr);
+    try {
+      act(() => requestAnimationFrame.mock.calls.at(-1)[0](0));
+
+      expect(dimensions.width).toEqual([800]);
+      expect(dimensions.height).toEqual([600]);
+      expect(context.setTransform).toHaveBeenCalledWith(1, 0, 0, 1, 0, 0);
+    } finally {
+      dpr.mockRestore();
+    }
+  });
+
+  it('shares one index for the final move-preview state but keeps placement and copy previews canonical', () => {
+    const table = { id: 't1', seats: 2, status: 'empty', x: 100, y: 100 };
+    const canonicalState = { ...state, tables: [table], chairs: [] };
+    const renderState = { ...canonicalState, tables: [{ ...table, x: 105, y: 105 }] };
+    useGameState.mockReturnValue(canonicalState);
+    useRenderState.mockReturnValue(renderState);
+    findClickedEntity.mockReturnValue({ type: 'table', data: table, text: 'Dining table' });
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { configurable: true, value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { configurable: true, value: 600 });
+    canvas.getContext = vi.fn(() => drawingContext());
+    calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+
+    fireEvent.click(canvas, { clientX: 100, clientY: 100 });
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+    fireEvent.mouseMove(canvas, { clientX: 300, clientY: 300, buttons: 0 });
+    rerender(<RestaurantCanvas managementOpen={false} placementRequest={{ itemType: 'table' }} />);
+    act(() => requestAnimationFrame.mock.calls.at(-1)[0](1000));
+
+    const [,, , , indexes] = drawFurnitureLayer.mock.calls.at(-1);
+    const furnitureState = drawFurnitureLayer.mock.calls.at(-1)[1];
+    expect(furnitureState.tables[0]).toMatchObject({ x: 300, y: 300 });
+    expect(indexes.tablesById.get('t1')).toBe(furnitureState.tables[0]);
+    expect(createRenderIndexes).toHaveBeenCalledTimes(1);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].indexes).toBe(indexes);
+    expect(drawCustomerLayer.mock.calls.at(-1)[3].indexes).toBe(indexes);
+    expect(drawQueueLayer.mock.calls.at(-1)[3]).not.toHaveProperty('indexes');
+    expect(drawPlacementPreview.mock.calls.at(-1)[1]).toBe(canonicalState);
+    expect(drawPlacementPreview.mock.calls.at(-1)).toHaveLength(4);
+
+    drawPlacementPreview.mockClear();
+    drawCopyPreview(drawingContext(), canonicalState, { x: 0, y: 0, zoom: 1 }, {
+      items: [{ type: 'table', id: 't1', x: 500, y: 500 }],
+      validation: { valid: true },
+    });
+    expect(drawPlacementPreview).toHaveBeenCalledWith(
+      expect.anything(), canonicalState, expect.anything(), expect.objectContaining({ x: 500, y: 500 }),
+    );
+    expect(drawPlacementPreview.mock.calls[0]).toHaveLength(4);
+  });
+
+  it('forces a backing-store reset before drawing again after a canvas fault', () => {
+    const reportFault = vi.fn();
+    useRuntimeFault.mockReturnValue({ fault: null, reportFault });
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { configurable: true, value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { configurable: true, value: 600 });
+    const dimensions = trackCanvasDimensions(canvas);
+    canvas.getContext = vi.fn(() => drawingContext());
+    calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+    act(() => requestAnimationFrame.mock.calls.at(-1)[0](0));
+    expect(dimensions).toEqual({ width: [800], height: [600] });
+
+    const fault = new Error('injected draw failure');
+    drawFloorLayer.mockImplementationOnce(() => { throw fault; });
+    act(() => requestAnimationFrame.mock.calls.at(-1)[0](16));
+    expect(reportFault).toHaveBeenCalledWith(fault, 'drawing');
+
+    useRuntimeFault.mockReturnValue({ fault, reportFault });
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    useRuntimeFault.mockReturnValue({ fault: null, reportFault });
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    act(() => requestAnimationFrame.mock.calls.at(-1)[0](32));
+
+    expect(dimensions.width).toEqual([800, 800]);
+    expect(dimensions.height).toEqual([600]);
   });
 
   it.each(fixtureMovementCases)('moves a %s with one generic fixture transaction', (type, id, label) => {
@@ -208,7 +472,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
     calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
 
     fireEvent.click(canvas, { clientX: 200, clientY: 200 });
@@ -239,7 +503,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
     calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
 
     fireEvent.click(canvas, { clientX: 210, clientY: 180 });
@@ -265,7 +529,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
     calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
     fireEvent.click(canvas, { clientX: 210, clientY: 180 });
     fireEvent.click(screen.getByRole('button', { name: /Move/ }));
@@ -298,7 +562,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
     calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
 
     fireEvent.click(canvas, { clientX: 100, clientY: 120 });
@@ -729,7 +993,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
     calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
 
     fireEvent.click(canvas, { clientX: 200, clientY: 200 });
@@ -814,7 +1078,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
     calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
 
     const frame = requestAnimationFrame.mock.calls[0][0];
@@ -822,7 +1086,7 @@ describe('RestaurantCanvas object movement', () => {
 
     expect(drawStaffLayer).toHaveBeenCalledWith(
       expect.anything(), state, expect.anything(),
-      { timeMs: 1250, reducedMotion: true },
+      expect.objectContaining({ timeMs: 1250, reducedMotion: true, indexes: expect.any(Object) }),
     );
   });
 
@@ -833,7 +1097,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
     calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
 
     const fault = new Error('injected drawing fault');
@@ -855,7 +1119,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
 
     requestAnimationFrame.mock.calls[0][0](0);
 
@@ -984,7 +1248,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
     calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
 
     fireEvent.mouseDown(canvas, { clientX: 10, clientY: 10, button: 0 });
@@ -1198,11 +1462,13 @@ describe('RestaurantCanvas object movement', () => {
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
     calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
     const context = {
+      clearRect: vi.fn(),
       fillText: vi.fn(),
       fillRect: vi.fn(),
       restore: vi.fn(),
       save: vi.fn(),
       scale: vi.fn(),
+      setTransform: vi.fn(),
       strokeRect: vi.fn(),
       translate: vi.fn(),
     };
@@ -1265,7 +1531,7 @@ describe('RestaurantCanvas object movement', () => {
     const canvas = container.querySelector('canvas');
     Object.defineProperty(canvas, 'clientWidth', { value: 800 });
     Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => ({ scale: vi.fn(), fillText: vi.fn() }));
+    canvas.getContext = vi.fn(() => drawingContext());
     fireEvent.mouseDown(canvas, { clientX: 10, clientY: 10, button: 0 });
     fireEvent.mouseMove(canvas, { clientX: 130, clientY: 100, buttons: 1 });
     fireEvent.mouseUp(canvas, { clientX: 130, clientY: 100 });

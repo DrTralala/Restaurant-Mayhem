@@ -114,8 +114,22 @@ export function recordPartyOrderOutcome(records, partyMembers, customer, outcome
 }
 
 export const PAID_REVIEW_SCORE = 100;
+const PAID_REVIEW_REPUTATION_DIVISOR = 4000;
 
-export function recordPartyPayment(records, customer) {
+export function getPaidReviewReputationGain(score) {
+  return score / PAID_REVIEW_REPUTATION_DIVISOR;
+}
+
+export function getPaidReviewScore(customer) {
+  const happiness = Number.isFinite(customer?.happiness)
+    ? Math.min(100, Math.max(0, customer.happiness))
+    : PAID_REVIEW_SCORE;
+  return Math.round(happiness * 100) / 100;
+}
+
+export function recordPartyPayment(records, customer, score = getPaidReviewScore(customer)) {
+  if (!Number.isFinite(score) || score < 0 || score > 100) return records;
+
   const entries = getRecordEntries(records);
   const partyId = getPartyKey(customer);
   const customerId = customer?.id;
@@ -133,7 +147,7 @@ export function recordPartyPayment(records, customer) {
   }
   const payment = {
     customerId,
-    score: PAID_REVIEW_SCORE,
+    score: Math.round(score * 100) / 100,
   };
   const updatedRecord = { ...record, paidReviews: [...parts.paidReviews, payment] };
   return entries.map((entry, index) => index === recordIndex ? updatedRecord : entry);
@@ -198,9 +212,10 @@ export function settlePartyReview({
   const memberCount = completeRecord.memberIds.length;
   const unaffordableCount = unaffordableMemberIds.length;
   const unaffordableScore = memberCount === 1 ? -50 : -110;
-  const contributionTotal = paidTotal + unaffordableCount * unaffordableScore;
+  const unaffordableTotal = unaffordableCount * unaffordableScore;
+  const contributionTotal = paidTotal + unaffordableTotal;
   const score = contributionTotal / memberCount;
-  const rawDelta = contributionTotal / 5000;
+  const rawDelta = getPaidReviewReputationGain(paidTotal) + unaffordableTotal / 5000;
   const reputationGainEffect = getUpgradeEffect({ upgrades }, 'reputationGain');
   const reputationDelta = rawDelta > 0 ? rawDelta * (1 + reputationGainEffect) : rawDelta;
   const review = {

@@ -3,6 +3,23 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import SimulationRuntime, { useRenderState } from './SimulationRuntime';
 import { FIXED_STEP_SECONDS } from '../simulation/fixedStep';
 import { runTick } from '../simulation/gameLoop';
+import { interpolateSimulationState } from '../canvas/interpolation';
+
+const { runtimeCallbacks } = vi.hoisted(() => ({ runtimeCallbacks: [] }));
+
+vi.mock('../canvas/interpolation', () => ({
+  interpolateSimulationState: vi.fn((_previous, current) => current),
+}));
+vi.mock('../hooks/useAnimationFrameLoop', async importOriginal => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    useAnimationFrameLoop: vi.fn((callback, options) => {
+      runtimeCallbacks.push(callback);
+      return actual.useAnimationFrameLoop(callback, options);
+    }),
+  };
+});
 
 let gameState;
 let generation;
@@ -39,7 +56,9 @@ beforeEach(() => {
   };
   dispatch.mockClear();
   runTick.mockClear();
+  interpolateSimulationState.mockReset().mockImplementation((_previous, current) => current);
   frames.length = 0;
+  runtimeCallbacks.length = 0;
   vi.stubGlobal('requestAnimationFrame', vi.fn(callback => {
     frames.push(callback);
     return frames.length;
@@ -79,6 +98,68 @@ it('does not enter fixed-step service while a career decision is pending and res
   act(() => frames.shift()(2000));
   act(() => frames.shift()(2000 + FIXED_STEP_SECONDS * 1000));
   expect(runTick).toHaveBeenCalled();
+});
+
+it('stops runtime frames while paused, publishes canonical edits, and resumes without a long-gap step', () => {
+  gameState = { ...gameState, paused: true, restaurant: { gameTime: 10 } };
+  let renders = 0;
+  function CountingHarness() {
+    renders += 1;
+    const state = useRenderState();
+    return <span data-testid="render-time">{state.restaurant.gameTime}</span>;
+  }
+  const view = render(<SimulationRuntime><CountingHarness /></SimulationRuntime>);
+  expect(frames).toHaveLength(0);
+  expect(screen.getByTestId('render-time')).toHaveTextContent('10');
+
+  gameState = { ...gameState, restaurant: { gameTime: 24 } };
+  view.rerender(<SimulationRuntime><CountingHarness /></SimulationRuntime>);
+  expect(screen.getByTestId('render-time')).toHaveTextContent('24');
+  expect(frames).toHaveLength(0);
+  expect(runTick).not.toHaveBeenCalled();
+  expect(interpolateSimulationState).not.toHaveBeenCalled();
+  const pausedRenderCount = renders;
+
+  gameState = { ...gameState, paused: false };
+  view.rerender(<SimulationRuntime><CountingHarness /></SimulationRuntime>);
+  expect(frames).toHaveLength(1);
+  act(() => frames.shift()(100_000));
+  expect(runTick).not.toHaveBeenCalled();
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(interpolateSimulationState).toHaveBeenCalledTimes(1);
+  expect(screen.getByTestId('render-time')).toHaveTextContent('24');
+  expect(frames).toHaveLength(1);
+
+  act(() => frames.shift()(100_000 + FIXED_STEP_SECONDS * 1000 + 1));
+  expect(runTick).toHaveBeenCalledTimes(1);
+  expect(dispatch).toHaveBeenCalledWith({
+    type: 'TICK',
+    nextState: expect.objectContaining({ restaurant: { gameTime: 26 } }),
+  });
+  expect(renders).toBeGreaterThan(pausedRenderCount);
+});
+
+it('guards a directly invoked pre-pause runtime callback after canonical pause commits', () => {
+  let renders = 0;
+  function CountingHarness() {
+    renders += 1;
+    return <Harness />;
+  }
+  const view = render(<SimulationRuntime><CountingHarness /></SimulationRuntime>);
+  const pendingRuntimeCallback = runtimeCallbacks.at(-1);
+
+  gameState = { ...gameState, paused: true };
+  view.rerender(<SimulationRuntime><CountingHarness /></SimulationRuntime>);
+  const renderCountAfterPause = renders;
+  interpolateSimulationState.mockImplementationOnce((_previous, current) => ({ ...current }));
+  let keepRunning;
+  act(() => { keepRunning = pendingRuntimeCallback(10_000); });
+
+  expect(keepRunning).toBe(false);
+  expect(runTick).not.toHaveBeenCalled();
+  expect(interpolateSimulationState).not.toHaveBeenCalled();
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(renders).toBe(renderCountAfterPause);
 });
 
 it('stops scheduling after a tick fault and restarts after generation changes', () => {

@@ -6,6 +6,10 @@ import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { getPlaceSettingPositions } from './tableGeometry';
 import { recordSeatResidency } from '../simulation/movement/seatedDeparture';
 import { expireFoodPatience, startFoodPatience } from '../simulation/foodPatience';
+import { createRenderIndexes } from './renderIndexes';
+import { getServiceCounterItemPosition } from './serviceCounterGeometry';
+import { getCustomerConsumptionRemainingFraction } from '../simulation/consumption';
+import { getRemainingFraction } from '../simulation/activity';
 
 function recordCtx(extraCanvas = {}) {
   const calls = {
@@ -191,6 +195,172 @@ describe('food patience head spacing', () => {
 });
 
 describe('drawFurnitureLayer', () => {
+  it('preserves first-match reference transcripts while avoiding repeated scene searches', () => {
+    const state = {
+      restaurant: { gameTime: 30 },
+      tables: [
+        { id: 'table', x: 100, y: 100 },
+        { id: 'table', x: 500, y: 500 },
+      ],
+      chairs: [
+        { id: 'chair', tableId: 'other', x: 700, y: 700 },
+        { id: 'chair', tableId: 'table', x: 110, y: 80 },
+        { id: 'chair', tableId: 'table', x: 600, y: 600 },
+      ],
+      customers: [
+        { id: 'customer', tableId: 'table', chairId: 'chair' },
+        { id: 'customer', tableId: 'missing', chairId: 'missing' },
+      ],
+      kitchenStations: [{ id: 'kitchen', equipmentId: 'oven', x: 20, y: 20 }],
+      equipment: [
+        { id: 'oven', type: 'oven', name: 'First oven' },
+        { id: 'oven', type: 'toaster', name: 'Duplicate oven' },
+      ],
+      washStations: [{ id: 'wash', type: 'automatic', level: 1, x: 200, y: 20 }],
+      serviceTables: [
+        { id: 'counter', x: 300, y: 100 },
+        { id: 'counter', x: 600, y: 100 },
+      ],
+      dishes: [
+        { id: 'bread', base: 'Bread' },
+        { id: 'bread', base: 'Pasta' },
+      ],
+      serviceItems: [
+        { id: 'kitchen-dish', kind: 'dish', menuItemId: 'bread', state: 'ready', stationId: 'kitchen', x: 30, y: 30 },
+        { id: 'invalid-kitchen-dish', kind: 'dish', menuItemId: 'bread', state: 'ready', stationId: 'missing', x: 40, y: 40 },
+        { id: 'wash-item', kind: 'dish', washStationId: 'wash', washStartedAt: 0, state: 'washing' },
+        { id: 'delivered', customerId: 'customer', kind: 'dish', menuItemId: 'bread', state: 'delivered', x: 0, y: 0 },
+        { id: 'dirty-drink', customerId: 'customer', kind: 'drink', menuItemId: 'water', state: 'dirty_at_table', x: 0, y: 0 },
+        { id: 'delivered-missing', customerId: 'missing', kind: 'dish', menuItemId: 'bread', state: 'delivered', x: 50, y: 50 },
+        { id: 'delivered-nan', customerId: NaN, kind: 'drink', menuItemId: 'water', state: 'delivered', x: 60, y: 60 },
+        { id: 'counter-valid', kind: 'dish', menuItemId: 'bread', state: 'on_service', serviceTableId: 'counter', serviceSlotIndex: 0, x: 70, y: 70 },
+        { id: 'counter-invalid-slot', kind: 'drink', menuItemId: 'water', state: 'on_service', serviceTableId: 'counter', serviceSlotIndex: 99, x: 80, y: 80 },
+        { id: 'counter-missing', kind: 'drink', menuItemId: 'tea', state: 'on_service', serviceTableId: 'missing', serviceSlotIndex: 0, x: 90, y: 90 },
+      ],
+    };
+    const arraysToTrack = [state.tables, state.chairs, state.customers, state.kitchenStations,
+      state.equipment, state.washStations, state.serviceTables, state.dishes, state.serviceItems];
+    const searchCounts = { find: 0, filter: 0, some: 0 };
+    for (const array of arraysToTrack) {
+      for (const method of Object.keys(searchCounts)) {
+        Object.defineProperty(array, method, {
+          configurable: true,
+          value(...args) {
+            searchCounts[method] += 1;
+            return Array.prototype[method].apply(this, args);
+          },
+        });
+      }
+    }
+
+    // Independently execute the former per-layer Array.find/filter/some queries.
+    const referenceEquipment = state.equipment.find(item => item.id === 'oven');
+    const referenceStationFood = state.serviceItems.some(item => item.kind === 'dish'
+      && item.stationId === 'kitchen' && ['preparing', 'ready'].includes(item.state));
+    const referenceWashItems = state.serviceItems.filter(item => item.washStationId === 'wash'
+      && ['queued_for_wash', 'washing'].includes(item.state));
+    Object.defineProperty(referenceWashItems, 'find', {
+      configurable: true,
+      value(...args) {
+        searchCounts.find += 1;
+        return Array.prototype.find.apply(this, args);
+      },
+    });
+    const referenceActiveWash = referenceWashItems.find(item => item.state === 'washing');
+    const referenceDelivered = [];
+    const referenceCounters = [];
+    for (const item of state.serviceItems) {
+      const kitchenDish = item.kind === 'dish'
+        && ['preparing', 'ready'].includes(item.state)
+        && state.kitchenStations.some(station => station.id === item.stationId);
+      if (kitchenDish) {
+        state.dishes.find(dish => dish.id === item.menuItemId);
+        continue;
+      }
+      if (!['on_service', 'delivered', 'dirty_at_table'].includes(item.state)) continue;
+      if (['delivered', 'dirty_at_table'].includes(item.state)) {
+        const customer = state.customers.find(candidate => candidate.id === item.customerId);
+        const chair = customer && state.chairs.find(candidate =>
+          candidate.id === customer.chairId && candidate.tableId === customer.tableId);
+        const table = customer && state.tables.find(candidate => candidate.id === customer.tableId);
+        if (!customer || !chair || !table) continue;
+        const kinds = [...new Set(state.serviceItems
+          .filter(candidate => candidate.customerId === item.customerId
+            && ['delivered', 'dirty_at_table'].includes(candidate.state))
+          .map(candidate => candidate.kind))];
+        const position = getPlaceSettingPositions(table, chair, kinds)[item.kind];
+        if (position) {
+          referenceDelivered.push({ customer, chair, table, kinds, position });
+          if (item.kind !== 'drink') state.dishes.find(dish => dish.id === item.menuItemId);
+        }
+        continue;
+      }
+      const counter = state.serviceTables.find(candidate => candidate.id === item.serviceTableId);
+      referenceCounters.push({ counter, item });
+      if (item.kind !== 'drink') state.dishes.find(dish => dish.id === item.menuItemId);
+    }
+    const { chair: referenceChair, table: referenceTable, kinds: referenceKinds } = referenceDelivered[0];
+    const referenceCounter = referenceCounters[0].counter;
+    const referencePlaceSettings = getPlaceSettingPositions(referenceTable, referenceChair, referenceKinds);
+    const referenceWashRemaining = getRemainingFraction(
+      state.restaurant.gameTime,
+      referenceActiveWash.washStartedAt,
+      getDishwasherStats(state.washStations[0].level).secondsPerDish,
+    );
+    const referenceWashFilled = 14 * Math.min(1, Math.max(0, referenceWashRemaining));
+    expect(referenceEquipment.name).toBe('First oven');
+    expect(referenceStationFood).toBe(true);
+    expect(referenceActiveWash.id).toBe('wash-item');
+    expect(referenceChair.x).toBe(110);
+    expect(referenceTable.x).toBe(100);
+    expect(referenceKinds).toEqual(['dish', 'drink']);
+    expect(referenceCounter.x).toBe(300);
+    const referenceSearchCount = Object.values(searchCounts).reduce((sum, count) => sum + count, 0);
+    expect(referenceSearchCount).toBe(22);
+    Object.keys(searchCounts).forEach(method => { searchCounts[method] = 0; });
+
+    const indexes = createRenderIndexes(state);
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 }, {}, indexes);
+
+    expect(ctx._calls.texts.map(({ text, x, y, textAlign, textBaseline }) =>
+      [text, x, y, textAlign, textBaseline])).toEqual([
+      ['First oven', 40, 40, 'center', 'middle'],
+      ['Service counter', 360, 120, 'center', 'middle'],
+      ['Service counter', 660, 120, 'center', 'middle'],
+      ['Dish', 220, 35, 'center', 'middle'],
+      ['washer', 220, 45, 'center', 'middle'],
+      ['1 / 12', 220, 70, 'center', 'alphabetic'],
+      ['🍞', 30, 30, 'center', 'middle'],
+      ['🍞', referencePlaceSettings.dish.x, referencePlaceSettings.dish.y, 'center', 'middle'],
+      ['🥛', referencePlaceSettings.drink.x, referencePlaceSettings.drink.y, 'center', 'middle'],
+      ['🍞', getServiceCounterItemPosition(referenceCounter, 0).x,
+        getServiceCounterItemPosition(referenceCounter, 0).y, 'center', 'middle'],
+      ['💧', 80, 80, 'center', 'middle'],
+      ['🍵', 90, 90, 'center', 'middle'],
+    ]);
+    expect(ctx._calls.rectColours).toEqual([
+      { x: 100, y: 100, w: 40, h: 40, colour: '#6b5b3a' },
+      { x: 500, y: 500, w: 40, h: 40, colour: '#6b5b3a' },
+      { x: 700, y: 700, w: 20, h: 20, colour: '#5a4a30' },
+      { x: 110, y: 80, w: 20, h: 20, colour: '#5a4a30' },
+      { x: 600, y: 600, w: 20, h: 20, colour: '#5a4a30' },
+      { x: 20, y: 20, w: 40, h: 40, colour: '#555' },
+      { x: 25, y: 25, w: 30, h: 30, colour: '#888' },
+      { x: 300, y: 100, w: 120, h: 40, colour: '#4a6a4a' },
+      { x: 600, y: 100, w: 120, h: 40, colour: '#4a6a4a' },
+      { x: 200, y: 20, w: 40, h: 40, colour: '#536b75' },
+      { x: 243, y: 38 + 14 - referenceWashFilled, w: 1, h: referenceWashFilled, colour: '#ffd400' },
+    ]);
+    expect(ctx._calls.strokeRects).toEqual([
+      { x: 200.5, y: 20.5, w: 39, h: 39, colour: '#9ab0aa' },
+      { x: 242, y: 38, w: 3, h: 14, colour: '#8a6a00' },
+    ]);
+    expect(ctx._calls.images).toEqual([]);
+    expect(searchCounts).toEqual({ find: 0, filter: 0, some: 0 });
+    expect(referenceSearchCount).toBeGreaterThan(Object.values(searchCounts).reduce((sum, count) => sum + count, 0));
+  });
+
   it('draws dining tables without visible numbering', () => {
     const ctx = recordCtx();
     ctx.fillText = function fillText(text, x, y) {
@@ -950,6 +1120,41 @@ describe('drawPlacementPreview', () => {
 describe('drawStaffLayer', () => {
   const camera = { x: 0, y: 0, zoom: 1 };
 
+  it('uses indexed staff-first actor, carried-item and dish lookups without scene searches', () => {
+    const state = {
+      restaurant: { expansionLevel: 1 },
+      staff: [{ id: 7, name: 'Worker', role: 'waiter', x: 100, y: 100,
+        carryingServiceItemIds: [13, '13', 'missing'] }],
+      customers: [{ id: '7', x: 300, y: 300 }],
+      serviceItems: [
+        { id: 13, kind: 'dish', menuItemId: 1, state: 'carried' },
+        { id: '13', kind: 'dish', menuItemId: '1', state: 'carried' },
+        { id: 13, kind: 'dish', menuItemId: '1', state: 'carried' },
+      ],
+      dishes: [{ id: 1, base: 'Bread' }, { id: '1', base: 'Pasta' }],
+      staffAmenities: [],
+    };
+    const searchCounts = { find: 0 };
+    for (const array of [state.staff, state.customers, state.serviceItems, state.dishes, state.staffAmenities]) {
+      Object.defineProperty(array, 'find', {
+        configurable: true,
+        value(...args) {
+          searchCounts.find += 1;
+          return Array.prototype.find.apply(this, args);
+        },
+      });
+    }
+    const indexes = createRenderIndexes(state);
+    const ctx = recordCtx();
+
+    drawStaffLayer(ctx, state, camera, { indexes });
+
+    expect(ctx._calls.texts.map(call => call.text)).toEqual(['Worker', '🍞', '🍝']);
+    expect(indexes.actorsByStringId.get('7')).toBe(state.staff[0]);
+    expect(indexes.serviceItemsById.get(13)).toBe(state.serviceItems[0]);
+    expect(searchCounts.find).toBe(0);
+  });
+
   it('renders morale-scaled accumulated work instead of reusing the legacy timestamp formula', () => {
     const ctx = recordCtx();
     drawStaffLayer(ctx, {
@@ -1303,6 +1508,96 @@ describe('drawStaffLayer', () => {
 
 describe('drawCustomerLayer', () => {
   const camera = { x: 0, y: 0, zoom: 1 };
+
+  it('uses per-customer consumption buckets with full-scan parity and fewer item visits', () => {
+    const customers = [
+      { id: 'c1', state: 'eating', tableId: 't1', chairId: 'ch1' },
+      { id: 'c2', state: 'eating', tableId: 't2', chairId: 'ch2' },
+    ];
+    const serviceItems = [
+      { id: 'c1-dish', kind: 'dish', customerId: 'c1', state: 'delivered', consumptionStartedAt: 0 },
+      { id: 'c1-drink', kind: 'drink', customerId: 'c1', state: 'delivered', consumptionStartedAt: 120 },
+      { id: 'c2-drink', kind: 'drink', customerId: 'c2', state: 'delivered', consumptionStartedAt: 150 },
+      ...Array.from({ length: 4 }, (_, index) => ({
+        id: `other-${index}`, kind: 'dish', customerId: 'other', state: 'delivered',
+        consumptionStartedAt: 0,
+      })),
+    ];
+    const state = {
+      restaurant: { gameTime: 240 },
+      customers,
+      tables: [{ id: 't1', x: 100, y: 100 }, { id: 't2', x: 200, y: 100 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 110, y: 80 },
+        { id: 'ch2', tableId: 't2', x: 210, y: 80 },
+      ],
+      serviceItems,
+    };
+    const indexes = createRenderIndexes(state);
+    const referenceItems = [...serviceItems];
+    const countMapVisits = items => {
+      let visits = 0;
+      Object.defineProperty(items, 'map', {
+        configurable: true,
+        value(callback, thisArg) {
+          return Array.prototype.map.call(this, (...args) => {
+            visits += 1;
+            return callback.apply(thisArg, args);
+          });
+        },
+      });
+      return () => visits;
+    };
+    const referenceVisitCount = countMapVisits(referenceItems);
+    const reference = customers.map(customer => {
+      const before = referenceVisitCount();
+      const fraction = getCustomerConsumptionRemainingFraction(
+        customer, referenceItems, state.restaurant.gameTime,
+      );
+      return { fraction, visits: referenceVisitCount() - before };
+    });
+    const fullCollectionVisits = countMapVisits(state.serviceItems);
+    const bucketVisitCounts = customers.map(customer =>
+      countMapVisits(indexes.serviceItemsByCustomerId.get(customer.id)));
+    const ctx = recordCtx();
+
+    drawCustomerLayer(ctx, state, camera, { indexes });
+
+    const indexedVisits = bucketVisitCounts.map(count => count());
+    const progressFills = ctx._calls.rectColours.filter(rect => rect.colour === '#ffd400');
+    expect(reference.map(result => result.fraction)).toEqual([0.5, 0.5]);
+    expect(reference.map(result => result.visits)).toEqual([serviceItems.length, serviceItems.length]);
+    expect(fullCollectionVisits()).toBe(0);
+    expect(indexedVisits).toEqual([2, 1]);
+    expect(indexedVisits.reduce((sum, count) => sum + count, 0))
+      .toBeLessThan(reference.reduce((sum, result) => sum + result.visits, 0));
+    expect(progressFills).toEqual([
+      expect.objectContaining({ x: 135, y: 85, w: 1, h: 7, colour: '#ffd400' }),
+      expect.objectContaining({ x: 235, y: 85, w: 1, h: 7, colour: '#ffd400' }),
+    ]);
+  });
+
+  it('uses first strict table and composite chair matches from supplied render indexes', () => {
+    const table = { id: 1, x: 100, y: 100 };
+    const matchingChair = { id: 'chair', tableId: 1, x: 110, y: 80 };
+    const state = {
+      tables: [table, { id: 1, x: 500, y: 500 }],
+      chairs: [
+        { id: 'chair', tableId: 'other', x: 700, y: 700 },
+        matchingChair,
+        { id: 'chair', tableId: 1, x: 600, y: 600 },
+      ],
+      customers: [{ id: 'customer', state: 'seated', tableId: 1, chairId: 'chair' }],
+    };
+    const indexes = createRenderIndexes(state);
+    const ctx = recordCtx();
+
+    drawCustomerLayer(ctx, state, camera, { indexes });
+
+    expect(ctx._calls.arcs[0]).toMatchObject({ x: 120, y: 85 });
+    expect(indexes.tablesById.get(1)).toBe(table);
+    expect(indexes.chairsByIdAndTableId.get('chair').get(1)).toBe(matchingChair);
+  });
 
   it.each(['leaving', 'checkout_queued', 'checkout_moving'])(
     'keeps a %s customer seated visually until they physically leave the chair', stateName => {

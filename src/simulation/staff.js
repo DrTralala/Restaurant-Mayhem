@@ -62,7 +62,8 @@ import {
 } from './staffActivity';
 import { getQueueVisibleMembers } from './customerQueue';
 import {
-  PAID_REVIEW_SCORE,
+  getPaidReviewScore,
+  getPaidReviewReputationGain,
   getPartyKey,
   recordPartyOrderOutcome,
   recordPartyPayment,
@@ -1462,7 +1463,7 @@ function resolveTask({
     }
     const { subtotal: price } = getCheckoutBill({ ...state, customers, serviceItems }, customer);
     const tip = Math.round(price * getTipRate() * 100) / 100;
-    const reviewScore = PAID_REVIEW_SCORE;
+    const reviewScore = getPaidReviewScore(customer);
     const payment = {
       customerId: customer.id,
       day: state.restaurant.day || Math.floor(state.restaurant.gameTime / 86400) + 1,
@@ -1487,7 +1488,7 @@ function resolveTask({
     let nextRestaurant = restaurant;
     let settledReview = null;
     if (customer.menuOutcome === 'ordered' && hasPendingTracker) {
-      const paymentRecorded = recordPartyPayment(pendingPartyReviews, customer);
+      const paymentRecorded = recordPartyPayment(pendingPartyReviews, customer, reviewScore);
       const settlement = settlePartyReview({
         pendingPartyReviews: paymentRecorded,
         partyReviewHistory,
@@ -1500,7 +1501,7 @@ function resolveTask({
       settledReview = settlement.review;
     } else if (!hasPendingTracker && !hasExplicitMenuOutcome) {
       const reputationGainEffect = getUpgradeEffect(state, 'reputationGain');
-      const reputationGain = (PAID_REVIEW_SCORE / 5000) * (1 + reputationGainEffect);
+      const reputationGain = getPaidReviewReputationGain(reviewScore) * (1 + reputationGainEffect);
       nextRestaurant = {
         ...restaurant,
         reputation: clampReputation(restaurant.reputation + reputationGain),

@@ -1464,12 +1464,13 @@ describe('hydrateState', () => {
     expect(legacy.version).toBe(SAVE_VERSION);
   });
 
-  it('ignores legacy staff slots and normalises retired milestone rewards without losing history', () => {
+  it('canonicalises legacy built-in milestone rewards while retaining their achieved history', () => {
     const fresh = createInitialState();
     const savedMilestones = fresh.milestones.map(milestone => milestone.id === 'm6'
       ? {
           ...milestone,
-          condition: { type: 'reputation', threshold: 4 },
+          description: 'Legacy reputation goal',
+          condition: { type: 'reputation', threshold: 4.0 },
           reward: { type: 'newStaffSlot' },
           achieved: true,
         }
@@ -1478,9 +1479,72 @@ describe('hydrateState', () => {
     const hydrated = hydrateState({ ...fresh, staffSlots: 99, milestones: savedMilestones }, fresh);
 
     expect(hydrated).not.toHaveProperty('staffSlots');
-    expect(hydrated.milestones).toEqual(savedMilestones.map(milestone => milestone.id === 'm6'
-      ? { ...milestone, reward: { type: 'none' } }
-      : milestone));
+    expect(hydrated.milestones.find(milestone => milestone.id === 'm6')).toEqual({
+      ...savedMilestones.find(milestone => milestone.id === 'm6'),
+      description: 'Reach 4.0 reputation',
+      condition: { type: 'reputation', threshold: 4 },
+      reward: { type: 'cashBonus', amount: 150 },
+      achieved: true,
+    });
+  });
+
+  it('round-trips and migrates a sparse legacy milestone save without changing recipe slots', () => {
+    const fresh = createInitialState();
+    const customMilestone = {
+      id: 'legacy-custom',
+      description: 'Custom goal',
+      condition: { type: 'day', threshold: 2 },
+      reward: { type: 'newDishSlot' },
+      achieved: false,
+    };
+    const saved = {
+      ...fresh,
+      recipeSlots: 7,
+      milestones: [
+        {
+          id: 'm3',
+          description: 'Earn $1,000',
+          condition: { type: 'revenue', threshold: 1000 },
+          reward: { type: 'newDishSlot' },
+          achieved: true,
+          legacyNote: 'preserved',
+        },
+        customMilestone,
+        { ...customMilestone, description: 'Second custom copy' },
+      ],
+    };
+
+    expect(saveState(saved)).toBe(true);
+    const stored = loadState();
+    const hydrated = hydrateState(stored, fresh);
+
+    expect(hydrated.recipeSlots).toBe(7);
+    expect(hydrated.milestones.map(milestone => milestone.id)).toEqual(['m3', 'legacy-custom', 'legacy-custom']);
+    expect(hydrated.milestones[0]).toEqual({
+      id: 'm3',
+      description: 'Hold $1,000 cash reserve',
+      condition: { type: 'cashReserve', threshold: 1000 },
+      reward: { type: 'cashBonus', amount: 100 },
+      achieved: true,
+      legacyNote: 'preserved',
+    });
+    expect(hydrated.milestones.slice(1)).toEqual([
+      customMilestone,
+      { ...customMilestone, description: 'Second custom copy' },
+    ]);
+    expect(hydrateState(hydrated, fresh).milestones).toEqual(hydrated.milestones);
+  });
+
+  it('uses fresh canonical milestones for old saves with no milestone array without changing recipe slots', () => {
+    const fresh = createInitialState();
+    const oldSave = { ...fresh, recipeSlots: 6 };
+    delete oldSave.milestones;
+
+    const hydrated = hydrateState(oldSave, fresh);
+
+    expect(hydrated.recipeSlots).toBe(6);
+    expect(hydrated.milestones).toEqual(fresh.milestones);
+    expect(hydrated.milestones).toHaveLength(12);
   });
 
   it('normalises drink overrides and defaults missing state', () => {

@@ -168,7 +168,7 @@ it.each(['layer', 'context'])('reports a canvas %s fault once and draws again af
   vi.spyOn(HTMLCanvasElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
   vi.spyOn(HTMLCanvasElement.prototype, 'clientHeight', 'get').mockReturnValue(600);
   const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
-    .mockReturnValue({ scale: vi.fn(), fillText: vi.fn() });
+    .mockReturnValue({ clearRect: vi.fn(), fillText: vi.fn(), setTransform: vi.fn() });
   const view = mount(true);
   frame(0);
   expect(frames.size).toBe(2);

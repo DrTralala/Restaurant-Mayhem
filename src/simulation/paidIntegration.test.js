@@ -186,7 +186,7 @@ describe('committed food snapshots through real consumers', () => {
     state = cashierReady({ ...state, serviceItems: [] });
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     state = updateStaff(state, 0);
-    expect(state.completedCustomers[0]).toMatchObject({ revenue: 14.4, tip: 2.4, totalPaid: 14.4, reviewScore: 100, paidVisitSequence: 1 });
+    expect(state.completedCustomers[0]).toMatchObject({ revenue: 14.4, tip: 2.4, totalPaid: 14.4, reviewScore: 86, paidVisitSequence: 1 });
     expect(state.cookbook.entries.toast.paidPortions).toBe(1);
     expect(state.careerRun.paidMeals).toBe(1);
     expect(state.customers[0].dishOrderSnapshot).toMatchObject({ name: 'Toasted Bread', price: 12, quality: 4, prepTime: 60 });
@@ -194,6 +194,37 @@ describe('committed food snapshots through real consumers', () => {
 });
 
 describe('actual cashier integration', () => {
+  it('records happiness64 at checkout without changing paid-visit consumer awards', () => {
+    let state = committedFixture();
+    const accepted = acceptServiceContract(createInitialState(), { templateId: 'office-lunch' });
+    const active = accepted.serviceContracts.active;
+    state.serviceContracts = { ...accepted.serviceContracts, active: { ...active,
+      parties: active.parties.map((party, i) => i === 0
+        ? { ...party, status: 'admitted', admittedAt: 36900 } : party),
+      guests: active.guests.map((guest, i) => i < 2
+        ? { ...guest, status: 'pending' } : guest) } };
+    state.restaurant.gameTime = 36900;
+    state.customers = active.guests.slice(0, 2).map((guest, i) => ({ ...state.customers[0],
+      id: guest.guestId, partyId: guest.partyId, happiness: 64,
+      serviceContractId: active.instanceId, serviceContractGuestId: guest.guestId,
+      foodOutcome: 'delivered',
+      dishOrderSnapshot: { ...state.customers[0].dishOrderSnapshot, serviceItemId: `service-item-${i + 1}` },
+      orderedServiceItemIds: [`service-item-${i + 1}`] }));
+    state = cashierReady({ ...state, serviceItems: [] });
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const paid = updateStaff(state, 0);
+
+    expect(paid.completedCustomers.map(receipt => receipt.reviewScore)).toEqual([64, 64]);
+    expect(paid.completedCustomers.every(receipt => receipt.tip === 2.4
+      && receipt.totalPaid === 14.4)).toBe(true);
+    expect(paid.paidVisitSequence).toBe(2);
+    expect(paid.careerRun).toMatchObject({ paidMeals: 2, lastPaidVisitSequence: 2 });
+    expect(paid.serviceContracts.active.guests.slice(0, 2).map(row => [row.status, row.paidVisitSequence]))
+      .toEqual([['fulfilled_paid', 1], ['fulfilled_paid', 2]]);
+    expect(paid.cookbook.entries.toast.paidPortions).toBe(2);
+  });
+
   it('does not replay an old pending receipt into features during duplicate cashier recovery', () => {
     let state = committedFixture();
     state.customers[0].foodOutcome = 'delivered';

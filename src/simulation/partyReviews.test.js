@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PAID_REVIEW_SCORE,
   cancelPendingPartyReviews,
+  getPaidReviewScore,
   normalisePartyReviewHistory,
   normalisePendingPartyReviews,
   recordPartyOrderOutcome,
@@ -14,6 +15,29 @@ const party = [
   { id: 'b', partyId: 'p1' },
 ];
 
+describe('paid review scoring', () => {
+  it.each([0, 25, 64, 80, 86, 100])('uses finite customer happiness %s', happiness => {
+    expect(getPaidReviewScore({ happiness })).toBe(happiness);
+  });
+
+  it('rounds scores to two decimal places and clamps finite happiness', () => {
+    expect(getPaidReviewScore({ happiness: 86.126 })).toBe(86.13);
+    expect(getPaidReviewScore({ happiness: -1 })).toBe(0);
+    expect(getPaidReviewScore({ happiness: 101 })).toBe(100);
+  });
+
+  it.each([
+    ['missing', {}],
+    ['null', { happiness: null }],
+    ['string', { happiness: '80' }],
+    ['NaN', { happiness: Number.NaN }],
+    ['positive infinity', { happiness: Number.POSITIVE_INFINITY }],
+    ['negative infinity', { happiness: Number.NEGATIVE_INFINITY }],
+  ])('uses the legacy fallback for %s happiness', (_name, customer) => {
+    expect(getPaidReviewScore(customer)).toBe(PAID_REVIEW_SCORE);
+  });
+});
+
 describe('pending party reviews', () => {
   it('records unique ordered and unaffordable outcomes idempotently', () => {
     let records = recordPartyOrderOutcome([], party, party[0], 'ordered');
@@ -25,14 +49,93 @@ describe('pending party reviews', () => {
     }]);
   });
 
-  it('records a fixed positive paid contribution once', () => {
+  it('records a fixed positive paid contribution once and keeps raw score separate', () => {
     let records = recordPartyOrderOutcome([], party, party[0], 'ordered');
     records = recordPartyOrderOutcome(records, party, party[1], 'unaffordable');
     records = recordPartyPayment(records, party[0]);
     records = recordPartyPayment(records, party[0]);
     expect(records[0].paidReviews).toEqual([{ customerId: 'a', score: PAID_REVIEW_SCORE }]);
     const result = settlePartyReview({ ...baseSettlement, pendingPartyReviews: records }, 'p1');
-    expect(result.review.reputationDelta).toBeCloseTo(-0.002);
+    expect(result.review.score).toBe(-5);
+    expect(result.review.reputationDelta).toBeCloseTo(0.003);
+    expect(result.restaurant.reputation).toBeCloseTo(3.003);
+  });
+
+  it('records and settles the supplied happiness score without changing saved contributions', () => {
+    let records = normalisePendingPartyReviews([{
+      partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a', 'b'],
+      unaffordableMemberIds: [], paidReviews: [{ customerId: 'a', score: 70 }],
+    }]);
+    records = recordPartyPayment(records, party[1], 64);
+
+    expect(records[0].paidReviews).toEqual([
+      { customerId: 'a', score: 70 },
+      { customerId: 'b', score: 64 },
+    ]);
+    const result = settlePartyReview({ ...baseSettlement, pendingPartyReviews: records }, 'p1');
+    expect(result.review.score).toBe(67);
+    expect(result.review.reputationDelta).toBeCloseTo(0.0335, 4);
+  });
+
+  it('combines happiness64 with the existing group unaffordable penalty', () => {
+    let records = recordPartyOrderOutcome([], party, party[0], 'ordered');
+    records = recordPartyOrderOutcome(records, party, party[1], 'unaffordable');
+    records = recordPartyPayment(records, party[0], 64);
+
+    const result = settlePartyReview({
+      ...baseSettlement,
+      upgrades: [{ level: 1, effects: { type: 'reputationGain', value: 0.5 } }],
+      pendingPartyReviews: records,
+    }, 'p1');
+
+    expect(result.review.score).toBe(-23);
+    expect(result.review.reputationDelta).toBeCloseTo(-0.006, 4);
+  });
+
+  it('upgrades positive calibrated reputation even when the raw party score is negative', () => {
+    let records = recordPartyOrderOutcome([], party, party[0], 'ordered');
+    records = recordPartyOrderOutcome(records, party, party[1], 'unaffordable');
+    records = recordPartyPayment(records, party[0], 100);
+
+    const result = settlePartyReview({
+      ...baseSettlement,
+      upgrades: [{ level: 1, effects: { type: 'reputationGain', value: 0.5 } }],
+      pendingPartyReviews: records,
+    }, 'p1');
+
+    expect(result.review.score).toBe(-5);
+    expect(result.review.reputationDelta).toBeCloseTo(0.0045, 4);
+    expect(result.restaurant.reputation).toBeCloseTo(3.0045, 4);
+  });
+
+  it('rounds a valid explicit payment score to two decimal places', () => {
+    const ordered = recordPartyOrderOutcome([], party, party[0], 'ordered');
+    const paid = recordPartyPayment(ordered, party[0], 64.126);
+
+    expect(paid[0].paidReviews).toEqual([{ customerId: 'a', score: 64.13 }]);
+  });
+
+  it.each([null, '80', Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, 101])(
+    'does not change records for invalid explicit score %s', score => {
+      let records = recordPartyOrderOutcome([], party, party[0], 'ordered');
+      const beforePayment = records;
+      records = recordPartyPayment(records, party[0], score);
+
+      expect(records).toBe(beforePayment);
+    },
+  );
+
+  it('uses happiness by default and preserves membership and duplicate payment guards', () => {
+    const happyMember = { ...party[0], happiness: 70 };
+    let records = recordPartyOrderOutcome([], party, happyMember, 'ordered');
+    const paid = recordPartyPayment(records, happyMember);
+    const duplicate = recordPartyPayment(paid, happyMember, 64);
+
+    expect(paid[0].paidReviews).toEqual([{ customerId: 'a', score: 70 }]);
+    expect(duplicate).toBe(paid);
+
+    const forged = { id: 'forged', partyId: 'p1', happiness: 64 };
+    expect(recordPartyPayment(paid, forged, 64)).toBe(paid);
   });
 
   it('cancels only specified party records', () => {
@@ -72,16 +175,17 @@ const baseSettlement = {
 };
 
 describe('settled party reviews', () => {
-  it('makes a perfect-plus-unaffordable couple slightly negative', () => {
+  it('keeps a perfect-plus-unaffordable raw score negative with positive calibrated reputation', () => {
     let pending = recordPartyOrderOutcome([], party, party[0], 'ordered');
     pending = recordPartyOrderOutcome(pending, party, party[1], 'unaffordable');
     pending = recordPartyPayment(pending, party[0]);
     const result = settlePartyReview({ ...baseSettlement, pendingPartyReviews: pending }, 'p1');
     expect(result.review).toMatchObject({
       partyId: 'p1', score: -5, memberCount: 2, paidCount: 1,
-      unaffordableCount: 1, reputationDelta: -0.002,
+      unaffordableCount: 1,
     });
-    expect(result.restaurant.reputation).toBeCloseTo(2.998);
+    expect(result.review.reputationDelta).toBeCloseTo(0.003);
+    expect(result.restaurant.reputation).toBeCloseTo(3.003);
     expect(result.pendingPartyReviews).toEqual([]);
   });
 
@@ -105,8 +209,8 @@ describe('settled party reviews', () => {
     const positiveResult = settlePartyReview({
       ...baseSettlement, upgrades, pendingPartyReviews: positive,
     }, 'p1');
-    expect(positiveResult.review.reputationDelta).toBeCloseTo(0.06);
-    expect(positiveResult.restaurant.reputation).toBeCloseTo(3.06);
+    expect(positiveResult.review.reputationDelta).toBeCloseTo(0.075);
+    expect(positiveResult.restaurant.reputation).toBeCloseTo(3.075);
 
     const solo = [{ id: 'solo', partyId: 'solo-party' }];
     const negative = recordPartyOrderOutcome([], solo, solo[0], 'unaffordable');

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getCharacterMovementStatus } from './status';
+import { createRenderIndexes } from '../../canvas/renderIndexes';
 
 function stateFor(actor, requestGoal = actor.navigationGoal, status = null) {
   return {
@@ -45,5 +46,15 @@ describe('character movement status', () => {
       { x: 40, y: 20 },
       { plan: 'arrived', motion: 'holding' },
     ), 'a')).toEqual({ plan: 'planning', motion: 'holding' });
+  });
+
+  it('uses the supplied staff-first string-ID actor index without changing status', () => {
+    const staff = { id: 1, x: 0, y: 20, navigationGoal: { x: 40, y: 20 } };
+    const customer = { id: '1', x: 40, y: 20 };
+    const state = { staff: [staff], customers: [customer] };
+    const indexes = createRenderIndexes(state);
+
+    expect(getCharacterMovementStatus(state, '1', indexes.actorsByStringId))
+      .toEqual({ plan: 'planning', motion: 'holding' });
   });
 });
