@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getServiceItemEmoji } from './serviceItemEmoji';
+import { createRenderIndexes } from './renderIndexes';
 
 describe('getServiceItemEmoji', () => {
   it.each([
@@ -29,5 +30,19 @@ describe('getServiceItemEmoji', () => {
       expect(getServiceItemEmoji({ kind: 'dish', state }, [])).toBe('🍽️');
       expect(getServiceItemEmoji({ kind: 'drink', state }, [])).toBe('🥛');
     }
+  });
+
+  it('uses the supplied first-match strict dish index', () => {
+    const dishes = [
+      { id: 1, base: 'Bread' },
+      { id: 1, base: 'Pasta' },
+      { id: '1', base: 'Rice' },
+      { id: NaN, base: 'Fish' },
+    ];
+    const indexes = createRenderIndexes({ dishes });
+
+    expect(getServiceItemEmoji({ kind: 'dish', menuItemId: 1 }, dishes, indexes.dishesById)).toBe('🍞');
+    expect(getServiceItemEmoji({ kind: 'dish', menuItemId: '1' }, dishes, indexes.dishesById)).toBe('🍚');
+    expect(getServiceItemEmoji({ kind: 'dish', menuItemId: NaN }, dishes, indexes.dishesById)).toBe('🍽️');
   });
 });

@@ -18,6 +18,7 @@ import { getFoodPatienceFraction } from '../simulation/foodPatience';
 import { getAmenityGeometry } from '../data/staffAmenities';
 import { getCanvasFont } from '../typography';
 import { drawSprite } from './sprites';
+import { createRenderIndexes } from './renderIndexes';
 
 const CANVAS_LABEL_FONT = getCanvasFont('compact');
 // Counter items sit in two 14px rows, so keep the glyphs within that spacing.
@@ -238,20 +239,18 @@ function drawMenu(ctx, { x, y, width, height }) {
   ctx.restore();
 }
 
-function getStaffAmenity(state, residency) {
+function getStaffAmenity(residency, indexes) {
   if (residency?.kind !== 'staff_amenity' || residency.amenityId == null) return null;
-  return (state.staffAmenities || []).find(amenity =>
-    String(amenity?.id) === String(residency.amenityId));
+  return indexes.staffAmenitiesByStringId.get(String(residency.amenityId)) || null;
 }
 
-function getStaffAmenityById(state, amenityId) {
+function getStaffAmenityById(amenityId, indexes) {
   if (amenityId == null) return null;
-  return (state.staffAmenities || []).find(amenity =>
-    String(amenity?.id) === String(amenityId));
+  return indexes.staffAmenitiesByStringId.get(String(amenityId)) || null;
 }
 
-function getStaffAmenityAnchor(state, staff) {
-  const amenity = getStaffAmenity(state, staff?.movementResidency);
+function getStaffAmenityAnchor(staff, indexes) {
+  const amenity = getStaffAmenity(staff?.movementResidency, indexes);
   if (!amenity) return null;
   const geometry = getAmenityGeometry(amenity);
   const slotIndex = staff.movementResidency.slotIndex;
@@ -403,7 +402,7 @@ export function drawQueueLayer(ctx, state, camera, renderOptions = {}) {
   ctx.restore();
 }
 
-export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
+export function drawFurnitureLayer(ctx, state, camera, sprites = {}, indexes = createRenderIndexes(state)) {
   ctx.save();
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
@@ -436,13 +435,9 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
 
   for (const station of state.kitchenStations || []) {
     const eq = station.equipmentId
-      ? (state.equipment || []).find(e => e.id === station.equipmentId)
+      ? indexes.equipmentById.get(station.equipmentId)
       : null;
-    const serviceItems = Array.isArray(state.serviceItems) ? state.serviceItems : [];
-    const stationHasFood = serviceItems.some(item =>
-      item.kind === 'dish'
-      && item.stationId === station.id
-      && ['preparing', 'ready'].includes(item.state));
+    const stationHasFood = indexes.foodKitchenStationIds.has(station.id);
     const spriteKey = eq?.type === 'toaster'
       ? 'toaster'
       : eq?.type === 'oven'
@@ -501,9 +496,8 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
   }
   for (const station of state.washStations || []) {
     const w = station.w || 40, h = station.h || 40;
-    const serviceItems = Array.isArray(state.serviceItems) ? state.serviceItems : [];
-    const items = serviceItems.filter(item => item.washStationId === station.id
-      && ['queued_for_wash', 'washing'].includes(item.state));
+    const items = (indexes.serviceItemsByWashStationId.get(station.id) || [])
+      .filter(item => ['queued_for_wash', 'washing'].includes(item.state));
     const spriteKey = station.type === 'automatic'
       ? 'dishwasher'
       : items.length > 0 ? 'sinkWithDirtyDishes' : 'sink';
@@ -546,7 +540,7 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
   for (const item of Array.isArray(state.serviceItems) ? state.serviceItems : []) {
     const kitchenDish = item.kind === 'dish'
       && ['preparing', 'ready'].includes(item.state)
-      && (state.kitchenStations || []).some(station => station.id === item.stationId);
+      && indexes.kitchenStationIds.has(item.stationId);
     if (!kitchenDish && !['on_service', 'delivered', 'dirty_at_table'].includes(item.state)
       || !Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
     ctx.fillStyle = '#fff';
@@ -555,36 +549,34 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}) {
       ctx.save();
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(getServiceItemEmoji(item, state.dishes || []), item.x, item.y);
+      ctx.fillText(getServiceItemEmoji(item, state.dishes || [], indexes.dishesById), item.x, item.y);
       ctx.restore();
       continue;
     }
     if (['delivered', 'dirty_at_table'].includes(item.state)) {
-      const customer = (state.customers || []).find(candidate => candidate.id === item.customerId);
-      const chair = customer && (state.chairs || []).find(candidate => candidate.id === customer.chairId);
-      const table = customer && (state.tables || []).find(candidate => candidate.id === customer.tableId);
+      const customer = indexes.customersById.get(item.customerId);
+      const chair = customer
+        && indexes.chairsByIdAndTableId.get(customer.chairId)?.get(customer.tableId);
+      const table = customer && indexes.tablesById.get(customer.tableId);
       if (!customer || !chair || !table) continue;
-      const kinds = [...new Set((state.serviceItems || [])
-        .filter(candidate => candidate.customerId === item.customerId
-          && ['delivered', 'dirty_at_table'].includes(candidate.state))
-        .map(candidate => candidate.kind))];
+      const kinds = indexes.deliveredKindsByCustomerId.get(item.customerId) || [];
       const position = getPlaceSettingPositions(table, chair, kinds)[item.kind];
       if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
         ctx.save();
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);
+        ctx.fillText(getServiceItemEmoji(item, state.dishes || [], indexes.dishesById), position.x, position.y);
         ctx.restore();
       }
       continue;
     }
-    const counter = (state.serviceTables || []).find(candidate => candidate.id === item.serviceTableId);
+    const counter = indexes.serviceTablesById.get(item.serviceTableId);
     const position = getServiceCounterItemPosition(counter, item.serviceSlotIndex) || item;
     ctx.save();
     ctx.font = SERVICE_COUNTER_ITEM_FONT;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(getServiceItemEmoji(item, state.dishes || []), position.x, position.y);
+    ctx.fillText(getServiceItemEmoji(item, state.dishes || [], indexes.dishesById), position.x, position.y);
     ctx.restore();
   }
 
@@ -638,19 +630,20 @@ export function drawPlacementPreview(ctx, state, camera, placement) {
 }
 
 export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
+  const indexes = renderOptions.indexes || createRenderIndexes(state);
   ctx.save();
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
 
   const renderedStaff = [];
   for (const [index, s] of (state.staff || []).entries()) {
-    const movement = getCharacterMovementStatus(state, s.id);
+    const movement = getCharacterMovementStatus(state, s.id, indexes.actorsByStringId);
     const hasCoords = Number.isFinite(s.x) && Number.isFinite(s.y);
     const pos = hasCoords
       ? { x: s.x, y: s.y }
       : getDefaultStaffPosition(s.role, index, state, s.id);
-    const residency = getStaffAmenityAnchor(state, s);
-    const amenity = residency?.amenity || getStaffAmenityById(state, s.amenityUse?.amenityId);
+    const residency = getStaffAmenityAnchor(s, indexes);
+    const amenity = residency?.amenity || getStaffAmenityById(s.amenityUse?.amenityId, indexes);
     const isResident = Boolean(residency
       && s.amenityUse?.phase === 'occupied'
       && ['couch', 'bed'].includes(residency.amenity.type));
@@ -697,14 +690,14 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
 
     const carriedItems = Array.isArray(state.serviceItems)
       ? getCarriedServiceItemIds(s)
-        .map(id => state.serviceItems.find(item => item.id === id))
+        .map(id => indexes.serviceItemsById.get(id))
         .filter(Boolean)
       : [];
     carriedItems.forEach((carriedItem, carriedIndex) => {
       ctx.fillStyle = '#fff';
       ctx.font = getCanvasFont('item');
       ctx.fillText(
-        getServiceItemEmoji(carriedItem, state.dishes || []),
+        getServiceItemEmoji(carriedItem, state.dishes || [], indexes.dishesById),
         x + 12 + carriedIndex * 12,
         y - 14,
       );
@@ -715,21 +708,21 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
 }
 
 export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
+  const indexes = renderOptions.indexes || createRenderIndexes(state);
   ctx.save();
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
 
   for (const c of state.customers || []) {
-    const movement = getCharacterMovementStatus(state, c.id);
+    const movement = getCharacterMovementStatus(state, c.id, indexes.actorsByStringId);
     const walking = movement.motion === 'traversing';
     let cx, cy;
     let seatedGeometry = null;
     const table = c.tableId
-      ? (state.tables || []).find(candidate => candidate.id === c.tableId)
+      ? indexes.tablesById.get(c.tableId)
       : null;
     const chair = c.chairId && table
-      ? (state.chairs || []).find(candidate =>
-          candidate.id === c.chairId && candidate.tableId === c.tableId)
+      ? indexes.chairsByIdAndTableId.get(c.chairId)?.get(c.tableId)
       : null;
     // Deciding to leave does not mean the customer has physically stood up.
     // Keep the chair-sized pose while departure/checkout waits for a route.
@@ -774,7 +767,7 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
     drawVerticalProgress(ctx, cx + 14, cy - 7, consuming
       ? getCustomerConsumptionRemainingFraction(
         c,
-        state.serviceItems || [],
+        indexes.serviceItemsByCustomerId.get(c.id) || [],
         state.restaurant?.gameTime,
       )
       : null);

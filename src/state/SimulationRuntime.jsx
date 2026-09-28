@@ -62,6 +62,12 @@ export default function SimulationRuntime({ children }) {
     let phase = 'simulation';
     try {
       if (faultRef.current) return false;
+      if (canonicalRef.current.paused) {
+        previousRef.current = canonicalRef.current;
+        accumulatorRef.current = 0;
+        lastTimestampRef.current = null;
+        return false;
+      }
       if (isCareerDecisionPending(canonicalRef.current)) {
         accumulatorRef.current = 0;
         lastTimestampRef.current = null;
@@ -103,7 +109,7 @@ export default function SimulationRuntime({ children }) {
       reportFault(error, phase);
       return false;
     }
-  }, { enabled: !fault });
+  }, { enabled: !fault && !state.paused });
 
   return <RuntimeFaultContext.Provider value={faultContext}>
     <RenderStateContext.Provider value={renderState}>

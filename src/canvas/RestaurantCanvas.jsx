@@ -23,6 +23,7 @@ import {
 } from '../state/fixtureCopies';
 import { getFixtureSaleEligibility } from '../state/fixtureSales';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
+import { createRenderIndexes } from './renderIndexes';
 
 import {
   buildPlacement,
@@ -238,6 +239,7 @@ export default function RestaurantCanvas({
   onEmptySpaceClick,
 }) {
   const canvasRef = useRef(null);
+  const forceContextResetRef = useRef(false);
   const cameraRef = useRef(createCamera());
   const spritesRef = useRef(null);
   if (spritesRef.current === null) spritesRef.current = loadSprites();
@@ -286,18 +288,20 @@ export default function RestaurantCanvas({
     const camera = cameraRef.current;
     const sprites = spritesRef.current;
     const vp = viewportRef.current;
+    const cssWidth = canvas.clientWidth;
+    const cssHeight = canvas.clientHeight;
 
-    if (canvas.clientWidth !== vp.w || canvas.clientHeight !== vp.h) {
-      vp.w = canvas.clientWidth;
-      vp.h = canvas.clientHeight;
+    if (cssWidth !== vp.w || cssHeight !== vp.h) {
+      vp.w = cssWidth;
+      vp.h = cssHeight;
       camera.manual = false;
     }
 
     if (!camera.manual) {
       const world = getRestaurantWorld(state.restaurant);
       const fitted = calculateFitCamera({
-        viewportWidth: canvas.clientWidth,
-        viewportHeight: canvas.clientHeight,
+        viewportWidth: cssWidth,
+        viewportHeight: cssHeight,
         worldX: world.worldX,
         worldY: world.worldY,
         worldWidth: world.contentW,
@@ -310,23 +314,35 @@ export default function RestaurantCanvas({
       camera.zoom = fitted.zoom;
     }
 
-    canvas.width = canvas.clientWidth * window.devicePixelRatio;
-    canvas.height = canvas.clientHeight * window.devicePixelRatio;
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-    canvas.style.width = canvas.clientWidth + 'px';
-    canvas.style.height = canvas.clientHeight + 'px';
+    const dpr = Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+      ? window.devicePixelRatio
+      : 1;
+    const backingWidth = Math.trunc(cssWidth * dpr);
+    const backingHeight = Math.trunc(cssHeight * dpr);
+    if (canvas.width !== backingWidth) canvas.width = backingWidth;
+    if (canvas.height !== backingHeight) canvas.height = backingHeight;
+    if (forceContextResetRef.current) {
+      canvas.width = backingWidth;
+      forceContextResetRef.current = false;
+    }
+    // Keep the JSX percentage sizing intact so client dimensions continue to
+    // follow the responsive flex parent after a viewport resize.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
 
     let renderState = simulationRenderState;
     if (moveRef.current) renderState = applyMovePreview(renderState, state, moveRef.current);
     if (staffMoveRef.current) renderState = applyStaffMovePreview(renderState, staffMoveRef.current);
+    const indexes = createRenderIndexes(renderState);
 
     drawFloorLayer(ctx, renderState, camera, sprites);
-    drawFurnitureLayer(ctx, renderState, camera, sprites);
+    drawFurnitureLayer(ctx, renderState, camera, sprites, indexes);
     if (placement) drawPlacementPreview(ctx, state, camera, placement);
     if (copyRef.current) drawCopyPreview(ctx, state, camera, copyRef.current);
     const characterRenderOptions = { timeMs, reducedMotion: reducedMotionRef.current };
-    drawStaffLayer(ctx, renderState, camera, characterRenderOptions);
-    drawCustomerLayer(ctx, renderState, camera, characterRenderOptions);
+    const indexedCharacterRenderOptions = { ...characterRenderOptions, indexes };
+    drawStaffLayer(ctx, renderState, camera, indexedCharacterRenderOptions);
+    drawCustomerLayer(ctx, renderState, camera, indexedCharacterRenderOptions);
     drawQueueLayer(ctx, renderState, camera, characterRenderOptions);
     drawSelectionLayer(ctx, renderState, camera, selectedItems);
   }, [state, simulationRenderState, selectedItems, placement]);
@@ -414,6 +430,7 @@ export default function RestaurantCanvas({
       draw(timeMs);
       return true;
     } catch (error) {
+      forceContextResetRef.current = true;
       reportFault(error, 'drawing');
       return false;
     }

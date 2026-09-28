@@ -75,7 +75,7 @@ describe('I1 cancelled dish-only checkout', () => {
     const paid = updateStaff(cashierReady(state), 0);
     expect(paid.completedCustomers).toEqual([expect.objectContaining({ revenue: 0, tip: 0, totalPaid: 0, reviewScore: 100, paidVisitSequence: 1 })]);
     expect(paid.restaurant.totalServed).toBe(1);
-    expect(paid.restaurant.reputation).toBeCloseTo(reputation + 0.02);
+    expect(paid.restaurant.reputation).toBeCloseTo(reputation + 0.025, 4);
     expect(paid.partyReviewHistory[0]).toMatchObject({ score: 100, paidCount: 1 });
     expect(paid.cookbook.entries.toast.paidPortions).toBe(0);
     expect(paid.careerRun.paidMeals).toBe(0);
@@ -103,7 +103,7 @@ describe('I2 complete legacy migration or conservative absence', () => {
   it.each([
     ['complete edited price', () => {}, true, 9, 3],
     ['partial tuple', customer => { delete customer.drinkPriceAtOrder; delete customer.orderSubtotal; }, false, 12, 3],
-    ['absent menu outcome', customer => { delete customer.menuOutcome; }, false, 12, 3.02],
+    ['absent menu outcome', customer => { delete customer.menuOutcome; }, false, 12, 3.025],
     ['inconsistent legacy tuple', customer => { customer.orderSubtotal = 99; }, false, 12, 3],
   ])('preserves billing and actual checkout/review semantics for %s', (_name, alter, hasSnapshot, subtotal, reputation) => {
     const raw = legacyOrder();
@@ -123,7 +123,7 @@ describe('I2 complete legacy migration or conservative absence', () => {
     expect(paid.completedCustomers[0]).toMatchObject(subtotal === 9
       ? { revenue: 10.8, tip: 1.8, reviewScore: 100 } : { revenue: 14.4, tip: 2.4, reviewScore: 100 });
     expect(paid.completedCustomers[0]).toEqual(rawPaid.completedCustomers[0]);
-    expect(paid.restaurant.reputation).toBeCloseTo(reputation);
+    expect(paid.restaurant.reputation).toBeCloseTo(reputation, 4);
     expect(paid.restaurant.reputation).toBe(rawPaid.restaurant.reputation);
     expect(paid.restaurant.totalServed).toBe(rawPaid.restaurant.totalServed);
     expect(paid.cookbook.entries.toast.paidPortions).toBe(0);

@@ -7,8 +7,11 @@ function samePoint(left, right) {
     && left.x === right.x && left.y === right.y;
 }
 
-function currentActor(state, id) {
+function currentActor(state, id, actorsByStringId = null) {
   const expected = String(id);
+  if (actorsByStringId instanceof Map && actorsByStringId.has(expected)) {
+    return actorsByStringId.get(expected) || null;
+  }
   return [...(state?.staff || []), ...(state?.customers || [])]
     .find(actor => String(actor?.id) === expected) || null;
 }
@@ -21,8 +24,8 @@ export function getMovementStatus(state, statuses, id) {
   return getCharacterMovementStatus(state, id);
 }
 
-export function getCharacterMovementStatus(state, id) {
-  const actor = currentActor(state, id);
+export function getCharacterMovementStatus(state, id, actorsByStringId = null) {
+  const actor = currentActor(state, id, actorsByStringId);
   if (!actor) return { plan: 'unreachable', motion: 'holding', reason: 'missing-actor' };
   if (actor.navigationGoal != null && !finitePoint(actor.navigationGoal)) {
     return { plan: 'unreachable', motion: 'holding', reason: 'invalid-goal' };
