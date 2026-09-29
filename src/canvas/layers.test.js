@@ -782,6 +782,25 @@ describe('drawFurnitureLayer', () => {
      }));
   });
 
+  it.each([
+    ['carried_dirty', '0 / 12'],
+    ['queued_for_wash', '1 / 12'],
+    ['washing', '1 / 12'],
+  ])('counts a dishwasher dish only after placement: %s', (itemState, count) => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
+      washStations: [{ id: 'auto', type: 'automatic', x: 100, y: 20 }],
+      serviceItems: [{ id: 'dish', washStationId: 'auto', state: itemState }],
+      staff: [{
+        id: 'worker', carryingServiceItemIds: ['dish'],
+        task: { type: 'deliver_dirty_item', serviceItemId: 'dish', washStationId: 'auto' },
+      }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: count }));
+  });
+
   it('draws dirt, sentence-case station labels, queue stacks, and exact half progress', () => {
     const ctx = recordCtx();
     drawFurnitureLayer(ctx, { tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],

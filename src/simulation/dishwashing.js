@@ -28,6 +28,7 @@ export function getWashStationCapacity(station) {
 export function getWashStationOccupancy(state, station, {
   excludeServiceItemId = null,
   excludeServiceItemIds = [],
+  includeReservations = true,
 } = {}) {
   if (station?.id == null) return 0;
   const keyFor = id => String(id);
@@ -43,11 +44,14 @@ export function getWashStationOccupancy(state, station, {
   const serviceItems = state?.serviceItems || [];
   for (const item of serviceItems) {
     if (sameId(item?.washStationId, station.id)
-      && ['queued_for_wash', 'washing', 'carried_dirty'].includes(item?.state)) {
+      && (['queued_for_wash', 'washing'].includes(item?.state)
+        || (includeReservations && item?.state === 'carried_dirty'))) {
       add(item.id);
     }
-    if (sameId(item?.reservedWashStationId, station.id)) add(item.id);
+    if (includeReservations && sameId(item?.reservedWashStationId, station.id)) add(item.id);
   }
+  // Display only deposited dishes; capacity checks still reserve inbound slots.
+  if (!includeReservations) return ids.size;
   for (const worker of state?.staff || []) {
     const task = worker?.task;
     if (DIRTY_TRANSFER_TASKS.has(task?.type) && sameId(task.washStationId, station.id)) {

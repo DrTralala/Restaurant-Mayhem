@@ -1,6 +1,18 @@
 import { createGrid } from './grid';
-import { cellToWorld, worldToCell } from '../movement/navigationWorkspace';
-import { getDoorPosition, getDoors, isDoorCrossing, isDoorRoleForFlow } from '../world';
+import {
+  cellKey,
+  cellToWorld,
+  navigationFixtureRectangles,
+  worldToCell,
+} from '../movement/navigationWorkspace';
+import {
+  GRID_SIZE,
+  getDoorPosition,
+  getDoors,
+  getRestaurantWorld,
+  isDoorCrossing,
+  isDoorRoleForFlow,
+} from '../world';
 import { recordSeatResidency } from '../movement/seatedDeparture';
 import { getAmenityGeometry } from '../../data/staffAmenities';
 import { isStaticStaffAmenityExit } from '../movement/staffAmenityExit';
@@ -103,6 +115,114 @@ function outdoorFadeGrid(actor, base) {
       && fractionOnSegment(to, start, goal) >= fractionOnSegment(from, start, goal),
     neighbours: p => isOpen(p) && !same(p, goal) ? [point(goal)] : [],
     connectors: () => [],
+  });
+}
+
+// Revocation prevents a stale chair lease from authorising a chair escape. A
+// checkout customer trapped by a different fixture still needs a one-way route
+// out of that fixture, or it can block the FIFO cashier line permanently.
+function revokedCheckoutEscapeGrid(state, actor, base) {
+  if (actor?.state !== 'checkout_moving' || actor.seatResidency?.phase !== 'revoked'
+    || !finite(actor) || base.isOpen(actor)) return null;
+
+  const start = point(actor);
+  const startCell = worldToCell(start);
+  const world = getRestaurantWorld(state.restaurant || {});
+  const wallCellX = worldToCell({ x: world.doorX, y: 0 }).x;
+  const containingFixtures = navigationFixtureRectangles(state).filter(rectangle => {
+    if (![rectangle.x, rectangle.y, rectangle.w, rectangle.h].every(Number.isFinite)
+      || rectangle.w <= 0 || rectangle.h <= 0) return false;
+    const first = worldToCell(rectangle);
+    const last = worldToCell({
+      x: rectangle.x + rectangle.w - 1,
+      y: rectangle.y + rectangle.h - 1,
+    });
+    return startCell.x >= first.x && startCell.x <= last.x
+      && startCell.y >= first.y && startCell.y <= last.y;
+  });
+  if (containingFixtures.length === 0 || containingFixtures.some(rectangle =>
+    rectangle.kind === 'table' && sameId(rectangle.id, actor.tableId)
+      || rectangle.kind === 'chair' && sameId(rectangle.id, actor.chairId))) return null;
+
+  // A nested or raster-overlapping fixture must not enlarge the escape area.
+  const smallestArea = Math.min(...containingFixtures.map(rectangle =>
+    rectangle.w * rectangle.h));
+  const sourceFixtures = containingFixtures.filter(rectangle =>
+    rectangle.w * rectangle.h === smallestArea);
+  if (sourceFixtures.length !== 1) return null;
+
+  const sourceCells = new Set();
+  let maximumRadius = 1;
+  const sourceFixture = sourceFixtures[0];
+  const first = worldToCell(sourceFixture);
+  const last = worldToCell({
+    x: sourceFixture.x + sourceFixture.w - 1,
+    y: sourceFixture.y + sourceFixture.h - 1,
+  });
+  // The side wall is rasterised as one blocked column; a fixture overlap must
+  // never authorise an escape through that column (even from inside its strip).
+  if (first.x <= wallCellX && wallCellX <= last.x) return null;
+  for (let y = first.y; y <= last.y; y += 1) {
+    for (let x = first.x; x <= last.x; x += 1) sourceCells.add(`${x},${y}`);
+  }
+  maximumRadius = Math.max(maximumRadius,
+    Math.abs(startCell.x - first.x) + 1,
+    Math.abs(startCell.x - last.x) + 1,
+    Math.abs(startCell.y - first.y) + 1,
+    Math.abs(startCell.y - last.y) + 1);
+
+  const canExitTo = target => {
+    if (!base.isOpen(target)
+      || start.x < world.doorX && target.x > world.doorX
+      || start.x > world.doorX + 6 && target.x < world.doorX + 6) return false;
+
+    const boundaries = [0, 1];
+    for (const axis of ['x', 'y']) {
+      const delta = target[axis] - start[axis];
+      if (delta === 0) continue;
+      for (let coordinate = (Math.floor(Math.min(start[axis], target[axis]) / GRID_SIZE) + 1)
+        * GRID_SIZE; coordinate < Math.max(start[axis], target[axis]); coordinate += GRID_SIZE) {
+        boundaries.push((coordinate - start[axis]) / delta);
+      }
+    }
+    boundaries.sort((left, right) => left - right);
+    for (let index = 1; index < boundaries.length; index += 1) {
+      const fraction = (boundaries[index - 1] + boundaries[index]) / 2;
+      const sample = {
+        x: start.x + (target.x - start.x) * fraction,
+        y: start.y + (target.y - start.y) * fraction,
+      };
+      if (!base.isOpen(sample) && !sourceCells.has(cellKey(worldToCell(sample)))) return false;
+    }
+    return true;
+  };
+
+  let exits = [];
+  for (let radius = 1; radius <= maximumRadius; radius += 1) {
+    for (let y = startCell.y - radius; y <= startCell.y + radius; y += 1) {
+      for (let x = startCell.x - radius; x <= startCell.x + radius; x += 1) {
+        if (Math.max(Math.abs(x - startCell.x), Math.abs(y - startCell.y)) !== radius) continue;
+        const candidate = cellToWorld({ x, y });
+        if (canExitTo(candidate)) exits.push(candidate);
+      }
+    }
+    if (exits.length > 0) break;
+  }
+  if (exits.length === 0) return null;
+
+  exits.sort((left, right) => distance(start, left) - distance(start, right)
+    || left.y - right.y || left.x - right.x);
+  const isExit = candidate => exits.some(exit => same(exit, candidate));
+  return Object.freeze({
+    ...base,
+    signature: `${base.signature}:revoked-checkout-escape:${actor.id}:${JSON.stringify([start, exits])}`,
+    isOpen: candidate => same(candidate, start) || base.isOpen(candidate),
+    segmentClear: (from, to) => same(from, start) && isExit(to)
+      ? true : base.segmentClear(from, to),
+    neighbours: candidate => same(candidate, start)
+      ? exits.map(exit => ({ ...exit })) : base.neighbours(candidate),
+    connectors: candidate => same(candidate, start)
+      ? exits.map(exit => ({ ...exit })) : base.connectors(candidate),
   });
 }
 
@@ -226,6 +346,8 @@ export function createActorGrid(state, actor, base = createGrid(state), doorFlow
   const rejected = departing && actor.seatResidency && actor.seatResidency.phase !== 'clear'
     ? Object.freeze({ ...flowBase, residencyRevoked: true }) : flowBase;
   if (flowBase.isOpen(actor) || !departing) return rejected;
+  const blockedCheckoutRecovery = revokedCheckoutEscapeGrid(state, actor, rejected);
+  if (blockedCheckoutRecovery) return blockedCheckoutRecovery;
   const chairs = (state.chairs || []).filter(chair => chair.id === actor.chairId && chair.tableId === actor.tableId);
   const tables = (state.tables || []).filter(table => table.id === actor.tableId);
   if (chairs.length !== 1 || tables.length !== 1) return rejected;

@@ -521,7 +521,10 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}, indexes = c
     ctx.font = getCanvasFont('compact');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(`${getWashStationOccupancy(state, station)} / ${getWashStationCapacity(station)}`,
+    const occupancy = getWashStationOccupancy(state, station, {
+      includeReservations: station.type !== 'automatic',
+    });
+    ctx.fillText(`${occupancy} / ${getWashStationCapacity(station)}`,
       station.x + w / 2, station.y + h + 10);
     ctx.restore();
     const active = items.find(item => item.state === 'washing');
