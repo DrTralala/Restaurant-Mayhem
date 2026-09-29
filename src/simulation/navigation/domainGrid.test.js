@@ -6,7 +6,7 @@ import { recordSeatResidency } from '../movement/seatedDeparture';
 import { advanceCharacterMovementBatch, createMovementCoordinator } from './coordinator';
 import { createInitialState } from '../../state/initialState';
 import { hydrateState } from '../../state/persistence';
-import { movementSaveSnapshot } from '../../state/movementPersistence';
+import { movementSaveSnapshot, validateSavedNavigationGeometry } from '../../state/movementPersistence';
 
 function seatedWorld() {
   const table = { id: 'table', x: 200, y: 200 };
@@ -83,6 +83,113 @@ describe('domain-authorised navigation connectors', () => {
     const changed = { ...state, staff: [worker] };
     expect(findRoute(createActorGrid(changed, worker, createGrid(changed)), worker, actor.navigationGoal).status)
       .toBe('unreachable');
+  });
+
+  it('lets a revoked checkout customer escape an unrelated fixture blocking its saved queue route', () => {
+    const customer = {
+      id: 'c9', partyId: 'p5', state: 'checkout_moving', x: 460, y: 300,
+      tableId: 't1', chairId: 'ch1', seatingGeneration: 1,
+      seatResidency: {
+        schema: 1, actorId: 'c9', partyId: 'p5', generation: 1, phase: 'revoked',
+      },
+      cashierStationId: 'cashier1', checkoutPosition: { x: 820, y: 180 },
+      checkoutQueueIndex: 0, checkoutLineMember: false,
+      navigationGoal: { x: 820, y: 180 },
+    };
+    const state = {
+      ...seatedWorld(),
+      tables: [{ id: 't1', x: 60, y: 340, status: 'empty' }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 70, y: 320, rotation: 2 }],
+      kitchenStations: [{ id: 'k2', equipmentId: null, x: 440, y: 280 }],
+      cashierStations: [{ id: 'cashier1', x: 800, y: 120, w: 40, h: 40 }],
+      customers: [customer],
+      queue: [],
+      queueSlots: [],
+      movementCoordinator: createMovementCoordinator(),
+    };
+    const base = createGrid(state);
+    const grid = createActorGrid(state, customer, base);
+
+    expect(base.isOpen(customer)).toBe(false);
+    const route = findRoute(grid, customer, customer.navigationGoal);
+    expect(route.status).toBe('found');
+    expect(base.isOpen(route.points[0])).toBe(true);
+    expect(grid.segmentClear(customer, route.points[0])).toBe(true);
+    expect(grid.segmentClear(route.points[0], customer)).toBe(false);
+
+    let current = state;
+    for (let tick = 0; tick < 120 && current.customers[0].x !== 820; tick += 1) {
+      const batch = advanceCharacterMovementBatch(current,
+        [{ character: current.customers[0], speed: 62 }], 4 / 30);
+      current = {
+        ...current,
+        customers: [batch.moved.get(customer.id)],
+        movementCoordinator: batch.coordinator,
+      };
+    }
+    expect(current.customers[0]).toMatchObject({ x: 820, y: 180 });
+    expect(current.movementCoordinator.statuses.get(customer.id).plan).toBe('arrived');
+  });
+
+  it('does not escape through a containing service counter beyond the blocking kitchen fixture', () => {
+    const surroundingTables = [
+      [360, 240], [400, 240], [440, 240], [480, 240],
+      [360, 280],
+      [360, 320], [400, 320], [440, 320], [480, 320],
+    ].map(([x, y], index) => ({ id: `blocker-${index}`, x, y, status: 'empty' }));
+    const state = {
+      ...seatedWorld(),
+      tables: [{ id: 't1', x: 60, y: 340, status: 'empty' }, ...surroundingTables],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 70, y: 320, rotation: 2 }],
+      kitchenStations: [{ id: 'k2', equipmentId: null, x: 400, y: 280 }],
+      serviceTables: [{ id: 'st1', x: 400, y: 280, rotation: 0 }],
+      customers: [{
+        id: 'nested', partyId: 'p1', state: 'checkout_moving', x: 420, y: 300,
+        tableId: 't1', chairId: 'ch1', seatingGeneration: 1,
+        seatResidency: {
+          schema: 1, actorId: 'nested', partyId: 'p1', generation: 1, phase: 'revoked',
+        },
+        navigationGoal: { x: 600, y: 300 },
+      }],
+      queue: [],
+      queueSlots: [],
+    };
+    const customer = state.customers[0];
+    expect(() => validateSavedNavigationGeometry(state)).not.toThrow();
+    const base = createGrid(state);
+    const grid = createActorGrid(state, customer, base);
+
+    expect(base.isOpen(customer)).toBe(false);
+    expect(base.isOpen({ x: 500, y: 300 })).toBe(false);
+    expect(base.isOpen({ x: 520, y: 300 })).toBe(true);
+    expect(grid.segmentClear(customer, { x: 520, y: 300 })).toBe(false);
+  });
+
+  it('does not grant fixture escape through the wall raster when the fixture overlaps it', () => {
+    const customer = {
+      id: 'wall-trapped', partyId: 'p1', state: 'checkout_moving', x: 909, y: 300,
+      tableId: 't1', chairId: 'ch1', seatingGeneration: 1,
+      seatResidency: {
+        schema: 1, actorId: 'wall-trapped', partyId: 'p1', generation: 1, phase: 'revoked',
+      },
+      navigationGoal: { x: 980, y: 300 },
+    };
+    const state = {
+      ...seatedWorld(),
+      tables: [{ id: 't1', x: 60, y: 340, status: 'empty' }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 70, y: 320, rotation: 2 }],
+      kitchenStations: [{ id: 'edge-kitchen', equipmentId: null, x: 870, y: 280 }],
+      customers: [customer],
+      queue: [],
+      queueSlots: [],
+    };
+    expect(() => validateSavedNavigationGeometry(state)).not.toThrow();
+    const base = createGrid(state);
+    const grid = createActorGrid(state, customer, base);
+
+    expect(base.isOpen(customer)).toBe(false);
+    expect(base.isOpen({ x: 920, y: 300 })).toBe(true);
+    expect(grid.segmentClear(customer, { x: 920, y: 300 })).toBe(false);
   });
 
   it('does not permit escape through an overlapping unrelated fixture', () => {

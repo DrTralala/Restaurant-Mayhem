@@ -60,6 +60,26 @@ describe('dishwashing lifecycle', () => {
     expect(getWashStationOccupancy(state, station)).toBe(3);
   });
 
+  it('counts only deposited items when reservations are excluded from display occupancy', () => {
+    const station = { id: 'auto', type: 'automatic' };
+    const state = {
+      serviceItems: [
+        { id: 'washing', state: 'washing', washStationId: 'auto' },
+        { id: 'queued', state: 'queued_for_wash', washStationId: 'auto' },
+        { id: 'reserved', state: 'dirty_at_table', reservedWashStationId: 'auto' },
+        { id: 'carried', state: 'carried_dirty', washStationId: 'auto' },
+        { id: 'transfer', state: 'queued_for_wash', washStationId: 'sink', reservedWashStationId: 'auto' },
+      ],
+      staff: [{
+        id: 'worker', carryingServiceItemIds: ['carried'],
+        task: { type: 'deliver_dirty_item', serviceItemId: 'inbound', washStationId: 'auto' },
+      }],
+    };
+
+    expect(getWashStationOccupancy(state, station, { includeReservations: false })).toBe(2);
+    expect(getWashStationOccupancy(state, station)).toBe(6);
+  });
+
   it('exposes active station protection separately from capacity occupancy', () => {
     const station = { id: 'auto', type: 'automatic' };
     expect(isWashStationBusy({

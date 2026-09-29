@@ -1691,6 +1691,25 @@ describe('RestaurantCanvas object movement', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'UPGRADE_DISHWASHER', id: 'wash1' });
   });
 
+  it.each([
+    ['carried_dirty', 'Occupancy 0 / 12'],
+    ['queued_for_wash', 'Occupancy 1 / 12'],
+    ['washing', 'Occupancy 1 / 12'],
+  ])('shows only deposited dishes in dishwasher controls: %s', (itemState, count) => {
+    const station = { id: 'wash1', type: 'automatic', level: 1, x: 300, y: 120, w: 40, h: 40 };
+    useGameState.mockReturnValue({
+      ...state,
+      washStations: [station],
+      serviceItems: [{ id: 'dish', state: itemState, washStationId: 'wash1' }],
+    });
+    findClickedEntity.mockReturnValue({ type: 'washStation', data: station, text: 'Automatic dishwasher' });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 320, clientY: 140 });
+
+    expect(screen.getByText(count)).toBeInTheDocument();
+  });
+
   it('shows the level-ten dishwasher nominal duration as 300 seconds per dish', () => {
     const station = {
       id: 'wash1', type: 'automatic', level: 10, x: 300, y: 120, w: 40, h: 40,

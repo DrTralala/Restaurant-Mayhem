@@ -192,7 +192,7 @@ function DishwasherControls({ state, station, dispatch }) {
     ? station.level : 1;
   const stats = getDishwasherStats(level);
   if (!stats) return null;
-  const occupancy = getWashStationOccupancy(state, station);
+  const occupancy = getWashStationOccupancy(state, station, { includeReservations: false });
   const nextCost = stats.nextUpgradeCost;
   const maxed = nextCost == null;
   const funds = state.restaurant?.funds;
