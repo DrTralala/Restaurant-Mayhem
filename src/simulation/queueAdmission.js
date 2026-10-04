@@ -11,6 +11,10 @@ import {
   validateChairApproachAssignments,
 } from './seating';
 import { createGrid } from './navigation/grid';
+import {
+  createNavigationWorkspace,
+  isImmutableNavigationBlockedLookup,
+} from './movement/navigationWorkspace';
 
 const QUEUE_ADMISSION_SPACING = 16;
 
@@ -33,7 +37,13 @@ function getQueueAdmissionCandidates(state, door) {
     x: Math.floor((world.queueX + world.queueW) / world.gridSize),
     y: Math.floor((world.diningY + world.areaH + 50) / world.gridSize),
   };
-  const blocked = buildBlockedCells(state);
+  let blocked;
+  try {
+    const lookup = createNavigationWorkspace(state).blockedCells;
+    blocked = isImmutableNavigationBlockedLookup(lookup) ? lookup : buildBlockedCells(state);
+  } catch (_error) {
+    blocked = buildBlockedCells(state);
+  }
   const candidates = [];
   for (let y = first.y; y <= last.y; y += 1) {
     for (let x = first.x; x <= last.x; x += 1) {
@@ -88,10 +98,11 @@ export function planQueuePartyAdmission(state, { party, door, tableId, chairIds 
     ...(state.customers || []),
     ...getQueueVisibleMembers(state, state.queue),
   ].filter(isFinitePoint);
+  const admissionCandidates = getQueueAdmissionCandidates(state, door);
   const staged = [];
 
   for (const customer of party.members) {
-    const candidate = getQueueAdmissionCandidates(state, door).find(point =>
+    const candidate = admissionCandidates.find(point =>
       occupiedPositions.every(actor =>
         Math.hypot(point.x - actor.x, point.y - actor.y) >= QUEUE_ADMISSION_SPACING));
     if (!candidate) return null;

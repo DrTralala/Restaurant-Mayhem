@@ -2619,8 +2619,7 @@ export function prepareStaffForMovement(state, gameDt) {
   const claimedTableIds = new Set();
   const claimedDirtIds = new Set();
 
-  let staff = ensureStaffRuntime(state.staff, state).map(s =>
-    withCarriedServiceItemIds(s, getCarriedServiceItemIds(s)));
+  let staff = ensureStaffRuntime(state.staff, state);
 
   // Task 3 saves may contain a drink reservation whose task predates the
   // station reference. Keep its durable work ledger, but release the stale

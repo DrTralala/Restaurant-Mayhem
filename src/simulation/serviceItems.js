@@ -377,6 +377,19 @@ export function hasValidDrinkReservation(state, item) {
 }
 
 export function normaliseServiceItemOwnership(state) {
+  if (Array.isArray(state.customers) && state.customers.length === 0
+    && Array.isArray(state.serviceItems) && state.serviceItems.length === 0
+    && (state.staff == null || Array.isArray(state.staff))) {
+    const staff = (state.staff || []).map(worker => {
+      const normalisedWorker = withCarriedServiceItemIds(worker, []);
+      const taskType = normalisedWorker.task?.type;
+      return taskType === 'wash_item' || taskType === 'transfer_dirty_item'
+        ? { ...clearNavigationGoal(normalisedWorker), task: null }
+        : normalisedWorker;
+    });
+    return { ...state, customers: [], staff, serviceItems: [] };
+  }
+
   const customers = state.customers || [];
   const customerIds = new Set(customers.map(customer => String(customer.id)));
   const seen = new Set();

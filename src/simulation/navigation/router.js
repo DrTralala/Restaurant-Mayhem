@@ -1,5 +1,5 @@
 import { cellKey, worldToCell } from '../movement/navigationWorkspace';
-import { isLatticePoint, latticeAnchors } from './grid';
+import { isLatticePoint, latticeAnchors, queryLatticeReachability } from './grid';
 import { noteNavigation } from './telemetry';
 
 const keyOf = point => `${point.x},${point.y}`;
@@ -36,6 +36,13 @@ function pop(heap) {
 
 export function findRoute(grid, start, goal, { maxExpansions = Infinity, blocked = new Set() } = {}) {
   return advanceRouteSearch(beginRouteSearch(grid, start, goal, { blocked }), maxExpansions);
+}
+
+export function hasRoute(grid, start, goal) {
+  const reachable = queryLatticeReachability(grid, start, goal);
+  if (reachable !== null) return reachable;
+  noteNavigation('latticeReachabilityFallbacks');
+  return findRoute(grid, start, goal).status === 'found';
 }
 
 export function beginRouteSearch(grid, start, goal, { blocked = new Set(), allowBlockedStart = false, allowBlockedGoal = false } = {}) {

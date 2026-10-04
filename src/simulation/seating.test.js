@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildChairApproachAssignments, getChairCentre } from './seating';
+import {
+  buildChairApproachAssignments,
+  getChairCentre,
+  validateChairApproachAssignments,
+} from './seating';
 import { createInitialState } from '../state/initialState';
+import { createGrid } from './navigation/grid';
+import { captureNavigation } from './navigation/telemetry';
 
 describe('chair approaches', () => {
   it('never assigns a chair approach occupied by an existing actor', () => {
@@ -67,5 +73,54 @@ describe('chair approaches', () => {
 
   it('defines the stored seated position as the chair centre', () => {
     expect(getChairCentre({ x: 200, y: 180 })).toEqual({ x: 210, y: 190 });
+  });
+
+  it('uses trusted-grid reachability without changing the selected chair approach', () => {
+    const fresh = createInitialState();
+    const state = {
+      ...fresh,
+      customers: [{ id: 'reachability-customer', state: 'entering', x: 340.25, y: 200.5 }],
+      tables: fresh.tables.filter(table => table.id === 't2'),
+      chairs: fresh.chairs.filter(chair => chair.id === 'ch3'),
+      staff: [],
+    };
+    const grid = createGrid(state);
+    const copiedGrid = Object.freeze({ ...grid });
+    const reference = captureNavigation(() => buildChairApproachAssignments(state,
+      ['reachability-customer'], ['ch3'], { navigationGrid: copiedGrid }));
+    const captured = captureNavigation(() => buildChairApproachAssignments(
+      state, ['reachability-customer'], ['ch3'], { navigationGrid: grid },
+    ));
+
+    expect(captured.value).toEqual(reference.value);
+    expect(captured.value).not.toBeNull();
+    expect(reference.report.counters.routeStarts).toBeGreaterThan(0);
+    expect(reference.report.counters.routeExpansions).toBeGreaterThan(0);
+    expect(captured.report.counters.latticeReachabilityQueries).toBeGreaterThan(0);
+    expect(captured.report.counters.routeStarts || 0).toBe(0);
+    expect(captured.report.counters.routeExpansions || 0).toBe(0);
+  });
+
+  it('uses immutable workspace membership for approach construction and validation', () => {
+    const fresh = createInitialState();
+    const state = {
+      ...fresh,
+      customers: [{ id: 'workspace-customer', state: 'entering', x: 340, y: 200 }],
+      tables: fresh.tables.filter(table => table.id === 't2'),
+      chairs: fresh.chairs.filter(chair => chair.id === 'ch3'),
+      staff: [],
+    };
+    const grid = createGrid(state);
+    const built = captureNavigation(() => buildChairApproachAssignments(
+      state, ['workspace-customer'], ['ch3'], { navigationGrid: grid },
+    ));
+    expect(built.value).not.toBeNull();
+    expect(built.report.counters.workspaceGeometryCacheHits).toBe(1);
+
+    const validated = captureNavigation(() => validateChairApproachAssignments(
+      state, ['workspace-customer'], ['ch3'], built.value, 't2', { navigationGrid: grid },
+    ));
+    expect(validated.value).toBe(true);
+    expect(validated.report.counters.workspaceGeometryCacheHits).toBe(1);
   });
 });

@@ -12,7 +12,7 @@ import {
   getChairCentre,
   validateChairApproachAssignments,
 } from './seating';
-import { createActorGrid } from './navigation/domainGrid';
+import { createActorGridFactory } from './navigation/domainGrid';
 import { createGrid } from './navigation/grid';
 import {
   getDoors,
@@ -157,10 +157,11 @@ function getIngressDoorId(state, customer, fallbackDoorId = null) {
 
 function createReservedApproachGridFactory(state) {
   const baseGrid = createGrid(state);
+  const actorGridFor = createActorGridFactory(state, baseGrid);
   const fallbackDoorId = state.queueAdmissionGate?.doorId ?? null;
   return customer => {
     if (customer?.state !== 'entering') return baseGrid;
-    return createActorGrid(state, customer, baseGrid, {
+    return actorGridFor(customer, {
       direction: 'ingress',
       doorId: getIngressDoorId(state, customer, fallbackDoorId),
     });
@@ -300,8 +301,16 @@ function releaseInvalidReservedParties(state, tables, partyIds) {
 function refreshBlockedReservedApproaches(state) {
   let changed = false;
   const releasedPartyIds = new Set();
-  const navigationGrid = createReservedApproachGridFactory(state);
-  const hasIngress = getDoorsForFlow(state, 'ingress').length > 0;
+  let navigationGrid = null;
+  let hasIngress;
+  const getNavigationGrid = () => {
+    if (!navigationGrid) navigationGrid = createReservedApproachGridFactory(state);
+    return navigationGrid;
+  };
+  const hasIngressDoor = () => {
+    if (hasIngress === undefined) hasIngress = getDoorsForFlow(state, 'ingress').length > 0;
+    return hasIngress;
+  };
   const tables = (state.tables || []).map(table => {
     if (table?.status !== 'reserved' || table.diningPartyId == null) return table;
     const assignments = table.seatingAssignments;
@@ -311,15 +320,17 @@ function refreshBlockedReservedApproaches(state) {
     const geometryValid = validateChairApproachAssignments(
       state, memberIds, chairIds, assignments, table.id,
     );
-    if (geometryValid && (!hasIngress || validateChairApproachAssignments(
-      state, memberIds, chairIds, assignments, table.id, { navigationGrid },
+    if (geometryValid && (!hasIngressDoor() || validateChairApproachAssignments(
+      state, memberIds, chairIds, assignments, table.id, { navigationGrid: getNavigationGrid() },
     ))) {
       return table;
     }
-    const recomputed = buildChairApproachAssignments(state, memberIds, chairIds, { navigationGrid });
+    const recomputed = buildChairApproachAssignments(
+      state, memberIds, chairIds, { navigationGrid: getNavigationGrid() },
+    );
     if (recomputed
       && validateChairApproachAssignments(
-        state, memberIds, chairIds, recomputed, table.id, { navigationGrid },
+        state, memberIds, chairIds, recomputed, table.id, { navigationGrid: getNavigationGrid() },
       )
       && JSON.stringify(recomputed) !== JSON.stringify(assignments)) {
       changed = true;

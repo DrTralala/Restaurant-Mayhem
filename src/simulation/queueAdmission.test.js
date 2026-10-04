@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildBlockedCells, cellToWorld } from './pathfinding';
+import * as pathfinding from './pathfinding';
 import { getQueueAdmissionGateStatus, planQueuePartyAdmission } from './queueAdmission';
 import { getRestaurantWorld } from './world';
 
@@ -71,6 +72,36 @@ describe('queue admission', () => {
     });
     expect(planned.gate).not.toHaveProperty('guideStaffId');
     expect(state).toEqual(snapshot);
+  });
+
+  it('enumerates admission candidates once for the whole party', () => {
+    const state = buildAdmissionState();
+    const isInsideWorld = vi.spyOn(pathfinding, 'isInsideWorld');
+    const world = getRestaurantWorld(state.restaurant);
+    const firstX = Math.ceil((world.queueX + 60) / world.gridSize);
+    const lastX = Math.floor((world.queueX + world.queueW) / world.gridSize);
+    const firstY = Math.ceil(world.kitchenY / world.gridSize);
+    const lastY = Math.floor((world.diningY + world.areaH + 50) / world.gridSize);
+    let queueCellCount = 0;
+    for (let y = firstY; y <= lastY; y += 1) {
+      for (let x = firstX; x <= lastX; x += 1) {
+        const point = cellToWorld({ x, y });
+        if (point.x >= world.queueX && point.x <= world.queueX + world.queueW
+          && point.y >= world.kitchenY && point.y <= world.diningY + world.areaH + 50) {
+          queueCellCount += 1;
+        }
+      }
+    }
+
+    try {
+      const planned = planQueuePartyAdmission(state, planArgs(state));
+
+      expect(planned).not.toBeNull();
+      expect(planned.admittedCustomers).toHaveLength(2);
+      expect(isInsideWorld).toHaveBeenCalledTimes(queueCellCount);
+    } finally {
+      isInsideWorld.mockRestore();
+    }
   });
 
   it('clears inherited domain goals atomically without mutating queued input', () => {

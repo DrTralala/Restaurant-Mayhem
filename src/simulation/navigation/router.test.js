@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createGrid } from './grid';
 import { advanceRouteSearch, beginRouteSearch, findRoute, forkRouteSearch } from './router';
+import * as router from './router';
+import { captureNavigation } from './telemetry';
 
 const openState = () => ({
   restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [],
@@ -19,6 +21,33 @@ function expectSafeRoute(grid, start, goal, result) {
 }
 
 describe('independent static navigation router', () => {
+  it('exposes a boolean route-status helper that falls back for unregistered grid copies', () => {
+    const grid = createGrid(openState());
+    const copied = Object.freeze({ ...grid });
+    const start = { x: 400.5, y: 300.25 };
+    const goal = { x: 460, y: 300 };
+
+    expect(router.hasRoute).toBeTypeOf('function');
+    const captured = captureNavigation(() => router.hasRoute(copied, start, goal));
+
+    expect(captured.value).toBe(findRoute(copied, start, goal).status === 'found');
+    expect(captured.value).toBe(true);
+    expect(captured.report.counters.latticeReachabilityFallbacks).toBe(1);
+    expect(captured.report.counters.routeStarts).toBe(1);
+  });
+
+  it('falls back to the unchanged route search for non-lattice goals', () => {
+    expect(router.hasRoute).toBeTypeOf('function');
+    const grid = createGrid(openState());
+    const start = { x: 400, y: 300 };
+    const goal = { x: 461.25, y: 300 };
+    const captured = captureNavigation(() => router.hasRoute(grid, start, goal));
+
+    expect(captured.value).toBe(findRoute(grid, start, goal).status === 'found');
+    expect(captured.report.counters.latticeReachabilityFallbacks).toBe(1);
+    expect(captured.report.counters.routeStarts).toBe(1);
+  });
+
   it('exempts an explicit endpoint from traffic avoidance without opening the rest of its cell', () => {
     const grid = createGrid(openState());
     const start = { x: 419, y: 300 }, goal = { x: 460, y: 300 };

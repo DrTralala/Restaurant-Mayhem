@@ -6,6 +6,7 @@ import {
 import {
   createStaffDutyDefaults,
   getScheduledDuty,
+  getOwnedStaffSchedule,
   validateStaffSchedule,
 } from './staffSchedules';
 import { getStaffMovementSpeed } from './staffActivity';
@@ -44,6 +45,17 @@ const ACTIVE_PHASES = new Set(['active', 'exiting']);
 const WAITING_PHASES = new Set(['seeking_amenity', 'waiting_for_amenity']);
 const HANDOFF_PHASES = new Set(['finishing_task', 'blocked_handoff']);
 const EPSILON = 1e-9;
+const CONTROLLER_DEFAULTS = Object.freeze({
+  schedule: undefined,
+  effectiveDuty: DEFAULT_DUTY,
+  dutyPhase: 'available',
+  dutyTransitionRequestedAt: null,
+  amenityUse: null,
+  ptoSession: null,
+  wellRestedUntil: 0,
+  amenityWaitingSince: null,
+  lastRestActivityType: null,
+});
 
 const finite = value => Number.isFinite(value);
 const finitePoint = point => finite(point?.x) && finite(point?.y);
@@ -68,6 +80,8 @@ function normalisedSchedule(worker) {
   const schedule = Array.isArray(worker?.schedule)
     ? worker.schedule
     : worker?.schedule?.schedule;
+  const owned = getOwnedStaffSchedule(schedule);
+  if (owned) return owned.validation.valid ? owned.slots : allWorkSchedule();
   return validateStaffSchedule(schedule).valid ? [...schedule] : allWorkSchedule();
 }
 
@@ -501,7 +515,8 @@ function beginExit(state, worker, now, fingerprint) {
 }
 
 function normaliseWorkerForController(worker) {
-  const defaults = createStaffDutyDefaults();
+  const hasSchedule = Array.isArray(worker.schedule) || Boolean(worker.schedule?.schedule);
+  const defaults = hasSchedule ? CONTROLLER_DEFAULTS : createStaffDutyDefaults();
   const effectiveDuty = validDuty(worker.effectiveDuty);
   const storedPhase = typeof worker.dutyPhase === 'string' ? worker.dutyPhase : 'available';
   const dutyPhase = worker.amenityUse?.phase === 'occupied' && storedPhase !== 'exiting'
@@ -513,8 +528,7 @@ function normaliseWorkerForController(worker) {
     ...worker,
     effectiveDuty,
     dutyPhase,
-    schedule: Array.isArray(worker.schedule) || worker.schedule?.schedule
-      ? worker.schedule : defaults.schedule,
+    schedule: hasSchedule ? worker.schedule : defaults.schedule,
   };
 }
 
@@ -676,11 +690,12 @@ function beginDutyTransition(state, worker, desiredDuty, requestedAt, now) {
   };
 }
 
-function transitionActiveUse(state, worker, desiredDuty, now, fingerprint) {
+function transitionActiveUse(state, worker, desiredDuty, now, getFingerprint) {
   const current = currentAmenity(state, worker);
   const use = worker.amenityUse;
   if (!current || !use) return worker;
-  if (worker.dutyPhase === 'exiting' && !requestedExitRetry(worker, now, fingerprint)) return worker;
+  if (worker.dutyPhase === 'exiting'
+    && !requestedExitRetry(worker, now, getFingerprint())) return worker;
   if (use.phase === 'reserved') {
     if (amenityForDuty(current.amenity.type, desiredDuty)) return worker;
     return clearWorkerUse(worker, { phase: desiredDuty === 'work' ? 'available' : 'seeking_amenity' });
@@ -710,9 +725,9 @@ function transitionActiveUse(state, worker, desiredDuty, now, fingerprint) {
         morale: 100,
         wellbeingWakeAt: wakeAt,
         wellRestedUntil: Math.max(previousBuff, wakeAt + STAFF_WELLBEING_CONSTANTS.wellRestedSeconds),
-      }, now, fingerprint);
+      }, now, getFingerprint());
     }
-    return beginExit(state, { ...worker, effectiveDuty: desiredDuty }, now, fingerprint);
+    return beginExit(state, { ...worker, effectiveDuty: desiredDuty }, now, getFingerprint());
   }
   if (!amenityForDuty(current.amenity.type, desiredDuty)
     || (finished && !(policy?.fullMorale && desiredDuty === 'pto'))) {
@@ -725,14 +740,14 @@ function transitionActiveUse(state, worker, desiredDuty, now, fingerprint) {
         morale: 100,
         wellbeingWakeAt: wakeAt,
         wellRestedUntil: Math.max(previousBuff, wakeAt + STAFF_WELLBEING_CONSTANTS.wellRestedSeconds),
-      }, now, fingerprint);
+      }, now, getFingerprint());
     }
-    return beginExit(state, { ...worker, effectiveDuty: desiredDuty }, now, fingerprint);
+    return beginExit(state, { ...worker, effectiveDuty: desiredDuty }, now, getFingerprint());
   }
   return worker;
 }
 
-function settleWorker(state, rawWorker, fromTime, toTime, fingerprint) {
+function settleWorker(state, rawWorker, fromTime, toTime, getFingerprint) {
   let worker = normaliseWorkerForController(rawWorker);
   const useTransitionAt = occupiedUseTransitionTime(state, worker, fromTime, toTime);
   const recoveryTo = useTransitionAt == null ? toTime : Math.min(toTime, useTransitionAt);
@@ -759,16 +774,16 @@ function settleWorker(state, rawWorker, fromTime, toTime, fingerprint) {
 
   const current = currentAmenity(state, worker);
   if (current) {
-    worker = transitionActiveUse(state, worker, desiredDuty, decisionTime, fingerprint);
+    worker = transitionActiveUse(state, worker, desiredDuty, decisionTime, getFingerprint);
   }
 
   return worker;
 }
 
-function shouldRetryAmenity(worker, now, fingerprint) {
+function shouldRetryAmenity(worker, now, getFingerprint) {
   return !finite(worker.amenityRetryAt)
     || now >= worker.amenityRetryAt - EPSILON
-    || worker.amenityRetryFingerprint !== fingerprint;
+    || worker.amenityRetryFingerprint !== getFingerprint();
 }
 
 function markWaiting(worker, now, fingerprint, phase = 'waiting_for_amenity') {
@@ -783,18 +798,18 @@ function markWaiting(worker, now, fingerprint, phase = 'waiting_for_amenity') {
   };
 }
 
-function dispatchAmenity(state, worker, now, fingerprint) {
+function dispatchAmenity(state, worker, now, getFingerprint) {
   const duty = validDuty(worker.effectiveDuty);
   if (!['rest', 'pto'].includes(duty) || worker.task || workerHasCarriedLoad(worker)) {
     return { state, worker };
   }
   if (worker.amenityUse) return { state, worker };
-  if (!shouldRetryAmenity(worker, now, fingerprint)) return { state, worker };
+  if (!shouldRetryAmenity(worker, now, getFingerprint)) return { state, worker };
   const choice = selectStaffWellbeingAmenity(state, worker.id, now);
-  if (!choice) return { state, worker: markWaiting(worker, now, fingerprint) };
+  if (!choice) return { state, worker: markWaiting(worker, now, getFingerprint()) };
   const reserved = setReservation(state, worker.id, choice.amenityId, choice.slotIndex, now);
   return reserved === state
-    ? { state, worker: markWaiting(worker, now, fingerprint) }
+    ? { state, worker: markWaiting(worker, now, getFingerprint()) }
     : {
       state: reserved,
       worker: reserved.staff.find(candidate => sameId(candidate.id, worker.id)) || worker,
@@ -859,8 +874,18 @@ export function advanceStaffWellbeing(state, fromTime, toTime) {
   if (!state || !Array.isArray(state.staff) || !finite(fromTime) || !finite(toTime)
     || toTime < fromTime) return state;
 
-  const initialFingerprint = wellbeingFingerprint(state);
-  let staff = state.staff.map(worker => settleWorker(state, worker, fromTime, toTime, initialFingerprint));
+  let initialFingerprint;
+  let initialFingerprintReady = false;
+  const getInitialFingerprint = () => {
+    if (!initialFingerprintReady) {
+      initialFingerprint = wellbeingFingerprint(state);
+      initialFingerprintReady = true;
+    }
+    return initialFingerprint;
+  };
+  let staff = state.staff.map(worker => settleWorker(
+    state, worker, fromTime, toTime, getInitialFingerprint,
+  ));
   let next = { ...state, staff };
 
   // A schedule change can cancel a reservation before movement reaches its
@@ -884,15 +909,21 @@ export function advanceStaffWellbeing(state, fromTime, toTime) {
     const current = next.staff[index];
     if (current.amenityUse) continue;
     if (current.effectiveDuty === 'work') {
-      next.staff[index] = {
-        ...current,
-        dutyPhase: HANDOFF_PHASES.has(current.dutyPhase) ? current.dutyPhase : 'available',
-      };
+      const dutyPhase = HANDOFF_PHASES.has(current.dutyPhase) ? current.dutyPhase : 'available';
+      if (current.dutyPhase !== dutyPhase) next.staff[index] = { ...current, dutyPhase };
       continue;
     }
     if (current.dutyPhase === 'exiting' || current.task || workerHasCarriedLoad(current)) continue;
-    const fingerprint = wellbeingFingerprint(next);
-    const dispatched = dispatchAmenity(next, current, toTime, fingerprint);
+    let fingerprint;
+    let fingerprintReady = false;
+    const getFingerprint = () => {
+      if (!fingerprintReady) {
+        fingerprint = wellbeingFingerprint(next);
+        fingerprintReady = true;
+      }
+      return fingerprint;
+    };
+    const dispatched = dispatchAmenity(next, current, toTime, getFingerprint);
     next = dispatched.state;
     next.staff[index] = dispatched.worker;
   }

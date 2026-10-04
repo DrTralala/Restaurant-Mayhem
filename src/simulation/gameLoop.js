@@ -27,6 +27,8 @@ import { runPreflightFrame } from './navigation/preflight';
 import { navigationPhase } from './navigation/telemetry';
 import { advanceServiceContractArrivals, getNextServiceContractBoundary, settleServiceContracts } from './serviceContracts';
 import { evaluateCareerRun, isCareerDecisionPending } from './careerRun';
+import { withSimulationNavigationLayoutContext } from './movement/navigationWorkspace';
+import { withSimulationStaffScheduleContext } from './staffSchedules';
 
 /**
  * Combine customer- and staff-phase movement descriptors into one batch. A
@@ -226,6 +228,12 @@ function runTickInternal(state, timing) {
 }
 
 export function runTick(state, timing) {
+  return withSimulationStaffScheduleContext(() => withSimulationNavigationLayoutContext(
+    state, () => runTickWithOwnedLayout(state, timing),
+  ));
+}
+
+function runTickWithOwnedLayout(state, timing) {
   if (tickStopped(state)) return state;
 
   // A loaded career at cutoff finalises only already-recorded facts. Overdue

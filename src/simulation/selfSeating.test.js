@@ -4,6 +4,7 @@ import { cellToWorld } from './pathfinding';
 import { runTick } from './gameLoop';
 import { prepareCustomersForMovement } from './customers';
 import { prepareSelfSeating, reconcileSelfSeatingState, resolveSelfSeating } from './selfSeating';
+import { captureNavigation } from './navigation/telemetry';
 
 function queuedState(overrides = {}) {
   const fresh = createInitialState();
@@ -72,6 +73,15 @@ afterEach(() => {
 });
 
 describe('self seating admission', () => {
+  it('does not create a reserved-approach grid when there are no eligible reservations', () => {
+    const state = { ...createInitialState(), queue: [] };
+    expect(state.tables.some(table => table.status === 'reserved')).toBe(false);
+
+    const captured = captureNavigation(() => prepareSelfSeating(state));
+
+    expect(captured.report.counters.workspaceBuilds || 0).toBe(0);
+  });
+
   it('admits without a waiter and reserves exactly one table', () => {
     const next = prepareSelfSeating(queuedState());
     expect(next.staff).toEqual([]);
@@ -192,6 +202,26 @@ describe('self seating admission', () => {
     const seated = resolveSelfSeating(placed, statuses);
     expect(seated.customers[0].state).toBe('seated');
     expect(seated.tables[0].status).toBe('occupied');
+  });
+
+  it('revalidates an active reservation without repeating route searches each tick', () => {
+    const admitted = prepareSelfSeating(queuedState());
+    const assignments = structuredClone(admitted.tables[0].seatingAssignments);
+    const captured = captureNavigation(() => prepareSelfSeating(admitted));
+
+    expect(captured.value.tables[0].seatingAssignments).toEqual(assignments);
+    expect(captured.report.counters.latticeReachabilityQueries).toBeGreaterThan(0);
+    expect(captured.report.counters.routeStarts || 0).toBe(0);
+    expect(captured.report.counters.routeExpansions || 0).toBe(0);
+  });
+
+  it('shares the reserved-approach ingress flow base across party members', () => {
+    const admitted = prepareSelfSeating(queuedState({ queue: [partyOf(2)] }));
+    expect(admitted.customers).toHaveLength(2);
+    const captured = captureNavigation(() => prepareSelfSeating(admitted));
+
+    expect(captured.report.counters.actorFlowGridBuilds).toBe(1);
+    expect(captured.report.counters.actorFlowGridCacheHits).toBe(1);
   });
 
   it('reconcile releases its own reservation and sends members away when chairs are removed', () => {

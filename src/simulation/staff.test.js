@@ -41,6 +41,22 @@ it('prepares staff paths without changing positions', () => {
   expect(prepared.staff[0]).toMatchObject({ x: 100, y: 100 });
 });
 
+it('keeps ensureStaffRuntime inventory normalisation on the positioned fast path', () => {
+  const sourceIds = [];
+  const worker = {
+    id: 'legacy-carrier', role: 'cook', x: 100, y: 100, task: null,
+    carryingServiceItemIds: sourceIds,
+    carryingServiceItemId: 'legacy-item',
+  };
+  const prepared = prepareStaffForMovement({ ...baseState, staff: [worker] }, 0);
+
+  expect(prepared.staff[0].carryingServiceItemIds).toEqual([]);
+  expect(prepared.staff[0].carryingServiceItemIds).not.toBe(sourceIds);
+  expect(prepared.staff[0]).not.toHaveProperty('carryingServiceItemId');
+  expect(worker.carryingServiceItemId).toBe('legacy-item');
+  expect(worker.carryingServiceItemIds).toBe(sourceIds);
+});
+
 it('emits idle roaming at speed 20', () => {
   const entries = getStaffMovementEntries({
     ...baseState,

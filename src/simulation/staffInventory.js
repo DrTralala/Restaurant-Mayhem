@@ -2,6 +2,7 @@ function uniqueIds(value) {
   const ids = Array.isArray(value)
     ? value
     : value == null ? [] : [value];
+  if (ids.length === 0) return [];
   const seen = new Set();
   return ids.filter(id => {
     if (id == null || seen.has(id)) return false;
@@ -17,15 +18,15 @@ export function getStaffCarryCapacity(worker) {
 
 export function getCarriedServiceItemIds(worker) {
   if (Array.isArray(worker?.carryingServiceItemIds)) {
-    return uniqueIds(worker.carryingServiceItemIds);
+    const ids = worker.carryingServiceItemIds;
+    if (Array.isArray(ids) && ids.length === 0) return [];
+    return uniqueIds(ids);
   }
   return uniqueIds(worker?.carryingServiceItemId);
 }
 
 export function withCarriedServiceItemIds(worker, ids) {
   const { carryingServiceItemId: _legacyCarryingServiceItemId, ...withoutLegacy } = worker || {};
-  return {
-    ...withoutLegacy,
-    carryingServiceItemIds: uniqueIds(ids),
-  };
+  withoutLegacy.carryingServiceItemIds = uniqueIds(ids);
+  return withoutLegacy;
 }

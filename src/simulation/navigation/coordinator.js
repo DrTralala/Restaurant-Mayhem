@@ -1,11 +1,11 @@
-import { createGrid, latticeAnchors } from './grid';
+import { createGrid, hasStableSegmentGeometry, latticeAnchors } from './grid';
 import { cellKey, worldToCell } from '../movement/navigationWorkspace';
 import { advanceRouteSearch, beginRouteSearch, forkRouteSearch } from './router';
 import { planMovement } from './planner';
-import { actionsConflict, positionAt } from './reservations';
+import { actionsConflict, positionAt, createReservationPreparationContext } from './reservations';
 import { arbitrateDestinations, orderTrafficRequests } from './traffic';
 import { chooseRecoveries } from './recovery';
-import { createActorGrid, commitActorPosition } from './domainGrid';
+import { createActorGridFactory, commitActorPosition } from './domainGrid';
 import { CHARACTER_CLEARANCE } from './destinations';
 import { stationaryTrajectory, trajectorySegment } from '../movement/trajectory';
 import { noteNavigation } from './telemetry';
@@ -198,15 +198,68 @@ function trajectory(actions, dt, actor) {
   ));
 }
 
+function routeTargetPointIsPlain(point) {
+  if (!point || typeof point !== 'object') return false;
+  const prototype = Object.getPrototypeOf(point);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const x = Object.getOwnPropertyDescriptor(point, 'x');
+  const y = Object.getOwnPropertyDescriptor(point, 'y');
+  return x && y && Object.hasOwn(x, 'value') && Object.hasOwn(y, 'value')
+    && Number.isFinite(x.value) && Number.isFinite(y.value)
+    && Object.is(point.x, x.value) && Object.is(point.y, y.value);
+}
+
+function routeTargetNearestCandidate(grid, start, route) {
+  if (!hasStableSegmentGeometry(grid)) return null;
+  try {
+    if (!Array.isArray(route) || Object.getPrototypeOf(route) !== Array.prototype
+      || route.length < 2 || !routeTargetPointIsPlain(start)) return null;
+    let nearest = -1;
+    let nearestDistance = Infinity;
+    for (let index = 0; index < route.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(route, String(index));
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) return null;
+      const point = descriptor.value;
+      if (route[index] !== point || !routeTargetPointIsPlain(point)) return null;
+      const distance = Math.hypot(point.x - start.x, point.y - start.y);
+      if (!Number.isFinite(distance)) return null;
+      if (distance <= nearestDistance) {
+        nearest = index;
+        nearestDistance = distance;
+      }
+    }
+    return nearest < 0 ? null : { index: nearest, distance: nearestDistance };
+  } catch (_error) {
+    return null;
+  }
+}
+
 function routeTarget(grid, start, route, speed, horizon, goal) {
   let nearest = -1;
   let nearestDistance = Infinity;
-  for (let index = 0; index < route.length; index += 1) {
-    const point = route[index];
-    const distance = Math.hypot(point.x - start.x, point.y - start.y);
-    if (distance > nearestDistance || !grid.segmentClear(start, point)) continue;
-    nearest = index;
-    nearestDistance = distance;
+  const candidate = routeTargetNearestCandidate(grid, start, route);
+  if (candidate) {
+    noteNavigation('routeTargetClosestFirst');
+    // If the closest point is clear, the old scan must choose it (last index
+    // wins equal distances). Otherwise retain the original linear scan rather
+    // than allocating a sort or repeatedly searching for the next candidate.
+    const point = route[candidate.index];
+    noteNavigation('routeTargetVisibilityChecks');
+    if (grid.segmentClear(start, point)) {
+      nearest = candidate.index;
+      nearestDistance = candidate.distance;
+    }
+  }
+  if (nearest < 0) {
+    for (let index = 0; index < route.length; index += 1) {
+      const point = route[index];
+      const distance = Math.hypot(point.x - start.x, point.y - start.y);
+      if (distance > nearestDistance) continue;
+      noteNavigation('routeTargetVisibilityChecks');
+      if (!grid.segmentClear(start, point)) continue;
+      nearest = index;
+      nearestDistance = distance;
+    }
   }
   if (nearest < 0) return goal;
   const lookahead = speed * horizon * 0.75;
@@ -267,12 +320,13 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
   next.tick = previous.tick + 1;
   next.elapsedMovementSeconds = (previous.elapsedMovementSeconds || 0) + dt;
   const baseGrid = createGrid(state);
+  const actorGridFor = createActorGridFactory(state, baseGrid);
   const requests = normalise(state, entries, previous);
   next.requests = requests;
   const recoveryInputs = trafficRecoveryInputs(requests, previous.statuses, previous.conflicts, dt);
   const recoveryResult = chooseRecoveries({ requests: recoveryInputs.requests, records: previous.records,
     statuses: recoveryInputs.statuses, grid: baseGrid,
-    gridFor: request => createActorGrid(state, request.character, baseGrid, request.doorFlow),
+    gridFor: request => actorGridFor(request.character, request.doorFlow),
     budget: 512 });
   const effectiveGoal = request => request.checkoutAdvance
     ? request.goal : recoveryResult.recoveries.get(request.id)?.goal || request.goal;
@@ -280,6 +334,7 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
     .map(request => ({ ...request, goal: effectiveGoal(request) })), previous.claims);
   next.claims = arbitration.claims;
   const reservations = new Map([...requests].map(([id, request]) => [id, { actorId: id, actions: hold(request.start, horizon) }]));
+  const reservationPreparationContext = createReservationPreparationContext();
   const moved = new Map();
   const trajectories = new Map();
   const diagnostics = { expansionsThisTick: recoveryResult.expansions, actorExpansions: new Map(), waiting: new Map(),
@@ -303,7 +358,7 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
   for (const request of orderTrafficRequests([...requests.values()])) {
     const expansionsBefore = diagnostics.expansionsThisTick;
     const { id, goal, start, character, speed } = request;
-    const grid = createActorGrid(state, character, baseGrid, request.doorFlow);
+    const grid = actorGridFor(character, request.doorFlow);
     const target = effectiveGoal(request);
     const recovery = recoveryResult.recoveries.get(id);
     let actions = reservations.get(id).actions;
@@ -380,7 +435,7 @@ export function advanceCharacterMovementBatch(state, entries, movementDt, metric
           goal: (!continueYield && commitment) || routeTarget(grid, start, route, speed, horizon, target), speed, horizon,
           firstWaypoint: continueYield ? commitment : null,
           reservations: [...reservations.values()].filter(item => item.actorId !== id),
-          maxExpansions: Math.max(0, available - spent) });
+          maxExpansions: Math.max(0, available - spent) }, reservationPreparationContext);
         spent += result.expansions;
         blockers = result.blockers;
         if (result.actions.length) actions = result.actions;

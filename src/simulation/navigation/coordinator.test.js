@@ -1,11 +1,195 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { advanceCharacterMovementBatch, createMovementCoordinator } from './coordinator';
 import { minimumTrajectoryDistance } from '../movement/trajectory';
+import { captureNavigation } from './telemetry';
+import * as reservations from './reservations';
+import * as grids from './grid';
+import coordinatorSource from './coordinator.js?raw';
+import { noteNavigation } from './telemetry';
+import { createNavigationWorkspace } from '../movement/navigationWorkspace';
+
+function legacyRouteTarget(grid, start, route, speed, horizon, goal) {
+  let nearest = -1;
+  let nearestDistance = Infinity;
+  for (let index = 0; index < route.length; index += 1) {
+    const point = route[index];
+    const distance = Math.hypot(point.x - start.x, point.y - start.y);
+    if (distance > nearestDistance || !grid.segmentClear(start, point)) continue;
+    nearest = index;
+    nearestDistance = distance;
+  }
+  if (nearest < 0) return goal;
+  const lookahead = speed * horizon * 0.75;
+  let point = route[nearest];
+  let length = nearestDistance;
+  for (let index = nearest + 1; index < route.length; index += 1) {
+    const next = route[index];
+    const segment = Math.hypot(next.x - point.x, next.y - point.y);
+    if (length + segment > lookahead && length > 0) break;
+    length += segment;
+    point = next;
+  }
+  return point;
+}
+
+// Exercise the private production helper, including its actual grid, without
+// adding a test-only export or replacing a frozen grid's segment implementation.
+const routeTargetFactory = new Function('hasStableSegmentGeometry', 'noteNavigation', 'observeSegment',
+  coordinatorSource.slice(coordinatorSource.indexOf('function routeTarget'),
+    coordinatorSource.indexOf('function planCheckoutAdvance'))
+    .replaceAll('grid.segmentClear(start, point)', 'observeSegment(grid, start, point)')
+    + '\nreturn routeTarget;');
+function observedRouteTarget(...args) {
+  const checked = [];
+  const target = routeTargetFactory(grids.hasStableSegmentGeometry, noteNavigation, (grid, start, point) => {
+    checked.push(point);
+    return grid.segmentClear(start, point);
+  });
+  return { point: target(...args), checked };
+}
 
 const actor = (id, x, y, goal, extra = {}) => ({ id, x, y, ...(goal ? { navigationGoal: goal } : {}), ...extra });
 const world = staff => ({ restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [],
   serviceTables: [], customers: [], queueSlots: [], staff, movementCoordinator: createMovementCoordinator() });
 const entries = state => state.staff.map(character => ({ character, speed: character.navigationGoal ? 60 : 0 }));
+
+describe('route-target visibility selection', () => {
+  it('checks the nearest candidate first instead of each successively closer route point', () => {
+    const grid = grids.createGrid(world([]));
+    const start = { x: 600, y: 300 };
+    const route = Array.from({ length: 31 }, (_, index) => ({ x: 200 + index * 20, y: 300 }));
+    const expected = legacyRouteTarget(grid, start, route, 40, 2, route.at(-1));
+    const actual = observedRouteTarget(grid, start, route, 40, 2, route.at(-1));
+    expect(actual.point).toBe(expected);
+    expect(actual.point).toEqual({ x: 660, y: 300 });
+    expect(actual.checked).toEqual([route[20]]);
+  });
+
+  it('matches the original target for ties, blocked nearest points, off-lattice starts and empty routes', () => {
+    const open = grids.createGrid(world([]));
+    const blocked = grids.createGrid({ ...world([]), tables: [{ id: 'obstacle', x: 420, y: 300 }] });
+    const start = { x: 400, y: 300 };
+    const goal = { x: 800, y: 400 };
+    const tie = [{ x: 380, y: 300 }, { x: 420, y: 300 }, { x: 600, y: 300 }];
+    expect(observedRouteTarget(open, start, tie, 1, 2, goal).point).toBe(tie[1]);
+    const routes = [[], [start], tie,
+      [{ x: 420, y: 300 }, { x: 400, y: 340 }, { x: 440, y: 300 }],
+      [{ x: 420, y: 300 }, { x: 440, y: 300 }],
+    ];
+    for (const grid of [open, blocked]) for (const origin of [start, { x: 406.7934443842663, y: 300 }]) {
+      for (const route of routes) for (const speed of [0, 1, 40, 55, 73]) {
+        expect(observedRouteTarget(grid, origin, route, speed, 2, goal).point)
+          .toBe(legacyRouteTarget(grid, origin, route, speed, 2, goal));
+      }
+    }
+  });
+
+  it('matches the original algorithm across seeded arbitrary route orderings', () => {
+    const grid = grids.createGrid({ ...world([]), tables: [{ id: 'obstacle', x: 420, y: 300 }] });
+    let seed = 20260920;
+    const random = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 0x100000000);
+    for (let sample = 0; sample < 96; sample += 1) {
+      const start = { x: 380 + random() * 40, y: 280 + random() * 40 };
+      const route = Array.from({ length: sample % 24 }, () => ({
+        x: 300 + Math.floor(random() * 12) * 20, y: 240 + Math.floor(random() * 12) * 20,
+      }));
+      const goal = { x: 600, y: 400 };
+      const speed = [1, 40, 55, 73][sample % 4];
+      expect(observedRouteTarget(grid, start, route, speed, 2, goal).point)
+        .toBe(legacyRouteTarget(grid, start, route, speed, 2, goal));
+    }
+  });
+
+  it('retains the original read/query order for accessors and untrusted domain wrappers', () => {
+    const run = (legacy, wrapped) => {
+      const reads = [];
+      const base = grids.createGrid(world([]));
+      const grid = wrapped ? Object.freeze({ ...base, segmentClear: (from, to) => {
+        reads.push(`segment:${to.x}`); return base.segmentClear(from, to);
+      } }) : base;
+      const route = [{ x: 200, y: 300 },
+        { get x() { reads.push('point-x'); return 400; }, y: 300 }, { x: 600, y: 300 }];
+      const args = [grid, { x: 600, y: 300 }, route, 40, 2, route.at(-1)];
+      const point = legacy ? legacyRouteTarget(...args) : observedRouteTarget(...args).point;
+      return { point: { x: point.x, y: point.y }, reads };
+    };
+    for (const wrapped of [false, true]) expect(run(false, wrapped)).toEqual(run(true, wrapped));
+    const base = grids.createGrid(world([]));
+    const wrapped = Object.freeze({ ...base });
+    const route = [{ x: 200, y: 300 }, { x: 400, y: 300 }, { x: 600, y: 300 }];
+    expect(observedRouteTarget(wrapped, route[2], route, 40, 2, route[2]).checked).toEqual(route);
+  });
+
+  it('uses the original scan after a live door changes or becomes an accessor', () => {
+    expect(grids.hasStableSegmentGeometry).toBeTypeOf('function');
+    const state = { ...world([]), doors: [{ id: 'door', y: 340, role: 'entrance' }] };
+    const grid = grids.createGrid(state, null, { doorFlow: { direction: 'ingress', doorId: 'door' } });
+    expect(grids.hasStableSegmentGeometry(grid)).toBe(true);
+    state.doors[0].y = 380;
+    expect(grids.hasStableSegmentGeometry(grid)).toBe(false);
+    const route = [{ x: 200, y: 300 }, { x: 400, y: 300 }, { x: 600, y: 300 }];
+    expect(observedRouteTarget(grid, route[2], route, 40, 2, route[2]).checked).toEqual(route);
+    Object.defineProperty(state.doors[0], 'y', { get: () => 340 });
+    expect(grids.hasStableSegmentGeometry(grid)).toBe(false);
+    expect(observedRouteTarget(grid, route[2], route, 40, 2, route[2]).checked).toEqual(route);
+  });
+
+  it('does not reorder queries on a mutable borrowed raster', () => {
+    const state = world([]);
+    const workspace = createNavigationWorkspace(state);
+    const blockedCells = new Set(workspace.blockedCellKeys);
+    const grid = grids.createGrid(state, Object.freeze({ ...workspace, blockedCells }));
+    expect(grids.hasStableSegmentGeometry(grid)).toBe(false);
+    const route = [{ x: 200, y: 300 }, { x: 400, y: 300 }, { x: 600, y: 300 }];
+    expect(observedRouteTarget(grid, route[2], route, 40, 2, route[2]).checked).toEqual(route);
+    blockedCells.add('20,15');
+    expect(observedRouteTarget(grid, route[2], route, 40, 2, route[2]).point)
+      .toBe(legacyRouteTarget(grid, route[2], route, 40, 2, route[2]));
+  });
+
+  it('does not certify a borrowed frozen workspace with live bounds accessors', () => {
+    const state = world([]);
+    const workspace = createNavigationWorkspace(state);
+    let left = workspace.bounds.left;
+    const bounds = Object.freeze({ ...workspace.bounds, get left() { return left; } });
+    const grid = grids.createGrid(state, Object.freeze({ ...workspace, bounds }));
+    expect(grids.hasStableSegmentGeometry(grid)).toBe(false);
+    left += 20;
+    expect(grids.hasStableSegmentGeometry(grid)).toBe(false);
+  });
+
+  it.each(['start', 'route-index'])('preserves %s accessor fallback reads', kind => {
+    const run = legacy => {
+      const reads = [];
+      const start = kind === 'start'
+        ? { get x() { reads.push('start-x'); return 600; }, y: 300 } : { x: 600, y: 300 };
+      const route = [{ x: 200, y: 300 }, { x: 400, y: 300 }, { x: 600, y: 300 }];
+      const middle = route[1];
+      if (kind === 'route-index') {
+        Object.defineProperty(route, '1', { get: () => { reads.push('route-index'); return middle; } });
+      }
+      const grid = grids.createGrid(world([]));
+      const point = legacy ? legacyRouteTarget(grid, start, route, 40, 2, route[2])
+        : observedRouteTarget(grid, start, route, 40, 2, route[2]).point;
+      return { point, reads };
+    };
+    expect(run(false)).toEqual(run(true));
+  });
+
+  it('preserves malformed and non-finite fallback outcomes', () => {
+    const grid = grids.createGrid(world([]));
+    const start = { x: 400, y: 300 };
+    const goal = { x: 600, y: 300 };
+    const outcome = callback => {
+      try { return { point: callback() }; } catch (error) { return { error: [error.name, error.message] }; }
+    };
+    for (const route of [[start, { x: NaN, y: 300 }], [start, { x: Infinity, y: 300 }],
+      [start, null], [start, { x: '420', y: 300 }], [start, , goal]]) {
+      expect(outcome(() => observedRouteTarget(grid, start, route, 40, 2, goal).point))
+        .toEqual(outcome(() => legacyRouteTarget(grid, start, route, 40, 2, goal)));
+    }
+  });
+});
 
 function tick(state, descriptors = entries(state)) {
   const result = advanceCharacterMovementBatch(state, descriptors, 1 / 30);
@@ -22,6 +206,29 @@ function tick(state, descriptors = entries(state)) {
 }
 
 describe('bounded traffic coordinator', () => {
+  it('preserves batch movement and plans against the original route-target scan', () => {
+    const run = () => {
+      let state = world([
+        actor('a', 400, 300, { x: 600, y: 300 }),
+        actor('b', 600, 340, { x: 400, y: 340 }),
+        actor('obstacle', 440, 300),
+      ]);
+      const frames = [];
+      for (let tick = 0; tick < 60; tick += 1) {
+        const result = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
+        frames.push({ moved: result.moved, statuses: result.statuses, plans: result.coordinator.plans,
+          claims: result.coordinator.claims, trajectories: result.trajectories, diagnostics: result.diagnostics });
+        state = { ...state, staff: state.staff.map(worker => result.moved.get(worker.id) || worker),
+          movementCoordinator: result.coordinator };
+      }
+      return frames;
+    };
+    const predicate = vi.spyOn(grids, 'hasStableSegmentGeometry').mockReturnValue(false);
+    let reference;
+    try { reference = run(); } finally { predicate.mockRestore(); }
+    expect(run()).toEqual(reference);
+  });
+
   it.each([
     ['an orphan lease', {
       queue: [],
@@ -70,6 +277,62 @@ describe('bounded traffic coordinator', () => {
     for (let index = 0; index < 45; index += 1) state = tick(state);
     expect(state.staff[0]).toMatchObject({ x: 460, y: 300 });
     expect(state.movementCoordinator.statuses.get('worker').plan).toBe('arrived');
+  });
+
+  it('shares an exact ingress flow base across actors within one movement batch', () => {
+    const customers = [
+      actor('ingress-a', 700, 300, { x: 640, y: 300 }, { state: 'entering', entryDoorId: 'entrance' }),
+      actor('ingress-b', 700, 340, { x: 640, y: 340 }, { state: 'entering', entryDoorId: 'entrance' }),
+    ];
+    const state = {
+      ...world([]),
+      customers,
+      doors: [{ id: 'entrance', y: 340, role: 'entrance' }],
+    };
+    const descriptors = customers.map(character => ({
+      character,
+      speed: 60,
+      doorFlow: { direction: 'ingress', doorId: 'entrance', batchTag: 'same' },
+    }));
+    const captured = captureNavigation(() =>
+      advanceCharacterMovementBatch(state, descriptors, 1 / 30));
+
+    expect(captured.report.counters.actorFlowGridBuilds).toBe(1);
+    expect(captured.report.counters.actorFlowGridCacheHits).toBeGreaterThan(0);
+  });
+
+  it('shares reservation preparation within a batch but creates a fresh context for the next batch', () => {
+    const staff = [
+      actor('worker-a', 400, 300, { x: 460, y: 300 }),
+      actor('worker-b', 400, 340, { x: 460, y: 340 }),
+      actor('worker-c', 400, 380, { x: 460, y: 380 }),
+    ];
+    const state = world(staff);
+    const originalFactory = reservations.createReservationSafetyChecker;
+    const factory = vi.spyOn(reservations, 'createReservationSafetyChecker');
+    const contexts = [];
+    factory.mockImplementation((entries, blockers, context) => {
+      contexts.push(context);
+      return originalFactory(entries, blockers, context);
+    });
+
+    try {
+      const firstBatch = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
+      expect(firstBatch.diagnostics.expansionsThisTick).toBeLessThanOrEqual(2048);
+      expect(contexts.length).toBeGreaterThan(1);
+      const firstContext = contexts[0];
+      expect(firstContext).toBeDefined();
+      expect(contexts.every(context => context === firstContext)).toBe(true);
+
+      contexts.length = 0;
+      const secondBatch = advanceCharacterMovementBatch(state, entries(state), 1 / 30);
+      expect(secondBatch.diagnostics.expansionsThisTick).toBeLessThanOrEqual(2048);
+      expect(contexts.length).toBeGreaterThan(1);
+      expect(contexts.every(context => context === contexts[0])).toBe(true);
+      expect(contexts[0]).not.toBe(firstContext);
+    } finally {
+      factory.mockRestore();
+    }
   });
 
   it('does not freeze an independent actor when two destinations conflict', () => {

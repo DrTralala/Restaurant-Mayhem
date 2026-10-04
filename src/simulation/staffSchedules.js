@@ -5,6 +5,113 @@ export const STAFF_SCHEDULE_DAY_SECONDS = 24 * 60 * 60;
 export const STAFF_DUTY_MODES = Object.freeze(['work', 'rest', 'pto']);
 
 const DUTY_MODE_SET = new Set(STAFF_DUTY_MODES);
+const SCHEDULE_CONTEXT_LIMIT = 256;
+const ARRAY_SOME = Array.prototype.some;
+const ARRAY_REDUCE = Array.prototype.reduce;
+const ARRAY_ITERATOR = Array.prototype[Symbol.iterator];
+let activeScheduleContext = null;
+let internalPlainScheduleScope = false;
+
+/**
+ * Own ordinary schedule arrays for one synchronous tick. Callers must replace,
+ * not mutate, schedules during the scope. Nothing is cached between ticks and
+ * snapshots are internal only: worker.schedule keeps its original identity.
+ */
+export function withStaffScheduleContext(run) {
+  return runStaffScheduleContext(run, false);
+}
+
+/** Internal-plain-state-v1: only runTick owns plain, stable schedules. */
+export function withSimulationStaffScheduleContext(run) {
+  return runStaffScheduleContext(run, true);
+}
+
+function runStaffScheduleContext(run, plain) {
+  if (Object.prototype.toString.call(run) === '[object AsyncFunction]') {
+    throw new Error('Staff schedule contexts must be synchronous');
+  }
+  const previous = activeScheduleContext;
+  const previousPlain = internalPlainScheduleScope;
+  activeScheduleContext = new Map();
+  internalPlainScheduleScope = plain;
+  try {
+    const result = run();
+    if (result && typeof result.then === 'function') {
+      throw new Error('Staff schedule contexts must be synchronous');
+    }
+    return result;
+  } finally {
+    activeScheduleContext = previous;
+    internalPlainScheduleScope = previousPlain;
+  }
+}
+
+function captureSchedule(slots) {
+  if (Object.getPrototypeOf(slots) !== Array.prototype
+    || Object.getOwnPropertyDescriptor(slots, 'length')?.value !== STAFF_SCHEDULE_SLOT_COUNT) return null;
+  for (const [key, method] of [['some', ARRAY_SOME], ['reduce', ARRAY_REDUCE], [Symbol.iterator, ARRAY_ITERATOR]]) {
+    const own = Object.getOwnPropertyDescriptor(slots, key);
+    const inherited = Object.getOwnPropertyDescriptor(Array.prototype, key);
+    if ((own && own.value !== method) || inherited?.value !== method) return null;
+  }
+  const snapshot = new Array(STAFF_SCHEDULE_SLOT_COUNT);
+  for (let index = 0; index < STAFF_SCHEDULE_SLOT_COUNT; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(slots, String(index));
+    // Holes and accessors retain the original validator/iterator semantics.
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')) return null;
+    snapshot[index] = descriptor.value;
+  }
+  const validation = validateScheduleSlots(snapshot);
+  return Object.freeze({ slots: Object.freeze(snapshot), validation: Object.freeze(validation) });
+}
+
+function capturePlainSchedule(slots) {
+  if (slots.length !== STAFF_SCHEDULE_SLOT_COUNT) return null;
+  const snapshot = new Array(STAFF_SCHEDULE_SLOT_COUNT);
+  let leadingPto = 0;
+  let runLength = 0;
+  let hasNonPto = false;
+  let shortRun = false;
+  for (let index = 0; index < STAFF_SCHEDULE_SLOT_COUNT; index += 1) {
+    const mode = slots[index];
+    // Undefined reads (including holes) and invalid modes use the strict path.
+    if (!DUTY_MODE_SET.has(mode)) return null;
+    snapshot[index] = mode;
+    if (mode === 'pto') {
+      runLength += 1;
+      if (!hasNonPto) leadingPto += 1;
+    } else {
+      if (hasNonPto && runLength > 0 && runLength < 14) shortRun = true;
+      hasNonPto = true;
+      runLength = 0;
+    }
+  }
+  // The edge fragments are one cyclic run; all-PTO and zero-PTO are valid.
+  // Judge PTO only after mode eligibility, preserving invalid-mode precedence.
+  const edgeRun = leadingPto + runLength;
+  const validation = shortRun || (hasNonPto && edgeRun > 0 && edgeRun < 14)
+    ? invalid('pto-run-too-short') : { valid: true, reason: null };
+  return Object.freeze({ slots: Object.freeze(snapshot), validation: Object.freeze(validation) });
+}
+
+/** Return a private immutable snapshot, or null to use the standalone path. */
+export function getOwnedStaffSchedule(slots) {
+  const context = activeScheduleContext;
+  if (!context || !Array.isArray(slots)) return null;
+  if (context.has(slots)) return context.get(slots);
+  if (context.size >= SCHEDULE_CONTEXT_LIMIT) return null;
+  // Also acts as a capture-in-progress sentinel for re-entrant inspection.
+  context.set(slots, null);
+  let owned;
+  try {
+    owned = internalPlainScheduleScope ? capturePlainSchedule(slots) : captureSchedule(slots);
+  } catch (_error) {
+    // Eligibility inspection must not introduce a new failure for a fallback.
+    return null;
+  }
+  context.set(slots, owned);
+  return owned;
+}
 
 function invalid(reason) {
   return { valid: false, reason };
@@ -22,6 +129,11 @@ function scheduleSlots(schedule) {
  * one run rather than two independent fragments.
  */
 export function validateStaffSchedule(slots) {
+  const owned = getOwnedStaffSchedule(slots);
+  return owned ? { ...owned.validation } : validateScheduleSlots(slots);
+}
+
+function validateScheduleSlots(slots) {
   if (!Array.isArray(slots) || slots.length !== STAFF_SCHEDULE_SLOT_COUNT) {
     return invalid('invalid-length');
   }

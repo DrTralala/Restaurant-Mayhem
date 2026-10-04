@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createCustomerOrder,
   findAvailableServiceSlot,
@@ -463,6 +463,148 @@ describe('service item orders', () => {
       ],
     });
     expect(result.serviceItems.map(item => item.id)).toEqual(['i1']);
+  });
+
+  it('normalises canonical empty ownership while preserving the returned collection shape', () => {
+    const sourceIds = [];
+    const state = {
+      marker: { retained: true },
+      customers: [],
+      staff: [
+        { id: 'canonical', role: 'waiter', carryingServiceItemIds: sourceIds, task: null },
+        { id: 'stale-array', role: 'waiter', carryingServiceItemIds: ['stale', ''], task: null },
+        { id: 'stale-legacy', role: 'waiter', carryingServiceItemId: 'stale', task: null },
+        {
+          id: 'stale-wash', role: 'janitor', carryingServiceItemIds: [],
+          navigationGoal: { x: 10, y: 20 },
+          task: { type: 'wash_item', serviceItemId: 'missing', washStationId: 'sink' },
+        },
+        {
+          id: 'stale-transfer', role: 'waiter', carryingServiceItemIds: [],
+          navigationGoal: { x: 30, y: 40 },
+          task: {
+            type: 'transfer_dirty_item', serviceItemId: 'missing',
+            sourceWashStationId: 'sink', washStationId: 'machine',
+          },
+        },
+        {
+          id: 'unrelated-task', role: 'waiter', task: { type: 'take_order', customerId: 'c1' },
+        },
+      ],
+      serviceItems: [],
+      tables: [],
+      washStations: [],
+      serviceTables: [],
+    };
+
+    const result = normaliseServiceItemOwnership(state);
+
+    expect(result).not.toBe(state);
+    expect(result.marker).toBe(state.marker);
+    expect(result.customers).toEqual([]);
+    expect(result.serviceItems).toEqual([]);
+    expect(result.customers).not.toBe(state.customers);
+    expect(result.serviceItems).not.toBe(state.serviceItems);
+    expect(result.staff).not.toBe(state.staff);
+    expect(result.staff.every((worker, index) => worker !== state.staff[index])).toBe(true);
+    expect(Object.hasOwn(result, 'customers')).toBe(true);
+    expect(Object.hasOwn(result, 'staff')).toBe(true);
+    expect(Object.hasOwn(result, 'serviceItems')).toBe(true);
+    expect(result.staff.map(worker => worker.carryingServiceItemIds)).toEqual([
+      [], [], [], [], [], [],
+    ]);
+    expect(result.staff[0].carryingServiceItemIds).not.toBe(sourceIds);
+    expect(result.staff[2]).not.toHaveProperty('carryingServiceItemId');
+    expect(result.staff[3]).toMatchObject({ task: null });
+    expect(result.staff[3]).not.toHaveProperty('navigationGoal');
+    expect(result.staff[4]).toMatchObject({ task: null });
+    expect(result.staff[4]).not.toHaveProperty('navigationGoal');
+    expect(result.staff[5].task).toEqual({ type: 'take_order', customerId: 'c1' });
+    expect(state.staff[1].carryingServiceItemIds).toEqual(['stale', '']);
+    expect(state.staff[2].carryingServiceItemId).toBe('stale');
+  });
+
+  it('skips ownership sets and maps for an exactly canonical empty workload', () => {
+    const state = {
+      customers: [],
+      staff: Array.from({ length: 8 }, (_, index) => ({
+        id: `worker-${index}`, role: 'waiter', carryingServiceItemIds: [], task: null,
+      })),
+      serviceItems: [],
+    };
+    const NativeSet = globalThis.Set;
+    const NativeMap = globalThis.Map;
+    let setConstructions = 0;
+    let mapConstructions = 0;
+    vi.stubGlobal('Set', class CountingSet extends NativeSet {
+      constructor(...args) {
+        setConstructions += 1;
+        super(...args);
+      }
+    });
+    vi.stubGlobal('Map', class CountingMap extends NativeMap {
+      constructor(...args) {
+        mapConstructions += 1;
+        super(...args);
+      }
+    });
+    let result;
+    try {
+      result = normaliseServiceItemOwnership(state);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(setConstructions).toBe(0);
+    expect(mapConstructions).toBe(0);
+    expect(result.staff).toHaveLength(8);
+    expect(result.staff.every(worker => worker.carryingServiceItemIds.length === 0)).toBe(true);
+  });
+
+  it.each([
+    ['missing collections', {}],
+    ['null collections', { customers: null, serviceItems: null }],
+    ['undefined collections', { customers: undefined, serviceItems: undefined }],
+    ['missing customers', { serviceItems: [] }],
+    ['null customers', { customers: null, serviceItems: [] }],
+    ['missing service items', { customers: [] }],
+    ['null service items', { customers: [], serviceItems: null }],
+  ])('uses the conservative path for %s', (_label, collections) => {
+    const state = {
+      ...collections,
+      staff: [{
+        id: 'legacy', role: 'waiter', carryingServiceItemId: 'missing-item',
+        navigationGoal: { x: 10, y: 20 },
+        task: { type: 'transfer_dirty_item', serviceItemId: 'missing-item' },
+      }],
+    };
+
+    const result = normaliseServiceItemOwnership(state);
+
+    expect(Object.hasOwn(result, 'customers')).toBe(true);
+    expect(Object.hasOwn(result, 'serviceItems')).toBe(true);
+    expect(result.customers).toEqual([]);
+    expect(result.serviceItems).toEqual([]);
+    expect(result.staff[0].carryingServiceItemIds).toEqual([]);
+    expect(result.staff[0]).not.toHaveProperty('carryingServiceItemId');
+    expect(result.staff[0]).toMatchObject({ task: null });
+    expect(result.staff[0]).not.toHaveProperty('navigationGoal');
+  });
+
+  it('handles in-place additions after an empty-state normalisation', () => {
+    const state = { customers: [], staff: [], serviceItems: [] };
+    const first = normaliseServiceItemOwnership(state);
+    const customer = { id: 'c1', state: 'waiting_for_items' };
+    const item = { id: 'i1', kind: 'dish', customerId: 'c1', state: 'ordered' };
+    state.customers.push(customer);
+    state.serviceItems.push(item);
+
+    const result = normaliseServiceItemOwnership(state);
+
+    expect(first.customers).toEqual([]);
+    expect(first.serviceItems).toEqual([]);
+    expect(result.customers).toEqual([customer]);
+    expect(result.serviceItems).toEqual([item]);
   });
 
   it('releases stale carriers and reservations', () => {

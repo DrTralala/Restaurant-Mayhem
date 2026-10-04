@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { actionsConflict, positionAt } from './reservations';
+import * as reservations from './reservations';
 
 const action = (x1, y1, x2, y2, start = 0, end = 1) => ({
   from: { x: x1, y: y1 }, to: { x: x2, y: y2 }, start, end,
@@ -55,6 +56,58 @@ function generatedCases() {
     });
   }
   return cases;
+}
+
+function outcome(run) {
+  try {
+    return { value: run() };
+  } catch (error) {
+    return { error: { name: error.name, message: error.message } };
+  }
+}
+
+function referenceSafe(candidate, reservations, blockers) {
+  let clear = true;
+  for (const reservation of reservations) {
+    for (const other of reservation.actions) {
+      if (!actionsConflict(candidate, other)) continue;
+      blockers.add(reservation.actorId);
+      clear = false;
+      break;
+    }
+  }
+  return clear;
+}
+
+function safetyOutcome(check, candidate, blockers) {
+  try {
+    return { safe: check(candidate), blockers: [...blockers] };
+  } catch (error) {
+    return { error: { name: error.name, message: error.message }, blockers: [...blockers] };
+  }
+}
+
+function generatedSafetyWorkload() {
+  let seed = 0x51f15e;
+  const next = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+  const point = () => Math.round((next() - 0.5) * 1000) / 10;
+  const movement = () => {
+    const from = { x: point(), y: point() };
+    const duration = [0, 0.25, 0.5, 1, 2][Math.floor(next() * 5)];
+    const start = Math.round((next() - 0.5) * 20) / 10;
+    const to = duration === 0 ? from : { x: point(), y: point() };
+    return { from, to, start, end: start + duration };
+  };
+  const reservations = Array.from({ length: 24 }, (_, actor) => {
+    const actions = Array.from({ length: 1 + Math.floor(next() * 5) }, movement);
+    if (actor % 3 === 0) actions.push(actions[0]);
+    return { actorId: `random-${actor}`, actions };
+  });
+  const candidates = Array.from({ length: 96 }, movement);
+  return { reservations, candidates };
 }
 
 describe('continuous short-horizon reservations', () => {
@@ -152,6 +205,304 @@ describe('continuous short-horizon reservations', () => {
       action(Number.MAX_VALUE, 0, Number.MAX_VALUE, 0),
       action(-Number.MAX_VALUE, 0, -Number.MAX_VALUE, 0),
     )).toThrow(/arithmetic/i);
+  });
+
+  it('reuses validated action geometry and bounds across repeated scoped checks', () => {
+    const reads = { from: 0, to: 0, start: 0, end: 0 };
+    const right = {
+      get from() { reads.from += 1; return { x: 1000, y: 1000 }; },
+      get to() { reads.to += 1; return { x: 1000, y: 1000 }; },
+      get start() { reads.start += 1; return 0; },
+      get end() { reads.end += 1; return 1; },
+    };
+    const checker = reservations.createConflictChecker();
+    const minimum = vi.spyOn(Math, 'min');
+    const maximum = vi.spyOn(Math, 'max');
+    const absolute = vi.spyOn(Math, 'abs');
+    try {
+      const left = action(0, 0, 40, 0);
+      expect(Array.from({ length: 4 }, () => checker(left, right))).toEqual([false, false, false, false]);
+      expect(reads).toEqual({ from: 2, to: 2, start: 3, end: 3 });
+      // One bounds calculation per immutable action, plus one time-overlap
+      // calculation per query.
+      expect(minimum).toHaveBeenCalledTimes(8);
+      expect(maximum).toHaveBeenCalledTimes(8);
+      expect(absolute).toHaveBeenCalledTimes(20);
+    } finally {
+      minimum.mockRestore();
+      maximum.mockRestore();
+      absolute.mockRestore();
+    }
+  });
+
+  it('matches public conflict outcomes for seeded, extreme and malformed pairs', () => {
+    const cases = [
+      ...generatedCases(),
+      { left: action(Number.MAX_VALUE, 0, Number.MAX_VALUE, 0),
+        right: action(-Number.MAX_VALUE, 0, -Number.MAX_VALUE, 0) },
+      { left: action(-7e307, -7e307, -7e307, -7e307),
+        right: action(7e307, 7e307, 7e307, 7e307) },
+      { left: action(-7e307, 0, 7e307, 0, -1e308, 1e308),
+        right: action(7e307, 7e307, 7e307, 7e307, 8e307, 9e307) },
+      { left: action(0, 0, 20, 0), right: action(NaN, 0, 20, 0) },
+      { left: action(0, 0, 20, 0), right: action(0, 0, 20, 0, 1, 0) },
+      { left: action(0, 0, 20, 0), right: action(0, 0, 20, 0), clearance: NaN },
+      { left: action(0, 0, 20, 0), right: action(1000, 1000, 1000, 1000),
+        clearance: Number.MIN_VALUE },
+      { left: action(0, 0, 20, 0), right: action(1000, 1000, 1000, 1000),
+        clearance: Number.MAX_SAFE_INTEGER },
+      { left: action(0, 0, 20, 0), right: action(1000, 1000, 1000, 1000),
+        clearance: Number.MAX_VALUE },
+    ];
+    const checker = reservations.createConflictChecker();
+    for (const candidate of cases) {
+      const clearance = candidate.clearance;
+      expect(outcome(() => checker(candidate.left, candidate.right, clearance)))
+        .toEqual(outcome(() => actionsConflict(candidate.left, candidate.right, clearance)));
+    }
+  });
+
+  it('retains left-to-right action validation before clearance validation', () => {
+    const checker = reservations.createConflictChecker();
+    const malformedLeft = action(NaN, 0, 20, 0);
+    let rightReads = 0;
+    const throwingRight = {
+      get from() { rightReads += 1; throw new Error('right action read first'); },
+    };
+    expect(() => checker(malformedLeft, throwingRight, NaN)).toThrow(/reservation/i);
+    expect(rightReads).toBe(0);
+
+    const valid = action(0, 0, 20, 0);
+    expect(() => checker(valid, action(0, 0, 20, 0, 1, 0), NaN)).toThrow(/reservation/i);
+    expect(() => checker(valid, valid, NaN)).toThrow(/clearance/i);
+  });
+
+  it('matches the original safety loop for seeded multi-action reservation paths', () => {
+    const { reservations: entries, candidates } = generatedSafetyWorkload();
+    const blockers = new Set();
+    const context = reservations.createReservationPreparationContext();
+    for (const candidate of candidates) {
+      const expectedBlockers = new Set();
+      blockers.clear();
+      const check = reservations.createReservationSafetyChecker(entries, blockers, context);
+      expect(safetyOutcome(check, candidate, blockers))
+        .toEqual(safetyOutcome(value => referenceSafe(value, entries, expectedBlockers), candidate, expectedBlockers));
+    }
+  });
+
+  it('uses indexed owned actions without per-query iteration and validates tails only when reached', () => {
+    let reservationIterations = 0;
+    let actionIterations = 0;
+    let tailReads = 0;
+    const firstAction = action(40, 0, 0, 0);
+    const tail = { get from() { tailReads += 1; throw new Error('tail geometry visited'); } };
+    const firstActions = [firstAction, tail];
+    firstActions[Symbol.iterator] = function* iterateOwnedActions() {
+      actionIterations += 1;
+      for (let index = 0; index < firstActions.length; index += 1) yield firstActions[index];
+    };
+    const entries = [
+      { actorId: 'first', actions: firstActions },
+      { actorId: 'second', actions: [firstAction] },
+    ];
+    entries[Symbol.iterator] = function* iterateOwnedReservations() {
+      reservationIterations += 1;
+      for (let index = 0; index < entries.length; index += 1) yield entries[index];
+    };
+    const blockers = new Set();
+    const context = reservations.createReservationPreparationContext();
+    const check = reservations.createReservationSafetyChecker(entries, blockers, context);
+
+    expect(reservationIterations).toBe(1);
+    expect(actionIterations).toBe(0);
+    expect(tailReads).toBe(0);
+    expect(check(action(0, 0, 40, 0))).toBe(false);
+    expect([...blockers]).toEqual(['first', 'second']);
+    expect(reservationIterations).toBe(1);
+    expect(actionIterations).toBe(0);
+    expect(tailReads).toBe(0);
+
+    blockers.clear();
+    expect(() => check(action(0, 100, 40, 100))).toThrow('tail geometry visited');
+    expect(reservationIterations).toBe(1);
+    expect(actionIterations).toBe(0);
+    expect(tailReads).toBe(1);
+    expect([...blockers]).toEqual([]);
+  });
+
+  it('keeps left-before-right validation order in the branded owned path', () => {
+    let rightReads = 0;
+    const right = { get from() { rightReads += 1; throw new Error('right geometry read'); } };
+    const context = reservations.createReservationPreparationContext();
+    const check = reservations.createReservationSafetyChecker(
+      [{ actorId: 'peer', actions: [right] }], new Set(), context);
+
+    expect(() => check(action(NaN, 0, 20, 0))).toThrow(/reservation/i);
+    expect(rightReads).toBe(0);
+    expect(() => check(action(0, 0, 20, 0))).toThrow('right geometry read');
+    expect(rightReads).toBe(1);
+  });
+
+  it('prepares one candidate per safety query and reuses right records across pairs', () => {
+    const tracked = (x, y) => {
+      const reads = { from: 0, to: 0, start: 0, end: 0 };
+      const from = { x, y };
+      const to = { x: x + 10, y };
+      return {
+        reads,
+        action: {
+          get from() { reads.from += 1; return from; },
+          get to() { reads.to += 1; return to; },
+          get start() { reads.start += 1; return 0; },
+          get end() { reads.end += 1; return 1; },
+        },
+      };
+    };
+    const right = Array.from({ length: 12 }, (_, index) => tracked(1000 + index * 20, 1000));
+    const blockers = new Set();
+    const check = reservations.createReservationSafetyChecker(
+      [{ actorId: 'distant', actions: right.map(entry => entry.action) }], blockers);
+    const first = tracked(0, 0);
+    const second = tracked(0, 20);
+    const isFinite = vi.spyOn(Number, 'isFinite');
+
+    try {
+      expect(check(first.action)).toBe(true);
+      expect(first.reads).toEqual({ from: 2, to: 2, start: 3, end: 3 });
+      expect(right.map(entry => entry.reads)).toEqual(Array.from({ length: 12 }, () =>
+        ({ from: 2, to: 2, start: 3, end: 3 })));
+
+      expect(check(second.action)).toBe(true);
+      expect(second.reads).toEqual({ from: 2, to: 2, start: 3, end: 3 });
+      expect(right.map(entry => entry.reads)).toEqual(Array.from({ length: 12 }, () =>
+        ({ from: 2, to: 2, start: 3, end: 3 })));
+      expect(isFinite.mock.calls.filter(([value]) => value === 16)).toHaveLength(0);
+    } finally {
+      isFinite.mockRestore();
+    }
+  });
+
+  it('retains endpoint, clearance, duplicate-action and per-actor blocker semantics', () => {
+    const candidate = action(0, 0, 40, 0);
+    const duplicate = action(40, 0, 0, 0);
+    const entries = [
+      { actorId: 'zeta', actions: [
+        action(0, 16, 40, 16),
+        action(0, 15.999999999, 40, 15.999999999),
+        action(0, 0, 20, 0, 1, 2),
+        action(100, 100, 100, 100, 0, 0),
+      ] },
+      { actorId: 'endpoint', actions: [action(40, 0, 60, 0, 1, 2)] },
+      { actorId: 'alpha', actions: [duplicate] },
+      { actorId: 'beta', actions: [duplicate] },
+    ];
+    const expectedBlockers = new Set();
+    const actualBlockers = new Set();
+    const check = reservations.createReservationSafetyChecker(entries, actualBlockers,
+      reservations.createReservationPreparationContext());
+
+    expect(safetyOutcome(check, candidate, actualBlockers))
+      .toEqual(safetyOutcome(value => referenceSafe(value, entries, expectedBlockers), candidate, expectedBlockers));
+    expect([...actualBlockers]).toEqual(['zeta', 'endpoint', 'alpha', 'beta']);
+  });
+
+  it('matches the reference safety loop when extreme finite arithmetic throws', () => {
+    const cases = [
+      [action(Number.MAX_VALUE, 0, Number.MAX_VALUE, 0),
+        action(-Number.MAX_VALUE, 0, -Number.MAX_VALUE, 0)],
+      [action(-7e307, -7e307, -7e307, -7e307),
+        action(7e307, 7e307, 7e307, 7e307)],
+    ];
+    for (const [candidate, other] of cases) {
+      const entries = [{ actorId: 'extreme', actions: [other] }];
+      const expectedBlockers = new Set();
+      const actualBlockers = new Set();
+      const check = reservations.createReservationSafetyChecker(entries, actualBlockers,
+        reservations.createReservationPreparationContext());
+      const expected = safetyOutcome(value => referenceSafe(value, entries, expectedBlockers),
+        candidate, expectedBlockers);
+      const actual = safetyOutcome(check, candidate, actualBlockers);
+      expect(actual).toEqual(expected);
+      expect(actual).toMatchObject({ error: { message: expect.stringMatching(/arithmetic/i) }, blockers: [] });
+    }
+  });
+
+  it('matches the public pair oracle for signed-zero and subnormal prepared geometry', () => {
+    const pairs = [
+      [action(-0, -0, 0, 0), action(0, Number.MIN_VALUE, 0, Number.MIN_VALUE)],
+      [action(Number.MIN_VALUE, 0, -Number.MIN_VALUE, 0), action(-0, -0, 0, 0)],
+      [action(0, Number.MIN_VALUE, 40, Number.MIN_VALUE), action(0, 16, 40, 16)],
+      [action(-Number.MIN_VALUE, 0, Number.MIN_VALUE, 0), action(0, 15.999999999, 40, 15.999999999)],
+    ];
+    const context = reservations.createReservationPreparationContext();
+    for (const [candidate, other] of pairs) {
+      const entries = [{ actorId: 'numeric-edge', actions: [other] }];
+      const expectedBlockers = new Set();
+      const actualBlockers = new Set();
+      const check = reservations.createReservationSafetyChecker(entries, actualBlockers, context);
+      expect(safetyOutcome(check, candidate, actualBlockers))
+        .toEqual(safetyOutcome(value => referenceSafe(value, entries, expectedBlockers), candidate, expectedBlockers));
+    }
+  });
+
+  it('avoids repeating finite gap and threshold checks for a prepared eligible pair', () => {
+    const right = action(1000, 1000, 1000, 1000);
+    const check = reservations.createReservationSafetyChecker(
+      [{ actorId: 'distant', actions: [right] }], new Set());
+    const isFinite = vi.spyOn(Number, 'isFinite');
+    try {
+      expect(check(action(0, 0, 40, 0))).toBe(true);
+      expect(check(action(0, 0, 40, 0))).toBe(true);
+      expect(isFinite).toHaveBeenCalledTimes(18);
+    } finally {
+      isFinite.mockRestore();
+    }
+  });
+
+  it('re-reads mutable reservation action arrays and replaces stale position records', () => {
+    const candidate = action(0, 0, 40, 0);
+    const conflicting = action(40, 0, 0, 0);
+    let arraysRead = 0;
+    let actions = [conflicting];
+    const reservation = { actorId: 'peer', get actions() { arraysRead += 1; return actions; } };
+    const blockers = new Set();
+    const check = reservations.createReservationSafetyChecker([reservation], blockers);
+
+    expect(check(candidate)).toBe(false);
+    actions = [];
+    expect(check(candidate)).toBe(true);
+    expect(arraysRead).toBe(2);
+
+    actions = [action(NaN, 0, 20, 0)];
+    expect(() => check(candidate)).toThrow(/reservation/i);
+    expect(arraysRead).toBe(3);
+  });
+
+  it('preserves lazy validation and the old actor/action short-circuit order', () => {
+    const invalidCandidate = action(NaN, 0, 20, 0);
+    const emptyCheck = reservations.createReservationSafetyChecker([], new Set());
+    expect(emptyCheck(invalidCandidate)).toBe(true);
+
+    let rightReads = 0;
+    const throwingRight = { get from() { rightReads += 1; throw new Error('right read'); } };
+    const invalidLeftCheck = reservations.createReservationSafetyChecker(
+      [{ actorId: 'peer', actions: [throwingRight] }], new Set());
+    expect(() => invalidLeftCheck(invalidCandidate)).toThrow(/reservation/i);
+    expect(rightReads).toBe(0);
+
+    const actionsFailure = reservations.createReservationSafetyChecker([
+      { get actions() { throw new Error('actions getter'); } },
+    ], new Set());
+    expect(() => actionsFailure(invalidCandidate)).toThrow('actions getter');
+
+    const candidate = action(0, 0, 40, 0);
+    const blockers = new Set();
+    const laterInvalid = reservations.createReservationSafetyChecker([
+      { actorId: 'first', actions: [action(40, 0, 0, 0), action(NaN, 0, 20, 0)] },
+      { actorId: 'later', actions: [action(NaN, 0, 20, 0)] },
+    ], blockers);
+    expect(() => laterInvalid(candidate)).toThrow(/reservation/i);
+    expect([...blockers]).toEqual(['first']);
   });
 
   it('preserves arithmetic errors for finite gaps and durations that overflow exact math', () => {

@@ -16,6 +16,7 @@ import {
 import { recordSeatResidency } from '../movement/seatedDeparture';
 import { getAmenityGeometry } from '../../data/staffAmenities';
 import { isStaticStaffAmenityExit } from '../movement/staffAmenityExit';
+import { noteNavigation } from './telemetry';
 
 const finite = p => p && Number.isFinite(p.x) && Number.isFinite(p.y);
 const same = (a, b) => finite(a) && finite(b) && a.x === b.x && a.y === b.y;
@@ -312,7 +313,7 @@ function staffAmenityExitGrid(state, actor, base) {
   });
 }
 
-export function createActorGrid(state, actor, base = createGrid(state), doorFlow = null) {
+function createActorGridWithFlowResolver(state, actor, base, doorFlow, resolveFlowGrid) {
   const matches = (state.customers || []).filter(customer => String(customer.id) === String(actor.id));
   if (matches.length !== 1) return staffAmenityExitGrid(state, actor, base) || base;
   if (!same(matches[0], actor)) return base;
@@ -340,7 +341,7 @@ export function createActorGrid(state, actor, base = createGrid(state), doorFlow
     && String(base.doorFlow.doorId) === String(flowWithCrossing.doorId)
     && Boolean(base.doorFlow.allowRoleMismatch) === Boolean(flowWithCrossing.allowRoleMismatch);
   const flowBase = flowWithCrossing && ['ingress', 'egress'].includes(flowWithCrossing.direction)
-    ? baseMatchesFlow ? base : createGrid(state, null, { doorFlow: flowWithCrossing })
+    ? baseMatchesFlow ? base : resolveFlowGrid(state, flowWithCrossing)
     : base;
   const departing = ['checkout_moving', 'checkout_queued', 'leaving'].includes(actor.state);
   const rejected = departing && actor.seatResidency && actor.seatResidency.phase !== 'clear'
@@ -400,6 +401,89 @@ export function createActorGrid(state, actor, base = createGrid(state), doorFlow
     segmentClear,
     neighbours: p => flowBase.isOpen(p) ? flowBase.neighbours(p) : ports.filter(port => segmentClear(p, port)),
   });
+}
+
+export function createActorGrid(state, actor, base = createGrid(state), doorFlow = null) {
+  return createActorGridWithFlowResolver(state, actor, base, doorFlow,
+    createUncachedFlowGrid);
+}
+
+const ACTOR_FLOW_GRID_CACHE_LIMIT = 8;
+
+function snapshotActorFlow(flow) {
+  try {
+    if (!flow || typeof flow !== 'object' || Array.isArray(flow)) return null;
+    const prototype = Object.getPrototypeOf(flow);
+    if (prototype !== null && prototype !== Object.prototype) return null;
+    const snapshot = [prototype];
+    const coreValues = {};
+    for (const key of Reflect.ownKeys(flow)) {
+      const descriptor = Object.getOwnPropertyDescriptor(flow, key);
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) return null;
+      snapshot.push(key, descriptor.enumerable, descriptor.value);
+      if (['direction', 'doorId', 'allowRoleMismatch'].includes(key)) {
+        coreValues[key] = descriptor.value;
+      }
+    }
+    for (const key of ['direction', 'doorId', 'allowRoleMismatch']) {
+      if (!Object.hasOwn(coreValues, key) && key in flow) return null;
+      const value = coreValues[key];
+      if (value != null && (typeof value === 'object' || typeof value === 'function')) return null;
+    }
+    return snapshot;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function sameActorFlowSnapshot(left, right) {
+  return left.length === right.length
+    && left.every((value, index) => Object.is(value, right[index]));
+}
+
+function createUncachedFlowGrid(state, flow) {
+  return createGrid(state, null, { doorFlow: flow });
+}
+
+/**
+ * Build a synchronous, state-owned actor-grid factory. Only ordinary flow-base
+ * grids are shared; authority checks and actor-specific domain wrappers run for
+ * every call. Do not retain the factory across mutation of its captured state.
+ */
+export function createActorGridFactory(state, base = createGrid(state)) {
+  const flowVariants = [];
+  const resolveFlowGrid = (gridState, flow) => {
+    if (gridState !== state) {
+      noteNavigation('actorFlowGridCacheBypasses');
+      return createUncachedFlowGrid(gridState, flow);
+    }
+
+    const snapshot = snapshotActorFlow(flow);
+    if (!snapshot) {
+      noteNavigation('actorFlowGridCacheBypasses');
+      return createUncachedFlowGrid(gridState, flow);
+    }
+
+    const index = flowVariants.findIndex(entry => sameActorFlowSnapshot(entry.snapshot, snapshot));
+    if (index !== -1) {
+      const [entry] = flowVariants.splice(index, 1);
+      flowVariants.push(entry);
+      noteNavigation('actorFlowGridCacheHits');
+      return entry.grid;
+    }
+
+    const grid = createGrid(gridState, null, { doorFlow: flow });
+    flowVariants.push({ snapshot, grid });
+    noteNavigation('actorFlowGridBuilds');
+    if (flowVariants.length > ACTOR_FLOW_GRID_CACHE_LIMIT) {
+      flowVariants.shift();
+      noteNavigation('actorFlowGridCacheEvictions');
+    }
+    return grid;
+  };
+
+  return (actor, doorFlow = null) =>
+    createActorGridWithFlowResolver(state, actor, base, doorFlow, resolveFlowGrid);
 }
 
 export function commitActorPosition(actor, grid, position, actions) {

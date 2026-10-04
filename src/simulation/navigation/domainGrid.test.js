@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createActorGrid, commitActorPosition } from './domainGrid';
+import * as domainGrid from './domainGrid';
 import { createGrid } from './grid';
 import { findRoute } from './router';
 import { recordSeatResidency } from '../movement/seatedDeparture';
 import { advanceCharacterMovementBatch, createMovementCoordinator } from './coordinator';
+import { captureNavigation } from './telemetry';
 import { createInitialState } from '../../state/initialState';
 import { hydrateState } from '../../state/persistence';
 import { movementSaveSnapshot, validateSavedNavigationGeometry } from '../../state/movementPersistence';
@@ -19,6 +21,161 @@ function seatedWorld() {
 }
 
 describe('domain-authorised navigation connectors', () => {
+  it('reuses only exact flow-base variants and preserves their copied metadata', () => {
+    expect(domainGrid.createActorGridFactory).toBeTypeOf('function');
+    const customers = [
+      { id: 'flow-a', state: 'entering', x: 700, y: 300 },
+      { id: 'flow-b', state: 'entering', x: 700, y: 340 },
+    ];
+    const state = {
+      restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [],
+      serviceTables: [], cashierStations: [], washStations: [], staff: [], customers,
+      doors: [{ id: '', y: 340, role: 'entrance' }],
+    };
+    const base = createGrid(state);
+    const factory = domainGrid.createActorGridFactory(state, base);
+    const firstFlow = { direction: 'ingress', doorId: '', traceTag: 'alpha' };
+    let first;
+    let firstCopy;
+    let nullId;
+    let nullIdCopy;
+    let changedMetadata;
+    let mismatchedActor;
+    const captured = captureNavigation(() => {
+      first = factory(customers[0], firstFlow);
+      firstCopy = factory(customers[1], { ...firstFlow });
+      nullId = factory(customers[0], { direction: 'ingress', doorId: null, traceTag: 'alpha' });
+      nullIdCopy = factory(customers[1], { direction: 'ingress', doorId: null, traceTag: 'alpha' });
+      changedMetadata = factory(customers[1], { ...firstFlow, traceTag: 'beta' });
+      mismatchedActor = factory({ ...customers[0], x: 701 }, firstFlow);
+    });
+
+    expect(first).toBe(firstCopy);
+    expect(nullId).toBe(nullIdCopy);
+    expect(first).not.toBe(nullId);
+    expect(first).not.toBe(changedMetadata);
+    expect(first.doorFlow).toMatchObject({ direction: 'ingress', doorId: '', traceTag: 'alpha' });
+    expect(changedMetadata.doorFlow.traceTag).toBe('beta');
+    expect(first.signature).toBe(nullId.signature);
+    expect(first.isOpen({ x: 900, y: 360 })).toBe(true);
+    expect(nullId.isOpen({ x: 900, y: 360 })).toBe(false);
+    expect(mismatchedActor).toBe(base);
+    expect(captured.report.counters.actorFlowGridBuilds).toBe(3);
+    expect(captured.report.counters.actorFlowGridCacheHits).toBe(2);
+  });
+
+  it('rebuilds actor-specific seat adapters around a reused flow base', () => {
+    expect(domainGrid.createActorGridFactory).toBeTypeOf('function');
+    const state = seatedWorld();
+    const actor = state.customers[0];
+    const factory = domainGrid.createActorGridFactory(state, createGrid(state));
+    const egress = { direction: 'egress', doorId: 'door' };
+    const captured = captureNavigation(() => [factory(actor, egress), factory(actor, egress)]);
+    const [first, second] = captured.value;
+
+    expect(first).not.toBe(second);
+    expect(first.departure).toBeDefined();
+    expect(second.departure).toBeDefined();
+    expect(first.departure.base).toBe(second.departure.base);
+    expect(captured.report.counters.actorFlowGridBuilds).toBe(1);
+    expect(captured.report.counters.actorFlowGridCacheHits).toBe(1);
+  });
+
+  it('bounds batch-owned flow variants and falls back for accessor metadata', () => {
+    expect(domainGrid.createActorGridFactory).toBeTypeOf('function');
+    const customers = [{ id: 'flow-owner', state: 'entering', x: 700, y: 300 }];
+    const state = {
+      restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [],
+      serviceTables: [], cashierStations: [], washStations: [], staff: [], customers,
+      doors: [{ id: 'entrance', y: 340, role: 'entrance' }],
+    };
+    const factory = domainGrid.createActorGridFactory(state, createGrid(state));
+    let first;
+    let evictedFirst;
+    const variants = captureNavigation(() => {
+      first = factory(customers[0], { direction: 'ingress', doorId: 'entrance', batchTag: 0 });
+      for (let index = 1; index < 9; index += 1) {
+        factory(customers[0], { direction: 'ingress', doorId: 'entrance', batchTag: index });
+      }
+      evictedFirst = factory(customers[0], { direction: 'ingress', doorId: 'entrance', batchTag: 0 });
+    });
+
+    expect(evictedFirst).not.toBe(first);
+    expect(variants.report.counters.actorFlowGridBuilds).toBe(10);
+    expect(variants.report.counters.actorFlowGridCacheEvictions).toBe(2);
+
+    let metadataReads = 0;
+    const accessorFlow = { direction: 'ingress', doorId: 'missing-door' };
+    Object.defineProperty(accessorFlow, 'traceTag', {
+      enumerable: true,
+      get() { metadataReads += 1; return `read-${metadataReads}`; },
+    });
+    const accessorCapture = captureNavigation(() => [
+      factory(customers[0], accessorFlow),
+      factory(customers[0], accessorFlow),
+    ]);
+
+    expect(accessorCapture.value[0]).not.toBe(accessorCapture.value[1]);
+    expect(accessorCapture.value.map(grid => grid.doorFlow.traceTag)).toEqual(['read-1', 'read-2']);
+    expect(accessorCapture.report.counters.actorFlowGridCacheBypasses).toBe(2);
+  });
+
+  it('does not cache duplicate-ID authority failures or exit-ray adapters', () => {
+    expect(domainGrid.createActorGridFactory).toBeTypeOf('function');
+    const customer = { id: 'duplicate', state: 'entering', x: 700, y: 300 };
+    const duplicatedState = {
+      restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [],
+      serviceTables: [], cashierStations: [], washStations: [], staff: [],
+      customers: [customer, { ...customer, x: 720 }],
+      doors: [{ id: 'entrance', y: 340, role: 'entrance' }],
+    };
+    const base = createGrid(duplicatedState);
+    const factory = domainGrid.createActorGridFactory(duplicatedState, base);
+    const deniedCapture = captureNavigation(() => factory(customer,
+      { direction: 'ingress', doorId: 'entrance' }));
+    expect(deniedCapture.value).toBe(base);
+    expect(deniedCapture.report.counters.actorFlowGridBuilds || 0).toBe(0);
+
+    const fading = {
+      id: 'fading', state: 'leaving', exitPhase: 'fading', exitDoorId: 'door',
+      x: 993, y: 360, navigationGoal: { x: 1113, y: 360 },
+    };
+    const exitState = { ...seatedWorld(), customers: [fading] };
+    const exitFactory = domainGrid.createActorGridFactory(exitState, createGrid(exitState));
+    const exits = captureNavigation(() => [exitFactory(fading), exitFactory(fading)]);
+    expect(exits.value[0]).not.toBe(exits.value[1]);
+    expect(exits.value[0].signature).toBe(exits.value[1].signature);
+    expect(exits.report.counters.actorFlowGridBuilds || 0).toBe(0);
+    expect(exits.report.counters.actorFlowGridCacheHits || 0).toBe(0);
+  });
+
+  it('keeps actor-authorised wrong-role crossings in a separate flow variant', () => {
+    expect(domainGrid.createActorGridFactory).toBeTypeOf('function');
+    const customers = [
+      { id: 'at-door', state: 'entering', x: 900, y: 360 },
+      { id: 'away-from-door', state: 'entering', x: 700, y: 300 },
+    ];
+    const state = {
+      restaurant: { expansionLevel: 1 }, tables: [], chairs: [], kitchenStations: [],
+      serviceTables: [], cashierStations: [], washStations: [], staff: [], customers,
+      doors: [{ id: 'exit-only', y: 340, role: 'exit' }],
+    };
+    const factory = domainGrid.createActorGridFactory(state, createGrid(state));
+    const captured = captureNavigation(() => [
+      factory(customers[0], { direction: 'ingress', doorId: 'exit-only' }),
+      factory(customers[1], { direction: 'ingress', doorId: 'exit-only' }),
+    ]);
+    const [crossing, denied] = captured.value;
+
+    expect(crossing).not.toBe(denied);
+    expect(crossing.doorFlow.allowRoleMismatch).toBe(true);
+    expect(denied.doorFlow.allowRoleMismatch).toBe(false);
+    expect(crossing.isOpen({ x: 900, y: 360 })).toBe(true);
+    expect(denied.isOpen({ x: 900, y: 360 })).toBe(false);
+    expect(captured.report.counters.actorFlowGridBuilds).toBe(2);
+    expect(captured.report.counters.actorFlowGridCacheHits || 0).toBe(0);
+  });
+
   it.each(['ch7', 'ch8', 'ch11', 'ch12'])('completes departure across every raster cell of offset chair %s', chairId => {
     let state = createInitialState();
     const chair = state.chairs.find(item => item.id === chairId);

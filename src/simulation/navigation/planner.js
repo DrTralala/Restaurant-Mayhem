@@ -1,5 +1,5 @@
-import { isLatticePoint, latticeAnchors } from './grid';
-import { actionsConflict } from './reservations';
+import { getPlannerNeighbours, isLatticePoint, latticeAnchors } from './grid';
+import { createReservationSafetyChecker } from './reservations';
 import { noteNavigation } from './telemetry';
 
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -8,7 +8,7 @@ const searchKey = (point, time) => `${pointKey(point)}@${Math.round(time * 1e6)}
 const samePoint = (a, b) => a.x === b.x && a.y === b.y;
 
 export function planMovement({ grid, start, goal, speed, horizon, reservations = [], maxExpansions = 256,
-  firstWaypoint = null }) {
+  firstWaypoint = null }, reservationPreparationContext = null) {
   if (!Number.isFinite(horizon) || horizon <= 0 || !Number.isFinite(speed) || speed <= 0) {
     throw new Error('Invalid movement planning horizon or speed');
   }
@@ -25,23 +25,12 @@ export function planMovement({ grid, start, goal, speed, horizon, reservations =
   // endpoint for the entire horizon. Keep that edge mandatory, then search on.
   const waypointPending = firstWaypoint !== null && !samePoint(start, firstWaypoint);
   if (waypointPending && (!grid.isOpen(firstWaypoint)
-    || ![...grid.neighbours(start), ...(grid.connectors?.(start) || [])]
+    || ![...getPlannerNeighbours(grid, start), ...(grid.connectors?.(start) || [])]
       .some(point => samePoint(point, firstWaypoint)))) return result('unreachable');
   const remaining = (point, pending) => pending
     ? distance(point, firstWaypoint) + distance(firstWaypoint, goal) : distance(point, goal);
   const keyFor = (point, time, pending) => `${searchKey(point, time)}${pending ? ':waypoint' : ''}`;
-  const safe = action => {
-    let clear = true;
-    for (const reservation of reservations) {
-      for (const other of reservation.actions) {
-        if (!actionsConflict(action, other)) continue;
-        blockers.add(reservation.actorId);
-        clear = false;
-        break;
-      }
-    }
-    return clear;
-  };
+  const safe = createReservationSafetyChecker(reservations, blockers, reservationPreparationContext);
   const holding = node => ({ from: node.point, to: node.point, start: node.time, end: horizon });
   const initial = { point: start, time: 0, remaining: remaining(start, waypointPending),
     waypointPending, parent: null, action: null };
@@ -53,9 +42,30 @@ export function planMovement({ grid, start, goal, speed, horizon, reservations =
   const goalAnchors = new Set(latticeAnchors(goal).map(pointKey));
   const waitDuration = Math.min(0.25, 20 / speed);
   let complete = null;
+  const compareFrontier = (a, b) => a.time + a.remaining / speed - b.time - b.remaining / speed
+    || a.remaining - b.remaining || a.point.y - b.point.y || a.point.x - b.point.x;
+  const enqueue = (current, target) => {
+    const length = distance(current.point, target);
+    const duration = length === 0 ? waitDuration : length / speed;
+    const end = Math.min(horizon, current.time + duration);
+    if (end <= current.time) return false;
+    const fraction = (end - current.time) / duration;
+    const point = fraction >= 1 ? target : {
+      x: current.point.x + (target.x - current.point.x) * fraction,
+      y: current.point.y + (target.y - current.point.y) * fraction,
+    };
+    const pending = current.waypointPending && !samePoint(point, firstWaypoint);
+    const key = keyFor(point, end, pending);
+    if (visited.has(key)) return length > 0;
+    const action = { from: current.point, to: point, start: current.time, end };
+    if (!safe(action)) return false;
+    visited.add(key);
+    frontier.push({ point, time: end, remaining: remaining(point, pending), waypointPending: pending, parent: current, action,
+      clipped: end < current.time + duration });
+    return length > 0;
+  };
   while (frontier.length && expansions < budget) {
-    frontier.sort((a, b) => a.time + a.remaining / speed - b.time - b.remaining / speed
-      || a.remaining - b.remaining || a.point.y - b.point.y || a.point.x - b.point.x);
+    frontier.sort(compareFrontier);
     const current = frontier.shift();
     expansions += 1;
     if (current === initial ? initialSafe : safe(holding(current))) {
@@ -68,35 +78,18 @@ export function planMovement({ grid, start, goal, speed, horizon, reservations =
       if (current.remaining === 0) { complete = current; break; }
     }
     if (current.time >= horizon) continue;
-    const candidates = current.waypointPending ? [firstWaypoint] : grid.neighbours(current.point);
-    if (!current.waypointPending && !isLatticePoint(goal) && (goalAnchors.has(pointKey(current.point))
-      || distance(current.point, goal) < 20) && grid.segmentClear(current.point, goal)) candidates.push(goal);
-    const enqueue = target => {
-      const length = distance(current.point, target);
-      const duration = length === 0 ? waitDuration : length / speed;
-      const end = Math.min(horizon, current.time + duration);
-      if (end <= current.time) return false;
-      const fraction = (end - current.time) / duration;
-      const point = fraction >= 1 ? target : {
-        x: current.point.x + (target.x - current.point.x) * fraction,
-        y: current.point.y + (target.y - current.point.y) * fraction,
-      };
-      const pending = current.waypointPending && !samePoint(point, firstWaypoint);
-      const key = keyFor(point, end, pending);
-      if (visited.has(key)) return length > 0;
-      const action = { from: current.point, to: point, start: current.time, end };
-      if (!safe(action)) return false;
-      visited.add(key);
-      frontier.push({ point, time: end, remaining: remaining(point, pending), waypointPending: pending, parent: current, action,
-        clipped: end < current.time + duration });
-      return length > 0;
-    };
+    const candidates = current.waypointPending
+      ? [firstWaypoint] : getPlannerNeighbours(grid, current.point);
+    const goalCandidate = !current.waypointPending && !isLatticePoint(goal)
+      && (goalAnchors.has(pointKey(current.point)) || distance(current.point, goal) < 20)
+      && grid.segmentClear(current.point, goal);
     let canMove = false;
-    for (const target of candidates) canMove = enqueue(target) || canMove;
+    for (const target of candidates) canMove = enqueue(current, target) || canMove;
+    if (goalCandidate) canMove = enqueue(current, goal) || canMove;
     if (!current.waypointPending && !canMove && !isLatticePoint(current.point)) {
-      for (const target of grid.connectors?.(current.point) || []) enqueue(target);
+      for (const target of grid.connectors?.(current.point) || []) enqueue(current, target);
     }
-    enqueue(current.point);
+    enqueue(current, current.point);
   }
   // Prefer reaching a safe waypoint over tuning a horizon-clipped endpoint.
   // Otherwise a backtracking loop can win by ending slightly closer to an

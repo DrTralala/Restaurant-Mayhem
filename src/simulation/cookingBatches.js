@@ -348,11 +348,67 @@ function deriveBatchStatus(batch, items) {
   return 'ready';
 }
 
+function hasBatchReferences(state) {
+  return (state.serviceItems || []).some(item => item == null || item.batchId != null)
+    || (state.staff || []).some(worker => worker?.task?.batchId != null);
+}
+
+function hasCanonicalEmptyBatchInventory(state) {
+  return state.staff.every(worker => {
+    const ids = worker?.carryingServiceItemIds;
+    return worker
+      && Object.getPrototypeOf(worker) === Object.prototype
+      && Object.hasOwn(worker, 'carryingServiceItemIds')
+      && Array.isArray(ids)
+      && ids.length === 0
+      && !Object.hasOwn(worker, 'carryingServiceItemId');
+  });
+}
+
+function hasCanonicalCarriedInventory(state) {
+  const itemStates = new Map();
+  for (const item of state.serviceItems) {
+    if (item?.id == null) return false;
+    const key = String(item.id);
+    if (itemStates.has(key)) return false;
+    itemStates.set(key, item.state);
+  }
+
+  return state.staff.every(worker => {
+    const ids = worker?.carryingServiceItemIds;
+    if (!worker || Object.getPrototypeOf(worker) !== Object.prototype
+      || !Object.hasOwn(worker, 'carryingServiceItemIds')
+      || !Array.isArray(ids) || Object.hasOwn(worker, 'carryingServiceItemId')) return false;
+    const seen = new Set();
+    for (const id of ids) {
+      if (id == null || seen.has(id)) return false;
+      seen.add(id);
+      const itemState = itemStates.get(String(id));
+      if (itemState !== 'carried' && itemState !== 'carried_dirty') return false;
+    }
+    return true;
+  });
+}
+
+function canSkipEmptyCookingBatchNormalisation(state) {
+  if (Object.getPrototypeOf(state) !== Object.prototype
+    || !Array.isArray(state.cookingBatches) || state.cookingBatches.length !== 0
+    || !Array.isArray(state.staff) || !Array.isArray(state.serviceItems)
+    || Object.getPrototypeOf(state.staff) !== Array.prototype
+    || Object.getPrototypeOf(state.serviceItems) !== Array.prototype
+    || hasBatchReferences(state)) return false;
+
+  if (state.serviceItems.length === 0) return hasCanonicalEmptyBatchInventory(state);
+  return hasCanonicalCarriedInventory(state);
+}
+
 /**
  * Reconcile durable batch records after a save or an ownership-changing
  * operation. Invalid reservations are released rather than left stranded.
  */
 export function normaliseCookingBatches(state) {
+  if (state && canSkipEmptyCookingBatchNormalisation(state)) return state;
+
   const hasBatchData = Array.isArray(state?.cookingBatches)
     || (state?.serviceItems || []).some(item => item?.batchId != null)
     || (state?.staff || []).some(worker => worker?.task?.batchId != null);

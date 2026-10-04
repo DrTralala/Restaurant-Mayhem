@@ -283,6 +283,121 @@ describe('cooking batches', () => {
     expect(result.serviceItems[0].state).toBe('carried_dirty');
   });
 
+  it('preserves identity for a canonical empty batch ledger', () => {
+    const base = kitchenState();
+    const current = {
+      ...base,
+      staff: [{ ...base.staff[0], carryingServiceItemIds: [] }],
+      cookingBatches: [],
+    };
+
+    expect(normaliseCookingBatches(current)).toBe(current);
+  });
+
+  it('still repairs carried inventory and orphaned tasks with an empty batch ledger', () => {
+    const base = kitchenState({
+      serviceItems: [
+        { id: 'dirty', kind: 'dish', state: 'carried_dirty' },
+        { id: 'missing-state', kind: 'dish', state: 'ready' },
+      ],
+    });
+    const current = {
+      ...base,
+      staff: [{
+        ...base.staff[0],
+        carryingServiceItemIds: ['dirty', 'missing', 'dirty', null, 'missing-state'],
+        carryingServiceItemId: 'legacy-single-item',
+        task: { type: 'prepare_dish', batchId: 'orphan', stationId: 'missing-station' },
+      }],
+      cookingBatches: [],
+    };
+
+    const result = normaliseCookingBatches(current);
+
+    expect(result).not.toBe(current);
+    expect(result.staff[0].carryingServiceItemIds).toEqual(['dirty']);
+    expect(result.staff[0]).not.toHaveProperty('carryingServiceItemId');
+    expect(result.staff[0].task).toBeNull();
+  });
+
+  it('keeps malformed duplicate item IDs on the full normalisation path', () => {
+    const base = kitchenState({
+      serviceItems: [
+        { id: 'duplicate', kind: 'dish', state: 'ordered' },
+        { id: 'duplicate', kind: 'dish', state: 'ready' },
+      ],
+    });
+    const current = {
+      ...base,
+      staff: [{ ...base.staff[0], carryingServiceItemIds: [] }],
+      cookingBatches: [],
+    };
+
+    const result = normaliseCookingBatches(current);
+
+    expect(result).not.toBe(current);
+    expect(result.serviceItems).toEqual([base.serviceItems[1], base.serviceItems[1]]);
+  });
+
+  it('reconciles multiple service items without IDs using the legacy string key', () => {
+    const base = kitchenState();
+    const lastItem = { kind: 'dish', state: 'ready' };
+    const current = {
+      ...base,
+      staff: [{ ...base.staff[0], carryingServiceItemIds: [] }],
+      serviceItems: [{ kind: 'dish', state: 'ordered' }, lastItem],
+      cookingBatches: [],
+    };
+
+    const result = normaliseCookingBatches(current);
+
+    expect(result).not.toBe(current);
+    expect(result.serviceItems).toEqual([lastItem, lastItem]);
+  });
+
+  it('allows numeric zero as a valid service item ID in the fast path', () => {
+    const base = kitchenState({
+      serviceItems: [{ id: 0, kind: 'dish', state: 'carried' }],
+    });
+    const current = {
+      ...base,
+      staff: [{ ...base.staff[0], carryingServiceItemIds: [0] }],
+      cookingBatches: [],
+    };
+
+    expect(normaliseCookingBatches(current)).toBe(current);
+  });
+
+  it('does not mask malformed null service items with the empty-ledger fast path', () => {
+    const base = kitchenState();
+    const current = {
+      ...base,
+      staff: [{ ...base.staff[0], carryingServiceItemIds: [] }],
+      serviceItems: [null],
+      cookingBatches: [],
+    };
+
+    expect(() => normaliseCookingBatches(current)).toThrow();
+  });
+
+  it('rechecks batch references after in-place changes between calls', () => {
+    const base = kitchenState();
+    const current = {
+      ...base,
+      staff: [{ ...base.staff[0], carryingServiceItemIds: [] }],
+      cookingBatches: [],
+    };
+
+    expect(normaliseCookingBatches(current)).toBe(current);
+    current.staff[0].task = {
+      type: 'prepare_dish', batchId: 'orphan', stationId: 'missing-station',
+    };
+
+    const result = normaliseCookingBatches(current);
+
+    expect(result.staff[0].task).toBeNull();
+  });
+
   it('keeps the remaining batch task when its station is temporarily unreachable', () => {
     const blockers = [
       [80, 100], [100, 100], [120, 100], [140, 100],
