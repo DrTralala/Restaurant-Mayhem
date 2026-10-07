@@ -11,6 +11,8 @@ Restaurant Mayhem is a browser-based restaurant management simulation. Build and
 
 ### Install and run
 
+No account or application configuration is required for local play.
+
 ```sh
 git clone https://github.com/DrTralala/Restaurant-Mayhem.git
 cd Restaurant-Mayhem
@@ -18,7 +20,7 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite. Keep the development server local: its save API is intended for trusted local use and has no authentication.
+Open the local URL printed by Vite. A successful start shows the restaurant canvas with its management, menu and settings controls. Keep the development server local: its save API is intended for trusted local use and has no authentication.
 
 ## What you can manage
 
