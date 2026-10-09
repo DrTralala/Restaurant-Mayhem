@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { drawStaffLayer, drawCustomerLayer, drawFloorLayer, drawFurnitureLayer, drawPlacementPreview, drawQueueLayer } from './layers';
+import * as characterFigure from './characterFigure';
 import { updateStaff } from '../simulation/staff';
 import { processKitchen } from '../simulation/kitchen';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
@@ -87,6 +88,14 @@ function recordCtx(extraCanvas = {}) {
 
 function loadedSprite(name) {
   return { name, complete: true, naturalWidth: 100, naturalHeight: 100 };
+}
+
+function expectFigureFeet(ctx, x, y, seated = false) {
+  const scale = seated ? 0.7 : 1;
+  const footY = seated ? 15 : 22;
+  expect(ctx._calls.scales).toContainEqual({ x: scale, y: scale });
+  expect(ctx._calls.lines).toContainEqual({ x: x - 6 * scale, y: y + footY * scale });
+  expect(ctx._calls.lines).toContainEqual({ x: x + 6 * scale, y: y + footY * scale });
 }
 
 function withMovementStatuses(state, records) {
@@ -878,7 +887,7 @@ describe('drawFurnitureLayer', () => {
     drawCustomerLayer(arrivedCtx, arrived, { x: 0, y: 0, zoom: 1 });
     drawCustomerLayer(clearedCtx, cleared, { x: 0, y: 0, zoom: 1 });
 
-    expect(enRouteCtx._calls.arcs).toHaveLength(1);
+    expect(enRouteCtx._calls.arcs).toHaveLength(2); // head plus eating plate
     expect(enRouteCtx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14))
       .toHaveLength(0);
     expect(arrivedCtx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14))
@@ -1198,7 +1207,7 @@ describe('drawStaffLayer', () => {
     drawStaffLayer(ctx, state, camera);
     expect(ctx._calls.arcs.length).toBe(1);
     expect(ctx._calls.arcs[0].x).toBe(150);
-    expect(ctx._calls.arcs[0].y).toBe(196);
+    expect(ctx._calls.arcs[0].y).toBeCloseTo(196, 0);
   });
 
   it('renders staff as a stick figure with arms and no hand endpoint rectangles', () => {
@@ -1235,7 +1244,7 @@ describe('drawStaffLayer', () => {
     expect(ctx._calls.texts.find(call => call.text === 'Sofia').colour).toBe('#ffadd0');
   });
 
-  it('changes the limb pose while traversing and keeps a held nonempty goal still', () => {
+  it('animates walking and idle breathing without adding a stride to held staff', () => {
     const goal = { x: 350, y: 200 };
     const moving = withMovementStatuses({
       staff: [{ id: 's1', name: 'Marco', gender: 'male', role: 'cook', x: 150, y: 200, morale: 80, navigationGoal: goal }],
@@ -1260,7 +1269,76 @@ describe('drawStaffLayer', () => {
     drawStaffLayer(idleLater, idle, camera, { timeMs: 200, reducedMotion: false });
 
     expect(movingStart._calls.lines).not.toEqual(movingLater._calls.lines);
-    expect(idleStart._calls.lines).toEqual(idleLater._calls.lines);
+    expect(idleStart._calls.lines).not.toEqual(idleLater._calls.lines);
+    expect(idleStart._calls.lines.slice(-2)).toEqual(idleLater._calls.lines.slice(-2));
+  });
+
+  it('passes resolved activity, carrying posture, and transition gesture to the shared figure', () => {
+    const goal = { x: 350, y: 200 };
+    const state = withMovementStatuses({
+      restaurant: { expansionLevel: 1 },
+      staff: [
+        { id: 'walker', name: 'Walker', role: 'waiter', x: 100, y: 100,
+          navigationGoal: goal, carryingServiceItemIds: ['dish'] },
+        { id: 'cook', name: 'Cook', role: 'cook', x: 200, y: 100,
+          activityPhase: 'working', task: { type: 'prepare_dish', stationId: 'kitchen' } },
+      ],
+      serviceItems: [{ id: 'dish', kind: 'dish', state: 'carried', menuItemId: 'toast' }],
+      kitchenStations: [{ id: 'kitchen', equipmentId: 'oven' }],
+      equipment: [{ id: 'oven', type: 'oven' }],
+      dishes: [{ id: 'toast', base: 'Bread' }],
+    }, {
+      walker: { goal, status: { plan: 'scheduled', motion: 'traversing' } },
+    });
+    const gestures = new Map([['walker', 'serving']]);
+    const ctx = recordCtx();
+    const drawFigure = vi.spyOn(characterFigure, 'drawStickFigure');
+
+    try {
+      drawStaffLayer(ctx, state, camera, {
+        timeMs: 42, reducedMotion: true, gestures,
+      });
+
+      expect(drawFigure).toHaveBeenCalledWith(ctx, 100, 96, expect.any(String),
+        expect.objectContaining({
+          activity: 'walking', walking: true, carrying: true, gesture: 'serving',
+          timeMs: 42, reducedMotion: true,
+        }));
+      expect(drawFigure).toHaveBeenCalledWith(ctx, 200, 96, expect.any(String),
+        expect.objectContaining({ activity: 'baking', walking: false, carrying: false }));
+    } finally {
+      drawFigure.mockRestore();
+    }
+  });
+
+  it('walks an exiting amenity resident at actor coordinates but keeps blocked residents anchored', () => {
+    const goal = { x: 350, y: 200 };
+    const amenity = { id: 'couch', type: 'couch', x: 100, y: 100, slots: [] };
+    const resident = {
+      id: 'resident', name: 'Resident', role: 'waiter', x: 300, y: 200,
+      dutyPhase: 'exiting', navigationGoal: goal,
+      amenityUse: { amenityId: 'couch', phase: 'occupied', slotIndex: 0 },
+      movementResidency: { kind: 'staff_amenity', amenityId: 'couch', slotIndex: 0 },
+    };
+    const travelling = withMovementStatuses({
+      staff: [resident], staffAmenities: [amenity], restaurant: { expansionLevel: 1 },
+    }, {
+      resident: { goal, status: { plan: 'scheduled', motion: 'traversing' } },
+    });
+    const blocked = withMovementStatuses({
+      staff: [resident], staffAmenities: [amenity], restaurant: { expansionLevel: 1 },
+    }, {
+      resident: { goal, status: { plan: 'planning', motion: 'holding' } },
+    });
+    const movingCtx = recordCtx();
+    const blockedCtx = recordCtx();
+
+    drawStaffLayer(movingCtx, travelling, camera, { reducedMotion: true });
+    drawStaffLayer(blockedCtx, blocked, camera, { reducedMotion: true });
+
+    expect(movingCtx._calls.arcs[0].x).toBe(300);
+    expect(movingCtx._calls.arcs[0].y).toBeCloseTo(196, 0);
+    expect(blockedCtx._calls.arcs[0]).toMatchObject({ x: 110, y: 110 });
   });
 
   it('stacks names when staff occupy the same area', () => {
@@ -1291,7 +1369,7 @@ describe('drawStaffLayer', () => {
     // getDefaultStaffPosition for cook index 0 at expansionLevel 1: world.floorX=50
     // x = 50 + 40 + 0*45 = 90, y = world.diningY = 100
     expect(ctx._calls.arcs[0].x).toBe(90);
-    expect(ctx._calls.arcs[0].y).toBe(96);
+    expect(ctx._calls.arcs[0].y).toBeCloseTo(96, 0);
   });
 
   it('falls back when x is not finite', () => {
@@ -1302,7 +1380,7 @@ describe('drawStaffLayer', () => {
     const ctx = recordCtx();
     drawStaffLayer(ctx, state, camera);
     expect(ctx._calls.arcs[0].x).toBe(90);
-    expect(ctx._calls.arcs[0].y).toBe(96);
+    expect(ctx._calls.arcs[0].y).toBeCloseTo(96, 0);
   });
 
   it('falls back to the assigned cashier position when waiter coordinates are missing', () => {
@@ -1317,7 +1395,8 @@ describe('drawStaffLayer', () => {
 
     drawStaffLayer(ctx, state, camera);
 
-    expect(ctx._calls.arcs[0]).toMatchObject({ x: 840, y: 96 });
+    expect(ctx._calls.arcs[0].x).toBe(840);
+    expect(ctx._calls.arcs[0].y).toBeCloseTo(96, 0);
   });
 
   it('does not render staff task text on the main canvas', () => {
@@ -1343,7 +1422,7 @@ describe('drawStaffLayer', () => {
     expect(taskTexts.length).toBe(0);
   });
 
-  it('animates a stationary cleaning cloth without moving the staff member or striding', () => {
+  it('animates a stationary cleaning pose without moving the staff member or striding', () => {
     const state = {
       staff: [{
         id: 's1', name: 'Anna', role: 'waiter', x: 300, y: 300, morale: 80,
@@ -1361,10 +1440,14 @@ describe('drawStaffLayer', () => {
     drawStaffLayer(reducedStart, state, camera, { timeMs: 0, reducedMotion: true });
     drawStaffLayer(reducedLater, state, camera, { timeMs: 200, reducedMotion: true });
 
-    expect(start._calls.arcs[0]).toEqual(later._calls.arcs[0]);
+    expect(start._calls.arcs[0].x).toBeCloseTo(300, 0);
+    expect(later._calls.arcs[0].x).toBeCloseTo(300, 0);
+    expect(start._calls.arcs[0].y).toBeGreaterThan(295);
+    expect(start._calls.arcs[0].y).toBeLessThan(297);
+    expect(later._calls.arcs[0].y).toBeGreaterThan(295);
+    expect(later._calls.arcs[0].y).toBeLessThan(297);
     expect(start._calls.lines).not.toEqual(later._calls.lines);
-    expect(start._calls.lines.at(-1)).not.toEqual(later._calls.lines.at(-1));
-    expect(start._calls.lines.slice(3, 5)).toEqual(later._calls.lines.slice(3, 5));
+    expect(start._calls.lines.slice(-2)).toEqual(later._calls.lines.slice(-2));
     expect(reducedStart._calls.lines).toEqual(reducedLater._calls.lines);
     expect(reducedStart._calls.rects).toEqual(reducedLater._calls.rects);
   });
@@ -1394,9 +1477,9 @@ describe('drawStaffLayer', () => {
     drawStaffLayer(assignedCtx, assigned, camera, { timeMs: 0 });
     drawStaffLayer(traversingCtx, traversing, camera, { timeMs: 0 });
 
-    expect(workingCtx._calls.strokes).toContainEqual({ colour: '#f3e6bd' });
-    expect(assignedCtx._calls.strokes).not.toContainEqual({ colour: '#f3e6bd' });
-    expect(traversingCtx._calls.strokes).not.toContainEqual({ colour: '#f3e6bd' });
+    expect(workingCtx._calls.rectColours.some(rect => rect.colour === '#f3e6bd')).toBe(true);
+    expect(assignedCtx._calls.rectColours.some(rect => rect.colour === '#f3e6bd')).toBe(false);
+    expect(traversingCtx._calls.rectColours.some(rect => rect.colour === '#f3e6bd')).toBe(false);
   });
 
   it.each(['planning', 'scheduled'])('suppresses work progress while a goal is %s', plan => {
@@ -1613,7 +1696,7 @@ describe('drawCustomerLayer', () => {
 
     drawCustomerLayer(ctx, state, camera, { indexes });
 
-    expect(ctx._calls.arcs[0]).toMatchObject({ x: 120, y: 85 });
+    expectFigureFeet(ctx, 120, 85, true);
     expect(indexes.tablesById.get(1)).toBe(table);
     expect(indexes.chairsByIdAndTableId.get('chair').get(1)).toBe(matchingChair);
   });
@@ -1630,7 +1713,8 @@ describe('drawCustomerLayer', () => {
       const state = { customers: [customer], chairs: [chair], tables: [table] };
       const waiting = recordCtx();
       drawCustomerLayer(waiting, state, camera);
-      expect(waiting._calls.arcs[0]).toMatchObject({ x: 360, y: 325 });
+      expect(waiting._calls.arcs[0].x).toBeCloseTo(360, 0);
+      expect(waiting._calls.arcs[0].y).toBe(325);
       expect(waiting._calls.lines.every(point => point.y < table.y)).toBe(true);
 
       const departed = recordCtx();
@@ -1638,7 +1722,8 @@ describe('drawCustomerLayer', () => {
         ...state,
         customers: [{ ...customer, x: 360, y: 300 }],
       }, camera);
-      expect(departed._calls.arcs[0]).toMatchObject({ x: 360, y: 296 });
+      expect(departed._calls.arcs[0].x).toBeCloseTo(360, 0);
+      expect(departed._calls.arcs[0].y).toBeCloseTo(296, 0);
       expect(departed._calls.lines).toContainEqual({ x: 366, y: 318 });
     },
   );
@@ -1651,7 +1736,7 @@ describe('drawCustomerLayer', () => {
       tables: [{ id: 't1', x: 140, y: 90 }],
     }, { x: 0, y: 0, zoom: 1 });
 
-    expect(ctx._calls.arcs).toContainEqual(expect.objectContaining({ x: 110, y: 105 }));
+    expectFigureFeet(ctx, 110, 105, true);
     expect(ctx._calls.rects).toContainEqual({ x: 98, y: 112, w: 24, h: 16 });
     expect(ctx._calls.rotations.at(-1)).toBe(0);
   });
@@ -1672,7 +1757,9 @@ describe('drawCustomerLayer', () => {
       tables: [{ id: 't1', x: 140, y: 90 }],
     }, camera);
 
-    expect(ctx._calls.arcs).toContainEqual(expect.objectContaining(expected));
+    const seated = ['seated', 'ordering', 'eating', 'waiting_for_items', 'waiting_for_party']
+      .includes(_label);
+    expectFigureFeet(ctx, expected.x, expected.y, seated);
   });
 
   it('renders guided customer at dynamic x/y even without tableId', () => {
@@ -1683,7 +1770,7 @@ describe('drawCustomerLayer', () => {
     const ctx = recordCtx();
     drawCustomerLayer(ctx, state, camera);
     expect(ctx._calls.arcs.length).toBe(1);
-    expect(ctx._calls.arcs[0].x).toBe(850);
+    expect(ctx._calls.arcs[0].x).toBeCloseTo(850, 0);
     expect(ctx._calls.arcs[0].y).toBe(366);
   });
 
@@ -1712,7 +1799,8 @@ describe('drawCustomerLayer', () => {
     drawCustomerLayer(holdingLater, holding, camera, { timeMs: 200 });
 
     expect(traversingStart._calls.lines).not.toEqual(traversingLater._calls.lines);
-    expect(holdingStart._calls.lines).toEqual(holdingLater._calls.lines);
+    expect(holdingStart._calls.lines).not.toEqual(holdingLater._calls.lines);
+    expect(holdingStart._calls.lines.slice(-2)).toEqual(holdingLater._calls.lines.slice(-2));
   });
 
   it('renders seated customer on their assigned chair instead of the table', () => {
@@ -1725,8 +1813,7 @@ describe('drawCustomerLayer', () => {
     const ctx = recordCtx();
     drawCustomerLayer(ctx, state, camera);
     expect(ctx._calls.arcs.length).toBe(1);
-    expect(ctx._calls.arcs[0].x).toBe(220);
-    expect(ctx._calls.arcs[0].y).toBe(185);
+    expectFigureFeet(ctx, 220, 185, true);
   });
 
   it('shows a cream open-book menu held by a seated customer who is deciding', () => {
@@ -1875,7 +1962,7 @@ describe('drawCustomerLayer', () => {
     drawCustomerLayer(ctx, state, camera);
     expect(ctx._calls.arcs.length).toBe(1);
     // should use dynamic x/y, not table position
-    expect(ctx._calls.arcs[0].x).toBe(850);
+    expect(ctx._calls.arcs[0].x).toBeCloseTo(850, 0);
     expect(ctx._calls.arcs[0].y).toBe(366);
   });
 
@@ -1913,8 +2000,10 @@ describe('drawCustomerLayer', () => {
     drawCustomerLayer(reducedStart, traversing, camera, { timeMs: 0, reducedMotion: true });
     drawCustomerLayer(reducedLater, traversing, camera, { timeMs: 200, reducedMotion: true });
 
-    expect(start._calls.lines).toEqual(later._calls.lines);
+    expect(start._calls.lines).not.toEqual(later._calls.lines);
+    expect(start._calls.lines.slice(-2)).toEqual(later._calls.lines.slice(-2));
     expect(movingStart._calls.lines).not.toEqual(movingLater._calls.lines);
+    expect(movingStart._calls.lines.slice(-2)).not.toEqual(movingLater._calls.lines.slice(-2));
     expect(reducedStart._calls.lines).toEqual(reducedLater._calls.lines);
   });
 
@@ -1929,7 +2018,43 @@ describe('drawCustomerLayer', () => {
 
     drawCustomerLayer(ctx, state, camera);
 
-    expect(ctx._calls.arcs[0]).toMatchObject({ x: 780, y: 136 });
+    expectFigureFeet(ctx, 780, 136);
+  });
+
+  it('uses the walking pose for a customer traversing to checkout', () => {
+    const goal = { x: 600, y: 180 };
+    const state = withMovementStatuses({
+      customers: [{ id: 'payer', state: 'checkout_moving', x: 500, y: 180,
+        navigationGoal: goal }],
+      tables: [], chairs: [], restaurant: { gameTime: 10 },
+    }, {
+      payer: { goal, status: { plan: 'scheduled', motion: 'traversing' } },
+    });
+    const ctx = recordCtx();
+    const drawFigure = vi.spyOn(characterFigure, 'drawStickFigure');
+
+    try {
+      drawCustomerLayer(ctx, state, camera, { timeMs: 120, reducedMotion: true });
+
+      expect(drawFigure).toHaveBeenCalledWith(ctx, 500, 176, expect.any(String),
+        expect.objectContaining({ activity: 'walking', walking: true, timeMs: 120 }));
+    } finally {
+      drawFigure.mockRestore();
+    }
+  });
+
+  it('falls back to finite actor coordinates when seated display geometry is invalid', () => {
+    const ctx = recordCtx();
+    expect(() => drawCustomerLayer(ctx, {
+      customers: [{ id: 'c1', state: 'seated', tableId: 't1', chairId: 'ch1', x: 420, y: 330 }],
+      tables: [{ id: 't1', x: 400, y: 300 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: Number.NaN, y: 310 }],
+      restaurant: {},
+    }, camera)).not.toThrow();
+
+    expect(ctx._calls.arcs).toHaveLength(1);
+    expectFigureFeet(ctx, 420, 326, true);
+    expect(ctx._calls.rects.some(({ w, h }) => w === 24 && h === 16)).toBe(false);
   });
 
   it('skips customers with no position and no tableId', () => {
@@ -1944,7 +2069,7 @@ describe('drawCustomerLayer', () => {
 });
 
 describe('drawQueueLayer', () => {
-  it('renders the exact leased customer positions and counts members hidden without a lease', () => {
+  it('renders leased customer anchors and counts members hidden without a lease', () => {
     const members = Array.from({ length: 9 }, (_, partyIndex) =>
       Array.from({ length: 4 }, (_, memberIndex) => ({
         id: `p${partyIndex}-m${memberIndex}`,
@@ -1969,11 +2094,30 @@ describe('drawQueueLayer', () => {
     };
     const ctx = recordCtx();
 
-    drawQueueLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
+    drawQueueLayer(ctx, state, { x: 0, y: 0, zoom: 1 }, { reducedMotion: true });
 
     expect(ctx._calls.arcs).toHaveLength(9);
     expect(ctx._calls.arcs.map(({ x }) => x)).toEqual(Array(9).fill(973));
     expect(ctx._calls.arcs.map(({ y }) => y)).toEqual([386, 416, 446, 476, 506, 536, 566, 596, 626]);
     expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '+27', y: 660 }));
+  });
+
+  it('renders visible queue members with the waiting activity', () => {
+    const state = {
+      queue: [{ id: 'member', partyId: 'party', gender: 'female' }],
+      queueSlots: [{ memberId: 'member', partyId: 'party', x: 973, y: 390 }],
+      restaurant: { expansionLevel: 1 },
+    };
+    const ctx = recordCtx();
+    const drawFigure = vi.spyOn(characterFigure, 'drawStickFigure');
+
+    try {
+      drawQueueLayer(ctx, state, { x: 0, y: 0, zoom: 1 }, { timeMs: 45, reducedMotion: true });
+
+      expect(drawFigure).toHaveBeenCalledWith(ctx, 973, 386, expect.any(String),
+        expect.objectContaining({ activity: 'waiting', timeMs: 45, reducedMotion: true }));
+    } finally {
+      drawFigure.mockRestore();
+    }
   });
 });

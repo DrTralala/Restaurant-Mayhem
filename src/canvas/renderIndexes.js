@@ -61,6 +61,7 @@ export function createRenderIndexes(state) {
   const customersById = createIdMap(recordsFor(state, 'customers'));
   const serviceTablesById = createIdMap(recordsFor(state, 'serviceTables'));
   const equipmentById = createIdMap(recordsFor(state, 'equipment'));
+  const kitchenStationsById = createIdMap(recordsFor(state, 'kitchenStations'));
   const dishesById = createIdMap(recordsFor(state, 'dishes'));
   const staffAmenitiesByStringId = createAmenitiesByStringId(recordsFor(state, 'staffAmenities'));
   const chairsByIdAndTableId = createChairsByIdAndTableId(recordsFor(state, 'chairs'));
@@ -112,6 +113,7 @@ export function createRenderIndexes(state) {
     customersById,
     serviceTablesById,
     equipmentById,
+    kitchenStationsById,
     dishesById,
     serviceItemsById,
     chairsByIdAndTableId,

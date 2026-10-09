@@ -261,13 +261,17 @@ describe('canvas actor presentation', () => {
     drawStaffLayer(staffContext, baseState({
       staff: [{ id: 's1', name: 'A', role: 'waiter', x: 100, y: 200 }],
     }), camera);
-    expect(staffContext._calls.arcs[0]).toMatchObject({ x: 100, y: 196 });
+    expect(staffContext._calls.arcs[0].x).toBe(100);
+    expect(staffContext._calls.arcs[0].y).toBeGreaterThan(195);
+    expect(staffContext._calls.arcs[0].y).toBeLessThan(197);
 
     const customerContext = makeContext();
     drawCustomerLayer(customerContext, baseState({
       customers: [{ id: 'c1', state: 'entering', x: 140, y: 220 }],
     }), camera);
-    expect(customerContext._calls.arcs[0]).toMatchObject({ x: 140, y: 216 });
+    expect(customerContext._calls.arcs[0].x).toBeCloseTo(140, 0);
+    expect(customerContext._calls.arcs[0].y).toBeGreaterThan(215);
+    expect(customerContext._calls.arcs[0].y).toBeLessThan(217);
   });
 
   it('keeps carried visuals attached to the shifted standing staff pose', () => {
@@ -280,7 +284,9 @@ describe('canvas actor presentation', () => {
       serviceItems: [{ id: 'food', kind: 'dish', menuItemId: 'missing', state: 'carried' }],
     }), camera);
 
-    expect(ctx._calls.arcs[0]).toMatchObject({ x: 100, y: 196 });
+    expect(ctx._calls.arcs[0].x).toBe(100);
+    expect(ctx._calls.arcs[0].y).toBeGreaterThan(195);
+    expect(ctx._calls.arcs[0].y).toBeLessThan(197);
     expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍽️', x: 112, y: 182 }));
   });
 
@@ -340,12 +346,15 @@ describe('canvas actor presentation', () => {
 
     const couchGeometry = getAmenityGeometry(couch);
     const bedGeometry = getAmenityGeometry(bed);
-    expect(ctx._calls.arcs).toEqual(expect.arrayContaining([
-      expect.objectContaining({ x: couchGeometry.slotAnchors[0].x, y: couchGeometry.slotAnchors[0].y }),
-      expect.objectContaining({ x: couchGeometry.slotAnchors[1].x, y: couchGeometry.slotAnchors[1].y }),
-      expect.objectContaining({ x: bedGeometry.slotAnchors[0].x, y: bedGeometry.slotAnchors[0].y }),
-      expect.objectContaining({ x: 320, y: 146 }),
-    ]));
+    const anchoredHeads = [
+      couchGeometry.slotAnchors[0], couchGeometry.slotAnchors[1],
+      bedGeometry.slotAnchors[0], { x: 320, y: 146 },
+    ];
+    for (const anchor of anchoredHeads) {
+      const head = ctx._calls.arcs.find(arc => arc.x === anchor.x);
+      expect(head).toBeDefined();
+      expect(Math.abs(head.y - anchor.y)).toBeLessThan(1);
+    }
     expect(ctx._calls.rotations.length).toBeGreaterThan(0);
 
     const timerFills = ctx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0

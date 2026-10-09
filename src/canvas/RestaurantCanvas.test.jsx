@@ -11,7 +11,7 @@ import {
   drawStaffLayer,
 } from './layers';
 import { adjustCameraZoom, calculateFitCamera } from './camera';
-import { useDispatch, useGameState } from '../state/GameContext';
+import { useDispatch, useGameGeneration, useGameState } from '../state/GameContext';
 import { useRenderState, useRuntimeFault } from '../state/SimulationRuntime';
 import { findClickedEntity } from './interaction';
 import { getRestaurantWorld } from '../simulation/world';
@@ -23,6 +23,7 @@ import { createRenderIndexes } from './renderIndexes';
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
   useDispatch: vi.fn(),
+  useGameGeneration: vi.fn(),
 }));
 
 vi.mock('../state/SimulationRuntime', () => ({
@@ -145,6 +146,19 @@ function drawingContext() {
   };
 }
 
+function prepareCanvasForFrames(container) {
+  const canvas = container.querySelector('canvas');
+  Object.defineProperty(canvas, 'clientWidth', { configurable: true, value: 800 });
+  Object.defineProperty(canvas, 'clientHeight', { configurable: true, value: 600 });
+  canvas.getContext = vi.fn(() => drawingContext());
+  calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  return canvas;
+}
+
+function runAnimationFrame(timestamp) {
+  act(() => requestAnimationFrame.mock.calls.at(-1)[0](timestamp));
+}
+
 function trackCanvasDimensions(canvas) {
   const writes = { width: [], height: [] };
   for (const dimension of ['width', 'height']) {
@@ -191,6 +205,7 @@ describe('RestaurantCanvas object movement', () => {
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
     useRuntimeFault.mockReset().mockReturnValue({ fault: null, reportFault: vi.fn() });
     useGameState.mockReturnValue(state);
+    useGameGeneration.mockReturnValue(0);
     useRenderState.mockImplementation(() => useGameState());
     useDispatch.mockReturnValue(vi.fn());
     findClickedEntity.mockReturnValue({ type: 'chair', data: chair, text: 'Chair' });
@@ -1072,22 +1087,231 @@ describe('RestaurantCanvas object movement', () => {
     expect(screen.queryByText(/Table \d|Chair \d/)).not.toBeInTheDocument();
   });
 
-  it('passes animation time and reduced-motion preference to character layers', () => {
-    window.matchMedia = vi.fn().mockReturnValue({ matches: true });
-    const { container } = render(<RestaurantCanvas managementOpen={false} />);
-    const canvas = container.querySelector('canvas');
-    Object.defineProperty(canvas, 'clientWidth', { value: 800 });
-    Object.defineProperty(canvas, 'clientHeight', { value: 600 });
-    canvas.getContext = vi.fn(() => drawingContext());
-    calculateFitCamera.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  it('subscribes to live reduced-motion changes and removes the listener', () => {
+    const previousMatchMedia = window.matchMedia;
+    const listeners = new Set();
+    const query = {
+      matches: false,
+      addEventListener: vi.fn((type, listener) => {
+        if (type === 'change') listeners.add(listener);
+      }),
+      removeEventListener: vi.fn((type, listener) => {
+        if (type === 'change') listeners.delete(listener);
+      }),
+    };
+    window.matchMedia = vi.fn().mockReturnValue(query);
+    const { container, unmount } = render(<RestaurantCanvas managementOpen={false} />);
+    prepareCanvasForFrames(container);
 
-    const frame = requestAnimationFrame.mock.calls[0][0];
-    frame(1250);
+    try {
+      runAnimationFrame(0);
+      expect(drawStaffLayer.mock.calls.at(-1)[3]).toEqual(expect.objectContaining({
+        timeMs: 0, reducedMotion: false, indexes: expect.any(Object),
+      }));
+      const listener = [...listeners][0];
+      expect(listener).toBeTypeOf('function');
+      act(() => listener({ matches: true }));
+      runAnimationFrame(16);
+      expect(drawStaffLayer.mock.calls.at(-1)[3]).toEqual(expect.objectContaining({
+        timeMs: 16, reducedMotion: true, indexes: expect.any(Object),
+      }));
+      unmount();
+      expect(query.removeEventListener).toHaveBeenCalledWith('change', listener);
+      expect(listeners.size).toBe(0);
+    } finally {
+      if (previousMatchMedia === undefined) delete window.matchMedia;
+      else window.matchMedia = previousMatchMedia;
+    }
+  });
 
-    expect(drawStaffLayer).toHaveBeenCalledWith(
-      expect.anything(), state, expect.anything(),
-      expect.objectContaining({ timeMs: 1250, reducedMotion: true, indexes: expect.any(Object) }),
-    );
+  it('scales animation time with game speed and freezes it during game pause', () => {
+    const normal = {
+      ...state, paused: false, speed: 1,
+      restaurant: { ...state.restaurant, gameTime: 10 },
+    };
+    useGameState.mockReturnValue(normal);
+    useRenderState.mockReturnValue(normal);
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    prepareCanvasForFrames(container);
+
+    runAnimationFrame(0);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(0);
+    runAnimationFrame(100);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+
+    const paused = { ...normal, paused: true };
+    useGameState.mockReturnValue(paused);
+    useRenderState.mockReturnValue(paused);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(200);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+    runAnimationFrame(300);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+
+    const resumed = { ...paused, paused: false };
+    useGameState.mockReturnValue(resumed);
+    useRenderState.mockReturnValue(resumed);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(400);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+    runAnimationFrame(500);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(200);
+
+    const fast = { ...resumed, speed: 2 };
+    useGameState.mockReturnValue(fast);
+    useRenderState.mockReturnValue(fast);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(600);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(200);
+    runAnimationFrame(700);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(400);
+  });
+
+  it('resets the canvas animation clock when the game generation changes', () => {
+    let generation = 1;
+    const first = {
+      ...state, paused: false, speed: 1,
+      restaurant: { ...state.restaurant, gameTime: 10 },
+    };
+    useGameState.mockReturnValue(first);
+    useRenderState.mockReturnValue(first);
+    useGameGeneration.mockReturnValue(generation);
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    prepareCanvasForFrames(container);
+    runAnimationFrame(0);
+    runAnimationFrame(100);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+
+    generation = 2;
+    const next = { ...first, restaurant: { ...first.restaurant, gameTime: 20 } };
+    useGameState.mockReturnValue(next);
+    useRenderState.mockReturnValue(next);
+    useGameGeneration.mockReturnValue(generation);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(116);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(0);
+    runAnimationFrame(132);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(16);
+  });
+
+  it('freezes animation time while a career decision is pending', () => {
+    const normal = {
+      ...state, paused: false, speed: 1,
+      restaurant: { ...state.restaurant, gameTime: 10 },
+    };
+    useGameState.mockReturnValue(normal);
+    useRenderState.mockReturnValue(normal);
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    prepareCanvasForFrames(container);
+    runAnimationFrame(0);
+    runAnimationFrame(100);
+
+    const decision = { ...normal, careerRun: { needsDecision: true } };
+    useGameState.mockReturnValue(decision);
+    useRenderState.mockReturnValue(decision);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(200);
+    runAnimationFrame(300);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+
+    useGameState.mockReturnValue(normal);
+    useRenderState.mockReturnValue(normal);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(400);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+    runAnimationFrame(500);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(200);
+  });
+
+  it('freezes animation time when a navigation fault stops simulation ticks', () => {
+    const normal = {
+      ...state, paused: false, speed: 1,
+      restaurant: { ...state.restaurant, gameTime: 10 },
+    };
+    useGameState.mockReturnValue(normal);
+    useRenderState.mockReturnValue(normal);
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    prepareCanvasForFrames(container);
+    runAnimationFrame(0);
+    runAnimationFrame(100);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+
+    const navigationFault = { ...normal, navigationFault: { issues: [] } };
+    useGameState.mockReturnValue(navigationFault);
+    useRenderState.mockReturnValue(navigationFault);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(200);
+    runAnimationFrame(300);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+
+    useGameState.mockReturnValue(normal);
+    useRenderState.mockReturnValue(normal);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(400);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(100);
+    runAnimationFrame(500);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(200);
+  });
+
+  it('freezes animation time across a stopped runtime fault and recovery', () => {
+    const reportFault = vi.fn();
+    const normal = {
+      ...state, paused: false, speed: 1,
+      restaurant: { ...state.restaurant, gameTime: 10 },
+    };
+    useRuntimeFault.mockReturnValue({ fault: null, reportFault });
+    useGameState.mockReturnValue(normal);
+    useRenderState.mockReturnValue(normal);
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    prepareCanvasForFrames(container);
+    runAnimationFrame(0);
+    runAnimationFrame(100);
+    const fault = new Error('injected runtime stop');
+    drawFloorLayer.mockImplementationOnce(() => { throw fault; });
+    runAnimationFrame(200);
+    expect(reportFault).toHaveBeenCalledWith(fault, 'drawing');
+
+    useRuntimeFault.mockReturnValue({ fault, reportFault });
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    useRuntimeFault.mockReturnValue({ fault: null, reportFault });
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(216);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(200);
+    runAnimationFrame(232);
+    expect(drawStaffLayer.mock.calls.at(-1)[3].timeMs).toBe(216);
+  });
+
+  it('uses current canonical service items to validate carried-item gestures', () => {
+    const task = { type: 'pickup_service_item', serviceItemId: 'dish', serviceTableId: 'counter' };
+    const unladenStaff = [{ id: 'waiter', role: 'waiter', task, carryingServiceItemIds: [] }];
+    const onService = [{ id: 'dish', kind: 'dish', state: 'on_service', serviceTableId: 'counter' }];
+    const before = {
+      ...state, paused: false, speed: 1,
+      restaurant: { ...state.restaurant, gameTime: 10 },
+      staff: unladenStaff, serviceItems: onService,
+    };
+    useGameState.mockReturnValue(before);
+    useRenderState.mockReturnValue(before);
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    prepareCanvasForFrames(container);
+    runAnimationFrame(0);
+
+    const canonical = {
+      ...before,
+      restaurant: { ...before.restaurant, gameTime: 11 },
+      staff: [{ ...unladenStaff[0], carryingServiceItemIds: ['dish'] }],
+      serviceItems: [{ ...onService[0], state: 'carried', assignedStaffId: 'waiter' }],
+    };
+    const staleRender = { ...canonical, serviceItems: onService };
+    useGameState.mockReturnValue(canonical);
+    useRenderState.mockReturnValue(staleRender);
+    rerender(<RestaurantCanvas managementOpen={false} />);
+    runAnimationFrame(100);
+
+    const options = drawStaffLayer.mock.calls.at(-1)[3];
+    expect(options.gestures.get('waiter')).toBe('pickup');
+    expect(canonical.serviceItems[0].state).toBe('carried');
+    expect(staleRender.serviceItems[0].state).toBe('on_service');
   });
 
   it('stops the draw loop after a drawing fault without requeueing a frame', () => {

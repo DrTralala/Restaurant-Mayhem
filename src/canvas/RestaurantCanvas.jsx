@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
-import { useGameState, useDispatch } from '../state/GameContext';
+import { useGameState, useDispatch, useGameGeneration } from '../state/GameContext';
 import { useRenderState, useRuntimeFault } from '../state/SimulationRuntime';
+import { isCareerDecisionPending } from '../simulation/careerRun';
 import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } from './camera';
 import { loadSprites } from './sprites';
 import { drawFloorLayer, drawFurnitureLayer, drawObjectLabel, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawQueueLayer, drawSelectionLayer } from './layers';
@@ -24,6 +25,10 @@ import {
 import { getFixtureSaleEligibility } from '../state/fixtureSales';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 import { createRenderIndexes } from './renderIndexes';
+import {
+  createCharacterAnimationClock,
+  createCharacterTransitionHistory,
+} from './characterAnimation';
 
 import {
   buildPlacement,
@@ -244,10 +249,20 @@ export default function RestaurantCanvas({
   const spritesRef = useRef(null);
   if (spritesRef.current === null) spritesRef.current = loadSprites();
   const viewportRef = useRef({ w: 0, h: 0 });
-  const reducedMotionRef = useRef(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
+  const reducedMotionRef = useRef(false);
   const state = useGameState();
+  const generation = useGameGeneration();
   const simulationRenderState = useRenderState();
   const { fault, reportFault } = useRuntimeFault();
+  const animationClockRef = useRef(null);
+  if (animationClockRef.current === null) {
+    animationClockRef.current = createCharacterAnimationClock();
+  }
+  const transitionHistoryRef = useRef(null);
+  if (transitionHistoryRef.current === null) {
+    transitionHistoryRef.current = createCharacterTransitionHistory();
+  }
+  const lastCanvasTimestampRef = useRef(null);
   const dispatch = useDispatch();
   const [placement, setPlacement] = useState(null);
   const placementRef = useRef(null);
@@ -281,7 +296,7 @@ export default function RestaurantCanvas({
     return screenToWorld(camera, point.x, point.y);
   };
 
-  const draw = useCallback((timeMs = 0) => {
+  const draw = useCallback((timestamp = 0) => {
     const canvas = canvasRef.current;
     if (!canvas || canvas.clientWidth === 0) return;
     const ctx = canvas.getContext('2d');
@@ -334,18 +349,62 @@ export default function RestaurantCanvas({
     if (moveRef.current) renderState = applyMovePreview(renderState, state, moveRef.current);
     if (staffMoveRef.current) renderState = applyStaffMovePreview(renderState, staffMoveRef.current);
     const indexes = createRenderIndexes(renderState);
+    lastCanvasTimestampRef.current = timestamp;
+    const timeMs = animationClockRef.current.update(timestamp, {
+      paused: state.paused === true || Boolean(state.navigationFault) || Boolean(fault)
+        || isCareerDecisionPending(state),
+      speed: state.speed,
+      generation,
+      gameTime: state.restaurant?.gameTime,
+    });
+    const gestures = transitionHistoryRef.current.update(renderState.staff, timeMs, {
+      generation,
+      gameTime: state.restaurant?.gameTime,
+      serviceItems: state.serviceItems,
+    });
 
     drawFloorLayer(ctx, renderState, camera, sprites);
     drawFurnitureLayer(ctx, renderState, camera, sprites, indexes);
     if (placement) drawPlacementPreview(ctx, state, camera, placement);
     if (copyRef.current) drawCopyPreview(ctx, state, camera, copyRef.current);
-    const characterRenderOptions = { timeMs, reducedMotion: reducedMotionRef.current };
+    const characterRenderOptions = {
+      timeMs, reducedMotion: reducedMotionRef.current, gestures,
+    };
     const indexedCharacterRenderOptions = { ...characterRenderOptions, indexes };
     drawStaffLayer(ctx, renderState, camera, indexedCharacterRenderOptions);
     drawCustomerLayer(ctx, renderState, camera, indexedCharacterRenderOptions);
     drawQueueLayer(ctx, renderState, camera, characterRenderOptions);
     drawSelectionLayer(ctx, renderState, camera, selectedItems);
-  }, [state, simulationRenderState, selectedItems, placement]);
+  }, [state, generation, fault, simulationRenderState, selectedItems, placement]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!mediaQuery) {
+      reducedMotionRef.current = false;
+      return undefined;
+    }
+
+    reducedMotionRef.current = mediaQuery.matches === true;
+    const onChange = event => {
+      reducedMotionRef.current = event.matches === true;
+    };
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', onChange);
+      return () => mediaQuery.removeEventListener('change', onChange);
+    }
+    mediaQuery.addListener?.(onChange);
+    return () => mediaQuery.removeListener?.(onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!fault) return;
+    animationClockRef.current.update(lastCanvasTimestampRef.current, {
+      paused: true,
+      speed: state.speed,
+      generation,
+      gameTime: state.restaurant?.gameTime,
+    });
+  }, [fault]);
 
   useEffect(() => {
     if (!placementRequest) {

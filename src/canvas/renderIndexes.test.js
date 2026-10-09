@@ -88,6 +88,18 @@ describe('createRenderIndexes', () => {
     expect(indexes.foodKitchenStationIds.has('missing')).toBe(false);
   });
 
+  it('indexes kitchen stations by strict ID for equipment lookup', () => {
+    const firstStation = { id: 'k1', equipmentId: 'eq1' };
+    const state = {
+      kitchenStations: [firstStation, { id: 'k1', equipmentId: 'eq2' }, { id: NaN }],
+    };
+    const indexes = createRenderIndexes(state);
+
+    expect(indexes.kitchenStationsById.get('k1')).toBe(firstStation);
+    expect(indexes.kitchenStationsById.has(NaN)).toBe(false);
+    expect(indexes.kitchenStationsById.size).toBe(1);
+  });
+
   it('indexes actors in existing staff-before-customer lookup order by string ID', () => {
     const staff = { id: 1, label: 'staff' };
     const customer = { id: '1', label: 'customer' };

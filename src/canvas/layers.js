@@ -13,12 +13,16 @@ import { getCustomerConsumptionRemainingFraction } from '../simulation/consumpti
 import { getPlaceableDimensions } from '../data/placeables';
 import { getCharacterMovementStatus } from '../simulation/movement';
 import { getCarriedServiceItemIds } from '../simulation/staffInventory';
+import { getStaffVisualActivity, getCustomerVisualActivity } from './characterActivity';
+import { drawStickFigure } from './characterFigure';
 import { getServiceItemProgress, getStaffTaskRemainingFraction } from '../simulation/staffPerformance';
 import { getFoodPatienceFraction } from '../simulation/foodPatience';
 import { getAmenityGeometry } from '../data/staffAmenities';
 import { getCanvasFont } from '../typography';
 import { drawSprite } from './sprites';
 import { createRenderIndexes } from './renderIndexes';
+
+export { drawStickFigure };
 
 const CANVAS_LABEL_FONT = getCanvasFont('compact');
 // Counter items sit in two 14px rows, so keep the glyphs within that spacing.
@@ -141,83 +145,6 @@ function staffProgress(state, staff, movement) {
     && movement.plan !== 'arrived';
   if (!staff.task || travellingToTask || staff.task.type === 'wash_item') return null;
   return getStaffTaskRemainingFraction(state, staff);
-}
-
-function animationOffset(id = '') {
-  return [...String(id)].reduce((total, character) => total + character.charCodeAt(0), 0) * 0.17;
-}
-
-export function drawStickFigure(ctx, x, y, color, {
-  seated = false,
-  lying = false,
-  walking = false,
-  cleaning = false,
-  timeMs = 0,
-  reducedMotion = false,
-  id = '',
-  scale = 1,
-  rotation = 0,
-} = {}) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(rotation);
-  ctx.scale(scale, scale);
-  const localX = 0;
-  const localY = 0;
-  const stride = walking && !cleaning && !reducedMotion
-    ? Math.sin(timeMs * 0.012 + animationOffset(id)) * 4
-    : 0;
-  const wipe = cleaning && !reducedMotion
-    ? Math.sin(timeMs * 0.012 + animationOffset(id)) * 5
-    : 0;
-  const leftHandX = cleaning ? localX + 3 + wipe : localX - 8;
-  const rightHandX = cleaning ? localX + 9 + wipe : localX + 8;
-  const handY = cleaning ? localY + 12 : localY + 10;
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = 2;
-
-  ctx.beginPath();
-  ctx.arc(localX, localY, 4, 0, Math.PI * 2);
-  ctx.stroke();
-
-  ctx.beginPath();
-  if (lying) {
-    // A resident on a bed is drawn along the bed's long axis. The caller
-    // rotates this small pose to match the furniture, so the head stays at
-    // the authoritative slot anchor instead of being re-positioned by the
-    // renderer.
-    ctx.moveTo(localX + 4, localY);
-    ctx.lineTo(localX + 16, localY);
-    ctx.moveTo(localX + 8, localY - 3);
-    ctx.lineTo(localX + 8, localY + 5);
-    ctx.moveTo(localX + 16, localY);
-    ctx.lineTo(localX + 23, localY - 5);
-    ctx.moveTo(localX + 16, localY);
-    ctx.lineTo(localX + 23, localY + 5);
-  } else {
-    ctx.moveTo(localX, localY + 4);
-    ctx.lineTo(localX, localY + 14);
-    ctx.moveTo(localX, localY + 7);
-    ctx.lineTo(leftHandX, handY + stride);
-    ctx.moveTo(localX, localY + 7);
-    ctx.lineTo(rightHandX, handY - stride);
-    ctx.moveTo(localX, localY + 14);
-    ctx.lineTo(localX - 6, seated ? localY + 15 : localY + 22 - stride);
-    ctx.moveTo(localX, localY + 14);
-    ctx.lineTo(localX + 6, seated ? localY + 15 : localY + 22 + stride);
-  }
-  ctx.stroke();
-
-  if (cleaning) {
-    ctx.strokeStyle = '#f3e6bd';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(leftHandX - 1, handY + 3);
-    ctx.lineTo(rightHandX + 2, handY + 3);
-    ctx.stroke();
-  }
-  ctx.restore();
 }
 
 function drawMenu(ctx, { x, y, width, height }) {
@@ -387,6 +314,7 @@ export function drawQueueLayer(ctx, state, camera, renderOptions = {}) {
   for (const member of layout.visibleMembers) {
     drawStickFigure(ctx, member.x, member.y - 4, getCharacterPalette(member).figure, {
       id: member.id,
+      activity: 'waiting',
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
     });
@@ -647,7 +575,9 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
       : getDefaultStaffPosition(s.role, index, state, s.id);
     const residency = getStaffAmenityAnchor(s, indexes);
     const amenity = residency?.amenity || getStaffAmenityById(s.amenityUse?.amenityId, indexes);
+    const leavingAmenity = s.dutyPhase === 'exiting' && movement.motion === 'traversing';
     const isResident = Boolean(residency
+      && !leavingAmenity
       && s.amenityUse?.phase === 'occupied'
       && ['couch', 'bed'].includes(residency.amenity.type));
     const x = isResident ? residency.anchor.x : pos.x;
@@ -661,7 +591,11 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
         return rotation * (Math.PI / 2);
       })()
       : 0;
-    const walking = !isResident && movement.motion === 'traversing';
+    const activity = getStaffVisualActivity(state, s, {
+      movement, indexes, seated, lying,
+    });
+    const walking = activity === 'walking';
+    const carrying = getCarriedServiceItemIds(s).length > 0;
 
     const palette = getCharacterPalette(s);
     drawStickFigure(ctx, x, y, palette.figure, {
@@ -669,8 +603,9 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
       seated,
       lying,
       walking,
-      cleaning: ['clean_table', 'clean_floor', 'wash_item'].includes(s.task?.type)
-        && s.activityPhase === 'working' && !walking,
+      carrying,
+      activity,
+      gesture: renderOptions.gestures?.get(s.id),
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
       rotation: amenityRotation,
@@ -718,7 +653,6 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
 
   for (const c of state.customers || []) {
     const movement = getCharacterMovementStatus(state, c.id, indexes.actorsByStringId);
-    const walking = movement.motion === 'traversing';
     let cx, cy;
     let seatedGeometry = null;
     const table = c.tableId
@@ -737,8 +671,14 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
 
     if (seated) {
       seatedGeometry = getSeatedDisplayGeometry(chair, table);
-      if (!seatedGeometry) continue;
-      ({ x: cx, y: cy } = seatedGeometry.figure);
+      if (seatedGeometry) {
+        ({ x: cx, y: cy } = seatedGeometry.figure);
+      } else if (Number.isFinite(c.x) && Number.isFinite(c.y)) {
+        cx = c.x;
+        cy = c.y - 4;
+      } else {
+        continue;
+      }
     } else if (Number.isFinite(c.x) && Number.isFinite(c.y)) {
       cx = c.x;
       cy = c.y - 4;
@@ -748,6 +688,10 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
 
     const deciding = (c.state === 'seated' && !c.dishId
       && !c.menuOutcome && c.foodOutcome !== 'cancelled') || c.state === 'ordering';
+    const activity = getCustomerVisualActivity(state, c, {
+      movement, indexes, seated, timeMs: renderOptions.timeMs,
+      reducedMotion: renderOptions.reducedMotion,
+    });
     ctx.save();
     ctx.globalAlpha = c.state === 'leaving' && c.exitPhase === 'fading'
       ? Math.max(0, 1 - (c.exitFadeProgress || 0))
@@ -756,12 +700,13 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       seated,
       scale: seated ? 0.7 : 1,
       rotation: 0,
-      walking: ['entering', 'leaving'].includes(c.state) && walking,
+      walking: activity === 'walking',
+      activity,
       id: c.id,
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
     });
-    if (deciding) drawMenu(ctx, seatedGeometry.menu);
+    if (deciding && seatedGeometry) drawMenu(ctx, seatedGeometry.menu);
     // Head radius plus half its stroke, then a three-unit gap and meter height.
     drawFoodPatienceMeter(ctx, cx - 7, cy - 5 * (seated ? 0.7 : 1) - 3 - 3,
       getFoodPatienceFraction(c, state.restaurant?.gameTime));
