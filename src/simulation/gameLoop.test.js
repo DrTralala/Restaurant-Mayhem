@@ -2097,14 +2097,16 @@ describe('runTick', () => {
     expect(tableStates.has('empty')).toBe(true);
     expect(paymentsObserved).toBe(1);
     expect(state.restaurant).toMatchObject({
-      totalServed: 1, dailyRevenue: 15.6, reputation: 1.998,
+      totalServed: 1, dailyRevenue: 15.6, reputation: 2.003,
     });
     expect(state.partyReviewHistory).toEqual([
       expect.objectContaining({
         partyId: 'mixed-party', score: -5, memberCount: 2, paidCount: 1,
-        unaffordableCount: 1, reputationDelta: -0.002,
+        unaffordableCount: 1,
       }),
     ]);
+    // Perfect paid review (100 / 4000) plus the unaffordable penalty (-110 / 5000).
+    expect(state.partyReviewHistory[0].reputationDelta).toBeCloseTo(0.003, 10);
     expect(state.pendingPartyReviews).toEqual([]);
 
     const settledRestaurant = state.restaurant;

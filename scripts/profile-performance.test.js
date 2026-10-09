@@ -153,8 +153,9 @@ describe('profile-performance comparison', () => {
   });
 
   it('reports finite total and tick timing distributions and alternates paired order', async () => {
+    // Exercise the comparison machinery without requiring historical commits in CI.
     const options = parsePerformanceArguments([
-      '--mode=fresh', '--speed=1', '--ticks=2', '--runs=2', '--warmups=1',
+      '--baseline=HEAD', '--mode=fresh', '--speed=1', '--ticks=2', '--runs=2', '--warmups=1',
     ]);
     const report = await profilePerformance(options);
     const workload = report.workloads[0];
@@ -262,7 +263,7 @@ describe('profile-performance comparison', () => {
 
   it('reports odd-run imbalance without adding hidden samples', async () => {
     const report = await profilePerformance(parsePerformanceArguments([
-      '--mode=fresh', '--speed=1', '--ticks=2', '--runs=1', '--warmups=0',
+      '--baseline=HEAD', '--mode=fresh', '--speed=1', '--ticks=2', '--runs=1', '--warmups=0',
     ]));
     expect(report.workloads[0].runs).toHaveLength(1);
     expect(report.orderBalance).toMatchObject({ balanced: false, baselineFirst: 1, candidateFirst: 0 });
