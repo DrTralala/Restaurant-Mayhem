@@ -13,6 +13,7 @@ import { clearNavigationGoal, setNavigationGoal } from '../simulation/movement/n
 import { createMovementCoordinator } from '../simulation/navigation/coordinator';
 import { getCashierCustomerPosition, getCashierWorkPosition } from '../simulation/world';
 import { SAVE_VERSION } from './saveVersion';
+import { migrateLegacyCookbook } from './cookbookMigration';
 import { normaliseDoorAdmissions } from './doorAdmissions';
 import { hydrateMovementResidencies, movementSaveSnapshot, validateSavedNavigationGeometry } from './movementPersistence';
 import { getOrderSnapshotSubtotal, normaliseCustomerEconomy } from '../simulation/menuEconomy';
@@ -50,8 +51,9 @@ export function loadState() {
   try {
     const serialized = localStorage.getItem(SAVE_KEY);
     if (!serialized) return null;
-    const saved = JSON.parse(serialized);
+    let saved = JSON.parse(serialized);
     if (saved?.version !== SAVE_VERSION) return null;
+    saved = migrateLegacyCookbook(saved);
     validateSavedNavigationGeometry(saved);
     validateSavedServiceItemInventory(saved);
     validateSavedState(saved);
@@ -410,6 +412,7 @@ export function hydrateState(saved, fresh) {
   if (saved.version != null && saved.version !== SAVE_VERSION) {
     throw new Error('Saved game is incompatible with the current game version');
   }
+  saved = migrateLegacyCookbook(saved);
   validateSavedNavigationGeometry(saved);
   validateSavedServiceItemInventory(saved);
   validateSavedState(saved);

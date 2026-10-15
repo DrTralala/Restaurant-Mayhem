@@ -7,6 +7,8 @@ import { createCookingBatch, getEligibleCookingItems, normaliseCookingBatches } 
 import { processKitchen } from './kitchen';
 import { getStaffTaskDuration } from './staffPerformance';
 import { updateStaff } from './staff';
+import { advanceConsumption } from './consumption';
+import { getResolvedDrink } from '../data/drinks';
 import { expireFoodPatience } from './foodPatience';
 import { calculateRevenue } from './revenue';
 import { acceptServiceContract } from './serviceContracts';
@@ -320,5 +322,71 @@ describe('actual cashier integration', () => {
     expect(() => updateStaff(cashierReady(state), 0)).toThrow(/exhaust/i);
     expect(state.completedCustomers).toEqual([]);
     expect(state.cookbook.entries.toast.paidPortions).toBe(0);
+  });
+});
+
+describe('Iced Tea committed-price payment', () => {
+  it('charges the committed Iced Tea price once after consumption despite a later menu override', () => {
+    let state = { ...baseState(), unlockedDrinkIds: ['iced-tea'] };
+    const rolls = [0.99, 0.99];
+    const ordered = createCustomerOrder(state, diner('iced-guest'), () => rolls.shift() ?? 0);
+    state = { ...state, customers: [ordered.customer], serviceItems: ordered.serviceItems };
+
+    expect(state.customers[0]).toMatchObject({
+      menuOutcome: 'ordered', drinkId: 'iced-tea', dishId: null,
+      dishPriceAtOrder: null, drinkPriceAtOrder: 4, orderSubtotal: 4,
+    });
+    const itemId = state.serviceItems[0].id;
+    expect(state.serviceItems[0]).toMatchObject({
+      kind: 'drink', menuItemId: 'iced-tea', state: 'ordered',
+    });
+    expect(getStaffTaskDuration(state, {
+      id: 'cook', role: 'cook', morale: 50,
+      task: { type: 'prepare_drink', serviceItemId: itemId },
+    })).toBe(90);
+
+    // Delivering the drink is not a payment: funds, receipts and sequence stay put.
+    state = updateStaff({
+      ...state,
+      tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
+      staff: [{
+        id: 'waiter', role: 'waiter', morale: 50, x: 180, y: 220,
+        carryingServiceItemIds: [itemId],
+        task: { type: 'deliver_service_item', serviceItemId: itemId, customerId: 'iced-guest' },
+      }],
+      serviceItems: state.serviceItems.map(item => ({
+        ...item, state: 'carried', assignedStaffId: 'waiter', stationId: null, x: 180, y: 220,
+      })),
+    }, 0);
+    expect(state.customers[0]).toMatchObject({ state: 'eating' });
+    expect(state.restaurant.funds).toBe(600);
+    expect(state.completedCustomers).toEqual([]);
+    expect(state.paidVisitSequence).toBe(0);
+
+    state = { ...state, drinkOverrides: { 'iced-tea': { price: 12 } } };
+    expect(getResolvedDrink(state, 'iced-tea').price).toBe(12);
+
+    state = advanceConsumption({
+      ...state, restaurant: { ...state.restaurant, gameTime: 36180 },
+    });
+    expect(state.serviceItems[0]).toMatchObject({ state: 'dirty_at_table' });
+    expect(state.customers[0].state).not.toBe('eating');
+    expect(state.completedCustomers).toEqual([]);
+    expect(state.restaurant.funds).toBe(600);
+
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const paid = updateStaff(cashierReady(state), 0);
+    expect(paid.completedCustomers).toHaveLength(1);
+    expect(paid.completedCustomers[0]).toMatchObject({
+      customerId: 'iced-guest', tip: 0.8, revenue: 4.8, totalPaid: 4.8,
+    });
+    const receipt = paid.completedCustomers[0];
+    expect(receipt.revenue - receipt.tip).toBe(4);
+    expect(paid.paidVisitSequence).toBe(1);
+    expect(paid.restaurant.totalServed).toBe(1);
+
+    const replayed = updateStaff(cashierReady(paid), 0);
+    expect(replayed.completedCustomers).toEqual(paid.completedCustomers);
+    expect(replayed.paidVisitSequence).toBe(1);
   });
 });

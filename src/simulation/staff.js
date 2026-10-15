@@ -20,6 +20,7 @@ import {
 import { ACTIVITY_DURATIONS } from './activity';
 import {
   advanceStaffTaskProgress,
+  getStaffTaskDuration,
   getStaffTaskLegacyRate,
   getStaffTaskRate,
   getStaffTaskSource,
@@ -2372,7 +2373,7 @@ function resolveTask({
         lastProgressAt: drinkProgress.lastProgressAt,
       },
     };
-    if (drinkProgress.accumulatedWork < ACTIVITY_DURATIONS.prepareDrink) {
+    if (drinkProgress.accumulatedWork < getStaffTaskDuration(state, staff)) {
       return {
         staff: clearNavigationGoal(progressedStaff),
         customers, queue, tables,

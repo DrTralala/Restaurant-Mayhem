@@ -37,6 +37,7 @@ import {
   getQueuePatienceMultiplier,
   getUpgradeEffect,
 } from './balance';
+import { getPatienceMax, getQueuePatience, getQueuePatienceMax } from './queuePatience';
 import { createSpendingProfile } from './menuEconomy';
 import { cancelPendingPartyReviews } from './partyReviews';
 import { expireFoodPatience } from './foodPatience';
@@ -241,26 +242,6 @@ const ARCHETYPES = ['regular', 'regular', 'regular', 'foodie', 'rusher', 'influe
 
 function partyKey(customer) {
   return customer.partyId ?? customer.id;
-}
-
-function getPatienceMax(customer) {
-  if (Number.isFinite(customer.patienceMax) && customer.patienceMax > 0) {
-    return customer.patienceMax;
-  }
-  const archetypePatience = getCustomerPatience(customer.archetype, customer.partySize);
-  if (Number.isFinite(archetypePatience) && archetypePatience > 0) return archetypePatience;
-  return Math.max(0, Number(customer.patience) || 0);
-}
-
-function getQueuePatience(customer) {
-  return Number.isFinite(customer.queuePatience) ? customer.queuePatience : customer.patience;
-}
-
-function getQueuePatienceMax(customer) {
-  if (Number.isFinite(customer.queuePatienceMax) && customer.queuePatienceMax > 0) {
-    return customer.queuePatienceMax;
-  }
-  return getPatienceMax(customer);
 }
 
 function chooseParty() {

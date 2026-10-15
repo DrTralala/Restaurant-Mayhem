@@ -2,14 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { DRINKS, getResolvedDrink, normaliseDrinkOverrides } from './drinks';
 
 describe('drink menu records', () => {
-  it('exposes dish-equivalent canonical attributes without changing tiers', () => {
+  it('pins the five original canonical drinks and appends the Iced Tea trade-off', () => {
     expect(DRINKS).toEqual([
-      expect.objectContaining({ id: 'water', price: 2, unlockCost: null, quality: 1, popularity: 50, prepTime: 120, cuisine: 'beverage', requiredEquipmentId: null }),
-      expect.objectContaining({ id: 'tea', price: 4, unlockCost: 150, quality: 1, popularity: 55 }),
-      expect.objectContaining({ id: 'soda', price: 5, unlockCost: 200, quality: 1, popularity: 60 }),
-      expect.objectContaining({ id: 'coffee', price: 6, unlockCost: 250, quality: 1, popularity: 65 }),
-      expect.objectContaining({ id: 'juice', price: 7, unlockCost: 350, quality: 1, popularity: 70 }),
+      Object.freeze({ id: 'water', name: 'Water', price: 2, unlockCost: null, quality: 1, popularity: 50, prepTime: 120, cuisine: 'beverage', requiredEquipmentId: null }),
+      Object.freeze({ id: 'tea', name: 'Tea', price: 4, unlockCost: 150, quality: 1, popularity: 55, prepTime: 120, cuisine: 'beverage', requiredEquipmentId: null }),
+      Object.freeze({ id: 'soda', name: 'Soda', price: 5, unlockCost: 200, quality: 1, popularity: 60, prepTime: 120, cuisine: 'beverage', requiredEquipmentId: null }),
+      Object.freeze({ id: 'coffee', name: 'Coffee', price: 6, unlockCost: 250, quality: 1, popularity: 65, prepTime: 120, cuisine: 'beverage', requiredEquipmentId: null }),
+      Object.freeze({ id: 'juice', name: 'Juice', price: 7, unlockCost: 350, quality: 1, popularity: 70, prepTime: 120, cuisine: 'beverage', requiredEquipmentId: null }),
+      Object.freeze({ id: 'iced-tea', name: 'Iced Tea', price: 4, unlockCost: 150,
+        quality: 1, popularity: 45, prepTime: 90, cuisine: 'beverage', requiredEquipmentId: null }),
     ]);
+    expect(Object.isFrozen(DRINKS)).toBe(true);
+    expect(DRINKS.every(drink => Object.isFrozen(drink))).toBe(true);
+  });
+
+  it('resolves Iced Tea overrides for price and quality only', () => {
+    const state = {
+      drinkOverrides: {
+        'iced-tea': { price: 12, quality: 3, popularity: 99, prepTime: 5 },
+      },
+    };
+    expect(getResolvedDrink(state, 'iced-tea')).toEqual({
+      id: 'iced-tea', name: 'Iced Tea', price: 12, unlockCost: 150,
+      quality: 3, popularity: 45, prepTime: 90, cuisine: 'beverage', requiredEquipmentId: null,
+    });
   });
 
   it('merges only validated mutable overrides', () => {

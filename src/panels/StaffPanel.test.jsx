@@ -235,21 +235,29 @@ describe('StaffPanel', () => {
     expect(screen.getByText('Staff (1)')).toBeInTheDocument();
   });
 
-  it('disables hire controls that are unaffordable', () => {
+  it('keeps the + Hire toggle enabled when funds are below every role salary', () => {
     useGameState.mockReturnValue(makeState({ restaurant: { funds: 119 } }));
     useDispatch.mockReturnValue(vi.fn());
 
     render(<StaffPanel />);
-    expect(screen.getByText('+ Hire')).toBeDisabled();
+
+    expect(screen.getByText('+ Hire')).toBeEnabled();
   });
 
-  it('disables the primary hire control when no role is affordable', () => {
+  it('disables every unaffordable role purchase while funds are below all salaries', () => {
+    const dispatch = vi.fn();
     useGameState.mockReturnValue(makeState({ restaurant: { funds: 119 } }));
-    useDispatch.mockReturnValue(vi.fn());
+    useDispatch.mockReturnValue(dispatch);
 
     render(<StaffPanel />);
+    fireEvent.click(screen.getByText('+ Hire'));
 
-    expect(screen.getByText('+ Hire')).toBeDisabled();
+    ['Cook', 'Waiter', 'Janitor'].forEach(roleName => {
+      const roleButton = screen.getByRole('button', { name: roleName });
+      expect(roleButton).toBeDisabled();
+      fireEvent.click(roleButton);
+    });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('dispatches HIRE_STAFF when clicking a role hire button', () => {
@@ -365,5 +373,216 @@ describe('StaffPanel', () => {
     render(<StaffPanel />);
 
     expect(screen.getByText('Morale: 80%')).toBeInTheDocument();
+  });
+});
+
+describe('StaffPanel hiring costs', () => {
+  it('shows canonical upfront and daily costs for every role, linked to its hire button', () => {
+    useGameState.mockReturnValue(makeState({ restaurant: { funds: 500 } }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+    fireEvent.click(screen.getByText('+ Hire'));
+
+    expect(screen.getByText('Hiring is charged immediately. Daily salaries are paid at midnight.')).toBeVisible();
+    expect(screen.getByText('$200 to hire · $200/day')).toBeVisible();
+    expect(screen.getByText('$150 to hire · $150/day')).toBeVisible();
+    expect(screen.getByText('$120 to hire · $120/day')).toBeVisible();
+
+    expect(screen.getByRole('button', { name: 'Cook' }))
+      .toHaveAttribute('aria-describedby', 'hire-cost-cook');
+    expect(screen.getByRole('button', { name: 'Waiter' }))
+      .toHaveAttribute('aria-describedby', 'hire-cost-waiter');
+    expect(screen.getByRole('button', { name: 'Janitor' }))
+      .toHaveAttribute('aria-describedby', 'hire-cost-janitor');
+
+    expect(screen.getByRole('button', { name: 'Cook' }))
+      .toHaveAccessibleDescription('$200 to hire · $200/day');
+    expect(screen.getByRole('button', { name: 'Waiter' }))
+      .toHaveAccessibleDescription('$150 to hire · $150/day');
+    expect(screen.getByRole('button', { name: 'Janitor' }))
+      .toHaveAccessibleDescription('$120 to hire · $120/day');
+  });
+
+  it.each([
+    [119, []],
+    [120, ['Janitor']],
+    [150, ['Waiter', 'Janitor']],
+    [200, ['Cook', 'Waiter', 'Janitor']],
+  ])('at $%i funds enables only the affordable role purchases', (funds, affordableRoles) => {
+    useGameState.mockReturnValue(makeState({ restaurant: { funds } }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+    fireEvent.click(screen.getByText('+ Hire'));
+
+    ['Cook', 'Waiter', 'Janitor'].forEach(roleName => {
+      const roleButton = screen.getByRole('button', { name: roleName });
+      if (affordableRoles.includes(roleName)) {
+        expect(roleButton).toBeEnabled();
+      } else {
+        expect(roleButton).toBeDisabled();
+      }
+    });
+  });
+
+  it('opens and closes the hire list without dispatching or consuming randomness', () => {
+    const dispatch = vi.fn();
+    const randomSpy = vi.spyOn(Math, 'random');
+    useGameState.mockReturnValue(makeState({ restaurant: { funds: 119 } }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+    fireEvent.click(screen.getByText('+ Hire'));
+
+    expect(screen.getByText('$120 to hire · $120/day')).toBeVisible();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(randomSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('+ Hire'));
+
+    expect(screen.queryByText('$120 to hire · $120/day')).not.toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(randomSpy).not.toHaveBeenCalled();
+  });
+
+  it('dispatches the canonical role and salary, then closes the hire list', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({ restaurant: { funds: 500 } }));
+    useDispatch.mockReturnValue(dispatch);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    render(<StaffPanel />);
+    fireEvent.click(screen.getByText('+ Hire'));
+    expect(screen.getByText('$120 to hire · $120/day')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Janitor' }));
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0][0]).toMatchObject({
+      type: 'HIRE_STAFF',
+      staff: { role: 'janitor', salary: 120 },
+    });
+    expect(screen.queryByText('$120 to hire · $120/day')).not.toBeInTheDocument();
+    expect(screen.queryByText('Hire staff')).not.toBeInTheDocument();
+  });
+});
+
+describe('StaffPanel training preview', () => {
+  it('shows the next training outcome beside each trainable staff card', () => {
+    useGameState.mockReturnValue(makeState({
+      staff: [
+        { id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 },
+        { id: 's2', name: 'Anna', role: 'waiter', skill: 4, morale: 80, salary: 150 },
+        { id: 's3', name: 'Luca', role: 'janitor', skill: 9, morale: 80, salary: 120 },
+      ],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    const cookCard = getStaffCard('s1');
+    expect(within(cookCard).getByText('After training: Skill 4/10 · Morale 90%')).toBeVisible();
+    expect(within(cookCard).getByText('Carry capacity: 1 → 1 items')).toBeVisible();
+    expect(within(cookCard).getByText('Morale work multiplier: 1.30× → 1.40×')).toBeVisible();
+
+    const waiterCard = getStaffCard('s2');
+    expect(within(waiterCard).getByText('After training: Skill 5/10 · Morale 90%')).toBeVisible();
+    expect(within(waiterCard).getByText('Carry capacity: 1 → 2 items')).toBeVisible();
+    expect(within(waiterCard).getByText('Order-taking rate: 1.30× → 2.80×')).toBeVisible();
+
+    const janitorCard = getStaffCard('s3');
+    expect(within(janitorCard).getByText('After training: Skill 10/10 · Morale 90%')).toBeVisible();
+    expect(within(janitorCard).getByText('Carry capacity: 2 → 3 items')).toBeVisible();
+    expect(within(janitorCard).getByText('Cleaning/washing rate: 1.95× → 2.80×')).toBeVisible();
+  });
+
+  it('omits the preview for maxed, unknown-role or invalid-skill workers', () => {
+    useGameState.mockReturnValue(makeState({
+      staff: [
+        { id: 's1', name: 'Marco', role: 'cook', skill: 10, morale: 80, salary: 200 },
+        { id: 's2', name: 'Ghost', role: 'manager', skill: 3, morale: 80, salary: 0 },
+        { id: 's3', name: 'Blank', role: 'waiter', skill: NaN, morale: 80, salary: 150 },
+      ],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    ['s1', 's2', 's3'].forEach(id => {
+      const card = getStaffCard(id);
+      expect(within(card).queryByText(/After training:/)).not.toBeInTheDocument();
+      expect(within(card).queryByText(/Carry capacity:/)).not.toBeInTheDocument();
+      expect(within(card).queryByText(/× → /)).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps the preview visible when training is unaffordable', () => {
+    useGameState.mockReturnValue(makeState({
+      restaurant: { funds: 10 },
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    const card = getStaffCard('s1');
+    expect(within(card).getByText('After training: Skill 4/10 · Morale 90%')).toBeVisible();
+    expect(within(card).getByText('Carry capacity: 1 → 1 items')).toBeVisible();
+    expect(within(card).getByText('Morale work multiplier: 1.30× → 1.40×')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Train ($620)' })).toBeDisabled();
+  });
+
+  it('updates the preview when a worker changes on rerender', () => {
+    let state = makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    });
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(vi.fn());
+
+    const { rerender } = render(<StaffPanel />);
+    expect(within(getStaffCard('s1')).getByText('After training: Skill 4/10 · Morale 90%')).toBeVisible();
+
+    state = {
+      ...state,
+      staff: [{ ...state.staff[0], skill: 4, morale: 90 }],
+    };
+    rerender(<StaffPanel />);
+
+    expect(within(getStaffCard('s1')).getByText('After training: Skill 5/10 · Morale 100%')).toBeVisible();
+  });
+
+  it('rounds the previewed morale like the current morale line while keeping rates exact', () => {
+    useGameState.mockReturnValue(makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 79.6, salary: 200 }],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    const card = getStaffCard('s1');
+    expect(within(card).getByText('Morale: 80%')).toBeVisible();
+    expect(within(card).getByText('After training: Skill 4/10 · Morale 90%')).toBeVisible();
+    expect(within(card).queryByText(/Morale 89\.6%/)).not.toBeInTheDocument();
+    expect(within(card).getByText('Morale work multiplier: 1.30× → 1.40×')).toBeVisible();
+  });
+
+  it('keeps the training button, price and dispatch payload unchanged beside the preview', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      restaurant: { funds: 620 },
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+
+    const card = getStaffCard('s1');
+    expect(within(card).getByText('After training: Skill 4/10 · Morale 90%')).toBeVisible();
+    const train = within(card).getByRole('button', { name: 'Train ($620)' });
+    expect(train).toBeEnabled();
+    fireEvent.click(train);
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'TRAIN_STAFF', id: 's1', cost: 620 });
   });
 });

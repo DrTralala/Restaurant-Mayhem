@@ -5,6 +5,9 @@ import { validateSavedState } from './saveValidation';
 import { acceptServiceContract } from '../simulation/serviceContracts';
 import { createDishOrderSnapshot, getResolvedDish } from '../simulation/cookbook';
 import { continueCareerAsSandbox, evaluateCareerRun } from '../simulation/careerRun';
+import { getResolvedDrink } from '../data/drinks';
+import { getStaffTaskDuration } from '../simulation/staffPerformance';
+import { buildAffordableBaskets } from '../simulation/menuEconomy';
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 function legacy() {
@@ -190,5 +193,138 @@ describe('additive v10 feature persistence', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('full'); });
     expect(saveState(createInitialState())).toBe(false);
+  });
+  function v1Cookbook() {
+    return { schemaVersion: 1, lastAppliedPaidVisitSequence: 0, entries: {
+      toast: { discovered: true, paidPortions: 15, perk: 'speed',
+        menuSettings: { name: 'Toasted Bread', price: 12, quality: 1 } },
+      'cheese-toast': { discovered: false, paidPortions: 0, perk: null,
+        menuSettings: { name: 'Cheese Toast', price: 14, quality: 1 } },
+      'roast-vegetables': { discovered: false, paidPortions: 0, perk: null,
+        menuSettings: { name: 'Roast Vegetables', price: 18, quality: 1 } },
+      'baked-potato': { discovered: false, paidPortions: 0, perk: null,
+        menuSettings: { name: 'Baked Potato', price: 22, quality: 1 } },
+      fries: { discovered: false, paidPortions: 0, perk: null,
+        menuSettings: { name: 'Crispy Fries', price: 10, quality: 1 } },
+      'fried-chicken': { discovered: false, paidPortions: 0, perk: null,
+        menuSettings: { name: 'Fried Chicken', price: 20, quality: 1 } },
+    } };
+  }
+  it('upgrades a recognised v1 cookbook ahead of strict validation in both entry points', () => {
+    const raw = createInitialState();
+    raw.cookbook = v1Cookbook();
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
+    const loaded = loadState();
+    expect(loaded.cookbook.schemaVersion).toBe(2);
+    expect(loaded.cookbook.entries.toast).toMatchObject({ paidPortions: 15, perk: 'speed' });
+    const hydrated = hydrateState(raw, createInitialState());
+    expect(hydrated.cookbook.schemaVersion).toBe(2);
+    expect(hydrated.cookbook.entries.toast).toMatchObject({ paidPortions: 15, perk: 'speed',
+      menuSettings: { name: 'Toasted Bread', price: 12, quality: 1 } });
+    expect(hydrated.cookbook.entries.gazpacho).toEqual({ discovered: false, paidPortions: 0, perk: null,
+      menuSettings: { name: 'Gazpacho', price: 16, quality: 1 } });
+  });
+  it('fails closed for a malformed v1 cookbook in both entry points', () => {
+    const raw = createInitialState();
+    raw.cookbook = v1Cookbook();
+    delete raw.cookbook.entries.fries;
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(loadState()).toBeNull();
+    expect(() => hydrateState(raw, createInitialState())).toThrow(/Invalid cookbook/);
+  });
+
+  function drinkPreparationFixture({
+    menuItemId = 'iced-tea', drinkOverrides = {}, unlockedDrinkIds = null,
+  } = {}) {
+    const raw = createInitialState();
+    const cook = raw.staff.find(worker => worker.role === 'cook');
+    const dispenser = raw.kitchenStations.find(station => station.equipmentId == null);
+    return {
+      ...raw,
+      restaurant: { ...raw.restaurant, gameTime: 100 },
+      unlockedDrinkIds: unlockedDrinkIds
+        ?? (menuItemId === 'water' ? ['water'] : ['water', menuItemId]),
+      drinkOverrides,
+      customers: [{
+        id: 'drink-guest', state: 'waiting_for_items', tableId: 't1', dishId: null,
+        drinkId: menuItemId, orderedServiceItemIds: ['drink-1'], x: 190, y: 210,
+      }],
+      serviceItems: [{
+        id: 'drink-1', kind: 'drink', menuItemId, customerId: 'drink-guest',
+        tableId: 't1', state: 'preparing', stationId: dispenser.id, serviceTableId: 'st1',
+        serviceSlotIndex: 0, assignedStaffId: cook.id, preparationStartedAt: 55,
+        accumulatedWork: 45, lastProgressAt: 100,
+      }],
+      staff: raw.staff.map(worker => worker.id === cook.id
+        ? {
+          ...worker,
+          task: {
+            type: 'prepare_drink', serviceItemId: 'drink-1', stationId: dispenser.id,
+            serviceTableId: 'st1', serviceSlotIndex: 0,
+          },
+        }
+        : worker),
+    };
+  }
+
+  it('round-trips an unlocked, overridden Iced Tea with active preparation work', () => {
+    const saved = drinkPreparationFixture({ drinkOverrides: { 'iced-tea': { price: 12 } } });
+    expect(saveState(saved)).toBe(true);
+
+    const hydrated = hydrateState(loadState(), createInitialState());
+    expect(hydrated.unlockedDrinkIds).toEqual(['water', 'iced-tea']);
+    expect(hydrated.drinkOverrides).toEqual({ 'iced-tea': { price: 12 } });
+    expect(getResolvedDrink(hydrated, 'iced-tea')).toEqual({
+      id: 'iced-tea', name: 'Iced Tea', price: 12, unlockCost: 150,
+      quality: 1, popularity: 45, prepTime: 90, cuisine: 'beverage', requiredEquipmentId: null,
+    });
+
+    const cook = hydrated.staff.find(worker => worker.role === 'cook');
+    expect(hydrated.serviceItems.find(item => item.id === 'drink-1')).toMatchObject({
+      state: 'preparing', accumulatedWork: 45, lastProgressAt: 100,
+    });
+    expect(cook.task).toMatchObject({ type: 'prepare_drink', serviceItemId: 'drink-1' });
+    expect(getStaffTaskDuration(hydrated, cook)).toBe(90);
+  });
+
+  it('keeps an old root-v10 drink set unchanged without auto-unlocking Iced Tea', () => {
+    const raw = {
+      ...createInitialState(),
+      unlockedDrinkIds: ['water', 'tea', 'soda', 'coffee', 'juice'],
+      drinkOverrides: {},
+    };
+    expect(() => validateSavedState(raw)).not.toThrow();
+
+    const hydrated = hydrateState(raw, createInitialState());
+    expect(hydrated.unlockedDrinkIds).toEqual(['water', 'tea', 'soda', 'coffee', 'juice']);
+    expect(hydrated.unlockedDrinkIds).not.toContain('iced-tea');
+    expect(hydrated.version).toBe(createInitialState().version);
+  });
+
+  it('keeps an old active Water preparation at 120 work after reload', () => {
+    const saved = drinkPreparationFixture({ menuItemId: 'water' });
+    expect(saveState(saved)).toBe(true);
+
+    const hydrated = hydrateState(loadState(), createInitialState());
+    const cook = hydrated.staff.find(worker => worker.role === 'cook');
+    expect(hydrated.serviceItems.find(item => item.id === 'drink-1')).toMatchObject({
+      state: 'preparing', accumulatedWork: 45, lastProgressAt: 100,
+    });
+    expect(getStaffTaskDuration(hydrated, cook)).toBe(120);
+  });
+
+  it('drops unknown drink overrides and never resolves a non-catalogue drink', () => {
+    const raw = {
+      ...createInitialState(),
+      unlockedDrinkIds: ['water', 'boba'],
+      drinkOverrides: { boba: { price: 9 } },
+    };
+    const hydrated = hydrateState(raw, createInitialState());
+    expect(hydrated.drinkOverrides).toEqual({});
+    expect(hydrated.unlockedDrinkIds).toEqual(['water', 'boba']);
+    expect(getResolvedDrink(hydrated, 'boba')).toBeNull();
+    expect(buildAffordableBaskets(hydrated, { spendingTier: 'value', spendingBudget: 45 })
+      .some(basket => basket.drink?.id === 'boba')).toBe(false);
   });
 });

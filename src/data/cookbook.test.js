@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { COOKBOOK_RECIPES, getCookbookRecipe, MASTERY_PORTION_THRESHOLD } from './cookbook';
 
 describe('authored catalogue', () => {
-  it('provides the six deterministic equipment and discovery choices', () => {
+  it('provides the seven deterministic equipment and discovery choices', () => {
     expect(COOKBOOK_RECIPES.map(({ id, base, method, requiredEquipmentId, prepTime, popularity, price }) =>
       [id, base, method, requiredEquipmentId, prepTime, popularity, price])).toEqual([
       ['toast', 'Bread', 'Toasted', 'eq1', 60, 50, 12],
@@ -11,7 +11,9 @@ describe('authored catalogue', () => {
       ['baked-potato', 'Potato', 'Baked', 'eq2', 210, 82, 22],
       ['fries', 'Potato', 'Fried', 'eq3', 105, 55, 10],
       ['fried-chicken', 'Chicken', 'Fried', 'eq3', 165, 78, 20],
+      ['gazpacho', 'Vegetables', 'Blended', 'eq4', 75, 55, 16],
     ]);
+    expect(getCookbookRecipe('gazpacho').requirements).toEqual([{ type: 'equipment', equipmentId: 'eq4' }]);
     expect(MASTERY_PORTION_THRESHOLD).toBe(15);
     expect(getCookbookRecipe('missing')).toBeNull();
     expect(getCookbookRecipe('toString')).toBeNull();

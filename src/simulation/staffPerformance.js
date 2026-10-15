@@ -1,13 +1,13 @@
 import { ACTIVITY_DURATIONS } from './activity';
 import { getUpgradeEffect } from './balance';
 import { getDishForServiceItem } from './cookbook';
+import { getDrink } from '../data/drinks';
 
 export const STAFF_PERFORMANCE_BASE = 0.5;
 
 const TASK_DURATIONS = Object.freeze({
   take_order: ACTIVITY_DURATIONS.takeOrder,
   take_payment: ACTIVITY_DURATIONS.takePayment,
-  prepare_drink: ACTIVITY_DURATIONS.prepareDrink,
   clean_table: ACTIVITY_DURATIONS.wipeFloor,
   clean_floor: ACTIVITY_DURATIONS.wipeFloor,
   wash_item: ACTIVITY_DURATIONS.manualWash,
@@ -139,6 +139,11 @@ export function getStaffTaskLegacyRate(state, worker, task = worker?.task) {
 /** Return the unmodified work required by a timed task. */
 export function getStaffTaskDuration(state, worker, task = worker?.task) {
   if (!task?.type) return null;
+  if (task.type === 'prepare_drink') {
+    const item = (state?.serviceItems || []).find(candidate => candidate.id === task.serviceItemId);
+    const duration = getDrink(item?.menuItemId)?.prepTime;
+    return Number.isFinite(duration) && duration > 0 ? duration : ACTIVITY_DURATIONS.prepareDrink;
+  }
   if (task.type === 'prepare_dish') {
     const dish = getDish(state, task);
     const item = (state?.serviceItems || []).find(candidate => candidate.id === task.serviceItemId);

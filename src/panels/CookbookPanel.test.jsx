@@ -35,9 +35,9 @@ describe('CookbookPanel', () => {
     useDispatch.mockReturnValue(dispatch);
   });
 
-  it('shows all six named recipes, numeric locked requirements and starter progress', () => {
+  it('shows all seven named recipes, numeric locked requirements and starter progress', () => {
     render(<CookbookPanel onClose={vi.fn()} />);
-    expect(screen.getAllByRole('article')).toHaveLength(6);
+    expect(screen.getAllByRole('article')).toHaveLength(7);
     const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
     expect(toast.getByText('On menu')).toBeInTheDocument();
     expect(toast.getByText('Paid portions: 0/15')).toBeInTheDocument();
@@ -49,6 +49,10 @@ describe('CookbookPanel', () => {
     const potato = within(screen.getByRole('article', { name: 'Baked Potato recipe' }));
     expect(potato.getByText('Own Oven: 0/1')).toBeInTheDocument();
     expect(potato.getByText('Roast Vegetables paid portions: 0/5')).toBeInTheDocument();
+    const gazpacho = within(screen.getByRole('article', { name: 'Gazpacho recipe' }));
+    expect(gazpacho.getByText('Locked — meet the discovery requirements below')).toBeInTheDocument();
+    expect(gazpacho.getByText('Own Blender: 0/1')).toBeInTheDocument();
+    expect(gazpacho.getByRole('button', { name: 'Add Gazpacho to menu' })).toBeDisabled();
   });
 
   it('starterCookbookProgress: three real canonical outcomes expose free Cheese Toast addition', () => {
@@ -75,6 +79,36 @@ describe('CookbookPanel', () => {
     view.rerender(<CookbookPanel onClose={vi.fn()} />);
     expect(toast.getByText(/No matching kitchen station/)).toBeInTheDocument();
     expect(toast.getByRole('button', { name: 'Add Toasted Bread to menu' })).toBeEnabled();
+  });
+
+  it('discovers the Blender recipe on ownership and adds it without a placed station', () => {
+    state.equipment = state.equipment.map(equipment =>
+      equipment.id === 'eq4' ? { ...equipment, owned: true } : equipment);
+    state.cookbook = reconcileCookbookDiscoveries(state);
+    render(<CookbookPanel onClose={vi.fn()} />);
+    const gazpacho = within(screen.getByRole('article', { name: 'Gazpacho recipe' }));
+    expect(gazpacho.getByText('Discovered')).toBeInTheDocument();
+    expect(gazpacho.getByText('Ready to add')).toBeInTheDocument();
+    expect(gazpacho.getByText(/No matching kitchen station/)).toBeInTheDocument();
+    fireEvent.click(gazpacho.getByRole('button', { name: 'Add Gazpacho to menu' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
+  });
+
+  it('offers the Gazpacho mastery preview once 15 paid portions are recorded', () => {
+    state.equipment = state.equipment.map(equipment =>
+      equipment.id === 'eq4' ? { ...equipment, owned: true } : equipment);
+    state.cookbook = reconcileCookbookDiscoveries(state);
+    state.cookbook = { ...state.cookbook, entries: { ...state.cookbook.entries,
+      gazpacho: { ...state.cookbook.entries.gazpacho, paidPortions: 15 } } };
+    state.dishes = [];
+    render(<CookbookPanel onClose={vi.fn()} />);
+    const gazpacho = within(screen.getByRole('article', { name: 'Gazpacho recipe' }));
+    expect(gazpacho.getByText('Signature choice available')).toBeInTheDocument();
+    fireEvent.click(gazpacho.getByRole('button', { name: 'Choose Quick Service' }));
+    expect(gazpacho.getByText('75 → 64 seconds base cook work')).toBeInTheDocument();
+    expect(gazpacho.getByText('55 → 55 popularity')).toBeInTheDocument();
+    fireEvent.click(gazpacho.getByRole('button', { name: 'Confirm Quick Service' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'CHOOSE_DISH_MASTERY', cookbookId: 'gazpacho', perk: 'speed' });
   });
 
   it('cancels inline mastery without dispatch and confirms exact permanent choice off-menu', () => {

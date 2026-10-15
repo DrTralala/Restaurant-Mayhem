@@ -1,8 +1,19 @@
 import { useRef, useEffect } from 'react';
 import { useGameState } from '../state/GameContext';
 import { getCanvasFont, TYPOGRAPHY } from '../typography';
+import { getServiceSummary } from './serviceSummary';
+import { getQueuePatienceSummary } from './queuePatienceSummary';
 
 const statBox = { ...TYPOGRAPHY.secondary, background: '#1a1a2e', borderRadius: 6, padding: 10, border: '1px solid #0f3460' };
+
+function formatPatience(party) {
+  if (party.status === 'unknown') return 'Patience unknown';
+  if (party.status === 'exhausted') return 'Patience exhausted';
+  const percent = party.fraction * 100;
+  const text = percent < 1 ? '<1' : percent < 100 && Math.round(percent) === 100
+    ? '>99' : String(Math.round(percent));
+  return `Lowest-remaining guest: ${text}% patience`;
+}
 
 export default function StatsPanel() {
   const state = useGameState();
@@ -22,6 +33,8 @@ export default function StatsPanel() {
     ? Math.round(unaffordableReviewCount / partyReviewHistory.length * 100)
     : 0;
   const latestPartyReviews = partyReviewHistory.slice(-10).reverse();
+  const service = getServiceSummary(state);
+  const queuePatience = getQueuePatienceSummary(state);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -63,6 +76,40 @@ export default function StatsPanel() {
         <div style={statBox}>Staff: <strong>{state.staff.length}</strong></div>
         <div style={statBox}>Dishes: <strong>{state.dishes.length}</strong></div>
       </div>
+
+      <section aria-label="Service now" style={{ marginTop: 16 }}>
+        <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Service now</h4>
+        <div style={statBox}>
+          Entry queue: {service.queueParties} parties · {service.queueGuests} guests
+        </div>
+        <h5 style={{ ...TYPOGRAPHY.secondary, margin: '10px 0 8px' }}>Queue patience</h5>
+        {queuePatience.length === 0 ? <p style={TYPOGRAPHY.secondary}>No parties waiting.</p> : (
+          <ul aria-label="Queue patience" style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 8 }}>
+            {queuePatience.map((party, index) => (
+              <li key={party.partyId} style={statBox}>
+                <div>Party {index + 1}: {party.guestCount} {party.guestCount === 1 ? 'guest' : 'guests'}</div>
+                <div>{formatPatience(party)}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+          All queued parties are included, even those not shown outside. A party leaves when any guest runs out of queue patience. Percentages show the lowest-remaining guest's share of their own maximum, not a countdown or comparable departure time.
+        </p>
+        <h5 style={{ ...TYPOGRAPHY.secondary, margin: '10px 0 8px' }}>
+          Pending service items (dishes + drinks)
+        </h5>
+        <div style={{ display: 'grid', gap: 8 }}>
+          {[
+            ['ordered', 'Awaiting preparation'], ['preparing', 'In preparation'],
+            ['ready', 'Ready for collection'], ['on_service', 'On service counter'],
+            ['carried', 'Being carried'],
+          ].map(([key, label]) => <div key={key} style={statBox}>{label}: {service.pending[key]}</div>)}
+        </div>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+          Current counts, not totals. One guest may order multiple items. Queue includes guests not shown outside. Delivered items and cleanup are excluded.
+        </p>
+      </section>
 
       <div style={{ marginTop: 16 }}>
         <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Party reviews</h4>

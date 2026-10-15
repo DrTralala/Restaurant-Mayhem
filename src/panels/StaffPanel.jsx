@@ -9,6 +9,7 @@ import StaffScheduleEditor, {
   getStaffDutyPresentation,
   getStaffSchedule,
 } from './StaffScheduleEditor';
+import { getStaffTrainingPreview } from './staffTrainingPreview';
 
 const ROLES = Object.keys(STAFF_SALARIES);
 const NAMES = ['Marco', 'Anna', 'Luca', 'Sofia', 'Giovanni', 'Isabella', 'Mario', 'Elena'];
@@ -36,7 +37,6 @@ export default function StaffPanel() {
   const [editingScheduleId, setEditingScheduleId] = useState(null);
   const funds = state.restaurant?.funds ?? 0;
   const staff = Array.isArray(state.staff) ? state.staff : [];
-  const canAffordAnyRole = Object.values(STAFF_SALARIES).some(salary => funds >= salary);
 
   const sortedStaff = [...staff].sort((left, right) => {
     const leftSkill = Number.isFinite(Number(left.skill)) ? Number(left.skill) : Number.NEGATIVE_INFINITY;
@@ -125,7 +125,7 @@ export default function StaffPanel() {
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: 0 }}>Staff ({staff.length})</h3>
-        <button type="button" onClick={() => setShowHire(!showHire)} disabled={!canAffordAnyRole} style={{
+        <button type="button" onClick={() => setShowHire(!showHire)} style={{
           ...TYPOGRAPHY.control,
           background: '#f0a500', color: '#111', border: 'none',
           padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
@@ -159,16 +159,28 @@ export default function StaffPanel() {
       {showHire && (
         <div style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, marginBottom: 12 }}>
           <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Hire staff</h4>
-           {ROLES.map(role => (
-             <button type="button" key={role} onClick={() => handleHire(role)}
-               disabled={funds < STAFF_SALARIES[role]} style={{
-              ...TYPOGRAPHY.control,
-              background: '#333', color: '#ccc', border: '1px solid #555',
-              padding: '8px 14px', borderRadius: 4, cursor: 'pointer', marginRight: 8, marginBottom: 4,
-            }}>
-              {humaniseIdentifier(role)}
-            </button>
-          ))}
+          <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '0 0 8px' }}>
+            Hiring is charged immediately. Daily salaries are paid at midnight.
+          </p>
+          {ROLES.map(role => {
+            const salary = STAFF_SALARIES[role];
+            return (
+              <div key={role} style={{ display: 'inline-block', marginRight: 8, marginBottom: 8 }}>
+                <button type="button" onClick={() => handleHire(role)}
+                  disabled={funds < salary}
+                  aria-describedby={`hire-cost-${role}`} style={{
+                  ...TYPOGRAPHY.control,
+                  background: '#333', color: '#ccc', border: '1px solid #555',
+                  padding: '8px 14px', borderRadius: 4, cursor: 'pointer',
+                }}>
+                  {humaniseIdentifier(role)}
+                </button>
+                <p id={`hire-cost-${role}`} style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0 0' }}>
+                  {`$${salary} to hire · $${salary}/day`}
+                </p>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -176,6 +188,7 @@ export default function StaffPanel() {
         const trainingCost = getStaffTrainingCost(s);
         const trainingDisabled = trainingCost == null || s.skill >= 10
           || funds < trainingCost;
+        const trainingPreview = getStaffTrainingPreview(s);
         const duty = getStaffDutyPresentation(s, gameTime);
         const skill = Number.isFinite(Number(s.skill)) ? Number(s.skill) : 0;
         const scheduleDraft = scheduleDrafts[s.id];
@@ -203,6 +216,13 @@ export default function StaffPanel() {
             Skill: {skill}/10
             <span style={{ marginLeft: 16 }}>Morale: {Math.round(s.morale)}%</span>
           </div>
+          {trainingPreview && (
+            <div style={{ ...TYPOGRAPHY.secondary, margin: '4px 0' }}>
+              <div>{`After training: Skill ${trainingPreview.skill}/10 · Morale ${Math.round(trainingPreview.morale)}%`}</div>
+              <div>{`Carry capacity: ${trainingPreview.carryBefore} → ${trainingPreview.carryAfter} items`}</div>
+              <div>{`${trainingPreview.rateLabel}: ${trainingPreview.rateBefore.toFixed(2)}× → ${trainingPreview.rateAfter.toFixed(2)}×`}</div>
+            </div>
+          )}
           <div
             data-testid={`staff-status-${s.id}`}
             style={{ ...TYPOGRAPHY.secondary, color: '#aab8cf', background: '#121c35', borderRadius: 4, padding: '6px 8px', marginTop: 7 }}

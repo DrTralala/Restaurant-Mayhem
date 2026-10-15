@@ -17,7 +17,7 @@ describe('shared feature defaults and actions', () => {
   it('initialises v10 sandbox branches and tagged starter atomically', () => {
     const state = createInitialState();
     expect(state).toMatchObject({ version: 10, paidVisitSequence: 0, careerRun: null,
-      cookbook: { schemaVersion: 1, lastAppliedPaidVisitSequence: 0,
+      cookbook: { schemaVersion: 2, lastAppliedPaidVisitSequence: 0,
         entries: { toast: { discovered: true, paidPortions: 0, perk: null } } },
       serviceContracts: { version: 1, active: null, results: [] },
     });

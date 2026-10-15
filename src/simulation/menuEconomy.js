@@ -244,3 +244,31 @@ export function estimateMenuItemDemand(state, kind, itemId) {
   }
   return Math.round(clamp01(totalProbability) * 100);
 }
+
+export function getMenuAffordabilitySummary(state) {
+  const probabilities = getSpendingTierProbabilities(state.restaurant?.reputation);
+  let dishShare = 0;
+  let anyOrderShare = 0;
+  let dishTotal = 0;
+  let anyOrderTotal = 0;
+  let budgetTotal = 0;
+  for (const [tier, [min, max]] of Object.entries(SPENDING_TIER_RANGES)) {
+    let dishCount = 0;
+    let anyCount = 0;
+    for (let budget = min; budget <= max; budget += 1) {
+      const baskets = buildAffordableBaskets(state, { spendingTier: tier, spendingBudget: budget });
+      if (baskets.length > 0) anyCount += 1;
+      if (baskets.some(basket => basket.dish)) dishCount += 1;
+    }
+    const tierBudgetTotal = max - min + 1;
+    dishShare += probabilities[tier] * dishCount / tierBudgetTotal;
+    anyOrderShare += probabilities[tier] * anyCount / tierBudgetTotal;
+    dishTotal += dishCount;
+    anyOrderTotal += anyCount;
+    budgetTotal += tierBudgetTotal;
+  }
+  return {
+    dishShare: dishTotal === budgetTotal ? 1 : Math.min(1, Math.max(0, dishShare)),
+    anyOrderShare: anyOrderTotal === budgetTotal ? 1 : Math.min(1, Math.max(0, anyOrderShare)),
+  };
+}

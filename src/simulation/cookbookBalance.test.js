@@ -35,3 +35,25 @@ it('cheeseToastInfluencerChoice: appeal has higher normalised probability than s
   expect(appeal.delta).toBeCloseTo(0.60, 10);
   expect(appeal.probability).toBeGreaterThan(speed.probability);
 });
+
+it('gazpachoTradeOff: rushers prefer Gazpacho while influencers prefer Roast Vegetables at equal price and quality', () => {
+  const cookbook = createCookbookState();
+  Object.assign(cookbook.entries.gazpacho.menuSettings, { price: 18 });
+  Object.assign(cookbook.entries['roast-vegetables'].menuSettings, { price: 18 });
+  const state = { cookbook, unlockedDrinkIds: [], dishes: [
+    { id: 'gazpacho-dish', cookbookId: 'gazpacho' },
+    { id: 'roast-dish', cookbookId: 'roast-vegetables' },
+  ] };
+  expect(getResolvedDish(state, 'gazpacho-dish')).toMatchObject({ prepTime: 75, popularity: 55, price: 18, quality: 1 });
+  expect(getResolvedDish(state, 'roast-dish')).toMatchObject({ prepTime: 150, popularity: 70, price: 18, quality: 1 });
+  const weights = archetype => {
+    const customer = { archetype, spendingTier: 'value', spendingBudget: 45 };
+    const baskets = buildAffordableBaskets(state, customer);
+    expect(baskets.map(basket => [basket.kind, basket.price])).toEqual([['dish', 18], ['dish', 18]]);
+    return baskets.map(basket => getBasketWeight(basket, customer));
+  };
+  const [rusherGazpacho, rusherRoast] = weights('rusher');
+  const [influencerGazpacho, influencerRoast] = weights('influencer');
+  expect(rusherGazpacho).toBeGreaterThan(rusherRoast);
+  expect(influencerGazpacho).toBeLessThan(influencerRoast);
+});

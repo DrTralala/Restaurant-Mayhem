@@ -26,7 +26,7 @@ function effectiveStats(recipe, perk) {
 export function createCookbookState(lastAppliedPaidVisitSequence = 0) {
   requireValid(isCounter(lastAppliedPaidVisitSequence), 'paid visit watermark');
   return {
-    schemaVersion: 1, lastAppliedPaidVisitSequence,
+    schemaVersion: 2, lastAppliedPaidVisitSequence,
     entries: Object.fromEntries(COOKBOOK_RECIPES.map(recipe => [recipe.id, {
       discovered: recipe.id === 'toast', paidPortions: 0, perk: null,
       menuSettings: { name: recipe.name, price: recipe.price, quality: 1 },
@@ -78,7 +78,7 @@ export function validateCookbookState(state) {
     return;
   }
   const cookbook = state.cookbook;
-  requireValid(isObject(cookbook) && cookbook.schemaVersion === 1, 'schema');
+  requireValid(isObject(cookbook) && cookbook.schemaVersion === 2, 'schema');
   requireValid(isCounter(cookbook.lastAppliedPaidVisitSequence)
     && isCounter(state.paidVisitSequence ?? 0)
     && cookbook.lastAppliedPaidVisitSequence <= (state.paidVisitSequence ?? 0), 'paid visit watermark');

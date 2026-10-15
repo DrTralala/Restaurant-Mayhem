@@ -74,6 +74,60 @@ describe('MenuPanel drinks', () => {
     expect(within(teaCard).queryByText(/Estimated demand:/)).not.toBeInTheDocument();
   });
 
+  it('shows a neutral canonical preview for every locked drink', () => {
+    render(<MenuPanel />);
+
+    const previews = [
+      ['Tea', 'Price: $4 · Base prep: 120s · Popularity: 55%'],
+      ['Soda', 'Price: $5 · Base prep: 120s · Popularity: 60%'],
+      ['Coffee', 'Price: $6 · Base prep: 120s · Popularity: 65%'],
+      ['Juice', 'Price: $7 · Base prep: 120s · Popularity: 70%'],
+      ['Iced Tea', 'Price: $4 · Base prep: 90s · Popularity: 45%'],
+    ];
+    for (const [name, text] of previews) {
+      const card = screen.getByRole('article', { name: `${name} menu item` });
+      expect(within(card).getByText(text)).toBeInTheDocument();
+    }
+
+    const icedTeaCard = screen.getByRole('article', { name: 'Iced Tea menu item' });
+    expect(within(icedTeaCard).getByRole('button', { name: 'Unlock Iced Tea ($150)' })).toBeInTheDocument();
+    expect(within(icedTeaCard).queryByLabelText('Iced Tea price')).not.toBeInTheDocument();
+    expect(within(icedTeaCard).queryByText(/Estimated demand:/)).not.toBeInTheDocument();
+  });
+
+  it('dispatches a canonical Iced Tea unlock and respects affordability and read-only guards', () => {
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    const view = render(<MenuPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock Iced Tea ($150)' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'UNLOCK_DRINK', id: 'iced-tea' });
+
+    const base = useGameState();
+    useGameState.mockReturnValue({ ...base, restaurant: { ...base.restaurant, funds: 149 } });
+    view.rerender(<MenuPanel />);
+    expect(screen.getByRole('button', { name: 'Unlock Iced Tea ($150)' })).toBeDisabled();
+
+    useGameState.mockReturnValue(base);
+    view.rerender(<MenuPanel readOnly />);
+    expect(screen.getByRole('button', { name: 'Unlock Iced Tea ($150)' })).toBeDisabled();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the unlocked Iced Tea canonical 90s duration and keeps its controls', () => {
+    const base = useGameState();
+    useGameState.mockReturnValue({ ...base, unlockedDrinkIds: ['water', 'iced-tea'] });
+    render(<MenuPanel />);
+
+    const card = screen.getByRole('article', { name: 'Iced Tea menu item' });
+    expect(within(card).getByText('$4 · 90s prep')).toBeInTheDocument();
+    expect(within(card).getByText('Popularity: 45%')).toBeInTheDocument();
+    expect(within(card).getByLabelText('Iced Tea price')).toHaveValue(4);
+    expect(within(card).getByRole('button', { name: 'Upgrade Iced Tea quality ($50)' })).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /Unlock Iced Tea/ })).not.toBeInTheDocument();
+    expect(within(card).queryByText('Price: $4 · Base prep: 90s · Popularity: 45%')).not.toBeInTheDocument();
+  });
+
   it('dispatches a canonical Tea unlock', () => {
     const dispatch = vi.fn();
     useDispatch.mockReturnValue(dispatch);
@@ -107,10 +161,12 @@ describe('MenuPanel drinks', () => {
     render(<MenuPanel />);
     fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
     expect(screen.getByRole('heading', { name: 'Cookbook' })).toBeInTheDocument();
-    expect(screen.getAllByRole('article')).toHaveLength(6);
+    expect(screen.getAllByRole('article')).toHaveLength(7);
+    expect(screen.queryByRole('region', { name: 'Menu affordability' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
     expect(screen.getByRole('button', { name: '+ New dish' })).toBeEnabled();
     expect(screen.getByLabelText('Water price')).toBeEnabled();
+    expect(screen.getByRole('region', { name: 'Menu affordability' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
     expect(screen.getByRole('heading', { name: 'Create new dish' })).toBeInTheDocument();
   });
@@ -157,5 +213,130 @@ describe('MenuPanel drinks', () => {
     view.rerender(<MenuPanel readOnly />);
     expect(screen.queryByRole('heading', { name: 'Create new dish' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '+ New dish' })).toBeDisabled();
+  });
+
+  describe('menu affordability', () => {
+    const coverage = label => screen.getByText(label);
+
+    it('shows the read-only summary, exact labels and caveat without dispatching on render', () => {
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel />);
+
+      const region = screen.getByRole('region', { name: 'Menu affordability' });
+      expect(within(region).getByText('Can afford an order containing a dish: 80.4%')).toBeInTheDocument();
+      expect(within(region).getByText('Can afford any order, including drink-only: 93.5%')).toBeInTheDocument();
+      expect(within(region).getByText(
+        'Price-only coverage for new walk-in guest budgets at current reputation, not existing guests or booked contracts. These overlapping percentages are not additive and do not predict purchases or service capacity. Item demand uses sampled budgets and preferences.',
+      )).toBeInTheDocument();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('shows zero coverage for an empty menu and keeps the no-dishes message', () => {
+      useGameState.mockReturnValue({
+        dishes: [], recipeSlots: 1, unlockedDrinkIds: [], drinkOverrides: {},
+        upgrades: [], restaurant: { funds: 200, reputation: 3 },
+      });
+      render(<MenuPanel />);
+
+      const region = screen.getByRole('region', { name: 'Menu affordability' });
+      expect(within(region).getByText('Can afford an order containing a dish: 0%')).toBeInTheDocument();
+      expect(within(region).getByText('Can afford any order, including drink-only: 0%')).toBeInTheDocument();
+      expect(screen.getByText('No dishes yet. Create your first dish!')).toBeInTheDocument();
+    });
+
+    it('updates dish coverage when a dish price changes', () => {
+      const view = render(<MenuPanel />);
+      expect(coverage('Can afford an order containing a dish: 80.4%')).toBeInTheDocument();
+
+      const base = useGameState();
+      useGameState.mockReturnValue({ ...base, dishes: [{ ...base.dishes[0], price: 19 }] });
+      view.rerender(<MenuPanel />);
+
+      expect(coverage('Can afford an order containing a dish: 53.6%')).toBeInTheDocument();
+      expect(coverage('Can afford any order, including drink-only: 93.5%')).toBeInTheDocument();
+    });
+
+    it('updates order coverage when the Water price changes', () => {
+      const view = render(<MenuPanel />);
+      const base = useGameState();
+      useGameState.mockReturnValue({ ...base, drinkOverrides: { water: { price: 100 } } });
+      view.rerender(<MenuPanel />);
+
+      expect(coverage('Can afford an order containing a dish: 80.4%')).toBeInTheDocument();
+      expect(coverage('Can afford any order, including drink-only: 80.4%')).toBeInTheDocument();
+    });
+
+    it('updates coverage when reputation changes', () => {
+      const view = render(<MenuPanel />);
+      const base = useGameState();
+      useGameState.mockReturnValue({ ...base, restaurant: { ...base.restaurant, reputation: 5 } });
+      view.rerender(<MenuPanel />);
+
+      expect(coverage('Can afford an order containing a dish: 93.1%')).toBeInTheDocument();
+      expect(coverage('Can afford any order, including drink-only: 97.7%')).toBeInTheDocument();
+    });
+
+    it('updates order coverage when the last unlocked drink is locked', () => {
+      const view = render(<MenuPanel />);
+      const base = useGameState();
+      useGameState.mockReturnValue({ ...base, unlockedDrinkIds: [] });
+      view.rerender(<MenuPanel />);
+
+      expect(coverage('Can afford an order containing a dish: 80.4%')).toBeInTheDocument();
+      expect(coverage('Can afford any order, including drink-only: 80.4%')).toBeInTheDocument();
+    });
+
+    it('formats exact endpoints and the smallest positive coverage', () => {
+      useGameState.mockReturnValue({
+        dishes: [{ id: 'toast', name: 'Toast', price: 6, prepTime: 60, quality: 2, popularity: 45 }],
+        recipeSlots: 1, unlockedDrinkIds: [], drinkOverrides: {}, upgrades: [],
+        restaurant: { funds: 200, reputation: 1 },
+      });
+      const view = render(<MenuPanel />);
+      expect(coverage('Can afford an order containing a dish: 100%')).toBeInTheDocument();
+      expect(coverage('Can afford any order, including drink-only: 100%')).toBeInTheDocument();
+
+      const base = useGameState();
+      useGameState.mockReturnValue({ ...base, dishes: [{ ...base.dishes[0], price: 120 }] });
+      view.rerender(<MenuPanel />);
+      expect(coverage('Can afford an order containing a dish: 0.1%')).toBeInTheDocument();
+      expect(coverage('Can afford any order, including drink-only: 0.1%')).toBeInTheDocument();
+
+      useGameState.mockReturnValue({ ...base, dishes: [{ ...base.dishes[0], price: 19 }] });
+      view.rerender(<MenuPanel />);
+      expect(coverage('Can afford an order containing a dish: 26.8%')).toBeInTheDocument();
+    });
+
+    it('shows exact 100% endpoints when every budget is covered at reputation 3', () => {
+      useGameState.mockReturnValue({
+        dishes: [{ id: 'toast', name: 'Toast', price: 6, prepTime: 60, quality: 2, popularity: 45 }],
+        recipeSlots: 1, unlockedDrinkIds: [], drinkOverrides: {}, upgrades: [],
+        restaurant: { funds: 200, reputation: 3 },
+      });
+      const view = render(<MenuPanel />);
+      expect(coverage('Can afford an order containing a dish: 100%')).toBeInTheDocument();
+      expect(coverage('Can afford any order, including drink-only: 100%')).toBeInTheDocument();
+
+      const base = useGameState();
+      useGameState.mockReturnValue({ ...base, restaurant: { ...base.restaurant, reputation: 2 } });
+      view.rerender(<MenuPanel />);
+      expect(coverage('Can afford an order containing a dish: 100%')).toBeInTheDocument();
+      expect(coverage('Can afford any order, including drink-only: 100%')).toBeInTheDocument();
+    });
+
+    it('keeps coverage visible and editing blocked while a career decision is pending', () => {
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      const base = useGameState();
+      useGameState.mockReturnValue({ ...base, careerRun: { needsDecision: true } });
+      render(<MenuPanel />);
+
+      const region = screen.getByRole('region', { name: 'Menu affordability' });
+      expect(within(region).getByText('Can afford an order containing a dish: 80.4%')).toBeInTheDocument();
+      expect(within(region).getByText('Can afford any order, including drink-only: 93.5%')).toBeInTheDocument();
+      expect(screen.getByLabelText('Toast price')).toBeDisabled();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
   });
 });

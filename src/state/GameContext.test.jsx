@@ -1429,6 +1429,24 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.unlockedDrinkIds).toEqual(['water']);
   });
 
+  it('unlocks Iced Tea only at its exact 150 cost and only once', () => {
+    expect(createInitialState().unlockedDrinkIds).toEqual(['water']);
+
+    const poor = renderReducer({ restaurant: { funds: 149 } });
+    poor.dispatch({ type: 'UNLOCK_DRINK', id: 'iced-tea' });
+    expect(poor.state.restaurant.funds).toBe(149);
+    expect(poor.state.unlockedDrinkIds).toEqual(['water']);
+
+    const game = renderReducer({ restaurant: { funds: 150 } });
+    game.dispatch({ type: 'UNLOCK_DRINK', id: 'iced-tea' });
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.unlockedDrinkIds).toEqual(['water', 'iced-tea']);
+
+    game.dispatch({ type: 'UNLOCK_DRINK', id: 'iced-tea' });
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.unlockedDrinkIds).toEqual(['water', 'iced-tea']);
+  });
+
   it('updates only an unlocked known drink price', () => {
     const game = renderReducer({
       unlockedDrinkIds: ['water', 'tea'], drinkOverrides: {},

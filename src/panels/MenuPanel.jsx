@@ -1,11 +1,20 @@
 import { useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { DRINKS, getResolvedDrink } from '../data/drinks';
-import { estimateMenuItemDemand } from '../simulation/menuEconomy';
+import { estimateMenuItemDemand, getMenuAffordabilitySummary } from '../simulation/menuEconomy';
 import { getResolvedDish } from '../simulation/cookbook';
 import { TYPOGRAPHY } from '../typography';
 import RecipeCreator from './RecipeCreator';
 import CookbookPanel from './CookbookPanel';
+
+function formatCoverage(share) {
+  if (share === 0) return '0%';
+  if (share === 1) return '100%';
+  const rounded = (share * 100).toFixed(1);
+  if (rounded === '0.0') return '<0.1%';
+  if (rounded === '100.0') return '>99.9%';
+  return `${rounded}%`;
+}
 
 export default function MenuPanel({ readOnly = false }) {
   const state = useGameState();
@@ -22,6 +31,8 @@ export default function MenuPanel({ readOnly = false }) {
   if (showCreator && !blocked) {
     return <RecipeCreator onClose={() => setShowCreator(false)} />;
   }
+
+  const affordability = getMenuAffordabilitySummary(state);
 
   return (
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
@@ -41,6 +52,13 @@ export default function MenuPanel({ readOnly = false }) {
       </div>
       {blocked && <p role="status" style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>Career decision pending — menu changes are unavailable. You can still browse.</p>}
       <p style={TYPOGRAPHY.secondary}>Cook seconds show base cooking work, not the complete wait time. Estimated demand is not a sales guarantee.</p>
+
+      <section aria-label="Menu affordability">
+        <h4 style={TYPOGRAPHY.subheading}>Menu affordability</h4>
+        <p>Can afford an order containing a dish: {formatCoverage(affordability.dishShare)}</p>
+        <p>Can afford any order, including drink-only: {formatCoverage(affordability.anyOrderShare)}</p>
+        <p style={TYPOGRAPHY.secondary}>Price-only coverage for new walk-in guest budgets at current reputation, not existing guests or booked contracts. These overlapping percentages are not additive and do not predict purchases or service capacity. Item demand uses sampled budgets and preferences.</p>
+      </section>
 
       {state.dishes.length === 0 && (
         <p style={{ ...TYPOGRAPHY.secondary, color: '#666' }}>No dishes yet. Create your first dish!</p>
@@ -148,16 +166,21 @@ export default function MenuPanel({ readOnly = false }) {
                 </div>
               </>
             ) : (
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <strong style={TYPOGRAPHY.subheading}>{drink.name}</strong>
-                <button
-                  onClick={() => mutate({ type: 'UNLOCK_DRINK', id: drink.id })}
-                  disabled={blocked || state.restaurant.funds < drink.unlockCost}
-                  style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
-                >
-                  Unlock {drink.name} (${drink.unlockCost})
-                </button>
-              </div>
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong style={TYPOGRAPHY.subheading}>{drink.name}</strong>
+                  <button
+                    onClick={() => mutate({ type: 'UNLOCK_DRINK', id: drink.id })}
+                    disabled={blocked || state.restaurant.funds < drink.unlockCost}
+                    style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
+                  >
+                    Unlock {drink.name} (${drink.unlockCost})
+                  </button>
+                </div>
+                <div style={{ ...TYPOGRAPHY.secondary, marginTop: 4 }}>
+                  Price: ${drink.price} · Base prep: {drink.prepTime}s · Popularity: {drink.popularity}%
+                </div>
+              </>
             )}
           </article>
         );

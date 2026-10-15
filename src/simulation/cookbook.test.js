@@ -106,6 +106,62 @@ describe('cookbook discovery and mastery', () => {
   });
 });
 
+describe('Blender recipe', () => {
+  function blenderFixture() {
+    const state = fixture();
+    state.equipment = [...state.equipment, { id: 'eq4', owned: true }];
+    state.cookbook = reconcileCookbookDiscoveries(state);
+    return state;
+  }
+
+  it('constructs schema 2 with an undiscovered default Gazpacho entry', () => {
+    const cookbook = createCookbookState(3);
+    expect(cookbook).toMatchObject({ schemaVersion: 2, lastAppliedPaidVisitSequence: 3 });
+    expect(cookbook.entries.gazpacho).toEqual({ discovered: false, paidPortions: 0, perk: null,
+      menuSettings: { name: 'Gazpacho', price: 16, quality: 1 } });
+    expect(() => validateCookbookState({ ...fixture(), cookbook, paidVisitSequence: 3 })).not.toThrow();
+  });
+
+  it('discovers Gazpacho from owning the Blender, without requiring a placed station', () => {
+    const state = blenderFixture();
+    expect(getCookbookEntryStatus(state, 'gazpacho')).toMatchObject({
+      discovered: true, equipmentOwned: true, stationAvailable: false, canAdd: true,
+    });
+  });
+
+  it('does not discover or add Gazpacho without the Blender', () => {
+    const state = fixture();
+    expect(getCookbookEntryStatus(state, 'gazpacho')).toMatchObject({
+      discovered: false, equipmentOwned: false, canAdd: false,
+    });
+    expect(reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' })).toBe(state);
+  });
+
+  it('adds Gazpacho explicitly, guards duplicates and retains settings through removal', () => {
+    let state = reduceCookbookAction(blenderFixture(), { type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
+    expect(state.dishes.at(-1)).toMatchObject({ id: 'cookbook:gazpacho', cookbookId: 'gazpacho',
+      name: 'Gazpacho', base: 'Vegetables', method: 'Blended', requiredEquipmentId: 'eq4',
+      cuisine: 'generic', price: 16, quality: 1, prepTime: 75, popularity: 55, unlocked: true });
+    expect(reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' })).toBe(state);
+    state = reduceCookbookAction(state, { type: 'UPDATE_DISH', id: 'cookbook:gazpacho',
+      changes: { name: 'House Gazpacho', price: 21 } });
+    state = reduceCookbookAction(state, { type: 'REMOVE_DISH', id: 'cookbook:gazpacho' });
+    expect(state.dishes.some(candidate => candidate.cookbookId === 'gazpacho')).toBe(false);
+    state = reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
+    expect(getResolvedDish(state, 'cookbook:gazpacho')).toMatchObject({ name: 'House Gazpacho', price: 21 });
+  });
+
+  it('offers speed 64 seconds or appeal 65 popularity at 15 paid Gazpacho portions', () => {
+    let state = reduceCookbookAction(blenderFixture(), { type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
+    state = pay(state, 15, 'gazpacho');
+    expect(getCookbookEntryStatus(state, 'gazpacho')).toMatchObject({ paidPortions: 15, canChoosePerk: true });
+    const speed = reduceCookbookAction(state, { type: 'CHOOSE_DISH_MASTERY', cookbookId: 'gazpacho', perk: 'speed' });
+    expect(getResolvedDish(speed, 'cookbook:gazpacho')).toMatchObject({ prepTime: 64, popularity: 55 });
+    const appeal = reduceCookbookAction(state, { type: 'CHOOSE_DISH_MASTERY', cookbookId: 'gazpacho', perk: 'appeal' });
+    expect(getResolvedDish(appeal, 'cookbook:gazpacho')).toMatchObject({ prepTime: 75, popularity: 65 });
+  });
+});
+
 describe('canonicalCookbookOutcomes', () => {
   it.each([
     ['paid authored dish', {}, 1],
@@ -360,7 +416,8 @@ describe('legacy adoption and strict validation', () => {
   });
 
   it.each([
-    state => { state.cookbook.schemaVersion = 2; },
+    state => { state.cookbook.schemaVersion = 1; },
+    state => { delete state.cookbook.entries.gazpacho; },
     state => { state.cookbook.entries.fake = state.cookbook.entries.toast; },
     state => { state.cookbook.entries.toast.paidPortions = -1; },
     state => { state.cookbook.entries.toast.paidPortions = 16; },

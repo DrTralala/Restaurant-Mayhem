@@ -103,10 +103,16 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
           const qualityBonus = Number.isFinite(eq.qualityBonus) ? eq.qualityBonus : multipliers.qualityBonus;
           const nextCost = owned ? (eq.upgradeCosts[eq.level - 1] || 0) : eq.purchaseCost;
           const maxed = owned && eq.level >= 10;
+          const nextMultipliers = owned && !maxed && Number.isInteger(eq.level) && eq.level >= 1 ? getEquipmentLevelMultipliers(eq.level + 1) : null;
           return (
             <div key={eq.id} style={{ background: owned ? '#1a2e1a' : '#1a1a2e', borderRadius: 8, padding: 12, border: `1px solid ${owned ? '#2a5a2a' : '#0f3460'}` }}>
               <strong style={TYPOGRAPHY.subheading}>{eq.name}</strong>
               <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0' }}>Speed: {(speedMultiplier * 100).toFixed(0)}% · Quality: +{(qualityBonus * 100).toFixed(0)}%</p>
+              {nextMultipliers && (
+                <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0' }}>
+                  After upgrade: Speed {(nextMultipliers.speedMultiplier * 100).toFixed(0)}% · Quality +{(nextMultipliers.qualityBonus * 100).toFixed(0)}%
+                </p>
+              )}
               <p style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>{owned ? `Level ${eq.level}` : 'Not owned'} {maxed ? '(Max)' : `→ $${nextCost}`}</p>
               <button
                 onClick={() => {

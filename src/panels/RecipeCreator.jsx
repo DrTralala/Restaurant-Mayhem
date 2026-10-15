@@ -6,6 +6,7 @@ import { TYPOGRAPHY } from '../typography';
 const selectStyle = { ...TYPOGRAPHY.control, background: '#1a1a2e', color: '#ccc', border: '1px solid #333', padding: '4px 8px', borderRadius: 4, marginLeft: 8 };
 const inputStyle = { ...TYPOGRAPHY.body, background: '#1a1a2e', color: '#ccc', border: '1px solid #333', padding: '6px 8px', borderRadius: 4, width: '100%', marginTop: 4 };
 const btnStyle = { ...TYPOGRAPHY.control, background: '#f0a500', color: '#111', border: 'none', padding: '8px 16px', borderRadius: 4, cursor: 'pointer' };
+const messageStyle = { ...TYPOGRAPHY.secondary, color: '#d44', marginTop: 4 };
 
 export default function RecipeCreator({ onClose }) {
   const state = useGameState();
@@ -14,7 +15,6 @@ export default function RecipeCreator({ onClose }) {
   const [method, setMethod] = useState(METHODS[0]);
   const [dishName, setDishName] = useState('');
   const [price, setPrice] = useState(5);
-  const [error, setError] = useState('');
 
   const requiredEquipmentId = BASE_EQUIPMENT_MAP[method];
   const equipment = requiredEquipmentId
@@ -23,14 +23,11 @@ export default function RecipeCreator({ onClose }) {
 
   const numericPrice = Number(price);
   const validPrice = Number.isInteger(numericPrice) && numericPrice >= 1 && numericPrice <= 100;
+  const nameError = !dishName.trim();
   const canCreate = equipment?.owned && dishName.trim() && validPrice;
 
   const handleCreate = () => {
-    if (!canCreate) {
-      if (!equipment?.owned) setError(`You need to own a ${equipment?.name || 'required equipment'} first.`);
-      else if (!validPrice) setError('Price must be a whole number from $1 to $100.');
-      return;
-    }
+    if (!canCreate) return;
 
     const dish = {
       id: `dish-${Date.now()}`,
@@ -54,25 +51,30 @@ export default function RecipeCreator({ onClose }) {
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
       <h3 style={{ ...TYPOGRAPHY.heading, marginBottom: 12, color: '#f0a500' }}>Create new dish</h3>
 
-      {error && <p style={{ ...TYPOGRAPHY.secondary, color: '#d44', marginBottom: 8 }}>{error}</p>}
-
       <div style={{ marginBottom: 8 }}>
-         <label style={TYPOGRAPHY.secondary}>Base ingredient:</label>
-        <select value={base} onChange={e => setBase(e.target.value)} style={selectStyle}>
+        <label htmlFor="recipe-base" style={TYPOGRAPHY.secondary}>Base ingredient:</label>
+        <select id="recipe-base" value={base} onChange={e => setBase(e.target.value)} style={selectStyle}>
           {BASES.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
       </div>
 
       <div style={{ marginBottom: 8 }}>
-         <label style={TYPOGRAPHY.secondary}>Cooking method:</label>
-        <select value={method} onChange={e => setMethod(e.target.value)} style={selectStyle}>
+        <label htmlFor="recipe-method" style={TYPOGRAPHY.secondary}>Cooking method:</label>
+        <select
+          id="recipe-method"
+          value={method}
+          onChange={e => setMethod(e.target.value)}
+          style={selectStyle}
+          aria-describedby="recipe-equipment-guidance"
+          aria-invalid={!equipment?.owned}
+        >
           {METHODS.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
-        {equipment && (
-           <span style={{ ...TYPOGRAPHY.secondary, marginLeft: 8, color: equipment.owned ? '#4a7' : '#d44' }}>
-            Requires: {equipment.name} {equipment.owned ? '✓' : '✗'}
-          </span>
-        )}
+        <p id="recipe-equipment-guidance" style={{ ...TYPOGRAPHY.secondary, marginTop: 4, color: equipment?.owned ? '#4a7' : '#d44' }}>
+          {equipment?.owned
+            ? `Requires: ${equipment.name} (owned)`
+            : `You need to own ${equipment?.name || 'the required equipment'} first.`}
+        </p>
       </div>
 
       <div style={{ marginBottom: 8 }}>
@@ -83,7 +85,10 @@ export default function RecipeCreator({ onClose }) {
           onChange={e => setDishName(e.target.value)}
           placeholder={`${method} ${base}`}
           style={inputStyle}
+          aria-invalid={nameError}
+          aria-describedby={nameError ? 'dish-name-error' : undefined}
         />
+        {nameError && <p id="dish-name-error" style={messageStyle}>Enter a dish name.</p>}
       </div>
 
       <div style={{ marginBottom: 12 }}>
@@ -93,7 +98,12 @@ export default function RecipeCreator({ onClose }) {
           type="number" value={price} min={1} max={100} step={1}
           onChange={e => setPrice(e.target.value)}
           style={{ ...inputStyle, width: 80, marginLeft: 4 }}
+          aria-invalid={!validPrice}
+          aria-describedby={!validPrice ? 'dish-price-error' : undefined}
         />
+        {!validPrice && (
+          <p id="dish-price-error" style={messageStyle}>Price must be a whole number from $1 to $100.</p>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
