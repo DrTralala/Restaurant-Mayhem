@@ -32,6 +32,9 @@ const warningLabels = {
   no_suitable_table: 'No placed table has enough associated chairs for the largest party.',
   no_cook: 'No cook is employed.', no_waiter: 'No waiter is employed.',
   no_staffed_checkout: 'No checkout has an assigned waiter.',
+  no_scheduled_cook: 'Under current schedules, no cook is scheduled to Work at one or more arrivals.',
+  no_scheduled_waiter: 'Under current schedules, no waiter is scheduled to Work at one or more arrivals.',
+  no_scheduled_checkout: 'Under current schedules, no assigned checkout waiter is scheduled to Work at one or more arrivals.',
 };
 const statusLabels = { scheduled: 'Scheduled', pending: 'Awaiting meal and payment',
   fulfilled_paid: 'Fulfilled and paid', not_fulfilled: 'Not fulfilled', failed: 'Failed',
@@ -91,7 +94,7 @@ export default function ServiceContractsPanel() {
   return <div style={{ ...TYPOGRAPHY.body, background: '#16213e', color: '#ddd', minWidth: 0, overflowWrap: 'anywhere' }}>
     <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '0 0 12px' }}>Service contracts</h3>
     <p style={secondaryStyle}>Book extra guests for a reward. One contract at a time, one attempt per offer each day.
-      Walk-ins continue; tables and staff are not reserved.</p>
+      Walk-ins follow opening hours and the walk-in pause setting; tables and staff are not reserved.</p>
     {decisionPending && <p style={{ color: '#f0a500' }}>Contract paused — choose Continue in Opening Week to resume</p>}
     <div role="status" aria-live="polite" style={{ position: 'absolute', width: 1, height: 1,
       overflow: 'hidden', clipPath: 'inset(50%)' }}>{announcement}</div>
@@ -158,11 +161,14 @@ export default function ServiceContractsPanel() {
         <ul style={{ paddingLeft: 20 }}>{warnings.map(warning => <li key={warning}>{warningLabels[warning]}</li>)}</ul>
         <p>Advisory only — acceptance is still allowed.</p>
       </div>}
+      <p>Scheduled Work does not guarantee availability or coverage throughout service.</p>
       {blockedReason && <p>{blockedLabels[blockedReason]}</p>}
       {reviewing === template.id ? <div role="group" aria-label={`Confirm ${template.title}`}>
         <p>Receive {money(terms.deposit)} now and {money(terms.balance)} on success at the deadline.</p>
         <ContractLiability terms={terms} />
         <p>Start preparation now? Arrival and deadline times are calculated again when you accept.</p>
+        {preview ? <><p>Projected start: {timeLabel(state, preview.serviceStartAt)}</p><p>Projected deadline: {timeLabel(state, preview.deadlineAt)}</p></>
+          : <p>Projected times unavailable.</p>}
         <div style={controlsStyle}>
           <ActionButton disabled={!canAccept} onClick={() => {
             if (canAccept) dispatch({ type: 'ACCEPT_SERVICE_CONTRACT', templateId: template.id });

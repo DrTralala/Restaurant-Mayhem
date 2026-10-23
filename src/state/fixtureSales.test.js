@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FIXTURE_SALE_REASONS,
   getFixtureSaleEligibility,
+  getFixtureSaleExpectation,
   getSaleSelection,
   sellFixtures,
 } from './fixtureSales';
@@ -276,5 +277,252 @@ describe('fixture sale eligibility', () => {
       valid: false,
       reason: FIXTURE_SALE_REASONS.IN_USE,
     });
+  });
+});
+
+describe('fixture sale expectation', () => {
+  it('returns null when the selection is null', () => {
+    expect(getFixtureSaleExpectation(null)).toBeNull();
+    expect(getFixtureSaleExpectation(undefined)).toBeNull();
+  });
+
+  it('canonically describes every fixture the sale removes', () => {
+    const state = makeState({
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 100, y: 100 }],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 100, y: 80 },
+        { id: 'ch2', tableId: 't1', x: 100, y: 140 },
+      ],
+      washStations: [{ id: 'wash2', type: 'automatic', level: 1, x: 300, y: 120 }],
+    });
+    const requestedItems = [
+      { type: 'table', id: 't1' },
+      { type: 'washStation', id: 'wash2' },
+    ];
+    const selection = getSaleSelection(state, requestedItems);
+
+    expect(getFixtureSaleExpectation(selection)).toEqual({
+      refund: selection.refund,
+      items: [
+        { type: 'chair', id: 'ch1' },
+        { type: 'chair', id: 'ch2' },
+        { type: 'table', id: 't1' },
+        { type: 'washStation', id: 'wash2' },
+      ],
+    });
+  });
+
+  it('deduplicates an explicitly selected chair that its table also removes and uses string ids', () => {
+    const state = makeState({
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 7, tableId: 't1', x: 100, y: 80 }],
+    });
+    const selection = getSaleSelection(state, [
+      { type: 'table', id: 't1' },
+      { type: 'chair', id: 7 },
+    ]);
+
+    expect(getFixtureSaleExpectation(selection)).toEqual({
+      refund: selection.refund,
+      items: [
+        { type: 'chair', id: '7' },
+        { type: 'table', id: 't1' },
+      ],
+    });
+  });
+
+  it('sorts items lexicographically by type then id', () => {
+    const state = makeState({
+      tables: [{ id: 't1', seats: 3, status: 'empty', x: 100, y: 100 }],
+      chairs: [
+        { id: 'ch10', tableId: 't1', x: 100, y: 80 },
+        { id: 'ch2', tableId: 't1', x: 100, y: 140 },
+      ],
+      washStations: [{ id: 'auto', type: 'automatic', level: 1, x: 300, y: 120 }],
+      staffAmenities: [{ id: 'amenity1', type: 'couch', x: 500, y: 300, slots: [] }],
+    });
+    const selection = getSaleSelection(state, [
+      { type: 'washStation', id: 'auto' },
+      { type: 'staffAmenity', id: 'amenity1' },
+      { type: 'table', id: 't1' },
+    ]);
+
+    expect(getFixtureSaleExpectation(selection).items).toEqual([
+      { type: 'chair', id: 'ch10' },
+      { type: 'chair', id: 'ch2' },
+      { type: 'staffAmenity', id: 'amenity1' },
+      { type: 'table', id: 't1' },
+      { type: 'washStation', id: 'auto' },
+    ]);
+  });
+
+  it('accepts a sale when the expected descriptor matches the recomputed one', () => {
+    const state = makeState({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(getSaleSelection(state, requestedItems));
+
+    const next = sellFixtures(state, requestedItems, expectedSale);
+
+    expect(next).not.toBe(state);
+    expect(next.tables).toEqual([]);
+    expect(next.chairs).toEqual([]);
+    expect(next.restaurant.funds).toBe(600 + expectedSale.refund);
+  });
+
+  it('treats an undefined descriptor as the legacy path', () => {
+    const state = makeState({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+
+    const legacy = sellFixtures(state, requestedItems);
+    const explicitUndefined = sellFixtures(state, requestedItems, undefined);
+
+    expect(legacy.restaurant.funds).toBe(775);
+    expect(explicitUndefined).toEqual(legacy);
+  });
+
+  it('rejects a stale expectation whose refund changed', () => {
+    const state = makeState({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(getSaleSelection(state, requestedItems));
+    const tampered = { ...expectedSale, refund: expectedSale.refund + 1 };
+
+    expect(sellFixtures(state, requestedItems, tampered)).toBe(state);
+    expect(state.restaurant.funds).toBe(600);
+  });
+
+  it('rejects a new linked chair that appeared after the expectation', () => {
+    const state = makeState({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 2, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(getSaleSelection(state, requestedItems));
+    const changed = {
+      ...state,
+      chairs: [...state.chairs, { id: 'ch2', tableId: 't1', x: 100, y: 140 }],
+    };
+
+    expect(sellFixtures(changed, requestedItems, expectedSale)).toBe(changed);
+    expect(changed.restaurant.funds).toBe(600);
+  });
+
+  it('rejects a chair relinked away after the expectation', () => {
+    const state = makeState({
+      restaurant: { funds: 600 },
+      tables: [
+        { id: 't1', seats: 2, status: 'empty', x: 100, y: 100 },
+        { id: 't2', seats: 2, status: 'empty', x: 400, y: 100 },
+      ],
+      chairs: [
+        { id: 'ch1', tableId: 't1', x: 100, y: 80 },
+        { id: 'ch2', tableId: 't1', x: 100, y: 140 },
+      ],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(getSaleSelection(state, requestedItems));
+    const changed = {
+      ...state,
+      chairs: state.chairs.map(chair => chair.id === 'ch2' ? { ...chair, tableId: 't2' } : chair),
+    };
+
+    expect(sellFixtures(changed, requestedItems, expectedSale)).toBe(changed);
+  });
+
+  it('rejects a removed fixture after the expectation', () => {
+    const state = makeState({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(getSaleSelection(state, requestedItems));
+    const removed = { ...state, tables: [], chairs: [] };
+
+    expect(sellFixtures(removed, requestedItems, expectedSale)).toBe(removed);
+  });
+
+  it('rejects a fixture that became in use after the expectation', () => {
+    const state = makeState({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(getSaleSelection(state, requestedItems));
+    const occupied = {
+      ...state,
+      tables: state.tables.map(table => ({ ...table, status: 'occupied' })),
+    };
+
+    expect(sellFixtures(occupied, requestedItems, expectedSale)).toBe(occupied);
+    expect(sellFixtures(occupied, requestedItems)).toBe(occupied);
+  });
+
+  it('still allows unrelated funds, clock, and fixture changes', () => {
+    const state = makeState({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(getSaleSelection(state, requestedItems));
+    const ticked = {
+      ...state,
+      restaurant: { ...state.restaurant, funds: 950, gameTime: 12345 },
+      doors: [{ id: 'door2', y: 440, role: 'exit' }],
+      washStations: [{ id: 'auto', type: 'automatic', level: 1, x: 300, y: 120 }],
+    };
+
+    const next = sellFixtures(ticked, requestedItems, expectedSale);
+
+    expect(next).not.toBe(ticked);
+    expect(next.tables).toEqual([]);
+    expect(next.chairs).toEqual([]);
+    expect(next.restaurant.funds).toBe(950 + expectedSale.refund);
+  });
+
+  it('rejects forged, malformed, and shuffled descriptors', () => {
+    const state = makeState({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(getSaleSelection(state, requestedItems));
+    const forged = [
+      null,
+      42,
+      'refund',
+      [],
+      {},
+      { refund: expectedSale.refund },
+      { items: expectedSale.items },
+      { refund: String(expectedSale.refund), items: expectedSale.items },
+      { refund: expectedSale.refund, items: 'items' },
+      { refund: expectedSale.refund, items: [...expectedSale.items,
+        { type: 'chair', id: 'ch1' }] },
+      { refund: expectedSale.refund, items: expectedSale.items.slice(0, -1) },
+      { refund: expectedSale.refund, items: [...expectedSale.items].reverse() },
+      { refund: expectedSale.refund, items: expectedSale.items.map(item =>
+        ({ ...item, id: Number(item.id) })) },
+    ];
+
+    for (const candidate of forged) {
+      expect(sellFixtures(state, requestedItems, candidate)).toBe(state);
+    }
+    expect(state.restaurant.funds).toBe(600);
   });
 });

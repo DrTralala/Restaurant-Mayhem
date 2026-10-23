@@ -6,6 +6,13 @@ export const DEFAULT_OPERATING_HOURS = Object.freeze({
   closeHour: 0,
 });
 
+export function getDailyPayroll(staff = []) {
+  return staff.reduce((total, worker) => {
+    const salary = worker?.salary;
+    return total + (Number.isFinite(salary) && salary >= 0 ? salary : 0);
+  }, 0);
+}
+
 export function advanceClock(state, dt) {
   const newGameTime = state.restaurant.gameTime + dt;
   const crossedMidnights = Math.max(0, Math.floor(newGameTime / SECONDS_PER_DAY)
@@ -18,10 +25,7 @@ export function advanceClock(state, dt) {
     : 0;
   let dailyHistory = [...(state.dailyHistory || [])];
   let notifications = [...(state.notifications || [])];
-  const payroll = (state.staff || []).reduce((total, staff) => {
-    const salary = staff?.salary;
-    return total + (Number.isFinite(salary) && salary >= 0 ? salary : 0);
-  }, 0);
+  const payroll = getDailyPayroll(state.staff || []);
 
   for (let offset = 0; offset < crossedMidnights; offset += 1) {
     const day = state.restaurant.day + offset;
@@ -76,6 +80,12 @@ export function isRestaurantOpen(state) {
     : hour >= openHour || hour < closeHour;
 }
 
+export const RUSH_PERIODS = Object.freeze([
+  Object.freeze({ name: 'Breakfast', startHour: 6, peakHour: 7, endHour: 8, peakMultiplier: 2 }),
+  Object.freeze({ name: 'Lunch', startHour: 11, peakHour: 12.5, endHour: 14, peakMultiplier: 2.5 }),
+  Object.freeze({ name: 'Dinner', startHour: 17, peakHour: 18.5, endHour: 20, peakMultiplier: 3 }),
+]);
+
 function ramp(secondsOfDay, start, peak, end, peakMultiplier) {
   if (secondsOfDay < start || secondsOfDay > end) return 1;
   if (secondsOfDay <= peak) {
@@ -88,9 +98,13 @@ export function getRushHourMultiplier(totalSeconds) {
   const time = ((totalSeconds % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY;
   return Math.max(
     1,
-    ramp(time, 6 * 3600, 7 * 3600, 8 * 3600, 2),
-    ramp(time, 11 * 3600, 12.5 * 3600, 14 * 3600, 2.5),
-    ramp(time, 17 * 3600, 18.5 * 3600, 20 * 3600, 3),
+    ...RUSH_PERIODS.map(period => ramp(
+      time,
+      period.startHour * 3600,
+      period.peakHour * 3600,
+      period.endHour * 3600,
+      period.peakMultiplier,
+    )),
   );
 }
 

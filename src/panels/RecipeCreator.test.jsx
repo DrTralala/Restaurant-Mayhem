@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import RecipeCreator from './RecipeCreator';
 
@@ -72,8 +72,46 @@ describe('RecipeCreator validation guidance', () => {
     expect(screen.getByText('Enter a dish name.')).toBeVisible();
     const name = screen.getByLabelText('Dish name:');
     expect(name).toHaveAttribute('aria-invalid', 'true');
-    expect(name).toHaveAttribute('aria-describedby', 'dish-name-error');
+    expect(document.getElementById(name.getAttribute('aria-describedby'))).toBe(screen.getByText('Enter a dish name.'));
 
+    const create = screen.getByRole('button', { name: /Create/ });
+    expect(create).toBeDisabled();
+    fireEvent.click(create);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('marks the dish name as required and shows the exact placeholder', () => {
+    renderCreator(ownedOvenState);
+    const name = screen.getByLabelText('Dish name:');
+
+    expect(name).toBeRequired();
+    expect(name).toHaveAttribute('placeholder', 'Enter a dish name');
+  });
+
+  it('blocks dispatch when the name is blank or whitespace only', () => {
+    const { dispatch, onClose } = renderCreator(ownedOvenState);
+    const name = screen.getByLabelText('Dish name:');
+    const create = screen.getByRole('button', { name: /Create/ });
+
+    fireEvent.click(create);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    fireEvent.change(name, { target: { value: '   ' } });
+    fireEvent.click(create);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not insert a name when the base or method changes', () => {
+    const { dispatch, onClose } = renderCreator(ownedOvenState);
+    const name = screen.getByLabelText('Dish name:');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Base ingredient:' }), { target: { value: 'Pasta' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Cooking method:' }), { target: { value: 'Baked' } });
+
+    expect(name).toHaveValue('');
+    expect(name).toHaveAttribute('placeholder', 'Enter a dish name');
     const create = screen.getByRole('button', { name: /Create/ });
     expect(create).toBeDisabled();
     fireEvent.click(create);
@@ -106,7 +144,7 @@ describe('RecipeCreator validation guidance', () => {
       fireEvent.change(price, { target: { value } });
       expect(screen.getByText(priceMessage)).toBeVisible();
       expect(price).toHaveAttribute('aria-invalid', 'true');
-      expect(price).toHaveAttribute('aria-describedby', 'dish-price-error');
+      expect(document.getElementById(price.getAttribute('aria-describedby'))).toBe(screen.getByText(priceMessage));
       expect(screen.getByRole('button', { name: /Create/ })).toBeDisabled();
     }
   });
@@ -134,7 +172,8 @@ describe('RecipeCreator validation guidance', () => {
     expect(screen.getByText('You need to own the required equipment first.')).toBeVisible();
     const method = screen.getByLabelText('Cooking method:');
     expect(method).toHaveAttribute('aria-invalid', 'true');
-    expect(method).toHaveAttribute('aria-describedby', 'recipe-equipment-guidance');
+    expect(document.getElementById(method.getAttribute('aria-describedby')))
+      .toBe(screen.getByText('You need to own the required equipment first.'));
   });
 
   it('shows unowned-equipment guidance and updates it for the selected method', () => {
@@ -149,7 +188,8 @@ describe('RecipeCreator validation guidance', () => {
     const method = screen.getByLabelText('Cooking method:');
     expect(screen.getByText('You need to own Oven first.')).toBeVisible();
     expect(method).toHaveAttribute('aria-invalid', 'true');
-    expect(method).toHaveAttribute('aria-describedby', 'recipe-equipment-guidance');
+    expect(document.getElementById(method.getAttribute('aria-describedby')))
+      .toBe(screen.getByText('You need to own Oven first.'));
 
     fireEvent.change(method, { target: { value: 'Blended' } });
     expect(screen.queryByText('You need to own Oven first.')).not.toBeInTheDocument();
@@ -221,5 +261,144 @@ describe('RecipeCreator validation guidance', () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('RecipeCreator instance field identity', () => {
+  const pairState = {
+    equipment: [
+      { id: 'eq2', name: 'Oven', owned: true },
+      { id: 'eq4', name: 'Blender', owned: true },
+    ],
+    dishes: [],
+    recipeSlots: 1,
+  };
+  const priceMessage = 'Price must be a whole number from $1 to $100.';
+
+  const renderPair = () => {
+    useGameState.mockReturnValue(pairState);
+    useDispatch.mockReturnValue(vi.fn());
+    render(
+      <>
+        <div data-testid="creator-one"><RecipeCreator onClose={vi.fn()} /></div>
+        <div data-testid="creator-two"><RecipeCreator onClose={vi.fn()} /></div>
+      </>,
+    );
+    return {
+      one: screen.getByTestId('creator-one'),
+      two: screen.getByTestId('creator-two'),
+    };
+  };
+
+  const controls = (container) => ({
+    base: within(container).getByRole('combobox', { name: 'Base ingredient:' }),
+    method: within(container).getByRole('combobox', { name: 'Cooking method:' }),
+    name: within(container).getByRole('textbox', { name: 'Dish name:' }),
+    price: within(container).getByRole('spinbutton', { name: 'Price: $' }),
+  });
+
+  const describedElement = (control) =>
+    document.getElementById(control.getAttribute('aria-describedby'));
+
+  it('gives each instance a unique ID prefix with exact label and description associations', () => {
+    const { one, two } = renderPair();
+    const first = controls(one);
+    const second = controls(two);
+
+    fireEvent.change(first.price, { target: { value: '0' } });
+    fireEvent.change(second.price, { target: { value: '0' } });
+
+    const firstGuidance = describedElement(first.method);
+    const firstPriceError = describedElement(first.price);
+    const firstIds = [
+      first.base.id,
+      first.method.id,
+      firstGuidance.id,
+      first.name.id,
+      describedElement(first.name).id,
+      first.price.id,
+      firstPriceError.id,
+    ];
+    const secondIds = [
+      second.base.id,
+      second.method.id,
+      describedElement(second.method).id,
+      second.name.id,
+      describedElement(second.name).id,
+      second.price.id,
+      describedElement(second.price).id,
+    ];
+
+    expect(firstIds.every(Boolean)).toBe(true);
+    expect(secondIds.every(Boolean)).toBe(true);
+    expect(new Set(firstIds).size).toBe(firstIds.length);
+    expect(new Set(secondIds).size).toBe(secondIds.length);
+    expect(new Set([...firstIds, ...secondIds]).size).toBe(firstIds.length + secondIds.length);
+
+    const prefix = first.base.id.replace(/-base$/, '');
+    expect(prefix).not.toBe(first.base.id);
+    expect(first.method.id).toBe(`${prefix}-method`);
+    expect(firstGuidance.id).toBe(`${prefix}-equipment-guidance`);
+    expect(first.name.id).toBe(`${prefix}-name`);
+    expect(describedElement(first.name).id).toBe(`${prefix}-name-error`);
+    expect(first.price.id).toBe(`${prefix}-price`);
+    expect(firstPriceError.id).toBe(`${prefix}-price-error`);
+
+    expect(within(one).getByText('Base ingredient:')).toHaveAttribute('for', first.base.id);
+    expect(within(one).getByText('Cooking method:')).toHaveAttribute('for', first.method.id);
+    expect(within(one).getByText('Dish name:')).toHaveAttribute('for', first.name.id);
+    expect(within(one).getByText('Price: $')).toHaveAttribute('for', first.price.id);
+    expect(within(two).getByText('Base ingredient:')).toHaveAttribute('for', second.base.id);
+    expect(within(two).getByText('Cooking method:')).toHaveAttribute('for', second.method.id);
+    expect(within(two).getByText('Dish name:')).toHaveAttribute('for', second.name.id);
+    expect(within(two).getByText('Price: $')).toHaveAttribute('for', second.price.id);
+
+    expect(first.method).toHaveAccessibleDescription('Requires: Oven (owned)');
+    expect(second.method).toHaveAccessibleDescription('Requires: Oven (owned)');
+    expect(first.name).toHaveAccessibleDescription('Enter a dish name.');
+    expect(second.name).toHaveAccessibleDescription('Enter a dish name.');
+    expect(first.price).toHaveAccessibleDescription(priceMessage);
+    expect(second.price).toHaveAccessibleDescription(priceMessage);
+    expect(within(one).getByText('Requires: Oven (owned)')).toBe(firstGuidance);
+    expect(within(one).getByText('Enter a dish name.')).toBe(describedElement(first.name));
+    expect(within(one).getByText(priceMessage)).toBe(firstPriceError);
+    expect(within(two).getByText('Requires: Oven (owned)')).toBe(describedElement(second.method));
+    expect(within(two).getByText('Enter a dish name.')).toBe(describedElement(second.name));
+    expect(within(two).getByText(priceMessage)).toBe(describedElement(second.price));
+  });
+
+  it('keeps edits and conditional errors isolated to the targeted instance', () => {
+    const { one, two } = renderPair();
+    const first = controls(one);
+    const second = controls(two);
+    const firstInitialNameError = describedElement(first.name);
+    const secondInitialNameError = describedElement(second.name);
+
+    expect(firstInitialNameError).not.toBe(secondInitialNameError);
+
+    fireEvent.change(second.name, { target: { value: 'Soup' } });
+    expect(second.name).toHaveValue('Soup');
+    expect(first.name).toHaveValue('');
+    expect(first.name).toHaveAccessibleDescription('Enter a dish name.');
+    expect(second.name).not.toHaveAttribute('aria-describedby');
+    expect(within(one).getByText('Enter a dish name.')).toBe(firstInitialNameError);
+    expect(within(two).queryByText('Enter a dish name.')).not.toBeInTheDocument();
+
+    fireEvent.change(second.method, { target: { value: 'Blended' } });
+    expect(second.method).toHaveAccessibleDescription('Requires: Blender (owned)');
+    expect(first.method).toHaveAccessibleDescription('Requires: Oven (owned)');
+
+    fireEvent.change(first.price, { target: { value: '0' } });
+    expect(first.price).toHaveAccessibleDescription(priceMessage);
+    expect(second.price).not.toHaveAttribute('aria-describedby');
+    const firstPriceError = describedElement(first.price);
+    expect(within(one).getByText(priceMessage)).toBe(firstPriceError);
+    expect(within(two).queryByText(priceMessage)).not.toBeInTheDocument();
+
+    fireEvent.change(second.price, { target: { value: '0' } });
+    expect(second.price).toHaveAccessibleDescription(priceMessage);
+    expect(within(one).getByText(priceMessage)).toBe(firstPriceError);
+    expect(within(two).getByText(priceMessage)).toBe(describedElement(second.price));
+    expect(describedElement(second.price)).not.toBe(firstPriceError);
   });
 });

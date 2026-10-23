@@ -1,6 +1,7 @@
 import { SERVICE_CONTRACTS, SERVICE_CONTRACT_PREP_SECONDS, SERVICE_CONTRACT_RESULT_LIMIT,
   SERVICE_CONTRACT_RULES_VERSION, getServiceContractTemplate } from '../data/serviceContracts';
 import { isRestaurantOpen } from './clock';
+import { getNormalisedStaffSchedule, getScheduledDuty } from './staffSchedules';
 import { normaliseCustomerQueue, QUEUE_PARTY_CAPACITY } from './customerQueue';
 import { clampReputation } from './balance';
 import { getServiceContractTerms, getServiceContractSettlement } from './serviceContractFinance';
@@ -43,6 +44,21 @@ function readinessWarnings(state, template, preview) {
   if (!staff.some(person => person.role === 'waiter')) warnings.push('no_waiter');
   if (!(state.cashierStations || []).some(station => staff.some(person =>
     person.id === station.assignedStaffId && person.role === 'waiter'))) warnings.push('no_staffed_checkout');
+
+  // Applied schedules are resolved once per worker and checked at each arrival
+  // slot; missing or invalid schedules use the same all-work fallback as runtime.
+  const schedules = new Map();
+  const dutySchedule = person => {
+    if (!schedules.has(person)) schedules.set(person, getNormalisedStaffSchedule(person));
+    return schedules.get(person);
+  };
+  const uncovered = group => group.length > 0 && preview.partyArrivals.some(arrival =>
+    !group.some(person => getScheduledDuty(dutySchedule(person), arrival) === 'work'));
+  const assignedCheckout = (state.cashierStations || []).flatMap(station =>
+    staff.filter(person => person.id === station.assignedStaffId && person.role === 'waiter'));
+  if (uncovered(staff.filter(person => person.role === 'cook'))) warnings.push('no_scheduled_cook');
+  if (uncovered(staff.filter(person => person.role === 'waiter'))) warnings.push('no_scheduled_waiter');
+  if (uncovered(assignedCheckout)) warnings.push('no_scheduled_checkout');
   return warnings;
 }
 

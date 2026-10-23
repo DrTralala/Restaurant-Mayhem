@@ -3,9 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import CookbookPanel from './CookbookPanel';
 import { useDispatch, useGameState } from '../state/GameContext';
 import { createInitialState } from '../state/initialState';
-import { applyCookbookPaidVisit, normaliseCookbookState, reconcileCookbookDiscoveries } from '../simulation/cookbook';
+import { applyCookbookPaidVisit, getCookbookEntryStatus, normaliseCookbookState, reconcileCookbookDiscoveries } from '../simulation/cookbook';
 
 vi.mock('../state/GameContext', () => ({ useGameState: vi.fn(), useDispatch: vi.fn() }));
+vi.mock('../simulation/cookbook', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, getCookbookEntryStatus: vi.fn(actual.getCookbookEntryStatus) };
+});
 
 function initial() {
   const state = createInitialState();
@@ -170,5 +174,115 @@ describe('CookbookPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
     expect(onClose).toHaveBeenCalledOnce();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('offers All and Ready actions with pressed state, an adjacent count and no dispatch', () => {
+    state = paidToast(state, 3);
+    render(<CookbookPanel onClose={vi.fn()} />);
+    const group = screen.getByRole('group', { name: 'Cookbook view' });
+    const all = within(group).getByRole('button', { name: 'All' });
+    const ready = within(group).getByRole('button', { name: 'Ready actions' });
+    expect(all).toHaveAttribute('aria-pressed', 'true');
+    expect(ready).toHaveAttribute('aria-pressed', 'false');
+    expect(within(group).getByText('1 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(7);
+    fireEvent.click(ready);
+    expect(all).toHaveAttribute('aria-pressed', 'false');
+    expect(ready).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getByRole('article', { name: 'Cheese Toast recipe' })).toBeInTheDocument();
+    fireEvent.click(all);
+    expect(all).toHaveAttribute('aria-pressed', 'true');
+    expect(ready).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getAllByRole('article')).toHaveLength(7);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('includes each recipe whose status canAdd or canChoosePerk exactly once', () => {
+    state = paidToast(state, 15);
+    state.equipment = state.equipment.map(equipment =>
+      equipment.id === 'eq4' ? { ...equipment, owned: true } : equipment);
+    state.cookbook = reconcileCookbookDiscoveries(state);
+    state.cookbook = { ...state.cookbook, entries: { ...state.cookbook.entries,
+      gazpacho: { ...state.cookbook.entries.gazpacho, paidPortions: 15 } } };
+    render(<CookbookPanel onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
+    expect(screen.getByText('3 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(3);
+    expect(screen.getByRole('article', { name: 'Toasted Bread recipe' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Cheese Toast recipe' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Gazpacho recipe' })).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'Roast Vegetables recipe' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the ready truth independent of a career-decision block and guards mutations', () => {
+    state = paidToast(state, 3);
+    state.careerRun = { needsDecision: true };
+    render(<CookbookPanel onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
+    expect(screen.getByText('1 recipes have ready actions.')).toBeInTheDocument();
+    const cheese = within(screen.getByRole('article', { name: 'Cheese Toast recipe' }));
+    const add = cheese.getByRole('button', { name: 'Add Cheese Toast to menu' });
+    expect(add).toBeDisabled();
+    fireEvent.click(add);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(screen.getByText(/Career decision pending/)).toBeInTheDocument();
+  });
+
+  it('recomputes the ready count and filtered list when state changes on rerender', () => {
+    state = paidToast(state, 3);
+    const view = render(<CookbookPanel onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
+    expect(screen.getByText('1 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    state = paidToast(state, 15);
+    view.rerender(<CookbookPanel onClose={vi.fn()} />);
+    expect(screen.getByText('2 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(2);
+    expect(screen.getByRole('article', { name: 'Toasted Bread recipe' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Cheese Toast recipe' })).toBeInTheDocument();
+  });
+
+  it('computes each recipe status exactly once per render', () => {
+    getCookbookEntryStatus.mockClear();
+    render(<CookbookPanel onClose={vi.fn()} />);
+    expect(getCookbookEntryStatus).toHaveBeenCalledTimes(7);
+    expect(new Set(getCookbookEntryStatus.mock.calls.map(([, cookbookId]) => cookbookId)).size).toBe(7);
+  });
+
+  it('shows the empty ready message when no recipe has a ready action', () => {
+    render(<CookbookPanel onClose={vi.fn()} />);
+    expect(screen.getByText('0 recipes have ready actions.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
+    expect(screen.queryAllByRole('article')).toHaveLength(0);
+    expect(screen.getByText('No recipes have ready actions.')).toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('pins an open signature confirmation that stops qualifying, excludes it from the count and keeps Cancel reachable', () => {
+    state = paidToast(state, 15);
+    const view = render(<CookbookPanel onClose={vi.fn()} />);
+    const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
+    fireEvent.click(toast.getByRole('button', { name: 'Choose Quick Service' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
+    expect(screen.queryByText('Shown while its signature choice is open.')).not.toBeInTheDocument();
+    state.cookbook = { ...state.cookbook, entries: { ...state.cookbook.entries,
+      toast: { ...state.cookbook.entries.toast, paidPortions: 14 } } };
+    view.rerender(<CookbookPanel onClose={vi.fn()} />);
+    expect(screen.getByText('1 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(2);
+    const pinned = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
+    expect(pinned.getByText('Shown while its signature choice is open.')).toBeInTheDocument();
+    const confirm = pinned.getByRole('button', { name: 'Confirm Quick Service' });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(dispatch).not.toHaveBeenCalled();
+    const cancel = pinned.getByRole('button', { name: 'Cancel' });
+    expect(cancel).toBeEnabled();
+    fireEvent.click(cancel);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(screen.queryByRole('article', { name: 'Toasted Bread recipe' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Shown while its signature choice is open.')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
   });
 });

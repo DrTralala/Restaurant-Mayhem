@@ -4,13 +4,16 @@ import { createCareerInitialState, createInitialState } from './initialState';
 import { getCareerScenario } from '../data/careerScenarios';
 import { continueCareerAsSandbox, isCareerDecisionPending } from '../simulation/careerRun';
 import { reconcileCookbookDiscoveries, reduceCookbookAction } from '../simulation/cookbook';
+import { isMenuItemSuspended } from '../simulation/menuEconomy';
 import { acceptServiceContract, withdrawServiceContract } from '../simulation/serviceContracts';
 import { hydrateState, loadState, saveState } from './persistence';
 import { ITEM_PRICES } from '../data/items';
+import { MENU_QUALITY_COST } from '../data/menuPricing';
 import { createEmptyAmenitySlots } from '../data/staffAmenities';
 import { getDrink, getResolvedDrink, normaliseDrinkOverrides } from '../data/drinks';
 import { getPlaceable } from '../data/placeables';
-import { getEquipmentLevelMultipliers } from '../data/equipment';
+import { getEquipmentLevelMultipliers, getEquipmentUpgradeQuote } from '../data/equipment';
+import { getGlobalUpgradeQuote } from '../data/upgrades';
 import { clampReputation } from '../simulation/balance';
 import { assignWaiterToStation } from '../simulation/cashiers';
 import {
@@ -23,9 +26,14 @@ import { getRestaurantWorld } from '../simulation/world';
 import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseOperatingHour } from '../simulation/clock';
-import { getStaffTrainingCost, STAFF_SALARIES } from '../simulation/staffProgression';
+import {
+  getStaffBonusPreview,
+  getStaffTrainingCost,
+  STAFF_SALARIES,
+} from '../simulation/staffProgression';
 import { updateAutomaticDishwashers } from '../simulation/dishwashing';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
+import { getExpansionPreview } from '../simulation/expansion';
 import { createStaffDutyDefaults, validateStaffSchedule } from '../simulation/staffSchedules';
 import {
   getStaffTaskLegacyRate,
@@ -41,16 +49,26 @@ import { invalidateMovementRuntime, moveStaff } from './staffMoves';
 import { getFixtureSaleEligibility, sellFixtures } from './fixtureSales';
 import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
 
-const DISH_QUALITY_COST = 50;
-const BONUS_COST = 50;
 const STARTING_DISH_QUALITY = 1;
-const EXPANSION_COSTS = [0, 1000, 3000, 6000];
 
 function canAfford(state, cost) {
   return Number.isFinite(cost)
     && cost >= 0
     && Number.isFinite(state.restaurant.funds)
     && state.restaurant.funds >= cost;
+}
+
+function setMenuItemSuspended(state, kind, id, suspended) {
+  const key = kind === 'dish' ? 'suspendedDishIds' : 'suspendedDrinkIds';
+  const current = Array.isArray(state.restaurant[key]) ? state.restaurant[key] : [];
+  if (isMenuItemSuspended(state, kind, id) === suspended) return state;
+  return {
+    ...state,
+    restaurant: {
+      ...state.restaurant,
+      [key]: suspended ? [...current, id] : current.filter(candidate => candidate !== id),
+    },
+  };
 }
 
 function getCataloguePrice(itemType, fallback = null) {
@@ -443,6 +461,15 @@ function reduceGameAction(state, action) {
         restaurant: { ...state.restaurant, openHour, closeHour },
       };
     }
+    case 'SET_WALK_INS_PAUSED': {
+      if (typeof action.paused !== 'boolean') return state;
+      const paused = state.restaurant.walkInsPaused === true;
+      if (paused === action.paused) return state;
+      return {
+        ...state,
+        restaurant: { ...state.restaurant, walkInsPaused: action.paused },
+      };
+    }
     case 'TOGGLE_PAUSE':
       return { ...state, paused: !state.paused };
     case 'UNLOCK_DRINK': {
@@ -460,6 +487,18 @@ function reduceGameAction(state, action) {
         },
         unlockedDrinkIds: [...unlockedDrinkIds, drink.id],
       };
+    }
+    case 'SET_MENU_ITEM_SUSPENDED': {
+      if (typeof action.suspended !== 'boolean') return state;
+      if (action.kind !== 'dish' && action.kind !== 'drink') return state;
+      if (typeof action.id !== 'string' || action.id.length === 0) return state;
+      const exists = action.kind === 'dish'
+        ? (state.dishes || []).some(dish => dish?.id === action.id)
+        : Array.isArray(state.unlockedDrinkIds)
+          && state.unlockedDrinkIds.includes(action.id)
+          && getResolvedDrink(state, action.id) != null;
+      if (!exists) return state;
+      return setMenuItemSuspended(state, action.kind, action.id, action.suspended);
     }
     case 'ADD_DISH': {
       const dish = action.dish;
@@ -520,10 +559,10 @@ function reduceGameAction(state, action) {
       const dish = state.dishes.find(candidate => candidate.id === action.id);
       const quality = Math.min(10, Math.max(0, Math.floor(dish?.quality)));
       if (!dish || !Number.isFinite(dish.quality) || quality >= 10
-        || !canAfford(state, DISH_QUALITY_COST)) return state;
+        || !canAfford(state, MENU_QUALITY_COST)) return state;
       return {
         ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - DISH_QUALITY_COST },
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - MENU_QUALITY_COST },
         dishes: state.dishes.map(candidate => candidate.id === dish.id
           ? { ...candidate, quality: quality + 1 }
           : candidate),
@@ -536,7 +575,7 @@ function reduceGameAction(state, action) {
         : [];
       const quality = Math.min(10, Math.max(0, Math.floor(drink?.quality)));
       if (!drink || !unlockedDrinkIds.includes(drink.id) || !Number.isFinite(drink.quality)
-        || quality >= 10 || !canAfford(state, DISH_QUALITY_COST)) return state;
+        || quality >= 10 || !canAfford(state, MENU_QUALITY_COST)) return state;
       const currentOverrides = normaliseDrinkOverrides(state.drinkOverrides);
       const drinkOverrides = normaliseDrinkOverrides({
         ...currentOverrides,
@@ -544,24 +583,23 @@ function reduceGameAction(state, action) {
       });
       return {
         ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - DISH_QUALITY_COST },
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - MENU_QUALITY_COST },
         drinkOverrides,
       };
     }
     case 'BUY_UPGRADE': {
       const upgrade = state.upgrades.find(candidate => candidate.id === action.id);
-      const cost = upgrade?.costs?.[upgrade.level];
-      if (!upgrade || !Number.isInteger(upgrade.level) || upgrade.level < 0
-        || upgrade.level >= upgrade.costs.length || !canAfford(state, cost)) return state;
+      const quote = getGlobalUpgradeQuote(upgrade, state.restaurant.funds);
+      if (!quote?.affordable) return state;
       const reputation = upgrade.effects?.type === 'reputation'
         ? clampReputation(state.restaurant.reputation
           + (Number.isFinite(upgrade.effects.value) ? upgrade.effects.value : 0))
         : state.restaurant.reputation;
       return {
         ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - cost, reputation },
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - quote.cost, reputation },
         upgrades: state.upgrades.map(u =>
-          u.id === action.id ? { ...u, level: u.level + 1 } : u
+          u.id === action.id ? { ...u, level: quote.nextLevel } : u
         ),
       };
     }
@@ -569,15 +607,15 @@ function reduceGameAction(state, action) {
       return state;
     case 'UPGRADE_EQUIPMENT': {
       const equipment = state.equipment.find(candidate => candidate.id === action.id);
-      const cost = equipment?.upgradeCosts?.[equipment.level - 1];
-      if (!equipment?.owned || !Number.isInteger(equipment.level) || equipment.level < 1
-        || equipment.level >= 10 || !canAfford(state, cost)) return state;
-      const level = equipment.level + 1;
+      const quote = getEquipmentUpgradeQuote(equipment, state.restaurant.funds);
+      if (!quote?.affordable) return state;
       return {
         ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - cost },
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - quote.cost },
         equipment: state.equipment.map(e =>
-          e.id === action.id ? { ...e, level, ...getEquipmentLevelMultipliers(level) } : e
+          e.id === action.id
+            ? { ...e, level: quote.nextLevel, ...getEquipmentLevelMultipliers(quote.nextLevel) }
+            : e
         ),
       };
     }
@@ -710,14 +748,14 @@ function reduceGameAction(state, action) {
     }
     case 'GIVE_BONUS': {
       const staff = state.staff.find(candidate => candidate.id === action.id);
-      if (!staff || !Number.isFinite(staff.morale) || staff.morale >= 100
-        || !canAfford(state, BONUS_COST)) return state;
+      const bonus = getStaffBonusPreview(staff);
+      if (!bonus || !canAfford(state, bonus.cost)) return state;
       const settled = settleStaffWorkBeforeRateChange(state, staff);
       return {
         ...settled,
-        restaurant: { ...settled.restaurant, funds: settled.restaurant.funds - BONUS_COST },
+        restaurant: { ...settled.restaurant, funds: settled.restaurant.funds - bonus.cost },
         staff: settled.staff.map(s =>
-          s.id === action.id ? { ...s, morale: Math.min(s.morale + 20, 100) } : s
+          s.id === action.id ? { ...s, morale: bonus.morale } : s
         ),
       };
     }
@@ -769,7 +807,7 @@ function reduceGameAction(state, action) {
     case 'COPY_FIXTURES':
       return copyFixtures(state, action.items);
     case 'SELL_ITEMS':
-      return sellFixtures(state, action.items);
+      return sellFixtures(state, action.items, action.expectedSale);
     case 'MOVE_CHAIR':
       return moveFixtures(state, [{
         type: 'chair', id: action.id, x: action.x, y: action.y,
@@ -822,10 +860,10 @@ function reduceGameAction(state, action) {
       };
     }
     case 'EXPAND': {
-      const level = state.restaurant.expansionLevel;
-      const cost = EXPANSION_COSTS[level];
-      if (!Number.isInteger(level) || level < 1 || cost == null || !canAfford(state, cost)) return state;
-      const newLevel = state.restaurant.expansionLevel + 1;
+      const quote = getExpansionPreview(state.restaurant);
+      if (!quote?.affordable) return state;
+      const cost = quote.cost;
+      const newLevel = quote.nextLevel;
       // Add a new kitchen station when expanding
       const newStationId = getNextNumericId(state.kitchenStations, 'k');
       const placement = getExpansionStationPlacement(state, newLevel);

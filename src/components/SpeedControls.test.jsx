@@ -2,15 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import SpeedControls from './SpeedControls';
 
-const { dispatch } = vi.hoisted(() => ({ dispatch: vi.fn() }));
+const { dispatch, gameState } = vi.hoisted(() => ({
+  dispatch: vi.fn(),
+  gameState: { current: { paused: false, speed: 4 } },
+}));
 vi.mock('../state/GameContext', () => ({
-  useGameState: () => ({ paused: false, speed: 4 }),
+  useGameState: () => gameState.current,
   useDispatch: () => dispatch,
 }));
 
 describe('SpeedControls', () => {
   beforeEach(() => {
     dispatch.mockClear();
+    gameState.current = { paused: false, speed: 4 };
   });
 
   it('renders the bottom control row in AMOLED black', () => {
@@ -28,6 +32,22 @@ describe('SpeedControls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
 
     expect(onFit).toHaveBeenCalledOnce();
+  });
+
+  it('publishes the selected speed through aria-pressed, including while paused', () => {
+    gameState.current = { paused: true, speed: 2 };
+    const view = render(<SpeedControls />);
+
+    expect(screen.getByRole('button', { name: '1x' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '2x' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '4x' })).toHaveAttribute('aria-pressed', 'false');
+
+    gameState.current = { paused: true, speed: 4 };
+    view.rerender(<SpeedControls />);
+
+    expect(screen.getByRole('button', { name: '1x' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '2x' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '4x' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('toggles once on Space, not on key repeat', () => {

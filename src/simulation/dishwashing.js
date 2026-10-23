@@ -75,6 +75,12 @@ export function getWashStationOccupancy(state, station, {
   return ids.size;
 }
 
+export function getWashStationUsage(state, station) {
+  const deposited = getWashStationOccupancy(state, station, { includeReservations: false });
+  const total = getWashStationOccupancy(state, station);
+  return { deposited, incoming: Math.max(0, total - deposited) };
+}
+
 export function hasWashStationCapacity(state, station, options) {
   return getWashStationOccupancy(state, station, options) < getWashStationCapacity(station);
 }

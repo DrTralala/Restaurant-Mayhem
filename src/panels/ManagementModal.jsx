@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import UpgradePanel from './UpgradePanel';
 import ItemsPanel from './ItemsPanel';
 import StaffPanel from './StaffPanel';
@@ -8,6 +8,9 @@ import HoursPanel from './HoursPanel';
 import ServiceContractsPanel from './ServiceContractsPanel';
 import CareerPanel from './CareerPanel';
 import { TYPOGRAPHY } from '../typography';
+import { useGameState, useDispatch } from '../state/GameContext';
+import { isCareerDecisionPending } from '../simulation/careerRun';
+import useDialogKeyboardFocus from '../components/useDialogKeyboardFocus';
 
 const TABS = [
   { key: 'upgrades', label: 'Upgrades' },
@@ -21,9 +24,21 @@ const TABS = [
 ];
 
 export default function ManagementModal({ isOpen, onClose, onStartPlacement,
-  initialTab = 'upgrades', onStartCareer, onShowCareerResult }) {
+  initialTab = 'upgrades', onStartCareer, onShowCareerResult,
+  onLocateStaff, locateDisabled = false, locateMessage = '' }) {
   const [tab, setTab] = useState(initialTab);
+  const state = useGameState();
+  const dispatch = useDispatch();
+  const decisionPending = isCareerDecisionPending(state);
+  const dialogRef = useRef(null);
+  const closeButtonRef = useRef(null);
   useEffect(() => { if (isOpen) setTab(initialTab); }, [isOpen, initialTab]);
+  useDialogKeyboardFocus({
+    isOpen,
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+    onClose,
+  });
 
   if (!isOpen) return null;
 
@@ -36,14 +51,16 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement,
         position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)',
       }} onClick={onClose} />
 
-      <div style={{
-        position: 'relative', width: '90%', maxWidth: 700, maxHeight: '80vh',
-        background: '#16213e', borderRadius: 12, border: '1px solid #0f3460',
-        display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        ...TYPOGRAPHY.body,
-      }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true"
+        aria-label="Restaurant management" tabIndex={-1} style={{
+          position: 'relative', width: '90%', maxWidth: 700, maxHeight: '80vh',
+          background: '#16213e', borderRadius: 12, border: '1px solid #0f3460',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          ...TYPOGRAPHY.body,
+        }}>
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          flexWrap: 'wrap', gap: 8,
           padding: '12px 16px', borderBottom: '1px solid #0f3460',
         }}>
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -51,6 +68,7 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement,
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
+                aria-pressed={tab === t.key}
                 style={{
                   ...TYPOGRAPHY.control,
                   background: tab === t.key ? '#f0a500' : 'transparent',
@@ -63,19 +81,38 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement,
               </button>
             ))}
           </div>
-          <button onClick={onClose} style={{
-            ...TYPOGRAPHY.icon,
-            background: 'none', border: 'none', color: '#888',
-            cursor: 'pointer',
-          }}>
-            ✕
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+            <button
+              disabled={decisionPending}
+              onClick={() => dispatch({ type: 'TOGGLE_PAUSE' })}
+              style={{
+                ...TYPOGRAPHY.control,
+                background: '#333', border: '1px solid #555', borderRadius: 4,
+                color: '#ccc', padding: '4px 12px', cursor: 'pointer',
+              }}
+            >
+              {state.paused ? 'Resume game' : 'Pause game'}
+            </button>
+            <button ref={closeButtonRef} type="button" aria-label="Close management" onClick={onClose} style={{
+              ...TYPOGRAPHY.icon,
+              background: 'none', border: 'none', color: '#888',
+              cursor: 'pointer',
+            }}>
+              ✕
+            </button>
+          </div>
         </div>
 
         <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
           {tab === 'upgrades' && <UpgradePanel onStartPlacement={onStartPlacement} />}
           {tab === 'items' && <ItemsPanel onStartPlacement={onStartPlacement} />}
-          {tab === 'staff' && <StaffPanel />}
+          {tab === 'staff' && (
+            <StaffPanel
+              onLocateStaff={onLocateStaff}
+              locateDisabled={locateDisabled}
+              locateMessage={locateMessage}
+            />
+          )}
           {tab === 'milestones' && <MilestonePanel />}
           {tab === 'stats' && <StatsPanel />}
           {tab === 'hours' && <HoursPanel />}

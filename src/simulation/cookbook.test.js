@@ -237,6 +237,15 @@ describe('canonical identity and reducer ownership', () => {
     expect(state.restaurant.funds).toBe(550);
   });
 
+  it('keeps the active menu settings through cookbook removal and re-add', () => {
+    let state = reduceCookbookAction(fixture(), { type: 'UPDATE_DISH', id: 'starter-toast',
+      changes: { name: 'House Toast', price: 27 } });
+    state = reduceCookbookAction(state, { type: 'REMOVE_DISH', id: 'starter-toast' });
+    expect(state.dishes).toEqual([]);
+    state = reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' });
+    expect(getResolvedDish(state, 'cookbook:toast')).toMatchObject({ name: 'House Toast', price: 27 });
+  });
+
   it('allocates the smallest free menu ID avoiding live dishes and both retained snapshot locations', () => {
     let state = fixture();
     state.dishes = [{ ...state.dishes[0], id: 'cookbook:toast', cookbookId: null }];
@@ -282,6 +291,41 @@ describe('canonical identity and reducer ownership', () => {
     const poor = { ...fixture(), restaurant: { funds: 49 } };
     expect(reduceCookbookAction(poor, { type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast' })).toBe(poor);
   });
+
+  it('pins the cookbook quality cost boundary, cap and forged cost', () => {
+    const exact = { ...fixture(), restaurant: { funds: 50 } };
+    const upgraded = reduceCookbookAction(exact, {
+      type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: 1,
+    });
+    expect(upgraded.restaurant.funds).toBe(0);
+    expect(upgraded.dishes[0].quality).toBe(2);
+    expect(upgraded.cookbook.entries.toast.menuSettings.quality).toBe(2);
+
+    const short = { ...fixture(), restaurant: { funds: 49.99 } };
+    expect(reduceCookbookAction(short, {
+      type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: -50,
+    })).toBe(short);
+
+    const base = fixture();
+    const capped = {
+      ...base,
+      dishes: [{ ...base.dishes[0], quality: 10 }],
+      cookbook: {
+        ...base.cookbook,
+        entries: {
+          ...base.cookbook.entries,
+          toast: {
+            ...base.cookbook.entries.toast,
+            menuSettings: { ...base.cookbook.entries.toast.menuSettings, quality: 10 },
+          },
+        },
+      },
+      restaurant: { funds: 50 },
+    };
+    expect(reduceCookbookAction(capped, {
+      type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast',
+    })).toBe(capped);
+  });
 });
 
 describe('immutable snapshots and conservative legacy resolution', () => {
@@ -312,6 +356,18 @@ describe('immutable snapshots and conservative legacy resolution', () => {
     const snapshot = createDishOrderSnapshot(getResolvedDish(state, 'starter-toast'), { serviceItemId: 'i1', orderedAt: 36000 });
     expect(snapshot).toMatchObject({ cookbookId: null, masteryPerk: null, prepTime: 213, popularity: 47 });
     expect(() => validateDishOrderSnapshot({ ...snapshot, masteryPerk: 'speed' })).toThrow();
+  });
+
+  it('resolves a committed custom dish snapshot after the custom dish is removed from the menu', () => {
+    const state = fixture();
+    state.dishes[0] = { ...state.dishes[0], id: 'custom-toast', cookbookId: null,
+      name: 'Custom Toast', prepTime: 213, popularity: 47 };
+    const snapshot = createDishOrderSnapshot(getResolvedDish(state, 'custom-toast'), { serviceItemId: 'i1', orderedAt: 36000 });
+    const removed = { ...state, dishes: state.dishes.filter(dish => dish.id !== 'custom-toast') };
+    expect(removed.dishes).toEqual([]);
+    expect(getDishForServiceItem(removed, { id: 'i1', kind: 'dish', menuItemId: 'custom-toast',
+      dishOrderSnapshot: snapshot })).toMatchObject({ id: 'custom-toast', cookbookId: null, masteryPerk: null,
+      name: 'Custom Toast', price: 12, quality: 1, prepTime: 213, popularity: 47 });
   });
 
   it('validates snapshot copies, ownership and cancelled retained history without requiring a plate', () => {

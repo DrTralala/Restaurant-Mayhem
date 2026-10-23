@@ -54,6 +54,7 @@ export default function SpeedControls({ onFit }) {
           key={s}
           disabled={decisionPending}
           onClick={() => dispatch({ type: 'SET_SPEED', speed: s })}
+          aria-pressed={state.speed === s}
           style={{ ...btnStyle, background: state.speed === s ? '#f0a500' : '#333', color: state.speed === s ? '#111' : '#ccc' }}
         >
           {s}x

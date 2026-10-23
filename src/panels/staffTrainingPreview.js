@@ -25,6 +25,10 @@ export function getStaffTrainingPreview(worker) {
     : worker.role === 'janitor'
       ? 'Cleaning/washing rate'
       : 'Morale work multiplier';
+  const unlocks = worker.skill < 10 && next.skill >= 10
+    ? worker.role === 'waiter' ? ['Can take orders for an eligible party together at one table.']
+      : worker.role === 'janitor' ? ['10% chance to instantly finish a newly started table-cleaning, floor-cleaning or manual-washing action.'] : []
+    : [];
 
   return {
     skill: next.skill,
@@ -34,5 +38,6 @@ export function getStaffTrainingPreview(worker) {
     rateLabel,
     rateBefore: rate(worker),
     rateAfter: rate(next),
+    unlocks,
   };
 }

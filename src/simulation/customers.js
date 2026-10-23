@@ -302,6 +302,7 @@ export function spawnCustomers(state, dt = 1) {
   const queue = normaliseQueuedParties(state.queue);
   if (!isRestaurantOpen(state)) return { ...state, queue };
   if (queue.length >= QUEUE_PARTY_CAPACITY) return { ...state, queue };
+  if (state.restaurant.walkInsPaused === true) return { ...state, queue };
 
   const baseRatePerSecond = Math.max(0, getBaseArrivalRate(state.restaurant.reputation)
     + getUpgradeEffect(state, 'customerRate'));

@@ -1,5 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef } from 'react';
+import StaffFireButton from './StaffFireButton';
 import { getStaffCarryCapacity } from '../simulation/staffInventory';
+import { getStaffBonusPreview, STAFF_BONUS_COST } from '../simulation/staffProgression';
+import { getCharacterMovementStatus } from '../simulation/movement';
+import { getStaffTaskProgress } from '../simulation/staffPerformance';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 import { useGameState } from '../state/GameContext';
 import {
@@ -31,10 +35,13 @@ const actionButton = {
 };
 
 export default function StaffDetailsPanel({ staff, cashierStations, dispatch, onMove, onClose, gameTime }) {
-  const [salary, setSalary] = useState(staff.salary);
   const state = useGameState();
+  const headingId = useId();
+  const headingRef = useRef(null);
 
-  useEffect(() => setSalary(staff.salary), [staff.id, staff.salary]);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [staff.id]);
 
   const role = humaniseIdentifier(staff.role);
   const assignedStation = cashierStations?.find(station => station.assignedStaffId === staff.id);
@@ -44,17 +51,50 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
     ? Number(gameTime)
     : state?.restaurant?.gameTime ?? 0;
   const duty = getStaffDutyPresentation(staff, currentGameTime);
+  const hasTask = !!staff.task?.type;
+  const taskState = state?.restaurant?.gameTime === currentGameTime
+    ? state
+    : {
+        ...(state || {}),
+        restaurant: {
+          ...(state?.restaurant || {}),
+          gameTime: currentGameTime,
+        },
+      };
+  const movement = hasTask
+    ? getCharacterMovementStatus(
+        taskState,
+        staff.id,
+        new Map([[String(staff.id), staff]]),
+      )
+    : null;
+  const travelling = hasTask
+    && staff.navigationGoal != null
+    && movement?.plan !== 'arrived';
+  const taskProgress = hasTask && !travelling
+    ? getStaffTaskProgress(taskState, staff)
+    : null;
+  const taskProgressValue = Number.isFinite(taskProgress?.progress)
+    ? taskProgress.progress
+    : null;
+  const bonus = getStaffBonusPreview(staff);
+  const funds = state?.restaurant?.funds;
+  const reason = !Number.isFinite(staff.morale) ? 'Morale unavailable.'
+    : staff.morale >= 100 ? 'Morale is already full.'
+      : !Number.isFinite(funds) ? 'Funds unavailable.'
+        : funds < STAFF_BONUS_COST ? 'Needs $50 in available funds.' : null;
 
   return (
-    <aside style={{
+    <aside aria-labelledby={headingId} style={{
       ...TYPOGRAPHY.body,
       position: 'absolute', top: 64, right: 16, zIndex: 250, width: 250,
+      maxHeight: 'calc(100vh - 80px)', overflowY: 'auto',
       background: '#0d1528', border: '1px solid #0f3460', borderRadius: 8,
       color: '#ccc', padding: 16, boxShadow: '0 8px 24px rgba(0,0,0,0.55)',
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
         <div>
-          <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: 0 }}>{staff.name}</h3>
+          <h3 id={headingId} ref={headingRef} tabIndex={-1} style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: 0 }}>{staff.name}</h3>
           <div style={{ ...TYPOGRAPHY.secondary, color: '#8fa4c8', marginTop: 3 }}>{role}</div>
         </div>
         <button
@@ -82,6 +122,33 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
         Current task: <strong style={{ color: '#fff' }}>{task}</strong>
       </div>
 
+      {hasTask && (
+        <section
+          aria-label="Task work progress"
+          style={{ ...TYPOGRAPHY.secondary, color: '#aab8cf', background: '#121c35', borderRadius: 4, padding: '7px 9px', marginBottom: 16 }}
+        >
+          <div style={{ color: '#e8eef8', marginBottom: 4 }}>Task work progress</div>
+          {travelling ? (
+            <div>Travelling or waiting to reach the task.</div>
+          ) : taskProgressValue != null ? (
+            <>
+              <div>{`Work completed: ${Math.round(taskProgressValue * 100)}%.`}</div>
+              <progress
+                aria-label="Task work completed"
+                max={1}
+                value={taskProgressValue}
+                style={{ width: '100%', accentColor: '#f0a500' }}
+              />
+            </>
+          ) : (
+            <div>Work progress unavailable for this task.</div>
+          )}
+          <div style={{ color: '#8fa4c8' }}>
+            Work progress only; excludes travel and later service steps.
+          </div>
+        </section>
+      )}
+
       <div
         data-testid={`staff-detail-status-${staff.id}`}
         style={{ ...TYPOGRAPHY.secondary, color: '#aab8cf', background: '#121c35', borderRadius: 4, padding: '7px 9px', marginBottom: 16 }}
@@ -105,30 +172,34 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
         Carry capacity: <strong style={{ color: '#fff' }}>{getStaffCarryCapacity(staff)}</strong>
       </div>
 
-      <label htmlFor={`salary-${staff.id}`} style={{ ...TYPOGRAPHY.secondary, display: 'block' }}>
-        Daily salary: <strong style={{ color: '#f0a500' }}>${salary}</strong>
-      </label>
-      <input
-        id={`salary-${staff.id}`}
-        aria-label={`Daily salary for ${staff.name}`}
-        type="range"
-        min={staff.salary}
-        max={staff.salary + 500}
-        step="10"
-        value={salary}
-        onChange={event => setSalary(Number(event.target.value))}
-        style={{ width: '100%', accentColor: '#f0a500', margin: '8px 0' }}
-      />
+      <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
+        Daily salary: <strong style={{ color: '#f0a500' }}>
+          {Number.isFinite(staff.salary) && staff.salary >= 0 ? `$${staff.salary}` : 'Unavailable'}
+        </strong>
+      </div>
+      <div style={{ ...TYPOGRAPHY.secondary, color: '#8fa4c8', marginBottom: 16 }}>
+        Paid at midnight.
+      </div>
+
+      <div
+        id={`bonus-preview-${staff.id}`}
+        style={{ ...TYPOGRAPHY.secondary, marginBottom: 8 }}
+      >
+        {bonus && <div>{`After bonus: morale ${Math.round(bonus.morale)}%.`}</div>}
+        <div>One-time payment. Daily salary stays unchanged.</div>
+        {reason && <div style={{ color: '#f2d08a' }}>{reason}</div>}
+      </div>
       <button
         type="button"
-        onClick={() => dispatch({ type: 'SET_STAFF_SALARY', id: staff.id, salary })}
-        disabled={salary <= staff.salary}
+        aria-describedby={`bonus-preview-${staff.id}`}
+        disabled={!bonus || !!reason}
+        onClick={() => dispatch({ type: 'GIVE_BONUS', id: staff.id })}
         style={{
-          ...actionButton, width: '100%', background: salary > staff.salary ? '#f0a500' : '#333',
-          color: salary > staff.salary ? '#111' : '#777',
+          ...actionButton, width: '100%', background: bonus && !reason ? '#f0a500' : '#333',
+          color: bonus && !reason ? '#111' : '#777',
         }}
       >
-        Apply raise
+        {`Give bonus ($${STAFF_BONUS_COST})`}
       </button>
 
       <button
@@ -139,17 +210,16 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
         Move
       </button>
 
-      <button
-        type="button"
-        aria-label={`Fire ${staff.name}`}
-        onClick={() => {
-          dispatch({ type: 'FIRE_STAFF', id: staff.id });
+      <StaffFireButton
+        worker={staff}
+        onConfirm={(id) => {
+          dispatch({ type: 'FIRE_STAFF', id });
           onClose();
         }}
         style={{ ...actionButton, width: '100%', marginTop: 12, background: '#3b2025', color: '#f08080', borderColor: '#844' }}
       >
         Fire employee
-      </button>
+      </StaffFireButton>
     </aside>
   );
 }

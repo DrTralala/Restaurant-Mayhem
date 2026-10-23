@@ -1,4 +1,5 @@
 import { COOKBOOK_RECIPES, getCookbookRecipe, MASTERY_PORTION_THRESHOLD } from '../data/cookbook';
+import { MENU_QUALITY_COST } from '../data/menuPricing';
 
 const isText = value => typeof value === 'string' && value.trim().length > 0;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -298,9 +299,9 @@ export function reduceCookbookAction(state, action) {
   let settings = { ...entry.menuSettings };
   let restaurant = state.restaurant;
   if (action.type === 'UPGRADE_DISH_QUALITY') {
-    if (settings.quality >= 10 || !Number.isFinite(restaurant.funds) || restaurant.funds < 50) return state;
+    if (settings.quality >= 10 || !Number.isFinite(restaurant.funds) || restaurant.funds < MENU_QUALITY_COST) return state;
     settings.quality += 1;
-    restaurant = { ...restaurant, funds: restaurant.funds - 50 };
+    restaurant = { ...restaurant, funds: restaurant.funds - MENU_QUALITY_COST };
   } else {
     if (isText(action.changes?.name)) settings.name = action.changes.name.trim();
     if (Number.isFinite(action.changes?.price)) settings.price = Math.max(1, Math.min(100, Math.round(action.changes.price)));

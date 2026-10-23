@@ -98,6 +98,12 @@ function expectFigureFeet(ctx, x, y, seated = false) {
   expect(ctx._calls.lines).toContainEqual({ x: x + 6 * scale, y: y + footY * scale });
 }
 
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
 function withMovementStatuses(state, records) {
   const requests = new Map();
   const statuses = new Map();
@@ -551,6 +557,181 @@ describe('drawFurnitureLayer', () => {
     }));
   });
 
+  it.each([
+    ['water', '💧'], ['iced-tea', '🥤'],
+  ])('draws a preparing %s drink just above its bare dispenser without item coordinates', (menuItemId, emoji) => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], serviceTables: [], equipment: [], dishes: [],
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 120 }],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId, state: 'preparing', stationId: 'dispenser',
+        serviceTableId: 'st1', serviceSlotIndex: 2, assignedStaffId: 'cook',
+      }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
+      text: emoji, x: 120, y: 110, textAlign: 'center', textBaseline: 'middle',
+    }));
+    expect(ctx._calls.texts.filter(call => call.text === emoji)).toHaveLength(1);
+  });
+
+  it('ignores contradictory preparing-drink coordinates and counter reservations', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], serviceTables: [{ id: 'st1', x: 300, y: 120 }], equipment: [], dishes: [],
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 40, y: 60 }],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', state: 'preparing', stationId: 'dispenser',
+        serviceTableId: 'st1', serviceSlotIndex: 0, x: 900, y: 900,
+      }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '💧', x: 60, y: 50 }));
+    expect(ctx._calls.texts.filter(call => call.text === '💧')).toHaveLength(1);
+  });
+
+  it.each([
+    ['ordered while assigned to a cook', 'ordered', 'dispenser'],
+    ['preparing without a station', 'preparing', null],
+  ])('keeps a %s drink invisible', (_case, itemState, stationId) => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], serviceTables: [{ id: 'st1', x: 300, y: 120 }], equipment: [], dishes: [],
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 120 }],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', state: itemState, stationId,
+        serviceTableId: 'st1', serviceSlotIndex: 0, assignedStaffId: 'cook',
+        x: 130, y: 150,
+      }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts.some(call => call.text === '💧')).toBe(false);
+  });
+
+  it.each([
+    ['missing', [{ id: 'other', equipmentId: null, x: 100, y: 120 }]],
+    ['equipped', [{ id: 'dispenser', equipmentId: 'eq1', x: 100, y: 120 }]],
+    ['non-finite x', [{ id: 'dispenser', equipmentId: null, x: NaN, y: 120 }]],
+    ['non-finite y', [{ id: 'dispenser', equipmentId: null, x: 100, y: Infinity }]],
+  ])('skips a preparing drink when its station is %s', (_case, kitchenStations) => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], serviceTables: [], equipment: [], dishes: [], kitchenStations,
+      serviceItems: [{ id: 'drink', kind: 'drink', menuItemId: 'water', state: 'preparing', stationId: 'dispenser' }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts.some(call => call.text === '💧')).toBe(false);
+  });
+
+  it('resolves preparing-drink stations through exact numeric station ids', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], serviceTables: [], equipment: [], dishes: [],
+      kitchenStations: [
+        { id: 7, equipmentId: null, x: 100, y: 120 },
+        { id: '7', equipmentId: null, x: 200, y: 120 },
+      ],
+      serviceItems: [{ id: 'drink', kind: 'drink', menuItemId: 'water', state: 'preparing', stationId: 7 }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '💧', x: 120, y: 110 }));
+    expect(ctx._calls.texts.filter(call => call.text === '💧')).toHaveLength(1);
+  });
+
+  it('drops the station indicator once a drink is carried', () => {
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], serviceTables: [], equipment: [], dishes: [],
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 120 }],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', state: 'carried', stationId: null,
+        assignedStaffId: 'cook', x: 300, y: 140,
+      }],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts.some(call => call.text === '💧')).toBe(false);
+  });
+
+  it('preserves delivered and on-service drink rendering alongside preparation indicators', () => {
+    const table = { id: 't1', x: 200, y: 200 };
+    const chair = { id: 'ch1', tableId: 't1', x: 210, y: 180 };
+    const deliveredPosition = getPlaceSettingPositions(table, chair, ['drink']).drink;
+    const counter = { id: 'st1', x: 300, y: 120 };
+    const counterPosition = getServiceCounterItemPosition(counter, 0);
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [table], chairs: [chair], customers: [{ id: 'c1', tableId: 't1', chairId: 'ch1' }],
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 120 }],
+      serviceTables: [counter], equipment: [], dishes: [],
+      serviceItems: [
+        { id: 'preparing', kind: 'drink', menuItemId: 'water', state: 'preparing', stationId: 'dispenser' },
+        { id: 'delivered', customerId: 'c1', kind: 'drink', menuItemId: 'iced-tea', state: 'delivered', x: 0, y: 0 },
+        { id: 'counter', kind: 'drink', menuItemId: 'tea', state: 'on_service', serviceTableId: 'st1', serviceSlotIndex: 0, x: 0, y: 0 },
+      ],
+    }, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '💧', x: 120, y: 110 }));
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🥤', ...deliveredPosition }));
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: '🍵', ...counterPosition }));
+    expect(ctx._calls.texts.some(call => (call.text === '🥤' || call.text === '🍵')
+      && call.x === 120 && call.y === 110)).toBe(false);
+  });
+
+  it('draws a preparing drink from a production-shaped reserved item', () => {
+    const state = {
+      staff: [{
+        id: 'cook', role: 'cook', morale: 80, x: 90, y: 130,
+        task: {
+          type: 'prepare_drink', serviceItemId: 'drink', stationId: 'dispenser',
+          serviceTableId: 'st1', serviceSlotIndex: 0,
+        },
+      }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', drinkId: 'water', tableId: 't1' }],
+      queue: [], tables: [], chairs: [], dishes: [], doors: [],
+      unlockedDrinkIds: ['water'],
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 120 }],
+      serviceTables: [{ id: 'st1', x: 300, y: 120 }],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'c1', tableId: 't1',
+        state: 'ordered', stationId: 'dispenser', serviceTableId: 'st1', serviceSlotIndex: 0,
+        assignedStaffId: 'cook',
+      }],
+      restaurant: { gameTime: 100, expansionLevel: 1 },
+    };
+
+    const preparing = updateStaff(state, 0);
+    expect(preparing.serviceItems[0]).toMatchObject({
+      state: 'preparing', stationId: 'dispenser', assignedStaffId: 'cook',
+    });
+
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, preparing, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
+      text: '💧', x: 120, y: 110, textAlign: 'center', textBaseline: 'middle',
+    }));
+    expect(ctx._calls.texts.filter(call => call.text === '💧')).toHaveLength(1);
+  });
+
+  it('renders preparation indicators without mutating frozen state or leaking canvas state', () => {
+    const state = deepFreeze({
+      tables: [], chairs: [], serviceTables: [], equipment: [], dishes: [],
+      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 120 }],
+      serviceItems: [{
+        id: 'drink', kind: 'drink', menuItemId: 'water', state: 'preparing', stationId: 'dispenser',
+        x: 900, y: 900,
+      }],
+    });
+    const before = structuredClone(state);
+    const ctx = recordCtx();
+
+    drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
+
+    expect(state).toEqual(before);
+    expect(ctx._calls.saves).toBe(ctx._calls.restores);
+  });
+
   it('selects stateful oven and manual-sink sprites from simulation state', () => {
     const oven = loadedSprite('oven');
     const ovenInUse = loadedSprite('ovenInUse');
@@ -808,6 +989,52 @@ describe('drawFurnitureLayer', () => {
     }, { x: 0, y: 0, zoom: 1 });
 
     expect(ctx._calls.texts).toContainEqual(expect.objectContaining({ text: count }));
+  });
+
+  it('draws deposited dishwasher occupancy with incoming on a second line and no reserved sprite', () => {
+    const dishwasher = loadedSprite('dishwasher');
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
+      washStations: [{ id: 'auto', type: 'automatic', level: 1, x: 100, y: 20, w: 40, h: 40 }],
+      serviceItems: [
+        { id: 'queued', state: 'queued_for_wash', washStationId: 'auto' },
+        { id: 'washing', state: 'washing', washStationId: 'auto', washStartedAt: 0 },
+        { id: 'reserved', state: 'dirty_at_table', reservedWashStationId: 'auto' },
+        { id: 'carried', state: 'carried_dirty', reservedWashStationId: 'auto' },
+      ],
+      restaurant: { gameTime: 0 },
+    }, { x: 0, y: 0, zoom: 1 }, { dishwasher });
+
+    expect(ctx._calls.texts).toEqual([
+      expect.objectContaining({ text: '2 / 12', x: 120, y: 70, textAlign: 'center' }),
+      expect.objectContaining({ text: '+2 incoming', x: 120, y: 80, textAlign: 'center' }),
+    ]);
+    expect(ctx._calls.images.map(call => call.image)).toEqual([dishwasher]);
+    expect(ctx._calls.saves).toBe(ctx._calls.restores);
+  });
+
+  it('keeps the manual sink label reservation-inclusive but never treats reservations as dirty artwork', () => {
+    const sink = loadedSprite('sink');
+    const sinkWithDirtyDishes = loadedSprite('sinkWithDirtyDishes');
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, {
+      tables: [], chairs: [], kitchenStations: [], serviceTables: [], equipment: [], dishes: [],
+      washStations: [{ id: 'sink', type: 'manual', x: 300, y: 120, w: 40, h: 40 }],
+      serviceItems: [
+        { id: 'reserved', state: 'dirty_at_table', reservedWashStationId: 'sink' },
+      ],
+      staff: [{
+        id: 'worker',
+        task: { type: 'deliver_dirty_item', serviceItemId: 'task', washStationId: 'sink' },
+      }],
+    }, { x: 0, y: 0, zoom: 1 }, { sink, sinkWithDirtyDishes: sinkWithDirtyDishes });
+
+    expect(ctx._calls.texts).toEqual([
+      expect.objectContaining({ text: '2 / 8', x: 320, y: 170, textAlign: 'center' }),
+    ]);
+    expect(ctx._calls.texts.some(call => /incoming/i.test(call.text))).toBe(false);
+    expect(ctx._calls.images.map(call => call.image)).toEqual([sink]);
   });
 
   it('draws dirt, sentence-case station labels, queue stacks, and exact half progress', () => {

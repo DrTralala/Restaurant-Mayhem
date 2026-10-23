@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  DEFAULT_OPERATING_HOURS,
-  advanceClock, getClockHandAngles, getRushHourMultiplier,
+  DEFAULT_OPERATING_HOURS, RUSH_PERIODS,
+  advanceClock, getClockHandAngles, getDailyPayroll, getRushHourMultiplier,
   formatOperatingHour, isRestaurantOpen, normaliseOperatingHour, secondsToGameTime,
 } from './clock';
 
@@ -92,6 +92,28 @@ describe('advanceClock', () => {
   });
 });
 
+describe('getDailyPayroll', () => {
+  it('sums only finite non-negative salaries from frozen staff and ignores invalid entries', () => {
+    const staff = Object.freeze([
+      Object.freeze({ id: 'cook', salary: 120 }),
+      Object.freeze({ id: 'waiter', salary: 150.25 }),
+      Object.freeze({ id: 'intern', salary: 0 }),
+      Object.freeze({ id: 'missing-salary' }),
+      Object.freeze({ id: 'negative', salary: -1 }),
+      Object.freeze({ id: 'nan', salary: Number.NaN }),
+      Object.freeze({ id: 'infinite', salary: Number.POSITIVE_INFINITY }),
+      null,
+    ]);
+
+    expect(getDailyPayroll(staff)).toBe(270.25);
+  });
+
+  it('returns zero for empty or defaulted staff lists', () => {
+    expect(getDailyPayroll([])).toBe(0);
+    expect(getDailyPayroll()).toBe(0);
+  });
+});
+
 describe('isRestaurantOpen', () => {
   it.each([
     [10 * 3600, 10, 22, true],
@@ -151,6 +173,73 @@ describe('rush hour and analogue clock helpers', () => {
       hourDegrees: 105,
       minuteDegrees: 180,
     });
+  });
+
+  it('pins the extracted period values at every endpoint, peak and slope', () => {
+    expect(getRushHourMultiplier(5.5 * 3600)).toBeCloseTo(1);
+    expect(getRushHourMultiplier(6 * 3600)).toBeCloseTo(1);
+    expect(getRushHourMultiplier(6.5 * 3600)).toBeCloseTo(1.5);
+    expect(getRushHourMultiplier(7 * 3600)).toBeCloseTo(2);
+    expect(getRushHourMultiplier(7.5 * 3600)).toBeCloseTo(1.5);
+    expect(getRushHourMultiplier(8 * 3600)).toBeCloseTo(1);
+    expect(getRushHourMultiplier(8.5 * 3600)).toBeCloseTo(1);
+    expect(getRushHourMultiplier(11 * 3600)).toBeCloseTo(1);
+    expect(getRushHourMultiplier(11.75 * 3600)).toBeCloseTo(1.75);
+    expect(getRushHourMultiplier(12.5 * 3600)).toBeCloseTo(2.5);
+    expect(getRushHourMultiplier(13.75 * 3600)).toBeCloseTo(1.25);
+    expect(getRushHourMultiplier(14 * 3600)).toBeCloseTo(1);
+    expect(getRushHourMultiplier(17 * 3600)).toBeCloseTo(1);
+    expect(getRushHourMultiplier(17.75 * 3600)).toBeCloseTo(2);
+    expect(getRushHourMultiplier(18.5 * 3600)).toBeCloseTo(3);
+    expect(getRushHourMultiplier(19.25 * 3600)).toBeCloseTo(2);
+    expect(getRushHourMultiplier(20 * 3600)).toBeCloseTo(1);
+    expect(getRushHourMultiplier(20.5 * 3600)).toBeCloseTo(1);
+  });
+
+  it('wraps the extracted periods across days and negative times', () => {
+    expect(getRushHourMultiplier(24 * 3600 + 12.5 * 3600)).toBeCloseTo(2.5);
+    expect(getRushHourMultiplier(24 * 3600 + 18.5 * 3600)).toBeCloseTo(3);
+    expect(getRushHourMultiplier(-86400 + 7 * 3600)).toBeCloseTo(2);
+    expect(getRushHourMultiplier(-11 * 3600)).toBeCloseTo(2);
+    expect(getRushHourMultiplier(-5.5 * 3600)).toBeCloseTo(3);
+    expect(getRushHourMultiplier(-18 * 3600)).toBeCloseTo(1);
+  });
+
+  it('matches the original hard-coded ramps on a dense sweep', () => {
+    const referenceRamp = (secondsOfDay, start, peak, end, peakMultiplier) => {
+      if (secondsOfDay < start || secondsOfDay > end) return 1;
+      if (secondsOfDay <= peak) {
+        return 1 + (peakMultiplier - 1) * ((secondsOfDay - start) / (peak - start));
+      }
+      return peakMultiplier - (peakMultiplier - 1) * ((secondsOfDay - peak) / (end - peak));
+    };
+    const reference = totalSeconds => {
+      const time = ((totalSeconds % 86400) + 86400) % 86400;
+      return Math.max(
+        1,
+        referenceRamp(time, 6 * 3600, 7 * 3600, 8 * 3600, 2),
+        referenceRamp(time, 11 * 3600, 12.5 * 3600, 14 * 3600, 2.5),
+        referenceRamp(time, 17 * 3600, 18.5 * 3600, 20 * 3600, 3),
+      );
+    };
+
+    for (let seconds = -86400; seconds <= 2 * 86400; seconds += 360) {
+      expect(getRushHourMultiplier(seconds)).toBe(reference(seconds));
+      expect(getRushHourMultiplier(seconds + 137)).toBe(reference(seconds + 137));
+    }
+  });
+});
+
+describe('RUSH_PERIODS', () => {
+  it('freezes the approved period definitions in order', () => {
+    expect(Object.isFrozen(RUSH_PERIODS)).toBe(true);
+    expect(RUSH_PERIODS).toHaveLength(3);
+    expect(RUSH_PERIODS.every(period => Object.isFrozen(period))).toBe(true);
+    expect(RUSH_PERIODS).toEqual([
+      { name: 'Breakfast', startHour: 6, peakHour: 7, endHour: 8, peakMultiplier: 2 },
+      { name: 'Lunch', startHour: 11, peakHour: 12.5, endHour: 14, peakMultiplier: 2.5 },
+      { name: 'Dinner', startHour: 17, peakHour: 18.5, endHour: 20, peakMultiplier: 3 },
+    ]);
   });
 });
 

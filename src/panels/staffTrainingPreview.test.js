@@ -101,6 +101,54 @@ describe('getStaffTrainingPreview', () => {
     expect(nearMax.carryAfter).toBe(3);
   });
 
+  it('lists the waiter group-order unlock only when training reaches skill 10', () => {
+    const crossing = getStaffTrainingPreview(worker({ role: 'waiter', skill: 9, morale: 80 }));
+    expect(crossing.skill).toBe(10);
+    expect(crossing.unlocks).toEqual(['Can take orders for an eligible party together at one table.']);
+
+    const fractional = getStaffTrainingPreview(worker({ role: 'waiter', skill: 9.5, morale: 80 }));
+    expect(fractional.skill).toBe(10);
+    expect(fractional.unlocks).toEqual(['Can take orders for an eligible party together at one table.']);
+
+    expect(getStaffTrainingPreview(worker({ role: 'waiter', skill: 8, morale: 80 })).unlocks).toEqual([]);
+  });
+
+  it('lists the janitor instant-cleaning unlock only when training reaches skill 10', () => {
+    const crossing = getStaffTrainingPreview(worker({ role: 'janitor', skill: 9, morale: 80 }));
+    expect(crossing.skill).toBe(10);
+    expect(crossing.unlocks).toEqual([
+      '10% chance to instantly finish a newly started table-cleaning, floor-cleaning or manual-washing action.',
+    ]);
+
+    expect(getStaffTrainingPreview(worker({ role: 'janitor', skill: 8, morale: 80 })).unlocks).toEqual([]);
+  });
+
+  it('keeps unlocks empty for cook and unknown roles crossing 10', () => {
+    expect(getStaffTrainingPreview(worker({ role: 'cook', skill: 9, morale: 80 })).unlocks).toEqual([]);
+    expect(getStaffTrainingPreview(worker({ role: 'manager', skill: 9, morale: 80 }))).toBeNull();
+  });
+
+  it('returns null instead of unlocks for a worker already at skill 10', () => {
+    expect(getStaffTrainingPreview(worker({ role: 'waiter', skill: 10, morale: 80 }))).toBeNull();
+    expect(getStaffTrainingPreview(worker({ role: 'janitor', skill: 10, morale: 80 }))).toBeNull();
+  });
+
+  it('does not mutate a frozen skill-9 worker and never calls Math.random for the unlock', () => {
+    const frozen = freeze(worker({ role: 'janitor', skill: 9, morale: 80 }));
+    const snapshot = JSON.stringify(frozen);
+    const randomSpy = vi.spyOn(Math, 'random').mockImplementation(() => {
+      throw new Error('Math.random must not be called');
+    });
+
+    const preview = getStaffTrainingPreview(frozen);
+
+    expect(preview.unlocks).toEqual([
+      '10% chance to instantly finish a newly started table-cleaning, floor-cleaning or manual-washing action.',
+    ]);
+    expect(JSON.stringify(frozen)).toBe(snapshot);
+    expect(randomSpy).not.toHaveBeenCalled();
+  });
+
   it('does not mutate a frozen input worker and never calls Math.random', () => {
     const frozen = freeze(worker({ role: 'waiter', skill: 4, morale: 80 }));
     const snapshot = JSON.stringify(frozen);

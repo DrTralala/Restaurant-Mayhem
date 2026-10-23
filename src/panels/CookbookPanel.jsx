@@ -15,11 +15,23 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
   const state = useGameState();
   const dispatch = useDispatch();
   const [confirmation, setConfirmation] = useState(null);
+  const [filter, setFilter] = useState('all');
   const blocked = readOnly || state.careerRun?.needsDecision === true;
   // Legacy/partial callers can browse without mutating state; parent initialisation owns adoption.
   const viewState = state.cookbook ? state : { ...state, ...normaliseCookbookState(state, {
     legacy: true, lastPaidVisitSequence: state.paidVisitSequence ?? 0,
   }) };
+  const entries = COOKBOOK_RECIPES.map(recipe => ({
+    recipe,
+    status: getCookbookEntryStatus(viewState, recipe.id),
+  }));
+  const readyEntries = entries.filter(({ status }) => status.canAdd || status.canChoosePerk);
+  const readyIds = new Set(readyEntries.map(({ recipe }) => recipe.id));
+  const pinnedId = filter === 'ready' && confirmation && !readyIds.has(confirmation.cookbookId)
+    ? confirmation.cookbookId : null;
+  const visibleEntries = filter === 'ready'
+    ? entries.filter(({ recipe }) => readyIds.has(recipe.id) || recipe.id === pinnedId)
+    : entries;
 
   return (
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
@@ -30,10 +42,16 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
       <p style={detailStyle}>Discover recipes, add them for free, then serve paid portions to choose a signature.</p>
       <p style={detailStyle}>Speed changes base cooking work, not the complete wait time. Custom recipes remain unrestricted.</p>
       {blocked && <p role="status" style={{ ...detailStyle, color: '#f0a500' }}>Career decision pending — menu changes are unavailable. You can still browse.</p>}
+      <div role="group" aria-label="Cookbook view" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', margin: '8px 0' }}>
+        <button style={buttonStyle} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All</button>
+        <button style={buttonStyle} aria-pressed={filter === 'ready'} onClick={() => setFilter('ready')}>Ready actions</button>
+        <p style={{ ...detailStyle, margin: 0 }}>{readyEntries.length} recipes have ready actions.</p>
+      </div>
+      {filter === 'ready' && visibleEntries.length === 0 && <p style={detailStyle}>No recipes have ready actions.</p>}
 
-      {COOKBOOK_RECIPES.map(recipe => {
-        const status = getCookbookEntryStatus(viewState, recipe.id);
+      {visibleEntries.map(({ recipe, status }) => {
         const settings = viewState.cookbook.entries[recipe.id].menuSettings;
+        const pinned = recipe.id === pinnedId;
         const pendingPerk = confirmation?.cookbookId === recipe.id ? confirmation.perk : null;
         const previewPerk = pendingPerk || status.perk;
         const prep = previewPerk === 'speed' ? Math.max(1, Math.round(recipe.prepTime * 0.85)) : recipe.prepTime;
@@ -44,6 +62,7 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
           <article key={recipe.id} aria-label={`${recipe.name} recipe`} style={{ background: '#1a1a2e',
             border: '1px solid #0f3460', borderRadius: 8, padding: 12, marginTop: 12 }}>
             <h4 style={{ ...TYPOGRAPHY.subheading, margin: '0 0 4px', color: '#f0a500' }}>{recipe.name}</h4>
+            {pinned && <p style={detailStyle}>Shown while its signature choice is open.</p>}
             {status.discovered && <p style={detailStyle}>Discovered</p>}
             <p style={detailStyle}>{additionReason}</p>
             <p style={detailStyle}>Equipment: {equipmentName(recipe.requiredEquipmentId)} · {recipe.base} / {recipe.method}</p>

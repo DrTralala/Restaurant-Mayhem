@@ -161,6 +161,18 @@ function validateScheduleSlots(slots) {
   return { valid: true, reason: null };
 }
 
+/**
+ * Resolve the duty schedule a worker is actually judged against: the owned
+ * immutable snapshot inside a tick context, otherwise a copied standalone
+ * schedule, with a fresh all-work fallback for missing or invalid input.
+ */
+export function getNormalisedStaffSchedule(worker) {
+  const schedule = Array.isArray(worker?.schedule) ? worker.schedule : worker?.schedule?.schedule;
+  const owned = getOwnedStaffSchedule(schedule);
+  if (owned) return owned.validation.valid ? owned.slots : createStaffDutyDefaults().schedule;
+  return validateStaffSchedule(schedule).valid ? [...schedule] : createStaffDutyDefaults().schedule;
+}
+
 /** Return the repeating schedule slot containing an absolute game timestamp. */
 export function getStaffScheduleBoundary(gameTime) {
   const seconds = Number.isFinite(gameTime) ? gameTime : 0;

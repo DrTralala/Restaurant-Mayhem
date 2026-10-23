@@ -12,3 +12,13 @@ export function getEquipmentLevelMultipliers(level) {
     qualityBonus: (level - 1) * 0.05,
   };
 }
+
+export function getEquipmentUpgradeQuote(equipment, funds) {
+  const level = equipment?.level;
+  const cost = equipment?.upgradeCosts?.[level - 1];
+  if (!equipment?.owned || !Number.isInteger(level) || level < 1 || level >= 10
+      || !Number.isFinite(cost) || cost < 0) return null;
+  return { level, nextLevel: level + 1, cost,
+    affordable: Number.isFinite(funds) && funds >= cost,
+    ...getEquipmentLevelMultipliers(level + 1) };
+}

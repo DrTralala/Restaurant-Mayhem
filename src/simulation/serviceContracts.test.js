@@ -2,12 +2,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInitialState } from '../state/initialState';
 import { validateSavedState } from '../state/saveValidation';
 import { advanceClock } from './clock';
+import * as staffSchedules from './staffSchedules';
 import { acceptServiceContract, advanceServiceContractArrivals, createServiceContractsState,
   getNextServiceContractBoundary, getServiceContractOffer, hydrateServiceContractsState,
   recordServiceContractPaidVisit, selectServiceContractView, settleServiceContracts,
   validateServiceContractsState, withdrawServiceContract } from './serviceContracts';
 
 afterEach(() => vi.restoreAllMocks());
+const scheduleFrom = (changes, base = 'work') => {
+  const slots = Array.from({ length: 48 }, () => base);
+  for (const [index, mode] of Object.entries(changes)) slots[Number(index)] = mode;
+  return slots;
+};
+const withSchedules = (state, byId) => ({ ...state, staff: state.staff.map(person =>
+  Object.hasOwn(byId, person.id) ? { ...person, schedule: byId[person.id] } : person) });
 const accept = (state = createInitialState(), templateId = 'office-lunch') =>
   acceptServiceContract(state, { templateId });
 const at = (state, time) => advanceClock(state, time - state.restaurant.gameTime);
@@ -119,6 +127,154 @@ describe('offers and immutable acceptance', () => {
     expect(offer.warnings).toEqual(expect.arrayContaining(['closed_at_arrival', 'queue_full',
       'no_affordable_dish', 'no_suitable_table', 'no_cook', 'no_waiter', 'no_staffed_checkout']));
     expect(accept(state, 'family-service').restaurant.funds).toBe(-470);
+  });
+});
+
+describe('schedule-aware readiness advice', () => {
+  it('aligns advice to the half-hour arrival slot including an exact boundary', () => {
+    const base = createInitialState();
+    const state = { ...base, restaurant: { ...base.restaurant, gameTime: 35100, openHour: 0, closeHour: 0 } };
+    expect(getServiceContractOffer(state, 'office-lunch').preview.partyArrivals)
+      .toEqual([36000, 36720, 37440]);
+
+    const restingAtArrival = withSchedules(state, {
+      'starter-cook': scheduleFrom({ 19: 'work', 20: 'rest' }),
+    });
+    expect(getServiceContractOffer(restingAtArrival, 'office-lunch').warnings)
+      .toContain('no_scheduled_cook');
+
+    const workingAtArrival = withSchedules(state, {
+      'starter-cook': scheduleFrom({ 19: 'rest', 20: 'work' }),
+    });
+    expect(getServiceContractOffer(workingAtArrival, 'office-lunch').warnings)
+      .not.toContain('no_scheduled_cook');
+  });
+
+  it('wraps schedule advice across midnight through the repeating slots', () => {
+    const base = createInitialState();
+    const state = { ...base, restaurant: { ...base.restaurant, gameTime: 84600, openHour: 0, closeHour: 0 } };
+    expect(getServiceContractOffer(state, 'office-lunch').preview.partyArrivals)
+      .toEqual([85500, 86220, 86940]);
+
+    const onlyPtoSlots = { 47: 'work', 0: 'work' };
+    const covered = withSchedules(state, {
+      'starter-cook': scheduleFrom(onlyPtoSlots, 'rest'),
+    });
+    expect(getServiceContractOffer(covered, 'office-lunch').warnings)
+      .not.toContain('no_scheduled_cook');
+
+    const beforeMidnight = withSchedules(state, {
+      'starter-cook': scheduleFrom({ 47: 'rest', 0: 'work' }, 'rest'),
+    });
+    expect(getServiceContractOffer(beforeMidnight, 'office-lunch').warnings)
+      .toContain('no_scheduled_cook');
+
+    const afterMidnight = withSchedules(state, {
+      'starter-cook': scheduleFrom({ 47: 'work', 0: 'rest' }, 'rest'),
+    });
+    expect(getServiceContractOffer(afterMidnight, 'office-lunch').warnings)
+      .toContain('no_scheduled_cook');
+  });
+
+  it('covers arrivals across mixed workers and flags only uncovered arrivals', () => {
+    const base = createInitialState();
+    const firstCook = { ...base.staff[0], schedule: scheduleFrom({ 20: 'work' }, 'rest') };
+    const secondCook = { ...base.staff[0], id: 'starter-cook-2',
+      schedule: scheduleFrom({ 21: 'work' }, 'rest') };
+    const mixed = { ...base, staff: [firstCook, secondCook, ...base.staff.slice(1)] };
+    expect(getServiceContractOffer(mixed, 'office-lunch').warnings)
+      .not.toContain('no_scheduled_cook');
+
+    const uncovered = { ...mixed, staff: [firstCook,
+      { ...secondCook, schedule: scheduleFrom({ 20: 'work' }, 'rest') }, ...base.staff.slice(1)] };
+    expect(getServiceContractOffer(uncovered, 'office-lunch').warnings)
+      .toContain('no_scheduled_cook');
+  });
+
+  it('warns when employed candidates are all on rest or pto at an arrival', () => {
+    const base = createInitialState();
+    const resting = { ...base, staff: base.staff.map(person =>
+      ({ ...person, schedule: scheduleFrom({}, 'rest') })) };
+    const offer = getServiceContractOffer(resting, 'office-lunch');
+    expect(offer.warnings).toContain('no_scheduled_cook');
+    expect(offer.warnings).toContain('no_scheduled_waiter');
+    expect(offer.warnings).toContain('no_scheduled_checkout');
+    expect(offer.warnings).not.toContain('no_cook');
+
+    const pto = { ...base, staff: base.staff.map(person =>
+      ({ ...person, schedule: scheduleFrom({}, 'pto') })) };
+    expect(getServiceContractOffer(pto, 'office-lunch').warnings).toContain('no_scheduled_cook');
+  });
+
+  it('keeps the absent-role warning without a schedule warning for an empty group', () => {
+    const base = createInitialState();
+    const state = { ...base, staff: base.staff.filter(person => person.role !== 'cook') };
+    const offer = getServiceContractOffer(state, 'office-lunch');
+    expect(offer.warnings).toContain('no_cook');
+    expect(offer.warnings).not.toContain('no_scheduled_cook');
+  });
+
+  it('follows the assigned checkout waiter identity and role, not unassigned waiters', () => {
+    const base = createInitialState();
+    const resting = withSchedules(base, { 'starter-cashier-waiter': scheduleFrom({}, 'rest') });
+    const offer = getServiceContractOffer(resting, 'office-lunch');
+    expect(offer.warnings).toContain('no_scheduled_checkout');
+    expect(offer.warnings).not.toContain('no_staffed_checkout');
+    expect(offer.warnings).not.toContain('no_scheduled_waiter');
+
+    const covering = withSchedules(base, { 'starter-cashier-waiter': scheduleFrom({}) });
+    expect(getServiceContractOffer(covering, 'office-lunch').warnings)
+      .not.toContain('no_scheduled_checkout');
+
+    const misassigned = withSchedules({ ...base,
+      cashierStations: base.cashierStations.map(station =>
+        ({ ...station, assignedStaffId: 'starter-cook' })) }, { 'starter-cook': scheduleFrom({}, 'rest') });
+    const misassignedOffer = getServiceContractOffer(misassigned, 'office-lunch');
+    expect(misassignedOffer.warnings).toContain('no_staffed_checkout');
+    expect(misassignedOffer.warnings).not.toContain('no_scheduled_checkout');
+  });
+
+  it('does not duplicate schedule warnings across multiple uncovered arrivals', () => {
+    const base = createInitialState();
+    const state = { ...base, staff: base.staff.map(person =>
+      ({ ...person, schedule: scheduleFrom({}, 'rest') })) };
+    const offer = getServiceContractOffer(state, 'office-lunch');
+    expect(offer.preview.partyArrivals.length).toBeGreaterThan(1);
+    for (const warning of ['no_scheduled_cook', 'no_scheduled_waiter', 'no_scheduled_checkout']) {
+      expect(offer.warnings.filter(candidate => candidate === warning)).toHaveLength(1);
+    }
+  });
+
+  it('keeps acceptance available and unchanged by schedule advice', () => {
+    const base = createInitialState();
+    const state = { ...base, staff: base.staff.map(person =>
+      ({ ...person, schedule: scheduleFrom({}, 'rest') })) };
+    const offer = getServiceContractOffer(state, 'office-lunch');
+    expect(offer.warnings).toContain('no_scheduled_cook');
+    expect(offer.canAccept).toBe(true);
+    const accepted = acceptServiceContract(state, { templateId: 'office-lunch' });
+    expect(accepted.serviceContracts.active.instanceId).toBe('sc-1');
+    expect(accepted.restaurant.funds).toBe(state.restaurant.funds + 22.5);
+  });
+
+  it('resolves each worker schedule once per offer without mutation or RNG', () => {
+    const state = createInitialState();
+    const frozen = structuredClone(state);
+    const random = vi.spyOn(Math, 'random').mockImplementation(() => { throw new Error('RNG'); });
+    const original = staffSchedules.getNormalisedStaffSchedule;
+    const resolve = vi.spyOn(staffSchedules, 'getNormalisedStaffSchedule');
+    try {
+      const offer = getServiceContractOffer(state, 'office-lunch');
+      const workers = resolve.mock.calls.map(([worker]) => worker);
+      expect(workers.length).toBeGreaterThan(0);
+      expect(new Set(workers).size).toBe(workers.length);
+      expect(offer.warnings).toEqual([]);
+      expect(state).toEqual(frozen);
+      expect(random).not.toHaveBeenCalled();
+    } finally {
+      resolve.mockRestore();
+      expect(staffSchedules.getNormalisedStaffSchedule).toBe(original);
+    }
   });
 });
 

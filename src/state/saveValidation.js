@@ -162,6 +162,20 @@ function validateUniqueIds(value, path) {
   });
 }
 
+function validateSuspendedMenuIds(restaurant, key) {
+  if (!has(restaurant, key)) return;
+  const value = restaurant[key];
+  if (!Array.isArray(value)) fail(`restaurant.${key}`, 'must be an array');
+  const seen = new Set();
+  value.forEach((id, index) => {
+    if (typeof id !== 'string' || id.length === 0) {
+      fail(`restaurant.${key}[${index}]`, 'must be a non-empty string ID');
+    }
+    if (seen.has(id)) fail(`restaurant.${key}`, `contains duplicate ID ${id}`);
+    seen.add(id);
+  });
+}
+
 function validateRecordCollection(state, key) {
   if (!has(state, key)) return [];
   validateArray(state[key], key);
@@ -312,6 +326,9 @@ function validateRestaurant(state) {
   validateOptionalFinite(restaurant, 'funds', 'restaurant');
   validateOptionalFinite(restaurant, 'dailyRevenue', 'restaurant');
   validateOptionalFinite(restaurant, 'reputation', 'restaurant');
+  validateOptionalBoolean(restaurant, 'walkInsPaused', 'restaurant');
+  validateSuspendedMenuIds(restaurant, 'suspendedDishIds');
+  validateSuspendedMenuIds(restaurant, 'suspendedDrinkIds');
 }
 
 function validateNavigationFields(record, path) {

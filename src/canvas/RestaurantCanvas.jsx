@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
 import { useGameState, useDispatch, useGameGeneration } from '../state/GameContext';
 import { useRenderState, useRuntimeFault } from '../state/SimulationRuntime';
 import { isCareerDecisionPending } from '../simulation/careerRun';
@@ -6,15 +6,21 @@ import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } fro
 import { loadSprites } from './sprites';
 import { drawFloorLayer, drawFurnitureLayer, drawObjectLabel, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawQueueLayer, drawSelectionLayer } from './layers';
 import { findClickedEntity } from './interaction';
-import { getDefaultStaffPosition, getMissingDoorWarnings, getRestaurantWorld } from '../simulation/world';
+import {
+  GRID_SIZE,
+  getDefaultStaffPosition,
+  getMissingDoorWarnings,
+  getRestaurantWorld,
+} from '../simulation/world';
 import StaffDetailsPanel from '../components/StaffDetailsPanel';
 import { normaliseSelectionRect, selectFurnitureInRect } from './selection';
 import { getFixture, getFixtureDescriptor, getFixtureLabel } from '../data/fixtures';
 import { getPlaceable } from '../data/placeables';
+import { ITEM_PRICES } from '../data/items';
 import { snapPlacement, validateFixtureCopies, validateFixtureMoves } from '../simulation/placement';
 import { getServiceSlotPosition } from '../simulation/serviceItems';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
-import { getWashStationOccupancy } from '../simulation/dishwashing';
+import { getWashStationUsage } from '../simulation/dishwashing';
 import { validateStaffMove } from '../state/staffMoves';
 import { projectFixtureActors } from '../simulation/navigation/occupancy';
 import { useAnimationFrameLoop } from '../hooks/useAnimationFrameLoop';
@@ -22,9 +28,10 @@ import {
   getFixtureCopyEligibility,
   getFixtureCopyReasonMessage,
 } from '../state/fixtureCopies';
-import { getFixtureSaleEligibility } from '../state/fixtureSales';
+import { getFixtureSaleEligibility, getFixtureSaleExpectation, getSaleSelection } from '../state/fixtureSales';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 import { createRenderIndexes } from './renderIndexes';
+import FixtureSaleReview from './FixtureSaleReview';
 import {
   createCharacterAnimationClock,
   createCharacterTransitionHistory,
@@ -35,6 +42,7 @@ import {
   getPlacementLabel,
   samePlacement,
 } from './placementInteraction';
+import { getContextMenuPosition } from './contextMenuPosition';
 import {
   buildCopyItems,
   buildMoveItems,
@@ -186,9 +194,106 @@ function canOfferFixtureSale(state, item) {
     && getFixtureSaleEligibility(state, item).valid;
 }
 
+function buildSaleReview(state, requestedItems) {
+  const entries = [];
+  const seen = new Set();
+
+  for (const item of requestedItems || []) {
+    if (!item || item.type == null || item.id == null) continue;
+    const key = `${item.type}:${String(item.id)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const eligibility = getFixtureSaleEligibility(state, item);
+    entries.push({
+      type: item.type,
+      id: item.id,
+      eligible: eligibility.valid === true,
+      reason: eligibility.reason ?? null,
+    });
+  }
+
+  const eligibleItems = entries
+    .filter(entry => entry.eligible)
+    .map(entry => ({ type: entry.type, id: entry.id }));
+  const selection = eligibleItems.length > 0 ? getSaleSelection(state, eligibleItems) : null;
+  const expectedSale = getFixtureSaleExpectation(selection);
+
+  return {
+    requestedItems: entries.map(entry => ({ type: entry.type, id: entry.id })),
+    entries,
+    eligibleItems,
+    expectedSale,
+    refund: expectedSale ? expectedSale.refund : null,
+    affectedChairIds: selection ? [...selection.removedChairs].map(String).sort() : [],
+  };
+}
+
+function sameSaleReviewFacts(current, next) {
+  const facts = review => JSON.stringify({
+    entries: review.entries,
+    expectedSale: review.expectedSale,
+    affectedChairIds: review.affectedChairIds,
+  });
+  return facts(current) === facts(next);
+}
+
 function formatNominalSeconds(seconds) {
   if (!Number.isFinite(seconds)) return '—';
   return Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(1);
+}
+
+const PLACEMENT_HINT = 'Arrow keys move when the canvas is focused. '
+  + 'Enter or click to buy. R rotates supported items. Right click or Escape cancels.';
+const PLACEMENT_ROTATED_STATUS = 'Placement rotated. Arrow keys move when the canvas is '
+  + 'focused. Enter or click to buy. Escape to cancel.';
+const FIXTURE_MOVE_HINT = 'Moving fixtures. Click to place, R to rotate when available, '
+  + 'or press Escape to cancel.';
+const FIXTURE_MOVE_ROTATED_STATUS = 'Fixture move rotated.';
+const FIXTURE_MOVE_SUBMITTED_STATUS = 'Fixture move submitted.';
+const FIXTURE_MOVE_CANCELLED_STATUS = 'Fixture move cancelled.';
+const FIXTURE_COPY_HINT = 'Copying fixtures. Click to purchase the copy or press Escape to cancel.';
+const FIXTURE_COPY_SUBMITTED_STATUS = 'Fixture copy submitted.';
+const FIXTURE_COPY_CANCELLED_STATUS = 'Fixture copy cancelled.';
+const FIXTURE_COPY_DESTINATION_FALLBACK = 'Destination is invalid';
+const STAFF_MOVE_HINT = 'Moving employee. Click a destination or press Escape to cancel.';
+const STAFF_MOVE_SUBMITTED_STATUS = 'Employee move submitted.';
+const STAFF_MOVE_CANCELLED_STATUS = 'Employee move cancelled.';
+const STAFF_MOVE_DESTINATION_FALLBACK = 'Destination is invalid';
+
+function getCataloguePrice(itemType, fallback = null) {
+  return Number.isFinite(ITEM_PRICES[itemType]) ? ITEM_PRICES[itemType] : fallback;
+}
+
+// Mirrors the reducer's purchase gate before the placement is consumed.
+function getPlacementPurchase(state, placement) {
+  const item = getPlaceable(placement?.itemType);
+  if (!item) return { valid: false, reason: 'Purchase unavailable' };
+
+  const equipment = placement.itemType === 'equipmentStation'
+    ? (Array.isArray(state?.equipment) ? state.equipment : [])
+      .find(candidate => candidate.id === placement.equipmentId)
+    : null;
+  if (placement.itemType === 'equipmentStation' && (!equipment || equipment.owned)) {
+    return { valid: false, reason: 'Purchase unavailable' };
+  }
+
+  const price = equipment
+    ? equipment.purchaseCost
+    : getCataloguePrice(placement.itemType, item.price);
+  if (!Number.isFinite(price) || price < 0) {
+    return { valid: false, reason: 'Purchase unavailable' };
+  }
+
+  const funds = state?.restaurant?.funds;
+  if (!Number.isFinite(funds) || funds < price) {
+    return { valid: false, reason: 'Insufficient funds' };
+  }
+
+  return { valid: true, reason: null, price };
+}
+
+function getArmedPlacementStatus(state, placement) {
+  return `Placing ${getPlacementLabel(state, placement)}. ${PLACEMENT_HINT}`;
 }
 
 function DishwasherControls({ state, station, dispatch }) {
@@ -197,7 +302,7 @@ function DishwasherControls({ state, station, dispatch }) {
     ? station.level : 1;
   const stats = getDishwasherStats(level);
   if (!stats) return null;
-  const occupancy = getWashStationOccupancy(state, station, { includeReservations: false });
+  const { deposited: occupancy, incoming } = getWashStationUsage(state, station);
   const nextCost = stats.nextUpgradeCost;
   const maxed = nextCost == null;
   const funds = state.restaurant?.funds;
@@ -215,6 +320,8 @@ function DishwasherControls({ state, station, dispatch }) {
       <div style={{ color: '#f0a500' }}>Dishwasher controls</div>
       <div>Level {level} / 10</div>
       <div>Occupancy {occupancy} / {stats.capacity}</div>
+      {incoming > 0 && <div>Incoming reservations: {incoming}</div>}
+      <div>Occupancy counts deposited items. Incoming reservations also use capacity.</div>
       <div>Nominal {formatNominalSeconds(stats.secondsPerDish)} seconds per dish</div>
       <div>{maxed ? 'Maximum level' : `Next upgrade $${nextCost}`}</div>
       <button
@@ -240,6 +347,8 @@ export default function RestaurantCanvas({
   managementOpen = false,
   fitRequest = 0,
   placementRequest = null,
+  locateRequest = null,
+  onLocateResult,
   onPlacementComplete,
   onEmptySpaceClick,
 }) {
@@ -265,14 +374,27 @@ export default function RestaurantCanvas({
   const lastCanvasTimestampRef = useRef(null);
   const dispatch = useDispatch();
   const [placement, setPlacement] = useState(null);
+  const [placementStatus, setPlacementStatus] = useState('');
+  const [fixtureMoveStatus, setFixtureMoveStatus] = useState('');
+  const [fixtureCopyStatus, setFixtureCopyStatus] = useState('');
+  const [staffMoveStatus, setStaffMoveStatus] = useState('');
   const placementRef = useRef(null);
+  const statusGenerationRef = useRef(generation);
+  const consumedLocateTokenRef = useRef(null);
 
   // Context menu state
   const [menu, setMenu] = useState(null); // { x, y, type, data }
+  const [menuPosition, setMenuPosition] = useState(null);
+  const wrapperRef = useRef(null);
+  const menuRef = useRef(null);
   const [selectedStaffId, setSelectedStaffId] = useState(null);
   const [selectedItems, setSelectedItems] = useState([]);
   const [selectionRect, setSelectionRect] = useState(null);
   const [, setMoveRevision] = useState(0);
+  const [saleReview, setSaleReview] = useState(null);
+  const [saleNotice, setSaleNotice] = useState('');
+  const saleReviewRef = useRef(null);
+  const saleSubmittedRef = useRef(false);
   const selectedStaff = state.staff.find(staff => staff.id === selectedStaffId) || null;
   const doorWarnings = getMissingDoorWarnings(state);
 
@@ -282,6 +404,26 @@ export default function RestaurantCanvas({
   const staffMoveRef = useRef(null); // { id, point, validation }
   const dragRef = useRef(null);
   const suppressClickRef = useRef(false);
+
+  const cancelSelectionDrag = useCallback(() => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setSelectionRect(null);
+  }, []);
+
+  useEffect(() => {
+    const handleWindowMouseUp = (event) => {
+      if (event.target === canvasRef.current) return;
+      cancelSelectionDrag();
+    };
+    const handleWindowBlur = () => cancelSelectionDrag();
+    window.addEventListener('mouseup', handleWindowMouseUp);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('mouseup', handleWindowMouseUp);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [cancelSelectionDrag]);
 
   // DOM overlays share the canvas wrapper's origin, not the viewport's.
   const getCanvasPos = (e) => {
@@ -295,6 +437,44 @@ export default function RestaurantCanvas({
     const camera = cameraRef.current;
     return screenToWorld(camera, point.x, point.y);
   };
+
+  const updateMenuPosition = useCallback(() => {
+    const wrapper = wrapperRef.current;
+    const panel = menuRef.current;
+    if (!menu || !wrapper || !panel) return;
+    const bounds = wrapper.getBoundingClientRect();
+    const size = panel.getBoundingClientRect();
+    const next = getContextMenuPosition(
+      { x: menu.x, y: menu.y },
+      { width: bounds.width, height: bounds.height },
+      { width: size.width, height: size.height },
+    );
+    setMenuPosition(current => (
+      current && current.x === next.x && current.y === next.y ? current : next
+    ));
+  }, [menu]);
+
+  useLayoutEffect(() => {
+    if (!menu) {
+      setMenuPosition(current => (current === null ? current : null));
+      return;
+    }
+    updateMenuPosition();
+  });
+
+  useEffect(() => {
+    if (!menu) return undefined;
+    const wrapper = wrapperRef.current;
+    const panel = menuRef.current;
+    if (typeof ResizeObserver === 'function') {
+      const observer = new ResizeObserver(updateMenuPosition);
+      if (wrapper) observer.observe(wrapper);
+      if (panel) observer.observe(panel);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', updateMenuPosition);
+    return () => window.removeEventListener('resize', updateMenuPosition);
+  }, [menu, updateMenuPosition]);
 
   const draw = useCallback((timestamp = 0) => {
     const canvas = canvasRef.current;
@@ -407,7 +587,34 @@ export default function RestaurantCanvas({
   }, [fault]);
 
   useEffect(() => {
+    if (placementRequest) {
+      setFixtureMoveStatus('');
+      setFixtureCopyStatus('');
+      setStaffMoveStatus('');
+      if (moveRef.current) {
+        moveRef.current = null;
+        setMoveRevision(revision => revision + 1);
+      }
+      if (copyRef.current) {
+        copyRef.current = null;
+        setMoveRevision(revision => revision + 1);
+      }
+      if (staffMoveRef.current) {
+        staffMoveRef.current = null;
+        setMoveRevision(revision => revision + 1);
+      }
+    }
     if (!placementRequest) {
+      if (placementRef.current) {
+        placementRef.current = null;
+        setPlacement(null);
+        // A withdrawn request is a real cancellation only while the current
+        // generation still owns the placement; a reset clears status instead.
+        if (statusGenerationRef.current === generation) {
+          setPlacementStatus('Placement cancelled.');
+        }
+        return;
+      }
       placementRef.current = null;
       setPlacement(null);
       return;
@@ -418,12 +625,14 @@ export default function RestaurantCanvas({
       const invalidPlacement = buildPlacement(state, placementRequest, { x: 200, y: 200 });
       placementRef.current = invalidPlacement;
       setPlacement(invalidPlacement);
+      setPlacementStatus(getArmedPlacementStatus(state, invalidPlacement));
       return;
     }
 
     const initialPlacement = buildPlacement(state, placementRequest, origin);
     placementRef.current = initialPlacement;
     setPlacement(initialPlacement);
+    setPlacementStatus(getArmedPlacementStatus(state, initialPlacement));
   }, [placementRequest]);
 
   useEffect(() => {
@@ -481,8 +690,72 @@ export default function RestaurantCanvas({
     staffMoveRef.current = null;
     dragRef.current = null;
     copyRef.current = null;
+    saleReviewRef.current = null;
+    saleSubmittedRef.current = false;
+    setSaleReview(null);
+    setSaleNotice('');
+    setFixtureMoveStatus('');
+    setFixtureCopyStatus('');
+    setStaffMoveStatus('');
     setMoveRevision(revision => revision + 1);
   }, [managementOpen]);
+
+  useEffect(() => {
+    saleReviewRef.current = null;
+    saleSubmittedRef.current = false;
+    setSaleReview(null);
+    setSaleNotice('');
+    if (statusGenerationRef.current !== generation) {
+      statusGenerationRef.current = generation;
+      setPlacementStatus('');
+      setFixtureMoveStatus('');
+      setFixtureCopyStatus('');
+      setStaffMoveStatus('');
+      if (staffMoveRef.current) {
+        staffMoveRef.current = null;
+        setMoveRevision(revision => revision + 1);
+      }
+    }
+  }, [generation]);
+
+  // Locate consumes each request token at most once. The effect tracks only the
+  // request identity and its guard inputs, so ordinary tick-driven state
+  // rerenders never re-run it; the canonical coordinates are resolved from the
+  // state snapshot at consumption time.
+  useEffect(() => {
+    if (!locateRequest) return;
+    const token = locateRequest.token;
+    if (token == null || consumedLocateTokenRef.current === token) return;
+    consumedLocateTokenRef.current = token;
+
+    const report = success => onLocateResult?.({ token, success });
+    const canvas = canvasRef.current;
+    const camera = cameraRef.current;
+    const width = canvas?.clientWidth;
+    const height = canvas?.clientHeight;
+    const worker = state.staff.find(candidate => candidate.id === locateRequest.id);
+    const canLocate = locateRequest.generation === generation
+      && !placementRequest
+      && !isCareerDecisionPending(state)
+      && Boolean(worker)
+      && Number.isFinite(worker?.x)
+      && Number.isFinite(worker?.y)
+      && Number.isFinite(width) && width > 0
+      && Number.isFinite(height) && height > 0
+      && Number.isFinite(camera.zoom) && camera.zoom > 0;
+
+    if (!canLocate) {
+      report(false);
+      return;
+    }
+
+    camera.x = width / 2 - worker.x * camera.zoom;
+    camera.y = height / 2 - worker.y * camera.zoom;
+    camera.manual = true;
+    viewportRef.current = { w: width, h: height };
+    canvas.focus();
+    report(true);
+  }, [locateRequest, generation, placementRequest]);
 
   useAnimationFrameLoop(timeMs => {
     try {
@@ -498,6 +771,14 @@ export default function RestaurantCanvas({
   // R key to rotate during move or placement
   useEffect(() => {
     const onKey = (e) => {
+      if (managementOpen) return;
+      if (e.defaultPrevented || e.isComposing || e.repeat
+        || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const target = e.target;
+      if (target?.isContentEditable || target?.closest?.(
+        'input, textarea, select, [role="textbox"], [role="combobox"], [role="spinbutton"], '
+        + '[contenteditable]:not([contenteditable="false"])',
+      )) return;
       const currentPlacement = placementRef.current;
       if (currentPlacement && e.key.toLowerCase() === 'r'
         && getPlaceable(currentPlacement.itemType)?.rotatable) {
@@ -512,6 +793,7 @@ export default function RestaurantCanvas({
         const next = buildPlacement(state, currentPlacement, point, rotation);
         placementRef.current = next;
         setPlacement(next);
+        setPlacementStatus(PLACEMENT_ROTATED_STATUS);
         return;
       }
       const moving = moveRef.current;
@@ -524,12 +806,23 @@ export default function RestaurantCanvas({
         moving.items = moving.items.map(item => ({ ...item, rotation }));
         moving.validation = validateFixtureMoves(state, moving.items);
         if (moving.validation.valid) moving.items = moving.validation.moves;
+        setFixtureMoveStatus(FIXTURE_MOVE_ROTATED_STATUS);
         setMoveRevision(revision => revision + 1);
       }
       if (e.key === 'Escape') {
+        const hadFixtureMove = Boolean(moveRef.current);
+        const hadFixtureCopy = Boolean(copyRef.current);
+        const hadStaffMove = Boolean(staffMoveRef.current);
+        if (saleReviewRef.current) {
+          saleReviewRef.current = null;
+          saleSubmittedRef.current = false;
+          setSaleReview(null);
+          setSaleNotice('');
+        }
         if (placementRef.current) {
           placementRef.current = null;
           setPlacement(null);
+          setPlacementStatus('Placement cancelled.');
           onPlacementComplete?.();
         }
         copyRef.current = null;
@@ -539,23 +832,34 @@ export default function RestaurantCanvas({
         moveRef.current = null;
         staffMoveRef.current = null;
         dragRef.current = null;
+        if (hadFixtureMove) setFixtureMoveStatus(FIXTURE_MOVE_CANCELLED_STATUS);
+        if (hadFixtureCopy) setFixtureCopyStatus(FIXTURE_COPY_CANCELLED_STATUS);
+        if (hadStaffMove) {
+          setStaffMoveStatus(STAFF_MOVE_CANCELLED_STATUS);
+          canvasRef.current?.focus();
+        }
         setMoveRevision(revision => revision + 1);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state, onPlacementComplete]);
+  }, [managementOpen, state, onPlacementComplete]);
 
   useEffect(() => {
     const cancelPlacement = (event) => {
       if (!placementRef.current && !copyRef.current) return;
       event.preventDefault();
       const hadPlacement = Boolean(placementRef.current);
+      const hadCopy = Boolean(copyRef.current);
       placementRef.current = null;
       setPlacement(null);
       copyRef.current = null;
       setMoveRevision(revision => revision + 1);
-      if (hadPlacement) onPlacementComplete?.();
+      if (hadCopy) setFixtureCopyStatus(FIXTURE_COPY_CANCELLED_STATUS);
+      if (hadPlacement) {
+        setPlacementStatus('Placement cancelled.');
+        onPlacementComplete?.();
+      }
     };
     window.addEventListener('contextmenu', cancelPlacement);
     return () => window.removeEventListener('contextmenu', cancelPlacement);
@@ -564,6 +868,10 @@ export default function RestaurantCanvas({
   // --- Mouse handlers ---
 
   const handleMouseMove = (e) => {
+    if (dragRef.current && (e.buttons & 1) !== 1) {
+      cancelSelectionDrag();
+      return;
+    }
     const currentPlacement = placementRef.current;
     if (currentPlacement) {
       const world = getWorldPos(e);
@@ -620,7 +928,7 @@ export default function RestaurantCanvas({
       }
       return;
     }
-    if (dragRef.current && (e.buttons & 1) === 1) {
+    if (dragRef.current) {
       const world = getWorldPos(e);
       const screen = getCanvasPos(e);
       dragRef.current.currentWorld = world;
@@ -649,6 +957,8 @@ export default function RestaurantCanvas({
     const validation = validateFixtureMoves(state, moving.items);
     moving.validation = validation;
     if (!validation.valid) {
+      const reason = validation.reason || 'Destination is invalid';
+      setFixtureMoveStatus(`Cannot move fixtures: ${reason}.`);
       setMoveRevision(revision => revision + 1);
       return;
     }
@@ -656,6 +966,7 @@ export default function RestaurantCanvas({
     dispatch({ type: 'MOVE_FIXTURES', items: validation.moves });
     setSelectedItems([]);
     moveRef.current = null;
+    setFixtureMoveStatus(FIXTURE_MOVE_SUBMITTED_STATUS);
     setMoveRevision(revision => revision + 1);
   };
 
@@ -674,6 +985,8 @@ export default function RestaurantCanvas({
     copying.validation = validation;
     copying.price = validation.price ?? copying.price;
     if (!validation.valid) {
+      const reason = validation.reason || FIXTURE_COPY_DESTINATION_FALLBACK;
+      setFixtureCopyStatus(`Cannot copy fixtures: ${reason}.`);
       setMoveRevision(revision => revision + 1);
       return;
     }
@@ -681,6 +994,7 @@ export default function RestaurantCanvas({
     dispatch({ type: 'COPY_FIXTURES', items: validation.copies });
     copyRef.current = null;
     setSelectedItems([]);
+    setFixtureCopyStatus(FIXTURE_COPY_SUBMITTED_STATUS);
     setMoveRevision(revision => revision + 1);
   };
 
@@ -691,6 +1005,8 @@ export default function RestaurantCanvas({
     const validation = validateStaffMove(state, moving.id, moving.point);
     moving.validation = validation;
     if (!validation.valid) {
+      const reason = validation.reason || STAFF_MOVE_DESTINATION_FALLBACK;
+      setStaffMoveStatus(`Cannot move employee: ${reason}.`);
       setMoveRevision(revision => revision + 1);
       return;
     }
@@ -698,24 +1014,63 @@ export default function RestaurantCanvas({
     dispatch({ type: 'MOVE_STAFF', id: moving.id, x: moving.point.x, y: moving.point.y });
     staffMoveRef.current = null;
     setSelectedStaffId(null);
+    setStaffMoveStatus(STAFF_MOVE_SUBMITTED_STATUS);
+    canvasRef.current?.focus();
     setMoveRevision(revision => revision + 1);
   };
 
+  // Click and Enter share one submission path so both revalidate the currently
+  // displayed point against the latest state before consuming the placement.
+  const submitPlacement = () => {
+    const currentPlacement = placementRef.current;
+    if (!currentPlacement) return false;
+
+    const next = buildPlacement(
+      state,
+      currentPlacement,
+      { x: currentPlacement.x, y: currentPlacement.y },
+      currentPlacement.rotation,
+    );
+    if (!samePlacement(currentPlacement, next)) {
+      placementRef.current = next;
+      setPlacement(next);
+    }
+    if (!next.valid) {
+      const label = getPlacementLabel(state, next);
+      const reason = next.reason ?? 'Placement is invalid';
+      setPlacementStatus(`Cannot place ${label}: ${reason}.`);
+      return false;
+    }
+
+    const purchase = getPlacementPurchase(state, next);
+    if (!purchase.valid) {
+      const label = getPlacementLabel(state, next);
+      setPlacementStatus(`Cannot place ${label}: ${purchase.reason}.`);
+      return false;
+    }
+
+    const payload = {
+      type: 'PLACE_ITEM',
+      itemType: next.itemType,
+      ...(next.equipmentId ? { equipmentId: next.equipmentId } : {}),
+      x: next.x,
+      y: next.y,
+      rotation: next.rotation,
+    };
+    // Consume the ref before dispatch so a synchronous reentry cannot repeat it.
+    placementRef.current = null;
+    setPlacement(null);
+    dispatch(payload);
+    setPlacementStatus('Placement submitted.');
+    onPlacementComplete?.();
+    return true;
+  };
+
   const handleClick = (e) => {
+    if (saleReviewRef.current) return;
     const currentPlacement = placementRef.current;
     if (currentPlacement) {
-      if (!currentPlacement.valid) return;
-      dispatch({
-        type: 'PLACE_ITEM',
-        itemType: currentPlacement.itemType,
-        ...(currentPlacement.equipmentId ? { equipmentId: currentPlacement.equipmentId } : {}),
-        x: currentPlacement.x,
-        y: currentPlacement.y,
-        rotation: currentPlacement.rotation,
-      });
-      placementRef.current = null;
-      setPlacement(null);
-      onPlacementComplete?.();
+      submitPlacement();
       return;
     }
     if (suppressClickRef.current) {
@@ -746,6 +1101,7 @@ export default function RestaurantCanvas({
       // Show context menu at click position
       setSelectedStaffId(null);
       setSelectedItems([]);
+      setMenuPosition(null);
       setMenu({
         x: e.clientX - rect.left,
         y: e.clientY - rect.top,
@@ -761,7 +1117,60 @@ export default function RestaurantCanvas({
     }
   };
 
+  const handleCanvasKeyDown = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas || e.target !== canvas || document.activeElement !== canvas) return;
+    if (managementOpen || saleReviewRef.current) return;
+    if (e.defaultPrevented || e.isComposing || e.nativeEvent?.isComposing || e.repeat
+      || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const currentPlacement = placementRef.current;
+    if (!currentPlacement) return;
+
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitPlacement();
+      return;
+    }
+
+    const offset = {
+      ArrowLeft: { x: -GRID_SIZE, y: 0 },
+      ArrowRight: { x: GRID_SIZE, y: 0 },
+      ArrowUp: { x: 0, y: -GRID_SIZE },
+      ArrowDown: { x: 0, y: GRID_SIZE },
+    }[e.key];
+    if (!offset) return;
+
+    e.preventDefault();
+    const snapped = snapPlacement(
+      currentPlacement.itemType,
+      {
+        x: currentPlacement.x + offset.x,
+        y: currentPlacement.y + offset.y,
+      },
+      state,
+      currentPlacement.rotation,
+    );
+    if (!snapped) return;
+
+    const next = buildPlacement(
+      state,
+      currentPlacement,
+      snapped,
+      currentPlacement.rotation,
+    );
+    placementRef.current = next;
+    setPlacement(next);
+  };
+
+  // Closing the panel (normal close or a confirmed fire) hands focus back to
+  // the canvas so it never strands on the unmounting trigger/row.
+  const closeStaffDetails = () => {
+    setSelectedStaffId(null);
+    canvasRef.current?.focus();
+  };
+
   const handleMouseDown = (e) => {
+    if (saleReviewRef.current) return;
     if (e.button !== 0 || moveRef.current || copyRef.current || staffMoveRef.current || placementRef.current) return;
     const world = getWorldPos(e);
     const screen = getCanvasPos(e);
@@ -775,6 +1184,7 @@ export default function RestaurantCanvas({
   };
 
   const handleMouseUp = () => {
+    if (saleReviewRef.current) return;
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag?.dragging) return;
@@ -794,7 +1204,7 @@ export default function RestaurantCanvas({
   const handleWheel = (e) => {
     e.preventDefault();
     const factor = e.deltaY > 0 ? 0.9 : 1.1;
-    adjustCameraZoom(cameraRef.current, factor);
+    adjustCameraZoom(cameraRef.current, factor, getCanvasPos(e));
   };
 
   // Context menu actions
@@ -810,6 +1220,11 @@ export default function RestaurantCanvas({
       anchor: { x: primary.x, y: primary.y },
       validation: null,
     };
+    setFixtureMoveStatus(FIXTURE_MOVE_HINT);
+    setFixtureCopyStatus('');
+    copyRef.current = null;
+    staffMoveRef.current = null;
+    setStaffMoveStatus('');
     setMenu(null);
     setMoveRevision(revision => revision + 1);
   };
@@ -827,18 +1242,65 @@ export default function RestaurantCanvas({
       validation: validateStaffMove(state, worker.id, point),
     };
     moveRef.current = null;
+    setFixtureMoveStatus('');
+    setFixtureCopyStatus('');
+    copyRef.current = null;
+    setStaffMoveStatus(STAFF_MOVE_HINT);
     dragRef.current = null;
     suppressClickRef.current = false;
     setMenu(null);
     setSelectedStaffId(null);
     setSelectedItems([]);
     setMoveRevision(revision => revision + 1);
+    canvasRef.current?.focus();
+  };
+
+  const handleCancelSale = () => {
+    saleReviewRef.current = null;
+    saleSubmittedRef.current = false;
+    setSaleReview(null);
+    setSaleNotice('');
+  };
+
+  const openFixtureSaleReview = (requestedItems) => {
+    const review = buildSaleReview(state, requestedItems);
+    if (review.entries.length === 0) return;
+    saleSubmittedRef.current = false;
+    saleReviewRef.current = review;
+    setSaleReview(review);
+    setSaleNotice('');
+    setMenu(null);
+  };
+
+  const handleConfirmSale = () => {
+    const current = saleReviewRef.current;
+    if (!current || saleSubmittedRef.current) return;
+
+    const next = buildSaleReview(state, current.requestedItems);
+    if (!sameSaleReviewFacts(current, next)) {
+      saleSubmittedRef.current = false;
+      saleReviewRef.current = next;
+      setSaleReview(next);
+      setSaleNotice('Sale details changed. Review them before confirming again.');
+      return;
+    }
+
+    if (next.eligibleItems.length === 0 || !next.expectedSale) return;
+    saleSubmittedRef.current = true;
+    dispatch({
+      type: 'SELL_ITEMS',
+      items: next.eligibleItems,
+      expectedSale: next.expectedSale,
+    });
+    saleReviewRef.current = null;
+    setSaleReview(null);
+    setSaleNotice('');
+    setSelectedItems([]);
   };
 
   const handleDeleteEntity = () => {
     if (!menu) return;
-    dispatch({ type: 'SELL_ITEMS', items: [{ type: menu.type, id: menu.data.id }] });
-    setMenu(null);
+    openFixtureSaleReview([{ type: menu.type, id: menu.data.id }]);
   };
 
   const handleCopySelected = () => {
@@ -858,6 +1320,10 @@ export default function RestaurantCanvas({
       price: eligibility.price ?? 0,
     };
     moveRef.current = null;
+    setFixtureMoveStatus('');
+    setFixtureCopyStatus(FIXTURE_COPY_HINT);
+    staffMoveRef.current = null;
+    setStaffMoveStatus('');
     dragRef.current = null;
     suppressClickRef.current = false;
     setMenu(null);
@@ -874,15 +1340,21 @@ export default function RestaurantCanvas({
       anchor: { x: items[0].x, y: items[0].y },
       validation: null,
     };
+    setFixtureMoveStatus(FIXTURE_MOVE_HINT);
+    setFixtureCopyStatus('');
     copyRef.current = null;
+    staffMoveRef.current = null;
+    setStaffMoveStatus('');
     suppressClickRef.current = false;
     setMoveRevision(revision => revision + 1);
   };
 
   const handleSellSelected = () => {
-    const sellableItems = selectedItems.filter(item => canOfferFixtureSale(state, item));
-    if (sellableItems.length > 0) dispatch({ type: 'SELL_ITEMS', items: sellableItems });
-    setSelectedItems([]);
+    const requestedItems = selectedItems
+      .filter(item => CANVAS_SELL_TYPES.has(item?.type))
+      .map(item => ({ type: item.type, id: item.id }));
+    if (requestedItems.length === 0) return;
+    openFixtureSaleReview(requestedItems);
   };
 
   const canMoveMenuEntity = Boolean(menu);
@@ -899,25 +1371,41 @@ export default function RestaurantCanvas({
     : null;
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
+    <div ref={wrapperRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
+        tabIndex={0}
+        aria-label="Restaurant canvas"
         style={{ width: '100%', height: '100%', cursor: placement || currentCopy ? 'crosshair' : (moveRef.current || staffMoveRef.current) ? 'none' : 'default' }}
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
         onWheel={handleWheel}
         onClick={handleClick}
+        onKeyDown={handleCanvasKeyDown}
       />
 
       {/* Context menu */}
-      {menu && (
-        <div style={{
-          position: 'absolute', left: menu.x + 8, top: menu.y + 8, zIndex: 300,
-          background: '#16213e', border: '1px solid #0f3460', borderRadius: 8,
-          padding: 6, display: 'flex', flexDirection: 'column', gap: 4,
-          minWidth: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-        }}>
+      {menu && !saleReview && (
+        <div
+          ref={menuRef}
+          role="region"
+          aria-label="Fixture actions"
+          style={{
+            position: 'absolute',
+            left: menuPosition ? menuPosition.x : menu.x + 8,
+            top: menuPosition ? menuPosition.y : menu.y + 8,
+            zIndex: 300,
+            background: '#16213e', border: '1px solid #0f3460', borderRadius: 8,
+            padding: 6, display: 'flex', flexDirection: 'column', gap: 4,
+            boxSizing: 'border-box',
+            minWidth: 'min(100px, 100%)',
+            maxWidth: '100%',
+            maxHeight: '100%',
+            overflowY: 'auto',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+          }}
+        >
           <div style={{ ...TYPOGRAPHY.secondary, color: '#888', padding: '2px 8px' }}>
             {getFixtureLabel(state, { type: menu.type, data: menu.data }) || humaniseIdentifier(menu.type)}
           </div>
@@ -972,7 +1460,7 @@ export default function RestaurantCanvas({
           cashierStations={state.cashierStations}
           dispatch={dispatch}
           onMove={handleMoveStaff}
-          onClose={() => setSelectedStaffId(null)}
+          onClose={closeStaffDetails}
         />
       )}
 
@@ -986,7 +1474,7 @@ export default function RestaurantCanvas({
         }} />;
       })()}
 
-      {selectedItems.length > 0 && !moveRef.current && !currentCopy && (
+      {selectedItems.length > 0 && !moveRef.current && !currentCopy && !saleReview && (
         <div style={{
           position: 'absolute', left: '50%', bottom: 16, transform: 'translateX(-50%)', zIndex: 300,
           display: 'flex', alignItems: 'center', gap: 8,
@@ -1003,12 +1491,23 @@ export default function RestaurantCanvas({
         </div>
       )}
 
+      {saleReview && (
+        <FixtureSaleReview
+          review={saleReview}
+          notice={saleNotice}
+          onCancel={handleCancelSale}
+          onConfirm={handleConfirmSale}
+        />
+      )}
+
       {/* Move mode indicator */}
       {moveRef.current && (
         <div style={{
           position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
           background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
           ...TYPOGRAPHY.control, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          textAlign: 'center', width: 'calc(100% - 32px)', boxSizing: 'border-box',
+          overflowWrap: 'break-word',
         }}>
           Click to place · {moveRef.current.originalItems.length === 1
             && isRotatableMoveItem(state, moveRef.current.originalItems[0]) ? 'R to rotate · ' : ''}Esc to cancel
@@ -1027,7 +1526,8 @@ export default function RestaurantCanvas({
           position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
           background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
           ...TYPOGRAPHY.control, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-          textAlign: 'center',
+          textAlign: 'center', width: 'calc(100% - 32px)', boxSizing: 'border-box',
+          overflowWrap: 'break-word',
         }}>
           <div>Click to place copy · ${currentCopy.price} · Esc to cancel</div>
           {currentCopy.validation && !currentCopy.validation.valid && (
@@ -1043,6 +1543,8 @@ export default function RestaurantCanvas({
           position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
           background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
           ...TYPOGRAPHY.control, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          textAlign: 'center', width: 'calc(100% - 32px)', boxSizing: 'border-box',
+          overflowWrap: 'break-word',
         }}>
           Click to place staff · Esc to cancel
           {staffMoveRef.current.validation && !staffMoveRef.current.validation.valid && (
@@ -1058,9 +1560,10 @@ export default function RestaurantCanvas({
           position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 300,
           background: '#f0a500', color: '#111', padding: '8px 20px', borderRadius: 8,
           ...TYPOGRAPHY.control, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-          textAlign: 'center',
+          textAlign: 'center', width: 'calc(100% - 32px)', boxSizing: 'border-box',
+          overflowWrap: 'break-word',
         }}>
-          <div>Place {getPlacementLabel(state, placement)} · Click to buy · R to rotate · Right click/Esc to cancel</div>
+          <div>Place {getPlacementLabel(state, placement)} · Arrow keys move · Enter/Click to buy · R to rotate · Right click/Esc to cancel</div>
           {!placement.valid && (
             <div style={{ ...TYPOGRAPHY.secondary, color: '#b00000', marginTop: 4 }}>Invalid: {placement.reason}</div>
           )}
@@ -1099,6 +1602,89 @@ export default function RestaurantCanvas({
           title="Zoom out"
           aria-label="Zoom out"
         >-</button>
+      </div>
+
+      {/* Persistent discrete placement announcements; the visual banner may
+          disappear on submission/cancellation while this region remains. */}
+      <div
+        role="status"
+        aria-label="Placement feedback"
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+          pointerEvents: 'none',
+        }}
+      >
+        {placementStatus}
+      </div>
+      <div
+        role="status"
+        aria-label="Fixture move feedback"
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+          pointerEvents: 'none',
+        }}
+      >
+        {fixtureMoveStatus}
+      </div>
+      <div
+        role="status"
+        aria-label="Fixture copy feedback"
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+          pointerEvents: 'none',
+        }}
+      >
+        {fixtureCopyStatus}
+      </div>
+      <div
+        role="status"
+        aria-label="Staff move feedback"
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+          pointerEvents: 'none',
+        }}
+      >
+        {staffMoveStatus}
       </div>
     </div>
   );

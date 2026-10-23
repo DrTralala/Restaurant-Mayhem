@@ -117,18 +117,37 @@ function toBasket(kind, dish = null, drink = null) {
   };
 }
 
-export function buildAffordableBaskets(state, customer) {
-  const budget = Number(customer?.spendingBudget);
-  if (!Number.isFinite(budget) || budget < 0) return [];
+function buildMenuBaskets(state, customer) {
+  const contractBypass = typeof customer?.serviceContractId === 'string'
+    && customer.serviceContractId.length > 0;
   const dishes = (state?.dishes || []).map(dish => getResolvedDish(state, dish.id))
-    .filter(dish => Number.isFinite(dish?.price));
+    .filter(dish => Number.isFinite(dish?.price))
+    .filter(dish => contractBypass || !isMenuItemSuspended(state, 'dish', dish.id));
   const drinks = (state?.unlockedDrinkIds || [])
-    .map(id => getResolvedDrink(state, id)).filter(Boolean);
+    .map(id => getResolvedDrink(state, id)).filter(Boolean)
+    .filter(drink => contractBypass || !isMenuItemSuspended(state, 'drink', drink.id));
   return [
     ...dishes.map(dish => toBasket('dish', dish)),
     ...drinks.map(drink => toBasket('drink', null, drink)),
     ...dishes.flatMap(dish => drinks.map(drink => toBasket('dish_drink', dish, drink))),
-  ].filter(basket => basket.price <= budget);
+  ];
+}
+
+export function isMenuItemSuspended(state, kind, id) {
+  const list = kind === 'dish'
+    ? state?.restaurant?.suspendedDishIds
+    : kind === 'drink' ? state?.restaurant?.suspendedDrinkIds : null;
+  return Array.isArray(list) && list.includes(id);
+}
+
+export function hasAvailableWalkInMenu(state) {
+  return buildMenuBaskets(state).length > 0;
+}
+
+export function buildAffordableBaskets(state, customer) {
+  const budget = Number(customer?.spendingBudget);
+  if (!Number.isFinite(budget) || budget < 0) return [];
+  return buildMenuBaskets(state, customer).filter(basket => basket.price <= budget);
 }
 
 export function getBasketWeight(basket, customer) {
@@ -188,65 +207,56 @@ const ARCHETYPE_MIX = Object.freeze({
   rusher: 1 / 6,
   influencer: 1 / 6,
 });
-const REPRESENTATIVE_BUDGET_FRACTIONS = Object.freeze([0, 0.25, 0.5, 0.75, 1]);
-
-function basketContains(basket, kind, itemId) {
-  return kind === 'dish'
-    ? basket.dish?.id === itemId
-    : kind === 'drink' && basket.drink?.id === itemId;
-}
-
-export function estimateMenuItemDemand(state, kind, itemId) {
-  const itemExists = kind === 'dish'
-    ? (state?.dishes || []).some(dish => dish?.id === itemId)
-    : kind === 'drink'
-      && (state?.unlockedDrinkIds || []).includes(itemId)
-      && getResolvedDrink(state, itemId) != null;
-  if (!itemExists) return 0;
-
+export function estimateMenuDemand(state) {
+  const baskets = buildMenuBaskets(state);
+  const dishes = new Map();
+  const drinks = new Map();
   const tierMix = getSpendingTierProbabilities(state?.restaurant?.reputation);
-  let totalProbability = 0;
   for (const [spendingTier, tierProbability] of Object.entries(tierMix)) {
     const [minimum, maximum] = SPENDING_TIER_RANGES[spendingTier];
-    for (const [archetype, archetypeProbability] of Object.entries(ARCHETYPE_MIX)) {
-      for (const fraction of REPRESENTATIVE_BUDGET_FRACTIONS) {
-        const customer = {
-          spendingTier,
-          spendingBudget: Math.round(minimum + (maximum - minimum) * fraction),
-          archetype,
-        };
-        const baskets = buildAffordableBaskets(state, customer);
-        const kinds = Object.keys(ORDER_KIND_WEIGHTS)
-          .filter(candidateKind => baskets.some(basket => basket.kind === candidateKind));
-        const kindWeightTotal = kinds.reduce(
-          (sum, candidateKind) => sum + ORDER_KIND_WEIGHTS[candidateKind],
-          0,
-        );
-        let profileProbability = 0;
-        for (const candidateKind of kinds) {
-          const candidates = baskets.filter(basket => basket.kind === candidateKind);
-          const basketWeightTotal = candidates.reduce(
-            (sum, basket) => sum + getBasketWeight(basket, customer),
-            0,
-          );
-          const containingWeight = candidates
-            .filter(basket => basketContains(basket, kind, itemId))
-            .reduce((sum, basket) => sum + getBasketWeight(basket, customer), 0);
-          if (kindWeightTotal > 0 && basketWeightTotal > 0) {
-            profileProbability += ORDER_KIND_WEIGHTS[candidateKind] / kindWeightTotal
-              * containingWeight / basketWeightTotal;
-          }
+    for (let spendingBudget = minimum; spendingBudget <= maximum; spendingBudget += 1) {
+      const candidates = baskets.filter(basket => basket.price <= spendingBudget);
+      if (!candidates.length) continue;
+      const groups = new Map();
+      for (const basket of candidates) {
+        if (!groups.has(basket.kind)) groups.set(basket.kind, []);
+        groups.get(basket.kind).push(basket);
+      }
+      const kindWeightTotal = [...groups.keys()]
+        .reduce((sum, kind) => sum + ORDER_KIND_WEIGHTS[kind], 0);
+      if (!(kindWeightTotal > 0)) continue;
+      for (const [archetype, archetypeProbability] of Object.entries(ARCHETYPE_MIX)) {
+        const customer = { spendingTier, spendingBudget, archetype };
+        for (const [kind, group] of groups) {
+          const weights = group.map(basket => getBasketWeight(basket, customer));
+          const basketWeightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+          if (!(basketWeightTotal > 0)) continue;
+          group.forEach((basket, index) => {
+            const probability = tierProbability / (maximum - minimum + 1)
+              * archetypeProbability * ORDER_KIND_WEIGHTS[kind] / kindWeightTotal
+              * weights[index] / basketWeightTotal;
+            if (basket.dish) dishes.set(basket.dish.id, (dishes.get(basket.dish.id) || 0) + probability);
+            if (basket.drink) drinks.set(basket.drink.id, (drinks.get(basket.drink.id) || 0) + probability);
+          });
         }
-        totalProbability += tierProbability * archetypeProbability
-          * profileProbability / REPRESENTATIVE_BUDGET_FRACTIONS.length;
       }
     }
   }
-  return Math.round(clamp01(totalProbability) * 100);
+  const rounded = map => new Map([...map].map(
+    ([id, probability]) => [id, Math.round(clamp01(probability) * 100)],
+  ));
+  return { dishes: rounded(dishes), drinks: rounded(drinks) };
+}
+
+export function estimateMenuItemDemand(state, kind, itemId) {
+  if (kind !== 'dish' && kind !== 'drink') return 0;
+  const demand = estimateMenuDemand(state);
+  return (kind === 'dish' ? demand.dishes : demand.drinks).get(itemId) ?? 0;
 }
 
 export function getMenuAffordabilitySummary(state) {
   const probabilities = getSpendingTierProbabilities(state.restaurant?.reputation);
+  const menuBaskets = buildMenuBaskets(state);
   let dishShare = 0;
   let anyOrderShare = 0;
   let dishTotal = 0;
@@ -256,7 +266,7 @@ export function getMenuAffordabilitySummary(state) {
     let dishCount = 0;
     let anyCount = 0;
     for (let budget = min; budget <= max; budget += 1) {
-      const baskets = buildAffordableBaskets(state, { spendingTier: tier, spendingBudget: budget });
+      const baskets = menuBaskets.filter(basket => basket.price <= budget);
       if (baskets.length > 0) anyCount += 1;
       if (baskets.some(basket => basket.dish)) dishCount += 1;
     }

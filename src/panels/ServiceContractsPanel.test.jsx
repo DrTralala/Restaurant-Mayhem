@@ -47,6 +47,47 @@ describe('ServiceContractsPanel', () => {
     expect(dispatch).not.toHaveBeenCalled();
     expect(state.restaurant.funds).toBe(600);
   });
+  it('shows current projected review times without opening details and refreshes both on rerender', () => {
+    const { rerender } = render(<ServiceContractsPanel />);
+    const card = () => screen.getByRole('region', { name: 'Office lunch offer' });
+    expect(within(card()).getByText(/Arrival 3: couple, 2 guests/)).not.toBeVisible();
+    fireEvent.click(within(card()).getByRole('button', { name: 'Review Office lunch' }));
+    const confirmation = () => screen.getByRole('group', { name: 'Confirm Office lunch' });
+    expect(within(confirmation()).getByText('Projected start: Day 1, 10:15 AM')).toBeVisible();
+    expect(within(confirmation()).getByText('Projected deadline: Day 1, 11:25 AM')).toBeVisible();
+    expect(within(card()).getByText(/Arrival 3: couple, 2 guests/)).not.toBeVisible();
+    state = { ...state, restaurant: { ...state.restaurant, gameTime: 11 * 3600 } };
+    rerender(<ServiceContractsPanel />);
+    expect(within(confirmation()).getByText('Projected start: Day 1, 11:15 AM')).toBeVisible();
+    expect(within(confirmation()).getByText('Projected deadline: Day 1, 12:25 PM')).toBeVisible();
+    expect(within(confirmation()).queryByText('Projected start: Day 1, 10:15 AM')).not.toBeInTheDocument();
+    expect(within(confirmation()).queryByText('Projected deadline: Day 1, 11:25 AM')).not.toBeInTheDocument();
+  });
+  it('labels projected review times across a midnight day wrap', () => {
+    state = { ...state, restaurant: { ...state.restaurant, day: 1, gameTime: 23 * 3600 + 50 * 60 } };
+    render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review Office lunch' }));
+    const confirmation = screen.getByRole('group', { name: 'Confirm Office lunch' });
+    expect(within(confirmation).getByText('Projected start: Day 2, 12:05 AM')).toBeVisible();
+    expect(within(confirmation).getByText('Projected deadline: Day 2, 1:15 AM')).toBeVisible();
+  });
+  it('replaces projected review times with unavailable and blocks acceptance after an invalid clock', () => {
+    const { rerender } = render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review Office lunch' }));
+    expect(screen.getByRole('button', { name: 'Accept and start preparation' })).toBeEnabled();
+    state = { ...state, restaurant: { ...state.restaurant, gameTime: Number.NaN } };
+    rerender(<ServiceContractsPanel />);
+    const confirmation = screen.getByRole('group', { name: 'Confirm Office lunch' });
+    expect(within(confirmation).getByText('Projected times unavailable.')).toBeVisible();
+    expect(within(confirmation).queryByText(/Projected start:/)).not.toBeInTheDocument();
+    expect(within(confirmation).queryByText(/Projected deadline:/)).not.toBeInTheDocument();
+    const accept = within(confirmation).getByRole('button', { name: 'Accept and start preparation' });
+    expect(accept).toBeDisabled();
+    fireEvent.click(accept);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(within(screen.getByRole('region', { name: 'Office lunch offer' }))
+      .getByText('The game clock cannot start a contract')).toBeVisible();
+  });
   it('keeps readiness warnings visible outside collapsed details', () => {
     state = { ...state, staff: [] };
     render(<ServiceContractsPanel />);
@@ -166,6 +207,37 @@ describe('ServiceContractsPanel', () => {
     rerender(<ServiceContractsPanel />);
     expect(screen.getByRole('status').textContent).toBe(announcement);
     expect(state.restaurant.funds).toBe(622.5);
+  });
+  it('states the pause-aware walk-in policy while open and while paused', () => {
+    const { rerender } = render(<ServiceContractsPanel />);
+    const intro = () => screen.getByText(
+      /Walk-ins follow opening hours and the walk-in pause setting; tables and staff are not reserved\./,
+    );
+    expect(intro()).toBeVisible();
+    expect(screen.queryByText(/Walk-ins continue/)).not.toBeInTheDocument();
+
+    state = { ...state, careerRun: { needsDecision: true } };
+    rerender(<ServiceContractsPanel />);
+    expect(intro()).toBeVisible();
+    expect(screen.getByText('Contract paused — choose Continue in Opening Week to resume')).toBeInTheDocument();
+  });
+  it('keeps the scheduled-work disclaimer visible on a warning-free offer', () => {
+    render(<ServiceContractsPanel />);
+    const card = screen.getByRole('region', { name: 'Office lunch offer' });
+    expect(within(card).queryByText('Check before accepting:')).not.toBeInTheDocument();
+    expect(within(card).getByText('Scheduled Work does not guarantee availability or coverage throughout service.')).toBeVisible();
+  });
+  it('keeps schedule advice and the coverage disclaimer outside details with acceptance enabled', () => {
+    const rest = Array.from({ length: 48 }, () => 'rest');
+    state = { ...state, staff: state.staff.map(person => ({ ...person, schedule: rest })) };
+    render(<ServiceContractsPanel />);
+    const card = screen.getByRole('region', { name: 'Office lunch offer' });
+    expect(within(card).getByText('Under current schedules, no cook is scheduled to Work at one or more arrivals.')).toBeVisible();
+    expect(within(card).getByText('Under current schedules, no waiter is scheduled to Work at one or more arrivals.')).toBeVisible();
+    expect(within(card).getByText('Under current schedules, no assigned checkout waiter is scheduled to Work at one or more arrivals.')).toBeVisible();
+    expect(within(card).getByText('Scheduled Work does not guarantee availability or coverage throughout service.')).toBeVisible();
+    expect(within(card).queryByText('No cook is employed.')).not.toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Review Office lunch' })).toBeEnabled();
   });
 });
 

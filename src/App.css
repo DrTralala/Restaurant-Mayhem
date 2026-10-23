@@ -53,6 +53,13 @@ textarea:focus-visible {
   animation: toast-lifetime 5s linear forwards;
 }
 
+.toast-banner.toast-banner--focused,
+.toast-banner:focus-within {
+  animation-play-state: paused;
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+}
+
 .toast-dismiss {
   position: absolute;
   top: 50%;

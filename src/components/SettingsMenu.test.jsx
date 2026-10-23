@@ -106,3 +106,108 @@ describe('Settings recovery focus ownership', () => {
     expect(screen.getByRole('button', { name: 'Fit' })).toHaveFocus();
   });
 });
+
+describe('Settings disclosure state', () => {
+  function disclosure(props = {}) {
+    return <SettingsMenu isOpen={false} modal={false} onToggle={() => {}} onClose={() => {}} {...props} />;
+  }
+
+  const settingsTrigger = () => screen.getByRole('button', { name: 'Settings' });
+
+  it('reports collapsed ordinary and modal triggers without a panel reference', () => {
+    const view = render(disclosure());
+    expect(settingsTrigger()).toHaveAttribute('aria-expanded', 'false');
+    expect(settingsTrigger()).not.toHaveAttribute('aria-controls');
+    expect(screen.queryByRole('button', { name: 'Save game' })).not.toBeInTheDocument();
+
+    view.rerender(disclosure({ modal: true }));
+    expect(settingsTrigger()).toHaveAttribute('aria-expanded', 'false');
+    expect(settingsTrigger()).not.toHaveAttribute('aria-controls');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('links an open ordinary panel and removes the reference when rerendered closed', () => {
+    const view = render(disclosure());
+    view.rerender(disclosure({ isOpen: true }));
+
+    expect(settingsTrigger()).toHaveAttribute('aria-expanded', 'true');
+    const panelId = settingsTrigger().getAttribute('aria-controls');
+    const panel = document.getElementById(panelId);
+    expect(panelId).toBeTruthy();
+    expect(panel).toBeInTheDocument();
+    expect(panel).toContainElement(screen.getByRole('button', { name: 'Save game' }));
+    expect(panel).not.toHaveAttribute('role');
+
+    view.rerender(disclosure({ isOpen: false }));
+    expect(settingsTrigger()).toHaveAttribute('aria-expanded', 'false');
+    expect(settingsTrigger()).not.toHaveAttribute('aria-controls');
+    expect(document.getElementById(panelId)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save game' })).not.toBeInTheDocument();
+
+    view.rerender(disclosure({ isOpen: true }));
+    expect(settingsTrigger()).toHaveAttribute('aria-controls', panelId);
+  });
+
+  it('links the open modal panel with its existing dialog semantics and removes it on close', () => {
+    const view = render(disclosure({ modal: true }));
+    view.rerender(disclosure({ modal: true, isOpen: true }));
+
+    expect(settingsTrigger()).toHaveAttribute('aria-expanded', 'true');
+    const panelId = settingsTrigger().getAttribute('aria-controls');
+    const panel = screen.getByRole('dialog', { name: 'Settings' });
+    expect(panel).toHaveAttribute('id', panelId);
+    expect(panel).toHaveAttribute('aria-modal', 'true');
+    expect(document.getElementById(panelId)).toBe(panel);
+
+    view.rerender(disclosure({ modal: true, isOpen: false }));
+    expect(settingsTrigger()).toHaveAttribute('aria-expanded', 'false');
+    expect(settingsTrigger()).not.toHaveAttribute('aria-controls');
+    expect(document.getElementById(panelId)).toBeNull();
+  });
+
+  it('gives two instances stable unique panel ids and separate controls references', () => {
+    const onToggle = () => {};
+    const view = render(<>
+      <SettingsMenu isOpen onToggle={onToggle} onClose={() => {}} />
+      <SettingsMenu isOpen onToggle={onToggle} onClose={() => {}} />
+    </>);
+    const triggers = screen.getAllByRole('button', { name: 'Settings' });
+    const panelIds = triggers.map(node => node.getAttribute('aria-controls'));
+    expect(panelIds[0]).toBeTruthy();
+    expect(panelIds[1]).toBeTruthy();
+    expect(panelIds[0]).not.toBe(panelIds[1]);
+    expect(document.getElementById(panelIds[0])).not.toBe(document.getElementById(panelIds[1]));
+    expect(document.getElementById(panelIds[0])).toHaveAttribute('id', panelIds[0]);
+    expect(document.getElementById(panelIds[1])).toHaveAttribute('id', panelIds[1]);
+
+    view.rerender(<>
+      <SettingsMenu isOpen={false} onToggle={onToggle} onClose={() => {}} />
+      <SettingsMenu isOpen onToggle={onToggle} onClose={() => {}} />
+    </>);
+    const collapsedTriggers = screen.getAllByRole('button', { name: 'Settings' });
+    expect(collapsedTriggers[0]).toHaveAttribute('aria-expanded', 'false');
+    expect(collapsedTriggers[0]).not.toHaveAttribute('aria-controls');
+    expect(collapsedTriggers[1]).toHaveAttribute('aria-controls', panelIds[1]);
+    expect(document.getElementById(panelIds[0])).toBeNull();
+    expect(document.getElementById(panelIds[1])).toBeInTheDocument();
+  });
+
+  it('keeps trigger toggling, initial action focus and modal close behaviour unchanged', () => {
+    const onToggle = vi.fn();
+    const onClose = vi.fn();
+    const view = render(disclosure({ modal: true, isOpen: true, onToggle, onClose }));
+    const trigger = settingsTrigger();
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Save game' })).toHaveFocus();
+    fireEvent.click(trigger);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Load game' }), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    view.rerender(disclosure({ modal: false, isOpen: true, onToggle, onClose }));
+    expect(screen.getByRole('button', { name: 'Save game' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Load game' }), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  });
+});

@@ -158,9 +158,10 @@ it('retains the already-owned settled worker when availability needs no change',
     .replace(/\bexport /g, '')
     .replace('let next = { ...state, staff };', 'capture(staff); let next = { ...state, staff };');
   const advance = new Function('createStaffDutyDefaults', 'getScheduledDuty', 'validateStaffSchedule',
-    'getOwnedStaffSchedule', 'getStaffAmenityDefinition', 'capture', '"use strict";\n' + source + '\nreturn advanceStaffWellbeing;')(
+    'getOwnedStaffSchedule', 'getNormalisedStaffSchedule', 'getStaffAmenityDefinition', 'capture', '"use strict";\n' + source + '\nreturn advanceStaffWellbeing;')(
     schedules.createStaffDutyDefaults, schedules.getScheduledDuty, schedules.validateStaffSchedule,
-    schedules.getOwnedStaffSchedule, getStaffAmenityDefinition, staff => settled.push(...staff),
+    schedules.getOwnedStaffSchedule, schedules.getNormalisedStaffSchedule, getStaffAmenityDefinition,
+    staff => settled.push(...staff),
   );
   const worker = Object.freeze({ id: 'owned-worker', role: 'waiter', morale: 80, ...schedules.createStaffDutyDefaults() });
   const state = { staff: [worker], staffAmenities: [], restaurant: { gameTime: 0 } };
@@ -431,12 +432,12 @@ describe('simulation-only plain schedule ownership', () => {
   it('uses plain ownership through runTick segments and recaptures inter-tick edits', () => {
     const slots = work(); slots[1] = 'rest';
     const input = scheduleState(slots);
-    const original = schedules.getOwnedStaffSchedule;
+    const original = schedules.getNormalisedStaffSchedule;
     const seen = [];
-    const getOwned = vi.spyOn(schedules, 'getOwnedStaffSchedule').mockImplementation(value => {
-      const captured = original(value);
-      if (value === slots && captured) seen.push(captured);
-      return captured;
+    const normalised = vi.spyOn(schedules, 'getNormalisedStaffSchedule').mockImplementation(worker => {
+      const result = original(worker);
+      if (worker?.schedule === slots && Object.isFrozen(result)) seen.push(result);
+      return result;
     });
     const descriptors = vi.spyOn(Object, 'getOwnPropertyDescriptor');
     const advance = vi.spyOn(wellbeing, 'advanceStaffWellbeing');
@@ -456,9 +457,9 @@ describe('simulation-only plain schedule ownership', () => {
       expect(second.staff[0].effectiveDuty).toBe('rest');
       expect(new Set(seen).size).toBe(1);
       expect(seen[0]).not.toBe(firstOwned);
-      expect(firstOwned.slots[2]).toBe('work');
+      expect(firstOwned[2]).toBe('work');
       expect(owned(slots)).toBeNull();
       expect(descriptors.mock.calls.filter(([value, key]) => value === slots && key === '0')).toHaveLength(0);
-    } finally { getOwned.mockRestore(); descriptors.mockRestore(); advance.mockRestore(); }
+    } finally { normalised.mockRestore(); descriptors.mockRestore(); advance.mockRestore(); }
   });
 });

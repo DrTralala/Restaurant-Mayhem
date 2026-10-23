@@ -6,3 +6,11 @@ export const UPGRADES = [
   { id: 'u7', name: 'Wall Art', category: 'decor', description: 'Slight reputation boost', level: 0, costs: [150, 300, 600, 1200], effects: { type: 'reputation', value: 0.1 } },
   { id: 'u8', name: 'Ambient Lighting', category: 'decor', description: 'Happier customers', level: 0, costs: [250, 500, 1000, 2000], effects: { type: 'happiness', value: 5 } },
 ];
+
+export function getGlobalUpgradeQuote(upgrade, funds) {
+  if (!Array.isArray(upgrade?.costs) || upgrade.costs.length === 0
+    || !Number.isInteger(upgrade.level) || upgrade.level < 0 || upgrade.level >= upgrade.costs.length) return null;
+  const cost = upgrade.costs[upgrade.level];
+  if (!Number.isFinite(cost) || cost < 0) return null;
+  return { level: upgrade.level, nextLevel: upgrade.level + 1, cost, affordable: Number.isFinite(funds) && funds >= cost };
+}

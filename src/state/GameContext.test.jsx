@@ -5,6 +5,7 @@ import { createInitialState } from './initialState';
 import { hydrateState } from './persistence';
 import { movementSaveSnapshot } from './movementPersistence';
 import { getRestaurantWorld } from '../simulation/world';
+import { getFixtureSaleExpectation, getSaleSelection } from './fixtureSales';
 import SettingsMenu from '../components/SettingsMenu';
 
 function StaffNameHarness() {
@@ -113,6 +114,133 @@ describe('GameProvider operating-hours actions', () => {
 
     expect(game.state).toBe(before);
     expect(game.state.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
+  });
+});
+
+describe('GameProvider walk-in pause action', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('sets only the restaurant flag for a strict boolean and rerenders it', () => {
+    const game = renderReducer();
+    expect(game.state.restaurant.walkInsPaused === true).toBe(false);
+
+    game.dispatch({ type: 'SET_WALK_INS_PAUSED', paused: true });
+
+    expect(game.state.restaurant).toMatchObject({ walkInsPaused: true });
+    expect(game.state.restaurant.openHour).toBe(createInitialState().restaurant.openHour);
+
+    game.dispatch({ type: 'SET_WALK_INS_PAUSED', paused: false });
+
+    expect(game.state.restaurant.walkInsPaused).toBe(false);
+  });
+
+  it.each(['yes', 1, 0, null, undefined, {}])('ignores invalid paused value %s', value => {
+    const game = renderReducer();
+    const before = game.state;
+
+    game.dispatch({ type: 'SET_WALK_INS_PAUSED', paused: value });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.walkInsPaused === true).toBe(false);
+  });
+
+  it('no-ops when the effective boolean is unchanged', () => {
+    const absent = renderReducer();
+    const absentBefore = absent.state;
+    absent.dispatch({ type: 'SET_WALK_INS_PAUSED', paused: false });
+    expect(absent.state).toBe(absentBefore);
+
+    const paused = renderReducer({ restaurant: { walkInsPaused: true } });
+    const pausedBefore = paused.state;
+    paused.dispatch({ type: 'SET_WALK_INS_PAUSED', paused: true });
+    expect(paused.state).toBe(pausedBefore);
+  });
+});
+
+describe('GameProvider menu suspension action', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('suspends and resumes a present dish without touching product data or the drink list', () => {
+    const game = renderReducer({ restaurant: { suspendedDrinkIds: ['water'] } });
+    const beforeDish = game.state.dishes[0];
+
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
+
+    expect(game.state.restaurant.suspendedDishIds).toEqual(['starter-toast']);
+    expect(game.state.restaurant.suspendedDrinkIds).toEqual(['water']);
+    expect(game.state.dishes[0]).toEqual(beforeDish);
+
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: false });
+
+    expect(game.state.restaurant.suspendedDishIds).toEqual([]);
+    expect(game.state.restaurant.suspendedDrinkIds).toEqual(['water']);
+  });
+
+  it('suspends and resumes an unlocked canonical drink in the drink list only', () => {
+    const game = renderReducer({ restaurant: { suspendedDishIds: ['gone-dish'] } });
+
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'drink', id: 'water', suspended: true });
+
+    expect(game.state.restaurant.suspendedDrinkIds).toEqual(['water']);
+    expect(game.state.restaurant.suspendedDishIds).toEqual(['gone-dish']);
+    expect(game.state.unlockedDrinkIds).toEqual(['water']);
+
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'drink', id: 'water', suspended: false });
+
+    expect(game.state.restaurant.suspendedDrinkIds).toEqual([]);
+    expect(game.state.restaurant.suspendedDishIds).toEqual(['gone-dish']);
+  });
+
+  it.each([
+    ['dish', 'starter-toast', 'yes'],
+    ['dish', 'starter-toast', 1],
+    ['dish', 'starter-toast', null],
+    ['side', 'starter-toast', true],
+    [undefined, 'starter-toast', true],
+    ['dish', 'missing-dish', true],
+    ['dish', '', true],
+    ['dish', 42, true],
+    ['drink', 'tea', true],
+    ['drink', 'unknown', true],
+    ['drink', '', true],
+  ])('ignores invalid suspension request %j %j %j', (kind, id, suspended) => {
+    const game = renderReducer();
+    const before = game.state;
+
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind, id, suspended });
+
+    expect(game.state).toBe(before);
+  });
+
+  it('no-ops repeated requests and preserves stale excluded IDs without pruning', () => {
+    const game = renderReducer({ restaurant: { suspendedDishIds: ['stale-dish'] } });
+
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
+    const suspended = game.state;
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
+    expect(game.state).toBe(suspended);
+    expect(game.state.restaurant.suspendedDishIds).toEqual(['stale-dish', 'starter-toast']);
+
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: false });
+    const resumed = game.state;
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: false });
+    expect(game.state).toBe(resumed);
+    expect(game.state.restaurant.suspendedDishIds).toEqual(['stale-dish']);
+
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
+    game.dispatch({ type: 'REMOVE_DISH', id: 'starter-toast' });
+    expect(game.state.dishes).toEqual([]);
+    expect(game.state.restaurant.suspendedDishIds).toEqual(['stale-dish', 'starter-toast']);
+  });
+
+  it('is blocked while a career decision is pending', () => {
+    const game = renderReducer({ careerRun: { needsDecision: true } });
+    const before = game.state;
+    expect(before.careerRun.needsDecision).toBe(true);
+
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
+
+    expect(game.state).toBe(before);
   });
 });
 
@@ -1022,6 +1150,117 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.upgrades[0].level).toBe(1);
   });
 
+  describe('global upgrade quote safety', () => {
+    const customUpgrade = (overrides = {}) => ({
+      id: 'custom-decor', name: 'Custom decor', level: 0, costs: [150],
+      effects: { type: 'reputation', value: 0.1 }, ...overrides,
+    });
+
+    it.each([
+      ['missing costs', { costs: undefined }],
+      ['empty costs', { costs: [] }],
+      ['non-array costs', { costs: 'expensive' }],
+      ['a negative current cost', { costs: [-150] }],
+      ['a NaN current cost', { costs: [Number.NaN] }],
+      ['a fractional level', { level: 0.5 }],
+      ['a negative level', { level: -1 }],
+      ['an above-cap level', { level: 2 }],
+      ['an exact-cap level', { level: 1 }],
+    ])('returns the original state for %s without throwing', (_label, overrides) => {
+      const game = renderReducer({
+        restaurant: { funds: 1000 },
+        upgrades: [customUpgrade(overrides)],
+      });
+      const before = game.state;
+
+      game.dispatch({ type: 'BUY_UPGRADE', id: 'custom-decor' });
+
+      expect(game.state).toBe(before);
+      expect(game.state.restaurant.funds).toBe(1000);
+    });
+
+    it('returns the original state for a sparse cost array at the current level', () => {
+      const sparse = [150];
+      sparse[2] = 450;
+      const game = renderReducer({
+        restaurant: { funds: 1000 },
+        upgrades: [customUpgrade({ level: 1, costs: sparse })],
+      });
+      const before = game.state;
+
+      game.dispatch({ type: 'BUY_UPGRADE', id: 'custom-decor' });
+
+      expect(game.state).toBe(before);
+    });
+
+    it.each([
+      ['NaN', Number.NaN],
+      ['Infinity', Number.POSITIVE_INFINITY],
+      ['missing', undefined],
+    ])('returns the original state for %s funds', (_label, funds) => {
+      const game = renderReducer({
+        restaurant: { funds },
+        upgrades: [customUpgrade()],
+      });
+      const before = game.state;
+
+      game.dispatch({ type: 'BUY_UPGRADE', id: 'custom-decor' });
+
+      expect(game.state).toBe(before);
+    });
+
+    it('returns the original state for an unknown upgrade id', () => {
+      const game = renderReducer({ restaurant: { funds: 1000 } });
+      const before = game.state;
+
+      game.dispatch({ type: 'BUY_UPGRADE', id: 'missing-upgrade' });
+
+      expect(game.state).toBe(before);
+    });
+
+    it('completes a purchase at exact funds and advances to the quoted nextLevel', () => {
+      const game = renderReducer({
+        restaurant: { funds: 150, reputation: 2 },
+        upgrades: [customUpgrade()],
+      });
+
+      game.dispatch({ type: 'BUY_UPGRADE', id: 'custom-decor' });
+
+      expect(game.state.restaurant).toMatchObject({ funds: 0, reputation: 2.1 });
+      expect(game.state.upgrades[0]).toMatchObject({ level: 1 });
+    });
+
+    it('preserves custom record fields and applies the reputation effect verbatim', () => {
+      const game = renderReducer({
+        restaurant: { funds: 300, reputation: 2 },
+        upgrades: [customUpgrade({ description: 'hand rolled', costs: [150, 300] })],
+      });
+
+      game.dispatch({ type: 'BUY_UPGRADE', id: 'custom-decor' });
+
+      expect(game.state.upgrades[0]).toMatchObject({
+        id: 'custom-decor',
+        description: 'hand rolled',
+        level: 1,
+        costs: [150, 300],
+        effects: { type: 'reputation', value: 0.1 },
+      });
+      expect(game.state.restaurant.funds).toBe(150);
+    });
+
+    it('completes a genuine zero-cost purchase at zero funds while ignoring a forged price', () => {
+      const game = renderReducer({
+        restaurant: { funds: 0, reputation: 2 },
+        upgrades: [customUpgrade({ costs: [0] })],
+      });
+
+      game.dispatch({ type: 'BUY_UPGRADE', id: 'custom-decor', cost: 999 });
+
+      expect(game.state.restaurant).toMatchObject({ funds: 0, reputation: 2.1 });
+      expect(game.state.upgrades[0].level).toBe(1);
+    });
+  });
+
   it('places unowned equipment and charges its canonical purchase cost exactly once', () => {
     const game = renderReducer({ restaurant: { funds: 600 } });
 
@@ -1131,6 +1370,72 @@ describe('GameProvider guarded economy actions', () => {
       speedMultiplier: 1.1,
       qualityBonus: 0.05,
     });
+  });
+
+  it('applies the canonical forged-cost level 9 to 10 equipment upgrade exactly once', () => {
+    const equipment = createInitialState().equipment.map(candidate => candidate.id === 'eq1'
+      ? { ...candidate, owned: true, level: 9 }
+      : candidate);
+    const game = renderReducer({ restaurant: { funds: 25600 }, equipment });
+
+    game.dispatch({ type: 'UPGRADE_EQUIPMENT', id: 'eq1', cost: 0 });
+
+    const upgraded = game.state.equipment.find(candidate => candidate.id === 'eq1');
+    expect(upgraded.level).toBe(10);
+    expect(upgraded.speedMultiplier).toBeCloseTo(1.9);
+    expect(upgraded.qualityBonus).toBeCloseTo(0.45);
+    expect(game.state.restaurant.funds).toBe(0);
+
+    const capped = game.state;
+    game.dispatch({ type: 'UPGRADE_EQUIPMENT', id: 'eq1', cost: -25600 });
+    expect(game.state).toBe(capped);
+  });
+
+  it.each([
+    ['a fractional level', { owned: true, level: 1.5 }],
+    ['a missing cost entry', { owned: true, level: 1, upgradeCosts: [] }],
+    ['a missing cost array', { owned: true, level: 1, upgradeCosts: undefined }],
+    ['a negative cost', { owned: true, level: 1, upgradeCosts: [-100] }],
+    ['unowned equipment', { owned: false, level: 1, upgradeCosts: [100] }],
+  ])('rejects an equipment upgrade with %s without changing state', (_label, overrides) => {
+    const equipment = createInitialState().equipment.map(candidate => candidate.id === 'eq1'
+      ? { ...candidate, ...overrides }
+      : candidate);
+    const game = renderReducer({ restaurant: { funds: 1000 }, equipment });
+    const before = game.state;
+
+    game.dispatch({ type: 'UPGRADE_EQUIPMENT', id: 'eq1', cost: 0 });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(1000);
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['missing', undefined],
+  ])('rejects an equipment upgrade when funds are %s', (_label, funds) => {
+    const equipment = createInitialState().equipment.map(candidate => candidate.id === 'eq1'
+      ? { ...candidate, owned: true }
+      : candidate);
+    const game = renderReducer({ restaurant: { funds }, equipment });
+    const before = game.state;
+
+    game.dispatch({ type: 'UPGRADE_EQUIPMENT', id: 'eq1', cost: 0 });
+
+    expect(game.state).toBe(before);
+  });
+
+  it('keeps a canonical zero-cost equipment upgrade working at zero funds', () => {
+    const equipment = createInitialState().equipment.map(candidate => candidate.id === 'eq1'
+      ? { ...candidate, owned: true, level: 1, upgradeCosts: [0] }
+      : candidate);
+    const game = renderReducer({ restaurant: { funds: 0 }, equipment });
+
+    game.dispatch({ type: 'UPGRADE_EQUIPMENT', id: 'eq1', cost: 999 });
+
+    expect(game.state.restaurant.funds).toBe(0);
+    expect(game.state.equipment.find(candidate => candidate.id === 'eq1')).toMatchObject({ level: 2 });
   });
 
   it('stops hiring at the staff slot limit and when salary is unaffordable', () => {
@@ -1249,6 +1554,63 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.serviceItems[0]).toMatchObject({ accumulatedWork: 130, lastProgressAt: 100 });
     expect(game.state.staff.find(staff => staff.id === 'starter-janitor').task)
       .toMatchObject({ accumulatedWork: 130, lastProgressAt: 100 });
+  });
+
+  it('ignores a caller-supplied bonus cost in favour of the canonical $50', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      restaurant: { funds: 600 },
+      staff: initial.staff.map(worker => worker.id === 'starter-cook'
+        ? { ...worker, morale: 50 }
+        : worker),
+    });
+
+    game.dispatch({ type: 'GIVE_BONUS', id: 'starter-cook', cost: -100 });
+
+    expect(game.state.restaurant.funds).toBe(550);
+    expect(game.state.staff.find(worker => worker.id === 'starter-cook'))
+      .toMatchObject({ morale: 70, salary: 200 });
+  });
+
+  it('caps a bonus at full morale and leaves salary and peers unchanged', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      restaurant: { funds: 600 },
+      staff: initial.staff.map(worker => worker.id === 'starter-cook'
+        ? { ...worker, morale: 95 }
+        : worker),
+    });
+
+    game.dispatch({ type: 'GIVE_BONUS', id: 'starter-cook' });
+
+    expect(game.state.restaurant.funds).toBe(550);
+    expect(game.state.staff.find(worker => worker.id === 'starter-cook'))
+      .toMatchObject({ morale: 100, salary: 200 });
+    expect(game.state.staff.find(worker => worker.id === 'starter-waiter'))
+      .toBe(initial.staff.find(worker => worker.id === 'starter-waiter'));
+  });
+
+  it.each([
+    ['full morale', 100, 600, 'starter-cook'],
+    ['nonfinite morale', Number.NaN, 600, 'starter-cook'],
+    ['missing worker', 80, 600, 'missing-staff'],
+    ['unaffordable funds', 80, 49, 'starter-cook'],
+  ])('rejects a %s bonus atomically without changing salary', (_label, morale, funds, id) => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      restaurant: { funds },
+      staff: initial.staff.map(worker => worker.id === 'starter-cook'
+        ? { ...worker, morale }
+        : worker),
+    });
+    const before = game.state;
+    const salaryBefore = before.staff.find(worker => worker.id === 'starter-cook').salary;
+
+    game.dispatch({ type: 'GIVE_BONUS', id, cost: 0 });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(funds);
+    expect(game.state.staff.find(worker => worker.id === 'starter-cook').salary).toBe(salaryBefore);
   });
 
   it('caps trained skill and morale without discarding an existing load', () => {
@@ -1379,6 +1741,64 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.kitchenStations).toEqual([]);
   });
 
+  it('charges every expansion transition exactly once and places literal snapped stations', () => {
+    const game = renderReducer({ restaurant: { funds: 10000, expansionLevel: 1 } });
+
+    game.dispatch({ type: 'EXPAND' });
+    expect(game.state.restaurant).toMatchObject({ funds: 9000, expansionLevel: 2 });
+
+    game.dispatch({ type: 'EXPAND' });
+    expect(game.state.restaurant).toMatchObject({ funds: 6000, expansionLevel: 3 });
+
+    game.dispatch({ type: 'EXPAND' });
+    expect(game.state.restaurant).toMatchObject({ funds: 0, expansionLevel: 4 });
+
+    expect(game.state.kitchenStations).toEqual([
+      { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
+      { id: 'k2', equipmentId: null, x: 360, y: 120 },
+      { id: 'k3', equipmentId: null, x: 260, y: 120 },
+      { id: 'k4', equipmentId: null, x: 400, y: 120 },
+      { id: 'k5', equipmentId: null, x: 460, y: 120 },
+    ]);
+
+    const capped = game.state;
+    game.dispatch({ type: 'EXPAND', cost: 0, nextLevel: 9 });
+    expect(game.state).toBe(capped);
+  });
+
+  it.each([
+    ['below cost', 999.5],
+    ['NaN funds', Number.NaN],
+    ['string funds', '1000'],
+  ])('rejects expansion with %s atomically', (_label, funds) => {
+    const game = renderReducer({ restaurant: { funds, expansionLevel: 1 } });
+    const before = game.state;
+
+    game.dispatch({ type: 'EXPAND' });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.expansionLevel).toBe(1);
+  });
+
+  it('recomputes the canonical price for a subsequent expansion instead of reusing a stale quote', () => {
+    const game = renderReducer({ restaurant: { funds: 4000, expansionLevel: 1 } });
+
+    game.dispatch({ type: 'EXPAND' });
+    expect(game.state.restaurant).toMatchObject({ funds: 3000, expansionLevel: 2 });
+
+    game.dispatch({ type: 'EXPAND' });
+    expect(game.state.restaurant).toMatchObject({ funds: 0, expansionLevel: 3 });
+  });
+
+  it('ignores caller-supplied expansion level and price fields', () => {
+    const game = renderReducer({ restaurant: { funds: 2000, expansionLevel: 1 } });
+
+    game.dispatch({ type: 'EXPAND', level: 4, nextLevel: 4, newLevel: 4, cost: 0, price: 0 });
+
+    expect(game.state.restaurant).toMatchObject({ funds: 1000, expansionLevel: 2 });
+    expect(game.state.kitchenStations).toHaveLength(3);
+  });
+
   it('enforces price limits and paid dish quality', () => {
     const game = renderReducer({ restaurant: { funds: 50 } });
 
@@ -1398,6 +1818,34 @@ describe('GameProvider guarded economy actions', () => {
 
     game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: Number.POSITIVE_INFINITY } });
     expect(game.state.dishes[0].price).toBe(100);
+  });
+
+  it('pins the custom-dish quality cost boundary, cap and forged cost', () => {
+    const initial = createInitialState();
+    const exact = renderReducer({
+      restaurant: { funds: 50 },
+      dishes: [{ ...initial.dishes[0], cookbookId: null }],
+    });
+    exact.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: 1 });
+    expect(exact.state.restaurant.funds).toBe(0);
+    expect(exact.state.dishes[0].quality).toBe(2);
+
+    const short = renderReducer({
+      restaurant: { funds: 49.99 },
+      dishes: [{ ...initial.dishes[0], cookbookId: null }],
+    });
+    const shortState = short.state;
+    short.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: -50 });
+    expect(short.state).toBe(shortState);
+
+    const capped = renderReducer({
+      restaurant: { funds: 50 },
+      dishes: [{ ...initial.dishes[0], cookbookId: null, quality: 10 }],
+    });
+    const cappedState = capped.state;
+    capped.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: 1 });
+    expect(capped.state).toBe(cappedState);
+    expect(capped.state.restaurant.funds).toBe(50);
   });
 
   it('allows adding dishes beyond the legacy recipe-slot count', () => {
@@ -1506,6 +1954,30 @@ describe('GameProvider guarded economy actions', () => {
     capped.dispatch({ type: 'UPGRADE_DRINK_QUALITY', id: 'water' });
     expect(capped.state).toBe(cappedState);
     expect(capped.state.restaurant.funds).toBe(600);
+  });
+
+  it('pins the drink quality cost boundary, cap and forged cost', () => {
+    const exact = renderReducer({
+      unlockedDrinkIds: ['water'], drinkOverrides: {},
+      restaurant: { funds: 50 },
+    });
+    exact.dispatch({ type: 'UPGRADE_DRINK_QUALITY', id: 'water', cost: 1 });
+    expect(exact.state.restaurant.funds).toBe(0);
+    expect(exact.state.drinkOverrides.water).toEqual({ quality: 2 });
+
+    const short = renderReducer({ unlockedDrinkIds: ['water'], restaurant: { funds: 49.99 } });
+    const shortState = short.state;
+    short.dispatch({ type: 'UPGRADE_DRINK_QUALITY', id: 'water', cost: -50 });
+    expect(short.state).toBe(shortState);
+
+    const capped = renderReducer({
+      unlockedDrinkIds: ['water'], drinkOverrides: { water: { quality: 10 } },
+      restaurant: { funds: 50 },
+    });
+    const cappedState = capped.state;
+    capped.dispatch({ type: 'UPGRADE_DRINK_QUALITY', id: 'water' });
+    expect(capped.state).toBe(cappedState);
+    expect(capped.state.restaurant.funds).toBe(50);
   });
 
   it('canonicalises valid dish creation and rejects malformed dishes', () => {
@@ -1724,5 +2196,70 @@ describe('GameProvider pause toggles', () => {
 
     game.dispatch({ type: 'TOGGLE_PAUSE' });
     expect(game.state).toMatchObject({ speed, paused: false });
+  });
+});
+
+describe('GameProvider fixture sale expectations', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('forwards the expected descriptor through SELL_ITEMS', () => {
+    const game = renderReducer({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80, rotation: 0 }],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(
+      getSaleSelection(game.state, requestedItems),
+    );
+
+    game.dispatch({ type: 'SELL_ITEMS', items: requestedItems, expectedSale });
+
+    expect(game.state.tables).toEqual([]);
+    expect(game.state.chairs).toEqual([]);
+    expect(game.state.restaurant.funds).toBe(600 + expectedSale.refund);
+  });
+
+  it('rejects stale or forged expected descriptors atomically', () => {
+    const game = renderReducer({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [],
+    });
+    const requestedItems = [{ type: 'table', id: 't1' }];
+    const expectedSale = getFixtureSaleExpectation(
+      getSaleSelection(game.state, requestedItems),
+    );
+    const before = game.state;
+
+    game.dispatch({ type: 'SELL_ITEMS', items: requestedItems,
+      expectedSale: { ...expectedSale, refund: expectedSale.refund + 1 } });
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(600);
+
+    game.dispatch({ type: 'SELL_ITEMS', items: requestedItems,
+      expectedSale: { refund: expectedSale.refund } });
+    expect(game.state).toBe(before);
+
+    game.dispatch({ type: 'SELL_ITEMS', items: requestedItems,
+      expectedSale: null });
+    expect(game.state).toBe(before);
+
+    game.dispatch({ type: 'SELL_ITEMS', items: requestedItems, expectedSale });
+    expect(game.state.tables).toEqual([]);
+    expect(game.state.restaurant.funds).toBe(600 + expectedSale.refund);
+  });
+
+  it('keeps the legacy SELL_ITEMS path without a descriptor', () => {
+    const game = renderReducer({
+      restaurant: { funds: 600 },
+      tables: [{ id: 't1', seats: 1, status: 'empty', x: 100, y: 100 }],
+      chairs: [],
+    });
+
+    game.dispatch({ type: 'SELL_ITEMS', items: [{ type: 'table', id: 't1' }] });
+
+    expect(game.state.tables).toEqual([]);
+    expect(game.state.restaurant.funds).toBe(750);
   });
 });

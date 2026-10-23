@@ -1,29 +1,17 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { TYPOGRAPHY } from '../typography';
 import MenuPanel from './MenuPanel';
+import useDialogKeyboardFocus from '../components/useDialogKeyboardFocus';
 
 export default function MenuModal({ isOpen, onClose }) {
+  const dialogRef = useRef(null);
   const closeButtonRef = useRef(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    if (!isOpen) return undefined;
-    const previouslyFocused = document.activeElement;
-    const handleKeyDown = event => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      onCloseRef.current();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    closeButtonRef.current?.focus();
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      if (previouslyFocused instanceof HTMLElement && previouslyFocused.isConnected) {
-        previouslyFocused.focus();
-      }
-    };
-  }, [isOpen]);
+  useDialogKeyboardFocus({
+    isOpen,
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+    onClose,
+  });
 
   if (!isOpen) return null;
 
@@ -35,6 +23,7 @@ export default function MenuModal({ isOpen, onClose }) {
       <button
         type="button"
         aria-label="Dismiss menu"
+        tabIndex={-1}
         onClick={onClose}
         style={{
           position: 'absolute', inset: 0, width: '100%', height: '100%',
@@ -42,7 +31,7 @@ export default function MenuModal({ isOpen, onClose }) {
         }}
       />
 
-      <div role="dialog" aria-modal="true" aria-label="Menu" style={{
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Menu" tabIndex={-1} style={{
         position: 'relative', width: '90%', maxWidth: 700, maxHeight: '80vh',
         background: '#16213e', borderRadius: 12, border: '1px solid #0f3460',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',

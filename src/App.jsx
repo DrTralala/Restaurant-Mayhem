@@ -21,17 +21,21 @@ function AppInner() {
 function AppSession() {
   const state = useGameState();
   const dispatch = useDispatch();
+  const generation = useGameGeneration();
   const { fault } = useRuntimeFault();
   const decisionPending = isCareerDecisionPending(state);
   const summary = getCareerSummary(state.careerRun, state.restaurant);
   const managementEntry = useRef(null);
   const restoreEntry = useRef(false);
+  const locateTokenRef = useRef(0);
   const [managementTab, setManagementTab] = useState('upgrades');
   const [modalOpen, setModalOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fitRequest, setFitRequest] = useState(0);
   const [placementRequest, setPlacementRequest] = useState(null);
+  const [locateRequest, setLocateRequest] = useState(null);
+  const [locateNotice, setLocateNotice] = useState('');
   const closeTopLevelMenus = () => {
     setModalOpen(false);
     setMenuOpen(false);
@@ -51,8 +55,25 @@ function AppSession() {
       setModalOpen(false);
       setMenuOpen(false);
       setPlacementRequest(null);
+      setLocateRequest(null);
     }
   }, [decisionPending]);
+  const requestLocate = id => {
+    if (decisionPending || placementRequest) return;
+    locateTokenRef.current += 1;
+    setLocateNotice('');
+    setLocateRequest({ id, token: locateTokenRef.current, generation });
+  };
+  const handleLocateResult = result => {
+    if (!locateRequest || !result || result.token !== locateRequest.token) return;
+    setLocateRequest(null);
+    if (result.success === true) {
+      setLocateNotice('');
+      setModalOpen(false);
+    } else {
+      setLocateNotice('Employee location unavailable.');
+    }
+  };
   const openManagement = tab => {
     if (decisionPending) { setSettingsOpen(false); return; }
     setManagementTab(tab);
@@ -80,6 +101,8 @@ function AppSession() {
             managementOpen={modalOpen || menuOpen || settingsOpen || decisionPending}
             fitRequest={fitRequest}
             placementRequest={decisionPending ? null : placementRequest}
+            locateRequest={locateRequest}
+            onLocateResult={handleLocateResult}
             onPlacementComplete={() => setPlacementRequest(null)}
             onEmptySpaceClick={closeTopLevelMenus}
           />
@@ -121,6 +144,11 @@ function AppSession() {
         initialTab={managementTab}
         onStartCareer={startCareer}
         onShowCareerResult={() => setSettingsOpen(false)}
+        onLocateStaff={requestLocate}
+        locateDisabled={decisionPending || Boolean(placementRequest)}
+        locateMessage={placementRequest
+          ? 'Finish or cancel placement before locating staff.'
+          : locateNotice}
       />
       <MenuModal isOpen={menuOpen && !decisionPending} onClose={() => setMenuOpen(false)} />
       {!settingsOpen && <CareerResultDialog summary={summary} blockedReason={blockedReason}

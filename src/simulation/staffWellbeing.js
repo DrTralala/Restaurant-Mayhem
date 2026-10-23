@@ -5,9 +5,8 @@ import {
 } from '../data/staffAmenities';
 import {
   createStaffDutyDefaults,
+  getNormalisedStaffSchedule,
   getScheduledDuty,
-  getOwnedStaffSchedule,
-  validateStaffSchedule,
 } from './staffSchedules';
 import { getStaffMovementSpeed } from './staffActivity';
 import { getMovementStatus } from './movement/status';
@@ -64,10 +63,6 @@ const samePoint = (left, right) => finitePoint(left) && finitePoint(right)
 const sameId = (left, right) => left != null && right != null && String(left) === String(right);
 const copyPoint = point => ({ x: point.x, y: point.y });
 
-function allWorkSchedule() {
-  return createStaffDutyDefaults().schedule;
-}
-
 function getWorker(state, staffId) {
   return (state?.staff || []).find(worker => sameId(worker?.id, staffId)) || null;
 }
@@ -76,17 +71,8 @@ function getAmenity(state, amenityId) {
   return (state?.staffAmenities || []).find(amenity => sameId(amenity?.id, amenityId)) || null;
 }
 
-function normalisedSchedule(worker) {
-  const schedule = Array.isArray(worker?.schedule)
-    ? worker.schedule
-    : worker?.schedule?.schedule;
-  const owned = getOwnedStaffSchedule(schedule);
-  if (owned) return owned.validation.valid ? owned.slots : allWorkSchedule();
-  return validateStaffSchedule(schedule).valid ? [...schedule] : allWorkSchedule();
-}
-
 function scheduledDuty(worker, now) {
-  return getScheduledDuty(normalisedSchedule(worker), now) || DEFAULT_DUTY;
+  return getScheduledDuty(getNormalisedStaffSchedule(worker), now) || DEFAULT_DUTY;
 }
 
 function validDuty(value) {
@@ -533,7 +519,7 @@ function normaliseWorkerForController(worker) {
 }
 
 function firstDutyBoundary(worker, fromTime, toTime) {
-  const schedule = normalisedSchedule(worker);
+  const schedule = getNormalisedStaffSchedule(worker);
   if (toTime <= fromTime) return toTime;
   if (getScheduledDuty(schedule, fromTime) !== validDuty(worker.effectiveDuty)) return fromTime;
   const slotSeconds = 1800;
@@ -571,7 +557,7 @@ export function getNextStaffWellbeingBoundary(state, fromTime, toTime = Infinity
   for (const worker of state.staff) {
     const workerBoundary = nextWorkerWellbeingBoundary(worker, fromTime, toTime);
     if (workerBoundary != null) next = Math.min(next, workerBoundary);
-    const schedule = normalisedSchedule(worker);
+    const schedule = getNormalisedStaffSchedule(worker);
     let boundary = nextScheduleBoundary(fromTime);
     for (let count = 0; count < 48 && boundary <= toTime + EPSILON; count += 1) {
       if (getScheduledDuty(schedule, boundary - EPSILON)

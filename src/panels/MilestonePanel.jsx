@@ -1,12 +1,21 @@
 import { useGameState } from '../state/GameContext';
 import { MILESTONES } from '../data/milestones';
-import { getMilestoneProgress } from '../simulation/milestones';
+import { getMilestoneMetric, getMilestoneProgress } from '../simulation/milestones';
 import { humaniseIdentifier, sentenceCase, TYPOGRAPHY } from '../typography';
 
 const BUILT_IN_MILESTONE_IDS = new Set(MILESTONES.map(milestone => milestone.id));
 const SUPPORTED_CONDITIONS = new Set([
   'servedTotal', 'cashReserve', 'revenue', 'reputation', 'day', 'equipmentLevel',
 ]);
+const CURRENCY_CONDITIONS = new Set(['cashReserve', 'revenue']);
+
+function formatMetric(value, conditionType) {
+  if (!Number.isFinite(value)) return 'Unavailable';
+  if (CURRENCY_CONDITIONS.has(conditionType)) {
+    return `$${Number.isInteger(value) ? value : value.toFixed(2)}`;
+  }
+  return String(value);
+}
 
 function isUsableMilestone(milestone) {
   return milestone !== null
@@ -39,12 +48,16 @@ export default function MilestonePanel() {
   return (
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
       <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', marginBottom: 12 }}>Milestones</h3>
+      <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '0 0 12px' }}>
+        Current values can change after a milestone is completed.
+      </p>
       {milestones.map((m, index) => {
         if (!isUsableMilestone(m)) return null;
         const rawProgress = m.achieved ? 100 : getMilestoneProgress(m, state);
         const progress = Number.isFinite(rawProgress)
           ? Math.min(100, Math.max(0, rawProgress))
           : 0;
+        const metric = getMilestoneMetric(m, state);
         return (
           <div key={`${m.id ?? 'milestone'}-${index}`} style={{
             background: m.achieved ? '#1a2e1a' : '#1a1a2e', borderRadius: 8,
@@ -64,6 +77,17 @@ export default function MilestonePanel() {
             >
               <div style={{ background: m.achieved ? '#4a7' : '#f0a500', height: '100%', width: `${progress}%`, borderRadius: 4, transition: 'width 0.3s' }} />
             </div>
+            <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0 0' }}>
+              <span>
+                {`Current metric: ${formatMetric(metric, m.condition.type)} / ${formatMetric(m.condition.threshold, m.condition.type)}`}
+              </span>
+              {m.condition.type === 'revenue' && (
+                <>
+                  {' '}
+                  <span>Cash reserve (legacy revenue condition)</span>
+                </>
+              )}
+            </p>
             <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0 0' }}>
               {m.achieved ? 'Completed' : `Reward: ${formatReward(m.reward, m)}`}
             </p>

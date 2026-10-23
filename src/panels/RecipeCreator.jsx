@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { BASES, METHODS, BASE_EQUIPMENT_MAP } from '../data/recipes';
 import { TYPOGRAPHY } from '../typography';
@@ -9,12 +9,21 @@ const btnStyle = { ...TYPOGRAPHY.control, background: '#f0a500', color: '#111', 
 const messageStyle = { ...TYPOGRAPHY.secondary, color: '#d44', marginTop: 4 };
 
 export default function RecipeCreator({ onClose }) {
+  const idPrefix = useId();
   const state = useGameState();
   const dispatch = useDispatch();
   const [base, setBase] = useState(BASES[0]);
   const [method, setMethod] = useState(METHODS[0]);
   const [dishName, setDishName] = useState('');
   const [price, setPrice] = useState(5);
+
+  const baseId = `${idPrefix}-base`;
+  const methodId = `${idPrefix}-method`;
+  const equipmentGuidanceId = `${idPrefix}-equipment-guidance`;
+  const nameId = `${idPrefix}-name`;
+  const nameErrorId = `${idPrefix}-name-error`;
+  const priceId = `${idPrefix}-price`;
+  const priceErrorId = `${idPrefix}-price-error`;
 
   const requiredEquipmentId = BASE_EQUIPMENT_MAP[method];
   const equipment = requiredEquipmentId
@@ -31,7 +40,7 @@ export default function RecipeCreator({ onClose }) {
 
     const dish = {
       id: `dish-${Date.now()}`,
-      name: dishName.trim() || `${method} ${base}`,
+      name: dishName.trim(),
       base,
       method,
       price: numericPrice,
@@ -52,25 +61,25 @@ export default function RecipeCreator({ onClose }) {
       <h3 style={{ ...TYPOGRAPHY.heading, marginBottom: 12, color: '#f0a500' }}>Create new dish</h3>
 
       <div style={{ marginBottom: 8 }}>
-        <label htmlFor="recipe-base" style={TYPOGRAPHY.secondary}>Base ingredient:</label>
-        <select id="recipe-base" value={base} onChange={e => setBase(e.target.value)} style={selectStyle}>
+        <label htmlFor={baseId} style={TYPOGRAPHY.secondary}>Base ingredient:</label>
+        <select id={baseId} value={base} onChange={e => setBase(e.target.value)} style={selectStyle}>
           {BASES.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
       </div>
 
       <div style={{ marginBottom: 8 }}>
-        <label htmlFor="recipe-method" style={TYPOGRAPHY.secondary}>Cooking method:</label>
+        <label htmlFor={methodId} style={TYPOGRAPHY.secondary}>Cooking method:</label>
         <select
-          id="recipe-method"
+          id={methodId}
           value={method}
           onChange={e => setMethod(e.target.value)}
           style={selectStyle}
-          aria-describedby="recipe-equipment-guidance"
+          aria-describedby={equipmentGuidanceId}
           aria-invalid={!equipment?.owned}
         >
           {METHODS.map(m => <option key={m} value={m}>{m}</option>)}
         </select>
-        <p id="recipe-equipment-guidance" style={{ ...TYPOGRAPHY.secondary, marginTop: 4, color: equipment?.owned ? '#4a7' : '#d44' }}>
+        <p id={equipmentGuidanceId} style={{ ...TYPOGRAPHY.secondary, marginTop: 4, color: equipment?.owned ? '#4a7' : '#d44' }}>
           {equipment?.owned
             ? `Requires: ${equipment.name} (owned)`
             : `You need to own ${equipment?.name || 'the required equipment'} first.`}
@@ -78,31 +87,32 @@ export default function RecipeCreator({ onClose }) {
       </div>
 
       <div style={{ marginBottom: 8 }}>
-         <label htmlFor="dish-name" style={TYPOGRAPHY.secondary}>Dish name:</label>
+         <label htmlFor={nameId} style={TYPOGRAPHY.secondary}>Dish name:</label>
         <input
-          id="dish-name"
+          id={nameId}
           value={dishName}
           onChange={e => setDishName(e.target.value)}
-          placeholder={`${method} ${base}`}
+          placeholder="Enter a dish name"
+          required
           style={inputStyle}
           aria-invalid={nameError}
-          aria-describedby={nameError ? 'dish-name-error' : undefined}
+          aria-describedby={nameError ? nameErrorId : undefined}
         />
-        {nameError && <p id="dish-name-error" style={messageStyle}>Enter a dish name.</p>}
+        {nameError && <p id={nameErrorId} style={messageStyle}>Enter a dish name.</p>}
       </div>
 
       <div style={{ marginBottom: 12 }}>
-         <label htmlFor="dish-price" style={TYPOGRAPHY.secondary}>Price: $</label>
+         <label htmlFor={priceId} style={TYPOGRAPHY.secondary}>Price: $</label>
         <input
-          id="dish-price"
+          id={priceId}
           type="number" value={price} min={1} max={100} step={1}
           onChange={e => setPrice(e.target.value)}
           style={{ ...inputStyle, width: 80, marginLeft: 4 }}
           aria-invalid={!validPrice}
-          aria-describedby={!validPrice ? 'dish-price-error' : undefined}
+          aria-describedby={!validPrice ? priceErrorId : undefined}
         />
         {!validPrice && (
-          <p id="dish-price-error" style={messageStyle}>Price must be a whole number from $1 to $100.</p>
+          <p id={priceErrorId} style={messageStyle}>Price must be a whole number from $1 to $100.</p>
         )}
       </div>
 

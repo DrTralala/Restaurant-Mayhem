@@ -37,9 +37,17 @@ export function screenToWorld(camera, screenX, screenY) {
   };
 }
 
-export function adjustCameraZoom(camera, factor) {
+export function adjustCameraZoom(camera, factor, anchor) {
+  const before = anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)
+    ? screenToWorld(camera, anchor.x, anchor.y)
+    : null;
+  const oldZoom = camera.zoom;
   camera.manual = true;
   camera.zoom = Math.max(camera.minZoom, Math.min(camera.maxZoom, camera.zoom * factor));
+  if (before && camera.zoom !== oldZoom) {
+    camera.x = anchor.x - before.x * camera.zoom;
+    camera.y = anchor.y - before.y * camera.zoom;
+  }
   return camera;
 }
 

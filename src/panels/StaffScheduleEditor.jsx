@@ -3,8 +3,10 @@ import {
   getScheduledDuty,
   STAFF_DUTY_MODES,
   STAFF_SCHEDULE_SLOT_COUNT,
+  STAFF_SCHEDULE_SLOT_SECONDS,
   validateStaffSchedule,
 } from '../simulation/staffSchedules';
+import { isRestaurantOpen } from '../simulation/clock';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 
 const MODE_LABELS = Object.freeze({ work: 'Work', rest: 'Rest', pto: 'PTO' });
@@ -154,6 +156,53 @@ function normaliseDraft(schedule) {
   );
 }
 
+/**
+ * Derive display-only team coverage for the repeating day.
+ *
+ * Period bounds are half-hour slot indices with the end exclusive. Only
+ * scheduled Work slots count. The active editor draft replaces the edited
+ * worker's saved schedule; other unsaved drafts are never included.
+ */
+export function getTeamCoveragePeriods({
+  staffList = [],
+  staff,
+  schedule,
+  openHour,
+  closeHour,
+} = {}) {
+  const matches = worker => (staff?.id != null
+    ? worker?.id === staff.id
+    : worker === staff);
+  const workers = (Array.isArray(staffList) ? staffList : []).filter(Boolean);
+  if (staff && !workers.some(matches)) workers.push(staff);
+  const planned = workers.map(worker => ({
+    role: ['cook', 'waiter', 'janitor'].includes(worker.role) ? worker.role : 'other',
+    slots: matches(worker)
+      ? normaliseDraft(schedule ?? getStaffSchedule(worker))
+      : getStaffSchedule(worker),
+  }));
+
+  const periods = [];
+  for (let start = 0; start < STAFF_SCHEDULE_SLOT_COUNT; start += 1) {
+    const counts = { cook: 0, waiter: 0, janitor: 0, other: 0 };
+    for (const worker of planned) {
+      if (worker.slots[start] === 'work') counts[worker.role] += 1;
+    }
+    const open = isRestaurantOpen({
+      restaurant: { openHour, closeHour, gameTime: start * STAFF_SCHEDULE_SLOT_SECONDS },
+    });
+    const previous = periods[periods.length - 1];
+    if (previous
+      && previous.open === open
+      && Object.keys(counts).every(role => previous.counts[role] === counts[role])) {
+      previous.end = start + 1;
+    } else {
+      periods.push({ start, end: start + 1, open, counts });
+    }
+  }
+  return periods;
+}
+
 function formatHours(hours) {
   const value = Number(hours);
   const unit = value === 1 ? 'hour' : 'hours';
@@ -223,6 +272,8 @@ export default function StaffScheduleEditor({
   onCancel,
   dispatch,
   staffList = [],
+  openHour,
+  closeHour,
 }) {
   const controlled = Array.isArray(schedule) && typeof onChange === 'function';
   const [internalSchedule, setInternalSchedule] = useState(() => normaliseDraft(
@@ -237,9 +288,25 @@ export default function StaffScheduleEditor({
   const staffKey = staff?.id || 'staff';
   const otherStaff = (Array.isArray(staffList) ? staffList : [])
     .filter(worker => worker && (staff?.id != null ? worker.id !== staff.id : worker !== staff));
+  const copyLabelCounts = new Map();
+  for (const worker of otherStaff) {
+    const label = String(worker.name || worker.id);
+    copyLabelCounts.set(label, (copyLabelCounts.get(label) || 0) + 1);
+  }
   const copySource = otherStaff.find(worker => String(worker.id) === copyStaffId);
   const schedulePeriods = buildSchedulePeriods(currentSchedule);
   const scheduleTotals = getScheduleTotals(currentSchedule);
+  const coveragePeriods = getTeamCoveragePeriods({
+    staffList,
+    staff,
+    schedule: currentSchedule,
+    openHour,
+    closeHour,
+  });
+  const previewValidation = validateStaffSchedule(currentSchedule);
+  const showOther = coveragePeriods.some(period => period.counts.other > 0);
+  const openScheduleGaps = coveragePeriods.filter(period => period.open
+    && (period.counts.cook === 0 || period.counts.waiter === 0));
 
   const updateSchedule = (nextSchedule) => {
     if (!controlled) setInternalSchedule(nextSchedule);
@@ -393,9 +460,13 @@ export default function StaffScheduleEditor({
               style={controlStyle()}
             >
               <option value="">Choose a staff member</option>
-              {otherStaff.map(worker => (
-                <option key={worker.id} value={worker.id}>{worker.name || worker.id}</option>
-              ))}
+              {otherStaff.map(worker => {
+                const label = String(worker.name || worker.id);
+                const optionLabel = copyLabelCounts.get(label) > 1
+                  ? `${label} (${worker.role || 'staff'}, ID ${String(worker.id)})`
+                  : label;
+                return <option key={worker.id} value={worker.id}>{optionLabel}</option>;
+              })}
             </select>
           </label>
           <button
@@ -447,6 +518,51 @@ export default function StaffScheduleEditor({
             ))}
           </ul>
         </div>
+      </div>
+
+      <div style={{ marginTop: 10, background: '#0d1528', border: '1px solid #223d62', borderRadius: 5, padding: 8 }}>
+        <h5 style={{ ...TYPOGRAPHY.subheading, color: '#dbe9ff', margin: '0 0 4px' }}>Team scheduled coverage</h5>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#9da9bd', margin: '0 0 6px' }}>
+          This draft + saved team schedules. Other unsaved drafts are excluded. Apply saves only this worker. Counts show scheduled Work, not guaranteed availability.
+        </p>
+        {!previewValidation.valid && (
+          <p style={{ ...TYPOGRAPHY.secondary, color: '#ffb3a7', margin: '0 0 6px' }}>
+            Cannot apply this draft: {scheduleValidationMessage(previewValidation.reason)}
+          </p>
+        )}
+        <ul aria-label="Team coverage preview" style={{ ...TYPOGRAPHY.secondary, color: '#c9d7ec', listStyle: 'none', padding: 0, margin: 0 }}>
+          {coveragePeriods.map(period => (
+            <li key={period.start} style={{ overflowWrap: 'anywhere', marginBottom: 2 }}>
+              {formatBoundaryTime(period.start)} to {formatBoundaryTime(period.end)} · {period.open ? 'Open' : 'Closed'} · Cooks {period.counts.cook}, Waiters {period.counts.waiter}, Janitors {period.counts.janitor}
+              {showOther && `, Other ${period.counts.other}`}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div style={{ marginTop: 10, background: '#0d1528', border: '1px solid #223d62', borderRadius: 5, padding: 8 }}>
+        <h5 style={{ ...TYPOGRAPHY.subheading, color: '#dbe9ff', margin: '0 0 4px' }}>Open-hours schedule gaps</h5>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#9da9bd', margin: '0 0 6px' }}>
+          Based on this draft and saved team schedules. Nonzero counts do not guarantee enough staff or actual availability.
+        </p>
+        {openScheduleGaps.length === 0 ? (
+          <p style={{ ...TYPOGRAPHY.secondary, color: '#c9d7ec', margin: 0 }}>
+            No zero-cook or zero-waiter gaps in this preview.
+          </p>
+        ) : (
+          <ul aria-label="Open-hours schedule gaps" style={{ ...TYPOGRAPHY.secondary, color: '#c9d7ec', listStyle: 'none', padding: 0, margin: 0 }}>
+            {openScheduleGaps.map(period => {
+              const missingRoles = [];
+              if (period.counts.cook === 0) missingRoles.push('No cooks scheduled to Work.');
+              if (period.counts.waiter === 0) missingRoles.push('No waiters scheduled to Work.');
+              return (
+                <li key={`${period.start}-${period.end}`} style={{ overflowWrap: 'anywhere', marginBottom: 2 }}>
+                  {formatBoundaryTime(period.start)} to {formatBoundaryTime(period.end)} · {missingRoles.join(' ')}
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
 
       {error && (

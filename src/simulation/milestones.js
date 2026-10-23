@@ -2,11 +2,9 @@ import { MILESTONES, normaliseMilestones } from '../data/milestones';
 
 const BUILT_IN_MILESTONE_IDS = new Set(MILESTONES.map(milestone => milestone.id));
 
-export function getMilestoneProgress(milestone, state) {
+export function getMilestoneMetric(milestone, state) {
   const condition = milestone?.condition;
-  const threshold = condition?.threshold;
-  if (!Number.isFinite(threshold) || threshold <= 0) return 0;
-
+  if (condition === null || condition === undefined) return undefined;
   const restaurant = state?.restaurant;
   let metric;
   switch (condition.type) {
@@ -35,9 +33,18 @@ export function getMilestoneProgress(milestone, state) {
       break;
     }
     default:
-      return 0;
+      return undefined;
   }
 
+  return metric;
+}
+
+export function getMilestoneProgress(milestone, state) {
+  const condition = milestone?.condition;
+  const threshold = condition?.threshold;
+  if (!Number.isFinite(threshold) || threshold <= 0) return 0;
+
+  const metric = getMilestoneMetric(milestone, state);
   if (!Number.isFinite(metric) || metric < 0) return 0;
   return Math.min(100, Math.max(0, (metric / threshold) * 100));
 }

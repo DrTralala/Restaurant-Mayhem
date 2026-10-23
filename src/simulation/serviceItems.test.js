@@ -903,3 +903,68 @@ describe('service item orders', () => {
     expect(allOrderedItemsDelivered(customer, serviceItems)).toBe(expected);
   });
 });
+
+describe('menu suspension order safety', () => {
+  const orderState = {
+    restaurant: { reputation: 3, gameTime: 42 },
+    dishes: [{
+      id: 'toast', name: 'Toast', base: 'Bread', method: 'Toasted', cuisine: 'generic',
+      requiredEquipmentId: null, price: 12, quality: 1, popularity: 50, prepTime: 120,
+    }],
+    unlockedDrinkIds: ['water'], drinkOverrides: {}, serviceItems: [],
+  };
+  const suspendedState = {
+    ...orderState,
+    restaurant: {
+      ...orderState.restaurant,
+      suspendedDishIds: ['toast'],
+      suspendedDrinkIds: ['water'],
+    },
+  };
+
+  it('keeps a committed order, snapshot and items unchanged after suspension', () => {
+    const rolls = [0.8, 0];
+    const ordered = createCustomerOrder(orderState, {
+      id: 'c1', partyId: 'p1', tableId: 't1', state: 'seated',
+      archetype: 'regular', patienceMax: 900, spendingTier: 'value', spendingBudget: 20,
+    }, () => rolls.shift());
+    const committed = structuredClone(ordered);
+
+    const replayed = createCustomerOrder({
+      ...suspendedState,
+      customers: [ordered.customer],
+      serviceItems: ordered.serviceItems,
+    }, ordered.customer, () => {
+      throw new Error('committed orders must not re-roll the menu');
+    });
+
+    expect(replayed.customer).toBe(ordered.customer);
+    expect(replayed.serviceItems).toBe(ordered.serviceItems);
+    expect(ordered.customer).toMatchObject({
+      state: 'waiting_for_items', menuOutcome: 'ordered', dishId: 'toast', drinkId: 'water',
+      dishPriceAtOrder: 12, drinkPriceAtOrder: 2, orderSubtotal: 14,
+    });
+    expect(ordered.customer.dishOrderSnapshot)
+      .toMatchObject({ menuItemId: 'toast', price: 12, quality: 1, prepTime: 120, popularity: 50 });
+    expect(ordered.serviceItems).toMatchObject([
+      { kind: 'dish', menuItemId: 'toast', state: 'ordered' },
+      { kind: 'drink', menuItemId: 'water', state: 'ordered' },
+    ]);
+    expect(ordered).toEqual(committed);
+  });
+
+  it('yields the safe unaffordable outcome when every walk-in item is suspended', () => {
+    const result = createCustomerOrder(suspendedState, {
+      id: 'c1', partyId: 'p1', tableId: 't1', state: 'seated',
+      archetype: 'regular', patienceMax: 900, spendingTier: 'value', spendingBudget: 20,
+    }, () => 0);
+
+    expect(result.customer).toMatchObject({
+      state: 'waiting_for_party', menuOutcome: 'unaffordable',
+      dishId: null, drinkId: null, dishPriceAtOrder: null, drinkPriceAtOrder: null,
+      orderSubtotal: null, orderedServiceItemIds: [], foodOutcome: null,
+    });
+    expect(result.customer).not.toHaveProperty('dishOrderSnapshot');
+    expect(result.serviceItems).toEqual([]);
+  });
+});

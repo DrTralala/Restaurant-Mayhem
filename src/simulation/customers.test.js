@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
+  admitScheduledServiceParty,
   getCustomerMovementEntries,
   getExitHeading,
   getQueueSafeExitGoal,
@@ -466,6 +467,86 @@ describe('spawnCustomers', () => {
       queuePatience: expectedPatience,
       queuePatienceMax: expectedPatience,
     });
+  });
+});
+
+describe('walk-in pause', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('keeps the existing queue and consumes no RNG while walk-ins are paused', () => {
+    const queue = [{ partyId: 'p1', members: [
+      { id: 'q1', partyId: 'p1', state: 'queued', patience: 100, happiness: 80 },
+    ] }];
+    const state = {
+      ...baseState,
+      queue,
+      restaurant: { ...baseState.restaurant, walkInsPaused: true },
+    };
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const result = spawnCustomers(state, 60);
+
+    expect(result.queue).toEqual(queue);
+    expect(result.queue[0].members[0].id).toBe('q1');
+    expect(result.restaurant.walkInsPaused).toBe(true);
+    expect(result.customers).toBe(state.customers);
+    expect(random).not.toHaveBeenCalled();
+  });
+
+  it('still spawns walk-ins when the flag is false or absent', () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const disabled = spawnCustomers({
+      ...baseState,
+      restaurant: { ...baseState.restaurant, walkInsPaused: false },
+    }, 60);
+    const absent = spawnCustomers(baseState, 60);
+
+    expect(disabled.queue).toHaveLength(1);
+    expect(absent.queue).toHaveLength(1);
+    expect(random).toHaveBeenCalled();
+  });
+
+  it('admits scheduled contract bookings while walk-ins are paused', () => {
+    const booking = {
+      instanceId: 'sc-1', partyId: 'p1', partyType: 'solo', arrivalAt: 12 * 3600,
+      members: [{
+        id: 'c1', serviceContractGuestId: 'g1', archetype: 'regular',
+        gender: 'female', spendingTier: 'value', spendingBudget: 20,
+      }],
+    };
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, walkInsPaused: true, gameTime: booking.arrivalAt },
+    };
+    const random = vi.spyOn(Math, 'random');
+
+    const result = admitScheduledServiceParty(state, booking);
+
+    expect(result).toMatchObject({ admitted: true, reason: null });
+    expect(result.state.queue).toHaveLength(1);
+    expect(result.state.queue[0].members[0]).toMatchObject({
+      id: 'c1', partyId: 'p1', state: 'queued', serviceContractId: 'sc-1',
+    });
+    expect(result.state.customers).toBe(state.customers);
+    expect(random).not.toHaveBeenCalled();
+  });
+
+  it('keeps processing existing queued guests while walk-ins are paused', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, walkInsPaused: true },
+      queue: [{ partyId: 'p1', members: [
+        { id: 'q1', partyId: 'p1', state: 'queued', patience: 1, happiness: 80 },
+      ] }],
+    };
+
+    const result = updateCustomers(state, 2);
+
+    expect(result.queue).toHaveLength(0);
+    expect(result.customers.map(customer => customer.state)).toEqual(['leaving']);
+    expect(result.customers[0].id).toBe('q1');
+    expect(result.restaurant.reputation).toBe(2.9);
   });
 });
 

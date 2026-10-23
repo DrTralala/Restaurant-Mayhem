@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { getNextDirtId, isRestaurantFloorPoint, updateDirt } from './dirt';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  DIRT_REPUTATION_THRESHOLD,
+  getDirtReputationLossPerMinute,
+  getNextDirtId,
+  isRestaurantFloorPoint,
+  updateDirt,
+} from './dirt';
 import { buildBlockedCells, cellToWorld, worldToCell } from './pathfinding';
 
 const baseState = {
@@ -332,5 +338,113 @@ describe('updateDirt', () => {
     const dirt = updateDirt(state, 0, () => 0).floorDirt[0];
     expect(Math.hypot(dirt.x - 240, dirt.y - 200)).toBeLessThanOrEqual(50);
     expect(Math.hypot(dirt.x - 610, dirt.y - 610)).toBeGreaterThan(120);
+  });
+});
+
+describe('getDirtReputationLossPerMinute', () => {
+  it('uses a shared threshold of three floor messes', () => {
+    expect(DIRT_REPUTATION_THRESHOLD).toBe(3);
+  });
+
+  it.each([0, 1, 3])('returns zero at or below the threshold for %s messes', messCount => {
+    expect(getDirtReputationLossPerMinute(messCount)).toBe(0);
+  });
+
+  it.each([
+    [4, 0.001],
+    [13, 0.01],
+    [20, 0.01],
+  ])('returns the capped rate for %s messes', (messCount, expected) => {
+    expect(getDirtReputationLossPerMinute(messCount)).toBe(expected);
+  });
+
+  it('caps the rate at 0.01 per minute for any finite excess', () => {
+    expect(getDirtReputationLossPerMinute(1000)).toBe(0.01);
+  });
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    -5,
+    '4',
+    null,
+    undefined,
+    {},
+  ])('returns zero for invalid count %s', messCount => {
+    expect(getDirtReputationLossPerMinute(messCount)).toBe(0);
+  });
+
+  it('is deterministic and does not use RNG', () => {
+    const randomSpy = vi.spyOn(Math, 'random');
+    const first = [0, 1, 3, 4, 13, 20].map(count => getDirtReputationLossPerMinute(count));
+    const second = [0, 1, 3, 4, 13, 20].map(count => getDirtReputationLossPerMinute(count));
+
+    expect(second).toEqual(first);
+    expect(randomSpy).not.toHaveBeenCalled();
+    randomSpy.mockRestore();
+  });
+});
+
+describe('updateDirt cleanliness parity', () => {
+  function farDirt(messCount) {
+    return Array.from({ length: messCount }, (_, index) => ({
+      id: `dirt-${index + 1}`, x: 700 + index * 20, y: 700,
+    }));
+  }
+
+  it.each([0, 1, 3, 4, 13, 20])(
+    'applies exactly the helper rate for %s messes over one game minute',
+    messCount => {
+      const state = {
+        ...baseState,
+        customers: [{ ...baseState.customers[0], dirtFactor: 0 }],
+        floorDirt: farDirt(messCount),
+      };
+
+      expect(updateDirt(state, 60).restaurant.reputation)
+        .toBeCloseTo(3 - getDirtReputationLossPerMinute(messCount), 10);
+    },
+  );
+
+  it('scales the helper rate by penaltyDt rather than raw game seconds', () => {
+    const state = {
+      ...baseState,
+      customers: [{ ...baseState.customers[0], dirtFactor: 0 }],
+      floorDirt: farDirt(4),
+    };
+
+    expect(updateDirt(state, 30).restaurant.reputation)
+      .toBeCloseTo(3 - getDirtReputationLossPerMinute(4) * 0.5, 10);
+  });
+
+  it('does not mutate a frozen state and consumes no RNG without generation', () => {
+    const customers = Object.freeze([
+      Object.freeze({
+        id: 'c1', state: 'seated', chairId: 'ch1', tableId: 't1',
+        x: 200, y: 200, dirtFactor: 0, happiness: 80,
+      }),
+    ]);
+    const floorDirt = Object.freeze(farDirt(3).map(dirt => Object.freeze(dirt)));
+    const state = Object.freeze({ ...baseState, customers, floorDirt });
+    const snapshot = JSON.stringify(state);
+    const randomSpy = vi.spyOn(Math, 'random');
+
+    const result = updateDirt(state, 60);
+
+    expect(result.restaurant.reputation).toBe(3);
+    expect(JSON.stringify(state)).toBe(snapshot);
+    expect(randomSpy).not.toHaveBeenCalled();
+    randomSpy.mockRestore();
+  });
+
+  it('uses only the injected RNG when dirt is generated', () => {
+    const randomSpy = vi.spyOn(Math, 'random');
+
+    const result = updateDirt(dirtGenerationState(), 0, () => 0);
+
+    expect(result.floorDirt).toHaveLength(1);
+    expect(randomSpy).not.toHaveBeenCalled();
+    randomSpy.mockRestore();
   });
 });

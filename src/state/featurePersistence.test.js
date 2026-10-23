@@ -327,4 +327,125 @@ describe('additive v10 feature persistence', () => {
     expect(buildAffordableBaskets(hydrated, { spendingTier: 'value', spendingBudget: 45 })
       .some(basket => basket.drink?.id === 'boba')).toBe(false);
   });
+
+  it('round-trips an optional walk-in pause flag and treats absence as effectively false', () => {
+    for (const value of [true, false]) {
+      localStorage.clear();
+      const raw = { ...createInitialState() };
+      raw.restaurant = { ...raw.restaurant, walkInsPaused: value };
+      expect(saveState(raw)).toBe(true);
+      const hydrated = hydrateState(loadState(), createInitialState());
+      expect(hydrated.restaurant.walkInsPaused).toBe(value);
+    }
+
+    localStorage.clear();
+    expect(() => validateSavedState(createInitialState())).not.toThrow();
+    const hydrated = hydrateState(createInitialState(), createInitialState());
+    expect(hydrated.restaurant.walkInsPaused).not.toBe(true);
+    expect(createInitialState().restaurant).not.toHaveProperty('walkInsPaused');
+  });
+
+  it.each(['yes', 1, 0, null])('rejects invalid walk-in pause value %s in both entry points', value => {
+    const raw = { ...createInitialState() };
+    raw.restaurant = { ...raw.restaurant, walkInsPaused: value };
+    expect(() => validateSavedState(raw)).toThrow();
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(loadState()).toBeNull();
+  });
+
+  it.each([
+    ['suspendedDishIds', ['starter-toast']],
+    ['suspendedDrinkIds', ['water']],
+  ])('round-trips a synthetic v10 %s list while absence stays inactive', (key, value) => {
+    expect(createInitialState().restaurant).not.toHaveProperty('suspendedDishIds');
+    expect(createInitialState().restaurant).not.toHaveProperty('suspendedDrinkIds');
+    expect(() => validateSavedState(createInitialState())).not.toThrow();
+    const hydratedActive = hydrateState(createInitialState(), createInitialState());
+    expect(hydratedActive.restaurant).not.toHaveProperty('suspendedDishIds');
+    expect(hydratedActive.restaurant).not.toHaveProperty('suspendedDrinkIds');
+
+    const raw = { ...createInitialState() };
+    raw.restaurant = { ...raw.restaurant, [key]: value };
+    expect(saveState(raw)).toBe(true);
+
+    const hydrated = hydrateState(loadState(), createInitialState());
+    expect(hydrated.restaurant[key]).toEqual(value);
+  });
+
+  it('accepts optional empty suspension arrays and preserves order with stale IDs', () => {
+    const empty = { ...createInitialState() };
+    empty.restaurant = {
+      ...empty.restaurant, suspendedDishIds: [], suspendedDrinkIds: [],
+    };
+    expect(() => validateSavedState(empty)).not.toThrow();
+    const hydratedEmpty = hydrateState(empty, createInitialState());
+    expect(hydratedEmpty.restaurant.suspendedDishIds).toEqual([]);
+    expect(hydratedEmpty.restaurant.suspendedDrinkIds).toEqual([]);
+
+    const stale = { ...createInitialState() };
+    stale.restaurant = {
+      ...stale.restaurant,
+      suspendedDishIds: ['gone-dish', 'starter-toast'],
+      suspendedDrinkIds: ['nobody'],
+    };
+    expect(() => validateSavedState(stale)).not.toThrow();
+    const hydratedStale = hydrateState(stale, createInitialState());
+    expect(hydratedStale.restaurant.suspendedDishIds).toEqual(['gone-dish', 'starter-toast']);
+    expect(hydratedStale.restaurant.suspendedDrinkIds).toEqual(['nobody']);
+  });
+
+  it('keeps committed orders, snapshots and legacy recipe resolution unchanged with suspensions', () => {
+    const withOrderFacts = () => {
+      const raw = orderFixture();
+      Object.assign(raw.customers[0], { drinkPriceAtOrder: null, orderSubtotal: 9 });
+      return raw;
+    };
+    const baseline = hydrateState(withOrderFacts(), createInitialState());
+    const suspendedRaw = withOrderFacts();
+    suspendedRaw.restaurant = {
+      ...suspendedRaw.restaurant,
+      suspendedDishIds: ['starter-toast'],
+      suspendedDrinkIds: ['water'],
+    };
+    const suspended = hydrateState(suspendedRaw, createInitialState());
+
+    expect(suspended.customers).toEqual(baseline.customers);
+    expect(suspended.serviceItems).toEqual(baseline.serviceItems);
+    expect(suspended.dishes).toEqual(baseline.dishes);
+    expect(suspended.cookbook).toEqual(baseline.cookbook);
+    expect(suspended.restaurant.suspendedDishIds).toEqual(['starter-toast']);
+    expect(suspended.restaurant.suspendedDrinkIds).toEqual(['water']);
+    expect(suspended.customers[0]).toMatchObject({
+      state: 'waiting_for_items', menuOutcome: 'ordered',
+      dishId: 'starter-toast', dishPriceAtOrder: 9, orderSubtotal: 9,
+    });
+    expect(suspended.customers[0].dishOrderSnapshot)
+      .toMatchObject({ schemaVersion: 1, menuItemId: 'starter-toast', price: 9, cookbookId: null });
+    expect(suspended.serviceItems[0]).toMatchObject({ id: 'dish-1', kind: 'dish', state: 'ordered' });
+    expect(getResolvedDish(suspended, 'starter-toast')).not.toBeNull();
+    expect(suspended.dishes[0].cookbookId).toBe('toast');
+  });
+
+  it.each(['suspendedDishIds', 'suspendedDrinkIds'])('rejects non-array %s values in both entry points', key => {
+    for (const value of [null, 'starter-toast', {}, 42]) {
+      const raw = { ...createInitialState() };
+      raw.restaurant = { ...raw.restaurant, [key]: value };
+      expect(() => validateSavedState(raw)).toThrow();
+      expect(() => hydrateState(raw, createInitialState())).toThrow();
+      localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      expect(loadState()).toBeNull();
+    }
+  });
+
+  it.each(['suspendedDishIds', 'suspendedDrinkIds'])('rejects non-string entries and duplicates in %s', key => {
+    for (const value of [[42], [''], [null], [true], ['a', 'a']]) {
+      const raw = { ...createInitialState() };
+      raw.restaurant = { ...raw.restaurant, [key]: value };
+      expect(() => validateSavedState(raw)).toThrow();
+      expect(() => hydrateState(raw, createInitialState())).toThrow();
+    }
+  });
 });

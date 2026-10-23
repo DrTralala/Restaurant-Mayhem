@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   getWashStationCapacity,
   getWashStationOccupancy,
+  getWashStationUsage,
   hasWashStationCapacity,
   isWashStationBusy,
   updateAutomaticDishwashers,
@@ -250,4 +251,103 @@ describe('dishwashing lifecycle', () => {
         dishes: [], restaurant: { gameTime: 100 }, kitchenStations: [], serviceTables: [], staff: [], washStations: [{ id: 'wash1' }] });
       expect(result.serviceItems).toEqual([item]);
     });
+});
+
+describe('getWashStationUsage', () => {
+  const station = { id: 'auto', type: 'automatic' };
+
+  it('splits deposited items from carried, reserved, and task-inbound reservations', () => {
+    const state = {
+      serviceItems: [
+        { id: 'queued', state: 'queued_for_wash', washStationId: 'auto' },
+        { id: 'washing', state: 'washing', washStationId: 'auto' },
+        { id: 'reserved', state: 'dirty_at_table', reservedWashStationId: 'auto' },
+        { id: 'carried', state: 'carried_dirty' },
+        { id: 'task', state: 'dirty_at_table' },
+      ],
+      staff: [{
+        id: 'worker',
+        carryingServiceItemIds: ['carried'],
+        task: {
+          type: 'deliver_dirty_item', serviceItemId: 'task', washStationId: 'auto',
+        },
+      }],
+    };
+
+    expect(getWashStationUsage(state, station)).toEqual({ deposited: 2, incoming: 3 });
+  });
+
+  it('uses canonical deduplication for repeated item and task references', () => {
+    const state = {
+      serviceItems: [
+        { id: 'same', state: 'queued_for_wash', washStationId: 'auto' },
+        { id: 'same', state: 'washing', washStationId: 'auto' },
+        { id: 'reserved', state: 'dirty_at_table', reservedWashStationId: 'auto' },
+        { id: 'reserved', state: 'dirty_at_table', reservedWashStationId: 'auto' },
+      ],
+      staff: [
+        {
+          id: 'first',
+          task: {
+            type: 'deliver_dirty_item', serviceItemId: 'reserved', washStationId: 'auto',
+          },
+        },
+        {
+          id: 'second',
+          task: {
+            type: 'transfer_dirty_item',
+            serviceItemIds: ['reserved', 'reserved'],
+            washStationId: 'auto',
+          },
+        },
+      ],
+    };
+
+    expect(getWashStationUsage(state, station)).toEqual({ deposited: 1, incoming: 1 });
+  });
+
+  it('does not count an item\'s own reservation as incoming', () => {
+    const state = {
+      serviceItems: [{
+        id: 'dish',
+        state: 'queued_for_wash',
+        washStationId: 'auto',
+        reservedWashStationId: 'auto',
+      }],
+    };
+
+    expect(getWashStationUsage(state, station)).toEqual({ deposited: 1, incoming: 0 });
+  });
+
+  it('moves an item from incoming to deposited when it arrives', () => {
+    const inbound = {
+      serviceItems: [{
+        id: 'dish', state: 'dirty_at_table', reservedWashStationId: 'auto',
+      }],
+    };
+    const deposited = {
+      serviceItems: [{
+        id: 'dish', state: 'queued_for_wash', washStationId: 'auto',
+      }],
+    };
+
+    expect(getWashStationUsage(inbound, station)).toEqual({ deposited: 0, incoming: 1 });
+    expect(getWashStationUsage(deposited, station)).toEqual({ deposited: 1, incoming: 0 });
+  });
+
+  it('returns zero for a frozen idle station without consuming randomness', () => {
+    const frozenStation = Object.freeze({ id: 'auto', type: 'automatic' });
+    const state = Object.freeze({
+      serviceItems: Object.freeze([]),
+      staff: Object.freeze([]),
+    });
+    const random = vi.spyOn(Math, 'random').mockImplementation(() => {
+      throw new Error('Unexpected RNG');
+    });
+    try {
+      expect(getWashStationUsage(state, frozenStation)).toEqual({ deposited: 0, incoming: 0 });
+    } finally {
+      random.mockRestore();
+    }
+  });
 });

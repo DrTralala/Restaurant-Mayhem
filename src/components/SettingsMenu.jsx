@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useDispatch, useGameState } from '../state/GameContext';
 import { createInitialState } from '../state/initialState';
 import { hydrateState } from '../state/persistence';
@@ -19,6 +19,7 @@ function focusableActions(panel) {
 }
 
 export default function SettingsMenu({ isOpen, onToggle, onClose, modal = false }) {
+  const panelId = useId();
   const state = useGameState();
   const dispatch = useDispatch();
   const [message, setMessage] = useState('');
@@ -98,6 +99,8 @@ export default function SettingsMenu({ isOpen, onToggle, onClose, modal = false 
       <button
         type="button"
         aria-label="Settings"
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? panelId : undefined}
         title="Settings"
         onClick={onToggle}
         style={{
@@ -113,7 +116,7 @@ export default function SettingsMenu({ isOpen, onToggle, onClose, modal = false 
         ⚙
       </button>
       {isOpen && (
-        <div ref={panelRef} role={modal ? 'dialog' : undefined}
+        <div ref={panelRef} id={panelId} role={modal ? 'dialog' : undefined}
           aria-modal={modal ? true : undefined} aria-label={modal ? 'Settings' : undefined}
           tabIndex={modal ? -1 : undefined} onKeyDown={handleKeyDown} style={{
           position: 'fixed', top: 100, right: 16, zIndex: 110,

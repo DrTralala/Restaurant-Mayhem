@@ -169,9 +169,58 @@ export function getSaleSelection(state, requestedItems) {
   };
 }
 
-export function sellFixtures(state, requestedItems) {
+export function getFixtureSaleExpectation(selection) {
+  if (!selection) return null;
+
+  const items = [];
+  const seen = new Set();
+
+  const add = (type, id) => {
+    const key = `${type}:${String(id)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({ type, id: String(id) });
+  };
+
+  for (const fixture of selection.fixtures || []) {
+    add(fixture.type, fixture.id);
+  }
+  for (const chairId of selection.removedChairs || []) {
+    add('chair', chairId);
+  }
+
+  items.sort((left, right) => {
+    if (left.type !== right.type) return left.type < right.type ? -1 : 1;
+    if (left.id !== right.id) return left.id < right.id ? -1 : 1;
+    return 0;
+  });
+
+  return { refund: selection.refund, items };
+}
+
+function sameSaleExpectation(expected, actual) {
+  if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return false;
+  if (expected.refund !== actual.refund) return false;
+  if (!Array.isArray(expected.items) || expected.items.length !== actual.items.length) {
+    return false;
+  }
+
+  return expected.items.every((item, index) => item != null
+    && typeof item === 'object'
+    && typeof item.type === 'string'
+    && typeof item.id === 'string'
+    && item.type === actual.items[index].type
+    && item.id === actual.items[index].id);
+}
+
+export function sellFixtures(state, requestedItems, expectedSale) {
   const selection = getSaleSelection(state, requestedItems);
   if (!selection) return state;
+
+  if (expectedSale !== undefined
+    && !sameSaleExpectation(expectedSale, getFixtureSaleExpectation(selection))) {
+    return state;
+  }
 
   const selectedByType = new Map();
   for (const fixture of selection.fixtures) {

@@ -1,5 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { getStaffTrainingCost } from './staffProgression';
+import {
+  getStaffBonusPreview,
+  getStaffTrainingCost,
+  STAFF_BONUS_COST,
+  STAFF_BONUS_MORALE_GAIN,
+} from './staffProgression';
+
+describe('getStaffBonusPreview', () => {
+  it('previews the shared bonus costs and gain constants', () => {
+    expect(STAFF_BONUS_COST).toBe(50);
+    expect(STAFF_BONUS_MORALE_GAIN).toBe(20);
+  });
+
+  it('previews a standard bonus without mutating the worker', () => {
+    const worker = Object.freeze({ morale: 80 });
+
+    expect(getStaffBonusPreview(worker)).toEqual({ cost: 50, morale: 100 });
+    expect(worker).toEqual({ morale: 80 });
+  });
+
+  it.each([
+    [79.6, 99.6],
+    [95, 100],
+    [-5, 15],
+    [0, 20],
+  ])('previews morale %s as %s', (morale, expected) => {
+    expect(getStaffBonusPreview({ morale })).toEqual({ cost: 50, morale: expected });
+  });
+
+  it.each([100, 101, Number.NaN, Number.POSITIVE_INFINITY, undefined, '80'])(
+    'rejects ineligible morale %s',
+    morale => {
+      expect(getStaffBonusPreview({ morale })).toBeNull();
+    },
+  );
+
+  it('rejects an absent worker', () => {
+    expect(getStaffBonusPreview(null)).toBeNull();
+    expect(getStaffBonusPreview(undefined)).toBeNull();
+  });
+});
 
 describe('getStaffTrainingCost', () => {
   it.each([

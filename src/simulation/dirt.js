@@ -6,6 +6,13 @@ const DIRT_PER_MINUTE = 0.10;
 const EATING_DIRT_PER_MINUTE = 0.20;
 const SEATED_VISUAL_STATES = new Set(['seated', 'ordering', 'eating', 'waiting_for_items']);
 
+export const DIRT_REPUTATION_THRESHOLD = 3;
+
+export function getDirtReputationLossPerMinute(messCount) {
+  return Number.isFinite(messCount)
+    ? Math.min(0.01, Math.max(0, messCount - DIRT_REPUTATION_THRESHOLD) * 0.001) : 0;
+}
+
 export function getNextDirtId(floorDirt = []) {
   const next = floorDirt.reduce((maximum, dirt) => {
     const match = /^dirt-(\d+)$/.exec(dirt.id || '');
@@ -117,8 +124,7 @@ export function updateDirt(state, gameDt, random = Math.random) {
       ? { ...customer, happiness: Math.max(0, (Number(customer.happiness) || 0) - happinessLoss) }
       : customer;
   });
-  const excessDirt = Math.max(0, floorDirt.length - 3);
-  const reputationLoss = Math.min(0.01, excessDirt * 0.001) * penaltyDt;
+  const reputationLoss = getDirtReputationLossPerMinute(floorDirt.length) * penaltyDt;
   return {
     ...state,
     customers,

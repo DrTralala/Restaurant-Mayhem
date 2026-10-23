@@ -6,7 +6,7 @@ import { getPlaceSettingPositions } from './tableGeometry';
 import { getServiceCounterItemPosition } from './serviceCounterGeometry';
 import { getSeatedDisplayGeometry } from './seatedGeometry';
 import { getRemainingFraction } from '../simulation/activity';
-import { getWashStationCapacity, getWashStationOccupancy } from '../simulation/dishwashing';
+import { getWashStationCapacity, getWashStationOccupancy, getWashStationUsage } from '../simulation/dishwashing';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { getQueueDisplayLayout } from '../simulation/customerQueue';
 import { getCustomerConsumptionRemainingFraction } from '../simulation/consumption';
@@ -449,11 +449,17 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}, indexes = c
     ctx.font = getCanvasFont('compact');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    const occupancy = getWashStationOccupancy(state, station, {
-      includeReservations: station.type !== 'automatic',
-    });
+    const usage = station.type === 'automatic' ? getWashStationUsage(state, station) : null;
+    const occupancy = usage
+      ? usage.deposited
+      : getWashStationOccupancy(state, station, {
+        includeReservations: station.type !== 'automatic',
+      });
     ctx.fillText(`${occupancy} / ${getWashStationCapacity(station)}`,
       station.x + w / 2, station.y + h + 10);
+    if (usage?.incoming > 0) {
+      ctx.fillText(`+${usage.incoming} incoming`, station.x + w / 2, station.y + h + 20);
+    }
     ctx.restore();
     const active = items.find(item => item.state === 'washing');
     if (active) {
@@ -469,6 +475,23 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}, indexes = c
   }
 
   for (const item of Array.isArray(state.serviceItems) ? state.serviceItems : []) {
+    if (item.kind === 'drink' && item.state === 'preparing') {
+      const station = indexes.kitchenStationsById.get(item.stationId);
+      if (!station || station.equipmentId != null
+        || !Number.isFinite(station.x) || !Number.isFinite(station.y)) continue;
+      ctx.fillStyle = '#fff';
+      ctx.font = getCanvasFont('item');
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(
+        getServiceItemEmoji(item, state.dishes || [], indexes.dishesById),
+        station.x + 20,
+        station.y - 10,
+      );
+      ctx.restore();
+      continue;
+    }
     const kitchenDish = item.kind === 'dish'
       && ['preparing', 'ready'].includes(item.state)
       && indexes.kitchenStationIds.has(item.stationId);

@@ -5,18 +5,67 @@ import { TYPOGRAPHY } from '../typography';
 const AUTO_DISMISS_MS = 5000;
 
 function ToastBanner({ notification, onDismiss }) {
-  useEffect(() => {
-    const timer = setTimeout(() => onDismiss(notification.id), AUTO_DISMISS_MS);
-    return () => clearTimeout(timer);
+  const bannerRef = useRef(null);
+  const remainingMsRef = useRef(AUTO_DISMISS_MS);
+  const startedAtRef = useRef(0);
+  const timerRef = useRef(null);
+  const [focused, setFocused] = useState(false);
+
+  const stopTimer = useCallback(() => {
+    if (timerRef.current === null) return;
+    clearTimeout(timerRef.current);
+    timerRef.current = null;
+  }, []);
+
+  const expire = useCallback(() => {
+    timerRef.current = null;
+    if (bannerRef.current?.contains(document.activeElement)) {
+      remainingMsRef.current = 0;
+      setFocused(true);
+      return;
+    }
+    onDismiss(notification.id);
   }, [notification.id, onDismiss]);
 
+  const startTimer = useCallback(() => {
+    startedAtRef.current = Date.now();
+    timerRef.current = setTimeout(expire, remainingMsRef.current);
+  }, [expire]);
+
+  useEffect(() => {
+    startTimer();
+    return stopTimer;
+  }, [startTimer, stopTimer]);
+
+  const handleFocus = () => {
+    setFocused(true);
+    if (timerRef.current === null) return;
+    clearTimeout(timerRef.current);
+    timerRef.current = null;
+    const elapsed = Date.now() - startedAtRef.current;
+    remainingMsRef.current = Math.max(0, remainingMsRef.current - elapsed);
+  };
+
+  const handleBlur = event => {
+    if (event.relatedTarget && bannerRef.current?.contains(event.relatedTarget)) return;
+    setFocused(false);
+    if (timerRef.current !== null) return;
+    startTimer();
+  };
+
   return (
-    <div className="toast-banner" role="status" style={{
-      ...TYPOGRAPHY.body,
-      background: '#f0a500', color: '#111', padding: '10px 44px 10px 24px',
-      borderRadius: 8,
-      marginBottom: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-    }}>
+    <div
+      ref={bannerRef}
+      className={`toast-banner${focused ? ' toast-banner--focused' : ''}`}
+      role="status"
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      style={{
+        ...TYPOGRAPHY.body,
+        background: '#f0a500', color: '#111', padding: '10px 44px 10px 24px',
+        borderRadius: 8,
+        marginBottom: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+      }}>
       {notification.message}
       <button
         type="button"
