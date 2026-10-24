@@ -118,6 +118,50 @@ describe('profile-performance comparison', () => {
     })).toBe(1);
   });
 
+  it('ignores only root menu-sales telemetry without mutating snapshots or hiding gameplay fields', () => {
+    const deepFreeze = value => {
+      if (value && typeof value === 'object') {
+        Object.values(value).forEach(deepFreeze);
+        Object.freeze(value);
+      }
+      return value;
+    };
+    const state = {};
+    const snapshot = deepFreeze({
+      restaurant: { funds: 600, totalServed: 3 },
+      customers: [{ id: 'customer-1' }],
+      notifications: [],
+    });
+    const missing = gameplayProjection(snapshot, state);
+    const populatedSnapshot = deepFreeze({
+      ...snapshot,
+      menuSales: {
+        day: 1,
+        dishes: [{ key: 'starter-toast', count: 2 }],
+        drinks: [{ key: 'water', count: 1 }],
+      },
+    });
+    const populated = gameplayProjection(populatedSnapshot, state);
+
+    expect(populated).toEqual(missing);
+    expect(populated).not.toHaveProperty('menuSales');
+    expect(snapshot).not.toHaveProperty('menuSales');
+    expect(populatedSnapshot.menuSales).toEqual({
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 2 }],
+      drinks: [{ key: 'water', count: 1 }],
+    });
+
+    expect(gameplayProjection({
+      ...snapshot,
+      restaurant: { ...snapshot.restaurant, funds: 601 },
+    }, state)).not.toEqual(missing);
+    expect(gameplayProjection({
+      ...snapshot,
+      customers: [{ id: 'customer-2' }],
+    }, state)).not.toEqual(missing);
+  });
+
   it('ignores expansion counters but still compares invariant diagnostics', () => {
     const snapshot = { restaurant: { totalServed: 3 }, notifications: [] };
     const makeState = ({ expansionsThisTick, actorExpansions, invariantFailure = null }) => ({

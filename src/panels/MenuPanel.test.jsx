@@ -1111,3 +1111,97 @@ describe('MenuPanel drinks', () => {
     });
   });
 });
+
+describe('paid today counters', () => {
+  beforeEach(() => {
+    useGameState.mockReturnValue({
+      dishes: [{
+        id: 'toast', name: 'Toast', price: 12, prepTime: 60,
+        quality: 2, popularity: 45,
+      }],
+      recipeSlots: 1,
+      equipment: [{ id: 'eq1', name: 'Toaster', owned: true }],
+      unlockedDrinkIds: ['water'],
+      drinkOverrides: { water: { price: 8, quality: 3 } },
+      upgrades: [],
+      restaurant: { funds: 200, reputation: 3 },
+    });
+    useDispatch.mockReturnValue(vi.fn());
+  });
+
+  it('shows zero for missing legacy telemetry and leaves locked drinks unchanged', () => {
+    const base = useGameState();
+    useGameState.mockReturnValue({
+      ...base,
+      restaurant: { ...base.restaurant, day: 1 },
+      menuSales: undefined,
+    });
+    render(<MenuPanel />);
+
+    const dishCard = within(screen.getByRole('article', { name: 'Toast menu item' }));
+    const waterCard = within(screen.getByRole('article', { name: 'Water menu item' }));
+    expect(dishCard.getByText('Paid today: 0')).toBeInTheDocument();
+    expect(waterCard.getByText('Paid today: 0')).toBeInTheDocument();
+
+    const teaCard = within(screen.getByRole('article', { name: 'Tea menu item' }));
+    expect(teaCard.queryByText(/Paid today:/)).not.toBeInTheDocument();
+  });
+
+  it('shows current-day counts beside demand and hides a stale day', () => {
+    const base = useGameState();
+    const menuSales = {
+      day: 1,
+      dishes: [{ key: 'toast', count: 4 }],
+      drinks: [{ key: 'water', count: 2 }],
+    };
+    useGameState.mockReturnValue({
+      ...base,
+      restaurant: { ...base.restaurant, day: 1 },
+      menuSales,
+    });
+    const view = render(<MenuPanel />);
+
+    const dishCard = within(screen.getByRole('article', { name: 'Toast menu item' }));
+    const waterCard = within(screen.getByRole('article', { name: 'Water menu item' }));
+    expect(dishCard.getByText('Paid today: 4')).toBeInTheDocument();
+    expect(waterCard.getByText('Paid today: 2')).toBeInTheDocument();
+    expect(dishCard.getByText(/Estimated demand:/)).toBeInTheDocument();
+
+    useGameState.mockReturnValue({
+      ...base,
+      restaurant: { ...base.restaurant, day: 2 },
+      menuSales,
+    });
+    view.rerender(<MenuPanel />);
+
+    expect(within(screen.getByRole('article', { name: 'Toast menu item' }))
+      .getByText('Paid today: 0')).toBeInTheDocument();
+    expect(within(screen.getByRole('article', { name: 'Water menu item' }))
+      .getByText('Paid today: 0')).toBeInTheDocument();
+  });
+
+  it('keeps counters visible read-only and explains charged-unit tracking limits', () => {
+    const base = useGameState();
+    useGameState.mockReturnValue({
+      ...base,
+      restaurant: { ...base.restaurant, day: 3 },
+      menuSales: {
+        day: 3,
+        dishes: [{ key: 'toast', count: 5 }],
+        drinks: [{ key: 'water', count: 1 }],
+      },
+    });
+    render(<MenuPanel readOnly />);
+
+    expect(within(screen.getByRole('article', { name: 'Toast menu item' }))
+      .getByText('Paid today: 5')).toBeInTheDocument();
+    expect(within(screen.getByRole('article', { name: 'Water menu item' }))
+      .getByText('Paid today: 1')).toBeInTheDocument();
+
+    const explanation = screen.getByText(/Paid today counts charged units/);
+    expect(explanation).toHaveTextContent('including booked guests');
+    expect(explanation).toHaveTextContent('not a demand percentage');
+    expect(explanation).toHaveTextContent('older saves');
+    expect(explanation).toHaveTextContent('removing a dish clears its paid count');
+  });
+});

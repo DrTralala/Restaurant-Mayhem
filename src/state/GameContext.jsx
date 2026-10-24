@@ -26,6 +26,7 @@ import { getRestaurantWorld } from '../simulation/world';
 import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseOperatingHour } from '../simulation/clock';
+import { normaliseMenuSales } from '../simulation/menuSales';
 import {
   getStaffBonusPreview,
   getStaffTrainingCost,
@@ -911,6 +912,12 @@ export function gameReducer(state, action) {
   if (state.navigationFault && action.type === 'TOGGLE_PAUSE') return state;
   let candidate = reduceGameAction(state, action);
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE') return candidate;
+  if (candidate.dishes !== state.dishes) {
+    candidate = {
+      ...candidate,
+      menuSales: normaliseMenuSales(candidate.menuSales, candidate),
+    };
+  }
   if (candidate.equipment !== state.equipment && candidate.cookbook) {
     candidate = { ...candidate, cookbook: reconcileCookbookDiscoveries(candidate) };
   }

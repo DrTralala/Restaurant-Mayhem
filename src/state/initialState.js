@@ -15,6 +15,7 @@ export function createInitialState() {
     cookbook: createCookbookState(),
     serviceContracts: createServiceContractsState(),
     paidVisitSequence: 0,
+    menuSales: { day: 1, dishes: [], drinks: [] },
     careerRun: null,
     restaurant: {
       name: 'My Restaurant',

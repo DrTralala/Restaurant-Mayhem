@@ -4,6 +4,7 @@ import { getPartyKey } from './partyReviews';
 import { applyCookbookPaidVisit, reconcileCookbookDiscoveries, validateDishOrderSnapshots } from './cookbook';
 import { applyCareerPaidVisit, isCareerDecisionPending } from './careerRun';
 import { recordServiceContractPaidVisit } from './serviceContracts';
+import { recordMenuSales } from './menuSales';
 
 const isId = value => typeof value === 'string' && value.trim().length > 0;
 const isAmount = value => Number.isFinite(value) && value >= 0;
@@ -46,7 +47,7 @@ export function getCheckoutBill(state, customer) {
   const drinkAmount = snapshottedSubtotal !== null ? customer.drinkPriceAtOrder ?? 0
     : getResolvedDrink(state, customer.drinkId)?.price || 0;
   requireFact(isAmount(dishAmount) && isAmount(drinkAmount), 'negative or non-finite bill line');
-  return { subtotal: snapshottedSubtotal ?? dishAmount + drinkAmount, dishAmount,
+  return { subtotal: snapshottedSubtotal ?? dishAmount + drinkAmount, dishAmount, drinkAmount,
     priceAtOrder: snapshottedSubtotal !== null ? customer.dishPriceAtOrder : null };
 }
 
@@ -121,5 +122,14 @@ export function commitPaidVisit(state, { customer, payment, paidAt }) {
   }
   if (state.careerRun) next = { ...next, careerRun: applyCareerPaidVisit(state.careerRun, outcome) };
   if (state.serviceContracts) next = recordServiceContractPaidVisit(next, outcome);
+  next = {
+    ...next,
+    menuSales: recordMenuSales(next, {
+      dishId: isId(dish?.menuItemId) ? dish.menuItemId : null,
+      dishAmount: bill.dishAmount,
+      drinkId: isId(live.drinkId) ? live.drinkId : null,
+      drinkAmount: bill.drinkAmount,
+    }),
+  };
   return { state: next, outcome };
 }

@@ -2199,6 +2199,71 @@ describe('GameProvider pause toggles', () => {
   });
 });
 
+describe('GameProvider menu sales telemetry', () => {
+  beforeEach(() => localStorage.clear());
+
+  const customDish = {
+    id: 'custom-dish', name: 'Custom dish', price: 9, prepTime: 30,
+    quality: 1, popularity: 50,
+  };
+
+  it('removes deleted custom and cookbook dish IDs without disturbing current counters', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      dishes: [initial.dishes[0], customDish],
+      menuSales: {
+        day: 1,
+        dishes: [
+          { key: 'starter-toast', count: 1 },
+          { key: 'custom-dish', count: 3 },
+        ],
+        drinks: [],
+      },
+    });
+
+    game.dispatch({ type: 'REMOVE_DISH', id: 'custom-dish' });
+
+    expect(game.state.dishes.map(dish => dish.id)).toEqual(['starter-toast']);
+    expect(game.state.menuSales).toEqual({
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 1 }],
+      drinks: [],
+    });
+
+    game.dispatch({ type: 'REMOVE_DISH', id: 'starter-toast' });
+
+    expect(game.state.dishes).toEqual([]);
+    expect(game.state.menuSales).toEqual({ day: 1, dishes: [], drinks: [] });
+  });
+
+  it('preserves counters through price, name, quality and suspension changes', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      dishes: [customDish],
+      menuSales: {
+        day: 1,
+        dishes: [{ key: 'custom-dish', count: 4 }],
+        drinks: [{ key: 'water', count: 2 }],
+      },
+    });
+    const expectedSales = {
+      day: 1,
+      dishes: [{ key: 'custom-dish', count: 4 }],
+      drinks: [{ key: 'water', count: 2 }],
+    };
+
+    game.dispatch({ type: 'UPDATE_DISH', id: 'custom-dish', changes: { price: 20 } });
+    expect(game.state.menuSales).toEqual(expectedSales);
+    game.dispatch({ type: 'UPDATE_DISH', id: 'custom-dish', changes: { name: 'Renamed' } });
+    expect(game.state.menuSales).toEqual(expectedSales);
+    game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'custom-dish' });
+    expect(game.state.dishes[0].quality).toBe(2);
+    expect(game.state.menuSales).toEqual(expectedSales);
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'custom-dish', suspended: true });
+    expect(game.state.menuSales).toEqual(expectedSales);
+  });
+});
+
 describe('GameProvider fixture sale expectations', () => {
   beforeEach(() => localStorage.clear());
 

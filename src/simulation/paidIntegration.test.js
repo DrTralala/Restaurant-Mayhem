@@ -10,6 +10,7 @@ import { updateStaff } from './staff';
 import { advanceConsumption } from './consumption';
 import { getResolvedDrink } from '../data/drinks';
 import { expireFoodPatience } from './foodPatience';
+import { getMenuSalesCount } from './menuSales';
 import { calculateRevenue } from './revenue';
 import { acceptServiceContract } from './serviceContracts';
 import { createInitialState } from '../state/initialState';
@@ -225,6 +226,7 @@ describe('actual cashier integration', () => {
     expect(paid.serviceContracts.active.guests.slice(0, 2).map(row => [row.status, row.paidVisitSequence]))
       .toEqual([['fulfilled_paid', 1], ['fulfilled_paid', 2]]);
     expect(paid.cookbook.entries.toast.paidPortions).toBe(2);
+    expect(getMenuSalesCount(paid, 'dish', 'starter-toast')).toBe(2);
   });
 
   it('does not replay an old pending receipt into features during duplicate cashier recovery', () => {
@@ -239,6 +241,7 @@ describe('actual cashier integration', () => {
     expect(recovered.cookbook.entries.toast.paidPortions).toBe(0);
     expect(recovered.careerRun.paidMeals).toBe(0);
     expect(recovered.customers[0].paidVisitSequence).toBeUndefined();
+    expect(getMenuSalesCount(recovered, 'dish', 'starter-toast')).toBe(0);
     expect(random).not.toHaveBeenCalled();
   });
 
@@ -270,6 +273,7 @@ describe('actual cashier integration', () => {
     expect(paid.cookbook.entries.toast.paidPortions).toBe(2);
     expect(paid.careerRun.paidMeals).toBe(2);
     expect(paid.customers.map(customer => customer.paidVisitSequence)).toEqual([1, 2]);
+    expect(getMenuSalesCount(paid, 'dish', 'starter-toast')).toBe(2);
     expect(paid.staff[2].task).toBeNull();
   });
 
@@ -287,6 +291,7 @@ describe('actual cashier integration', () => {
     expect(paid.cookbook.entries.toast.paidPortions).toBe(2);
     expect(paid.careerRun).toMatchObject({ paidMeals: 2, lastPaidVisitSequence: 2 });
     expect(paid.restaurant.totalServed).toBe(2);
+    expect(getMenuSalesCount(paid, 'dish', 'starter-toast')).toBe(2);
     const drained = calculateRevenue(paid);
     const calls = random.mock.calls.length;
     const replayed = updateStaff(cashierReady(drained), 0);
@@ -294,6 +299,8 @@ describe('actual cashier integration', () => {
     expect(replayed.completedCustomers).toEqual([]);
     expect(replayed.cookbook).toEqual(paid.cookbook);
     expect(replayed.restaurant).toEqual(drained.restaurant);
+    expect(replayed.menuSales).toEqual(paid.menuSales);
+    expect(getMenuSalesCount(replayed, 'dish', 'starter-toast')).toBe(2);
   });
 
   it('cancellation at the exact deadline followed by drink checkout never charges or credits food', () => {
@@ -312,6 +319,30 @@ describe('actual cashier integration', () => {
     expect(paid.cookbook.entries.toast.paidPortions).toBe(0);
     expect(paid.careerRun.paidMeals).toBe(0);
     expect(paid.paidVisitSequence).toBe(1);
+    expect(getMenuSalesCount(paid, 'dish', 'starter-toast')).toBe(0);
+    expect(getMenuSalesCount(paid, 'drink', 'water')).toBe(1);
+  });
+
+  it('does not count a zero-priced charged line while settling the visit normally', () => {
+    const state = baseState();
+    state.dishes = [{ ...state.dishes[0], cookbookId: null, price: 0 }];
+    state.customers = [{
+      id: 'free-guest', partyId: 'free-party', state: 'checkout_processing', tableId: null,
+      menuOutcome: null, dishId: 'starter-toast', drinkId: null, foodOutcome: null,
+      paymentReady: false, happiness: 80,
+    }];
+    state.serviceItems = [];
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const paid = updateStaff(cashierReady(state), 0);
+
+    expect(paid.completedCustomers).toHaveLength(1);
+    expect(paid.completedCustomers[0]).toMatchObject({
+      customerId: 'free-guest', revenue: 0, tip: 0, totalPaid: 0,
+    });
+    expect(paid.restaurant).toMatchObject({ funds: 600, totalServed: 1 });
+    expect(paid.menuSales).toEqual({ day: 1, dishes: [], drinks: [] });
+    expect(getMenuSalesCount(paid, 'dish', 'starter-toast')).toBe(0);
   });
 
   it('diagnoses sequence exhaustion from the real payment branch before publishing a receipt or progress', () => {
@@ -362,6 +393,7 @@ describe('Iced Tea committed-price payment', () => {
     expect(state.restaurant.funds).toBe(600);
     expect(state.completedCustomers).toEqual([]);
     expect(state.paidVisitSequence).toBe(0);
+    expect(getMenuSalesCount(state, 'drink', 'iced-tea')).toBe(0);
 
     state = { ...state, drinkOverrides: { 'iced-tea': { price: 12 } } };
     expect(getResolvedDrink(state, 'iced-tea').price).toBe(12);
@@ -384,9 +416,16 @@ describe('Iced Tea committed-price payment', () => {
     expect(receipt.revenue - receipt.tip).toBe(4);
     expect(paid.paidVisitSequence).toBe(1);
     expect(paid.restaurant.totalServed).toBe(1);
+    expect(paid.menuSales).toEqual({
+      day: 1,
+      dishes: [],
+      drinks: [{ key: 'iced-tea', count: 1 }],
+    });
+    expect(getMenuSalesCount(paid, 'drink', 'iced-tea')).toBe(1);
 
     const replayed = updateStaff(cashierReady(paid), 0);
     expect(replayed.completedCustomers).toEqual(paid.completedCustomers);
     expect(replayed.paidVisitSequence).toBe(1);
+    expect(getMenuSalesCount(replayed, 'drink', 'iced-tea')).toBe(1);
   });
 });

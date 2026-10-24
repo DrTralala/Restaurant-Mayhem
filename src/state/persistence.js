@@ -31,6 +31,7 @@ import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation
 import { createDishOrderSnapshot, normaliseCookbookState, validateDishOrderSnapshots } from '../simulation/cookbook';
 import { hydrateServiceContractsState, settleServiceContracts } from '../simulation/serviceContracts';
 import { evaluateCareerRun, normaliseCareerRun } from '../simulation/careerRun';
+import { normaliseMenuSales } from '../simulation/menuSales';
 import { calculateRevenue } from '../simulation/revenue';
 
 // Boolean outcome lets the provider report unsaved progress without turning a
@@ -54,6 +55,7 @@ export function loadState() {
     let saved = JSON.parse(serialized);
     if (saved?.version !== SAVE_VERSION) return null;
     saved = migrateLegacyCookbook(saved);
+    saved = { ...saved, menuSales: normaliseMenuSales(saved.menuSales, saved) };
     validateSavedNavigationGeometry(saved);
     validateSavedServiceItemInventory(saved);
     validateSavedState(saved);
@@ -413,6 +415,18 @@ export function hydrateState(saved, fresh) {
     throw new Error('Saved game is incompatible with the current game version');
   }
   saved = migrateLegacyCookbook(saved);
+  const savedRestaurantForSales = saved.restaurant && typeof saved.restaurant === 'object'
+    && !Array.isArray(saved.restaurant) ? saved.restaurant : {};
+  const freshRestaurantForSales = fresh?.restaurant && typeof fresh.restaurant === 'object'
+    && !Array.isArray(fresh.restaurant) ? fresh.restaurant : {};
+  saved = {
+    ...saved,
+    menuSales: normaliseMenuSales(saved.menuSales, {
+      dishes: Array.isArray(saved.dishes) ? saved.dishes
+        : Array.isArray(fresh?.dishes) ? fresh.dishes : [],
+      restaurant: { ...freshRestaurantForSales, ...savedRestaurantForSales },
+    }),
+  };
   validateSavedNavigationGeometry(saved);
   validateSavedServiceItemInventory(saved);
   validateSavedState(saved);

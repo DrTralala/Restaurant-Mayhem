@@ -1153,6 +1153,7 @@ describe('hydrateState', () => {
       version: SAVE_VERSION,
       careerRun: null,
       paidVisitSequence: 0,
+      menuSales: { day: 1, dishes: [], drinks: [] },
       cookbook: createCookbookState(),
       serviceContracts: createServiceContractsState(),
       dishes: [],
