@@ -21,6 +21,11 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
   const state = useGameState();
   const dispatch = useDispatch();
   const serviceTablePrice = PLACEABLES.serviceTable.price;
+  const funds = state.restaurant.funds;
+  const canBuyServiceTable = Number.isFinite(funds)
+    && Number.isFinite(serviceTablePrice)
+    && serviceTablePrice >= 0
+    && funds >= serviceTablePrice;
   const expansion = getExpansionPreview(state.restaurant);
   const expansionHelpId = useId();
   const shortfallHelpId = useId();
@@ -141,14 +146,16 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
           Long table where cooks place finished food and waiters pick it up. {state.serviceTables.length} installed.
         </p>
         <button
-          onClick={() => onStartPlacement('serviceTable')}
-          disabled={state.restaurant.funds < serviceTablePrice}
+          onClick={() => {
+            if (canBuyServiceTable) onStartPlacement('serviceTable');
+          }}
+          disabled={!canBuyServiceTable}
           style={{
             ...TYPOGRAPHY.control,
-            background: state.restaurant.funds < serviceTablePrice ? '#333' : '#f0a500',
-            color: state.restaurant.funds < serviceTablePrice ? '#666' : '#111',
+            background: canBuyServiceTable ? '#f0a500' : '#333',
+            color: canBuyServiceTable ? '#111' : '#666',
             border: 'none', padding: '6px 14px', borderRadius: 4,
-            cursor: state.restaurant.funds < serviceTablePrice ? 'not-allowed' : 'pointer',
+            cursor: canBuyServiceTable ? 'pointer' : 'not-allowed',
             marginTop: 6,
           }}
         >

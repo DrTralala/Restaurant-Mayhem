@@ -110,6 +110,45 @@ describe('StaffDetailsPanel', () => {
     expect(screen.getByText('Taking order')).toBeInTheDocument();
   });
 
+  it.each([
+    ['missing', undefined],
+    ['NaN', Number.NaN],
+    ['positive infinity', Number.POSITIVE_INFINITY],
+    ['string', '80'],
+    ['null', null],
+  ])('shows Unavailable for %s current morale', (_label, morale) => {
+    const current = { ...staff, task: null };
+    if (morale === undefined) delete current.morale;
+    else current.morale = morale;
+    render(<StaffDetailsPanel staff={current} dispatch={vi.fn()} onClose={vi.fn()} />);
+
+    const value = screen.getByText('Morale').nextElementSibling;
+    expect(value).toHaveTextContent('Unavailable');
+    expect(value).not.toHaveTextContent(/NaN%|Infinity%/);
+  });
+
+  it.each([
+    ['fractional', 79.6, '80%'],
+    ['zero', 0, '0%'],
+    ['negative', -12.4, '-12%'],
+  ])('keeps %s finite current morale as %s', (_label, morale, expected) => {
+    render(<StaffDetailsPanel staff={{ ...staff, morale }} dispatch={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByText('Morale').nextElementSibling).toHaveTextContent(expected);
+  });
+
+  it('recovers the current morale display when a rerender supplies a finite value', () => {
+    const { rerender } = render(
+      <StaffDetailsPanel staff={{ ...staff, morale: Number.NaN }} dispatch={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(screen.getByText('Morale').nextElementSibling).toHaveTextContent('Unavailable');
+
+    rerender(
+      <StaffDetailsPanel staff={{ ...staff, morale: 79.6 }} dispatch={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(screen.getByText('Morale').nextElementSibling).toHaveTextContent('80%');
+  });
+
   it('labels the details aside with the staff heading and focuses that heading on open', () => {
     render(<StaffDetailsPanel staff={staff} dispatch={vi.fn()} onClose={vi.fn()} />);
 
@@ -185,10 +224,25 @@ describe('StaffDetailsPanel', () => {
     ['prepare_drink', 'Preparing drink'],
     ['pickup_service_item', 'Collecting order'],
     ['deliver_service_item', 'Delivering order'],
+    ['deliver_food_item', 'Delivering order'],
+    ['take_payment', 'Taking payment'],
     ['transfer_dirty_item', 'Transferring dirty item'],
   ])('labels %s tasks', (type, label) => {
     render(<StaffDetailsPanel staff={{ ...staff, task: { type } }} dispatch={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it('shows the cook service-counter task label used by the roster', () => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, role: 'cook', task: { type: 'place_dish_on_service' } }}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Placing order on service counter').parentElement)
+      .toHaveTextContent('Current task: Placing order on service counter');
   });
 
   it('shows a cashier assignment for an idle waiter', () => {
@@ -233,6 +287,242 @@ describe('StaffDetailsPanel', () => {
 
     expect(screen.getByText('Cleaning table').parentElement)
       .toHaveTextContent('Current task: Cleaning table');
+  });
+
+  it.each([
+    ['take_order', 'Taking order'],
+    ['deliver_service_item', 'Delivering order'],
+  ])('shows both the active %s task and the checkout assignment for an assigned waiter', (type, label) => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, task: { type } }}
+        cashierStations={[{ id: 'cashier1', assignedStaffId: staff.id }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(label).parentElement)
+      .toHaveTextContent(`Current task: ${label}`);
+    const assignment = screen.getByText(/^Checkout assignment:/);
+    expect(assignment).toHaveTextContent('Checkout assignment: cashier1.');
+    expect(assignment.previousElementSibling)
+      .toHaveTextContent(`Current task: ${label}`);
+    expect(screen.getByText('Assignment does not guarantee current availability.'))
+      .toBeInTheDocument();
+  });
+
+  it('retains the Staffing cashier task for an idle assigned waiter and shows the assignment', () => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, task: null }}
+        cashierStations={[{ id: 'cashier1', assignedStaffId: staff.id }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Staffing cashier').parentElement)
+      .toHaveTextContent('Current task: Staffing cashier');
+    expect(screen.getByText(/^Checkout assignment:/))
+      .toHaveTextContent('Checkout assignment: cashier1.');
+    expect(screen.getByText('Assignment does not guarantee current availability.'))
+      .toBeInTheDocument();
+  });
+
+  it('shows None for an unassigned waiter while retaining the idle task fallback', () => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, task: null }}
+        cashierStations={[{ id: 'cashier1' }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText('Available').some(element => element.parentElement?.textContent === 'Current task: Available'))
+      .toBe(true);
+    expect(screen.getByText(/^Checkout assignment:/))
+      .toHaveTextContent('Checkout assignment: None.');
+    expect(screen.getByText('Assignment does not guarantee current availability.'))
+      .toBeInTheDocument();
+  });
+
+  it('matches numeric staff IDs strictly and keeps zero valid', () => {
+    const { rerender } = render(
+      <StaffDetailsPanel
+        staff={{ ...staff, id: 0, task: null }}
+        cashierStations={[{ id: 'cashier-zero', assignedStaffId: 0 }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/^Checkout assignment:/))
+      .toHaveTextContent('Checkout assignment: cashier-zero.');
+
+    rerender(
+      <StaffDetailsPanel
+        staff={{ ...staff, id: 0, task: null }}
+        cashierStations={[{ id: 'cashier-string', assignedStaffId: '0' }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/^Checkout assignment:/))
+      .toHaveTextContent('Checkout assignment: None.');
+  });
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+  ])('does not match a station when the waiter ID is %s', (_label, id) => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, id, task: null }}
+        cashierStations={[
+          { id: 'cashier-absent' },
+          { id: 'cashier-null', assignedStaffId: null },
+        ]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/^Checkout assignment:/))
+      .toHaveTextContent('Checkout assignment: None.');
+  });
+
+  it('tolerates null station records and uses the first strict match', () => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, task: null }}
+        cashierStations={[
+          null,
+          { id: 'cashier1', assignedStaffId: staff.id },
+          { id: 'cashier2', assignedStaffId: staff.id },
+        ]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const assignment = screen.getByText(/^Checkout assignment:/);
+    expect(assignment).toHaveTextContent('Checkout assignment: cashier1.');
+    expect(assignment).not.toHaveTextContent('cashier2');
+  });
+
+  it('removes the checkout assignment when a rerender no longer assigns the waiter', () => {
+    const { rerender } = render(
+      <StaffDetailsPanel
+        staff={{ ...staff, task: null }}
+        cashierStations={[{ id: 'cashier1', assignedStaffId: staff.id }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/^Checkout assignment:/))
+      .toHaveTextContent('Checkout assignment: cashier1.');
+
+    rerender(
+      <StaffDetailsPanel
+        staff={{ ...staff, task: null }}
+        cashierStations={[{ id: 'cashier1' }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/^Checkout assignment:/))
+      .toHaveTextContent('Checkout assignment: None.');
+    expect(screen.getByText(/^Checkout assignment:/)).not.toHaveTextContent('cashier1');
+  });
+
+  it('does not show a checkout assignment for a non-waiter', () => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, role: 'cook', task: null }}
+        cashierStations={[{ id: 'cashier1', assignedStaffId: staff.id }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/Checkout assignment:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Assignment does not guarantee current availability.'))
+      .not.toBeInTheDocument();
+  });
+
+  it('reads frozen staffing inputs repeatedly without mutation or randomness', () => {
+    const random = vi.spyOn(Math, 'random');
+    const frozenStaff = deepFreeze({ ...staff, id: 0, task: { type: 'take_order' } });
+    const frozenStations = deepFreeze([{ id: 'cashier-zero', assignedStaffId: 0 }]);
+
+    try {
+      const { rerender } = render(
+        <StaffDetailsPanel
+          staff={frozenStaff}
+          cashierStations={frozenStations}
+          dispatch={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText(/^Checkout assignment:/))
+        .toHaveTextContent('Checkout assignment: cashier-zero.');
+
+      rerender(
+        <StaffDetailsPanel
+          staff={frozenStaff}
+          cashierStations={frozenStations}
+          dispatch={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText(/^Checkout assignment:/))
+        .toHaveTextContent('Checkout assignment: cashier-zero.');
+      expect(frozenStations[0]).toMatchObject({ id: 'cashier-zero', assignedStaffId: 0 });
+      expect(random).not.toHaveBeenCalled();
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it.each([
+    ['unknown', { type: 'mystery' }],
+    ['missing-type', {}],
+    ['non-string-type', { type: 42 }],
+    ['prototype-key', { type: 'constructor' }],
+  ])('shows Task unavailable for a present %s task instead of an idle fallback', (_label, task) => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, task }}
+        cashierStations={[{ id: 'cashier1', assignedStaffId: staff.id }]}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Task unavailable').parentElement)
+      .toHaveTextContent('Current task: Task unavailable');
+    expect(screen.queryByText('Staffing cashier')).not.toBeInTheDocument();
+  });
+
+  it('keeps an empty task object unavailable without opening task progress', () => {
+    render(
+      <StaffDetailsPanel
+        staff={{ ...staff, task: {} }}
+        dispatch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Task unavailable').parentElement)
+      .toHaveTextContent('Current task: Task unavailable');
+    expect(screen.queryByRole('region', { name: 'Task work progress' })).not.toBeInTheDocument();
   });
 
   it('dispatches one bonus, still moves, and fires only after the shared confirmation', () => {

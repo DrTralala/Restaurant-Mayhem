@@ -11,22 +11,7 @@ import {
   formatGameTime,
   getStaffDutyPresentation,
 } from '../panels/StaffScheduleEditor';
-
-const taskLabels = {
-  clean_table: 'Cleaning table',
-  take_order: 'Taking order',
-  take_payment: 'Taking payment',
-  prepare_dish: 'Preparing dish',
-  prepare_drink: 'Preparing drink',
-  pickup_service_item: 'Collecting order',
-  deliver_service_item: 'Delivering order',
-  deliver_food_item: 'Delivering order',
-  clean_floor: 'Cleaning floor',
-  collect_dirty_item: 'Collecting dirty item',
-  deliver_dirty_item: 'Delivering dirty item',
-  transfer_dirty_item: 'Transferring dirty item',
-  wash_item: 'Washing item',
-};
+import { getStaffTaskLabel } from '../panels/staffTaskLabel';
 
 const actionButton = {
   ...TYPOGRAPHY.control,
@@ -44,9 +29,10 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
   }, [staff.id]);
 
   const role = humaniseIdentifier(staff.role);
-  const assignedStation = cashierStations?.find(station => station.assignedStaffId === staff.id);
-  const task = taskLabels[staff.task?.type]
-    || (staff.role === 'waiter' && assignedStation ? 'Staffing cashier' : 'Available');
+  const assignedStation = staff.id != null && Array.isArray(cashierStations)
+    ? cashierStations.find(station => station?.assignedStaffId === staff.id)
+    : null;
+  const task = getStaffTaskLabel(staff, cashierStations);
   const currentGameTime = Number.isFinite(Number(gameTime))
     ? Number(gameTime)
     : state?.restaurant?.gameTime ?? 0;
@@ -110,7 +96,7 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, margin: '16px 0' }}>
         <div style={{ background: '#16213e', borderRadius: 5, padding: 9 }}>
           <div style={{ ...TYPOGRAPHY.secondary, color: '#7788a8' }}>Morale</div>
-          <strong style={{ color: '#fff' }}>{Math.round(staff.morale)}%</strong>
+          <strong style={{ color: '#fff' }}>{Number.isFinite(staff.morale) ? `${Math.round(staff.morale)}%` : 'Unavailable'}</strong>
         </div>
         <div style={{ background: '#16213e', borderRadius: 5, padding: 9 }}>
           <div style={{ ...TYPOGRAPHY.secondary, color: '#7788a8' }}>Skill</div>
@@ -121,6 +107,17 @@ export default function StaffDetailsPanel({ staff, cashierStations, dispatch, on
       <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 16 }}>
         Current task: <strong style={{ color: '#fff' }}>{task}</strong>
       </div>
+
+      {staff.role === 'waiter' && (
+        <>
+          <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
+            Checkout assignment: <strong style={{ color: '#fff' }}>{assignedStation ? String(assignedStation.id) : 'None'}</strong>.
+          </div>
+          <div style={{ ...TYPOGRAPHY.secondary, color: '#8fa4c8', marginBottom: 16 }}>
+            Assignment does not guarantee current availability.
+          </div>
+        </>
+      )}
 
       {hasTask && (
         <section

@@ -307,6 +307,8 @@ export default function StaffScheduleEditor({
   const showOther = coveragePeriods.some(period => period.counts.other > 0);
   const openScheduleGaps = coveragePeriods.filter(period => period.open
     && (period.counts.cook === 0 || period.counts.waiter === 0));
+  const openJanitorPeriods = coveragePeriods.filter(period => period.open
+    && period.counts.janitor === 0);
 
   const updateSchedule = (nextSchedule) => {
     if (!controlled) setInternalSchedule(nextSchedule);
@@ -564,6 +566,22 @@ export default function StaffScheduleEditor({
           </ul>
         )}
       </div>
+
+      {openJanitorPeriods.length > 0 && (
+        <div style={{ marginTop: 10, background: '#0d1528', border: '1px solid #223d62', borderRadius: 5, padding: 8 }}>
+          <h5 style={{ ...TYPOGRAPHY.subheading, color: '#dbe9ff', margin: '0 0 4px' }}>Janitor schedule coverage</h5>
+          <p style={{ ...TYPOGRAPHY.secondary, color: '#9da9bd', margin: '0 0 6px' }}>
+            A schedule observation, not a staffing requirement. Scheduled Work does not guarantee availability.
+          </p>
+          <ul aria-label="Periods without scheduled janitors" style={{ ...TYPOGRAPHY.secondary, color: '#c9d7ec', listStyle: 'none', padding: 0, margin: 0 }}>
+            {openJanitorPeriods.map(period => (
+              <li key={`${period.start}-${period.end}`} style={{ overflowWrap: 'anywhere', marginBottom: 2 }}>
+                {formatBoundaryTime(period.start)} to {formatBoundaryTime(period.end)} · No janitors scheduled to Work in this period.
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {error && (
         <p role="alert" style={{ ...TYPOGRAPHY.secondary, color: '#ffb3a7', margin: '9px 0 0' }}>

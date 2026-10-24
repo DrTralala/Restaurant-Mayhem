@@ -38,7 +38,8 @@ function formatReward(reward, milestone) {
       || !Number.isSafeInteger(reward.amount) || reward.amount <= 0) return 'No reward';
     return `Cash bonus $${reward.amount}`;
   }
-  return humaniseIdentifier(reward.type);
+  if (reward.type === 'newDishSlot') return humaniseIdentifier(reward.type);
+  return 'No reward';
 }
 
 export default function MilestonePanel() {

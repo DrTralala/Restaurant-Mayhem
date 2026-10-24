@@ -351,6 +351,150 @@ describe('useDialogKeyboardFocus Tab containment', () => {
     fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
     expect(dialog).toHaveFocus();
   });
+
+  it('includes native disclosure summaries in both directions and boundary wrap', () => {
+    render(
+      <StaticHarness>
+        <details open>
+          <summary>First summary</summary>
+          <button type="button">Inside details</button>
+        </details>
+        <button type="button">Last</button>
+      </StaticHarness>,
+    );
+    const close = screen.getByRole('button', { name: 'Close' });
+    const summary = screen.getByText('First summary');
+    const inside = screen.getByRole('button', { name: 'Inside details' });
+    const last = screen.getByRole('button', { name: 'Last' });
+
+    close.focus();
+    fireEvent.keyDown(close, { key: 'Tab' });
+    expect(summary).toHaveFocus();
+
+    fireEvent.keyDown(summary, { key: 'Tab' });
+    expect(inside).toHaveFocus();
+
+    last.focus();
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(close).toHaveFocus();
+
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(last).toHaveFocus();
+
+    summary.focus();
+    fireEvent.keyDown(summary, { key: 'Tab', shiftKey: true });
+    expect(close).toHaveFocus();
+  });
+
+  it('excludes secondary and outside summaries unless explicit tabindex makes them eligible', () => {
+    render(
+      <StaticHarness>
+        <details open>
+          <summary>Primary summary</summary>
+          <summary>Secondary summary</summary>
+          <button type="button">Inside details</button>
+        </details>
+        <summary>Outside summary</summary>
+        <details open>
+          <summary>Explicit primary</summary>
+          <summary tabIndex={0}>Explicit secondary</summary>
+        </details>
+        <button type="button">Last</button>
+      </StaticHarness>,
+    );
+    const close = screen.getByRole('button', { name: 'Close' });
+    const primary = screen.getByText('Primary summary');
+    const inside = screen.getByRole('button', { name: 'Inside details' });
+    const explicitPrimary = screen.getByText('Explicit primary');
+    const explicitSecondary = screen.getByText('Explicit secondary');
+    const last = screen.getByRole('button', { name: 'Last' });
+
+    primary.focus();
+    fireEvent.keyDown(primary, { key: 'Tab' });
+    expect(inside).toHaveFocus();
+
+    fireEvent.keyDown(inside, { key: 'Tab' });
+    expect(explicitPrimary).toHaveFocus();
+
+    fireEvent.keyDown(explicitPrimary, { key: 'Tab' });
+    expect(explicitSecondary).toHaveFocus();
+
+    fireEvent.keyDown(explicitSecondary, { key: 'Tab' });
+    expect(last).toHaveFocus();
+
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(close).toHaveFocus();
+
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(last).toHaveFocus();
+
+    explicitSecondary.focus();
+    fireEvent.keyDown(explicitSecondary, { key: 'Tab', shiftKey: true });
+    expect(explicitPrimary).toHaveFocus();
+  });
+
+  it('honours explicit negative tabindex and hidden or inert summaries', () => {
+    render(
+      <StaticHarness withInitialFocus={false}>
+        <details open>
+          <summary tabIndex={-1}>Removed summary</summary>
+          <button type="button">Inside removed</button>
+        </details>
+        <details open>
+          <summary hidden>Hidden summary</summary>
+          <button type="button">Inside hidden</button>
+        </details>
+        <div style={{ display: 'none' }}>
+          <details open><summary>Display none summary</summary></details>
+        </div>
+        <div inert="">
+          <details open><summary>Inert summary</summary></details>
+        </div>
+        <details open>
+          <summary>First visible summary</summary>
+        </details>
+        <button type="button">Last visible</button>
+      </StaticHarness>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Static dialog' });
+    const insideRemoved = screen.getByRole('button', { name: 'Inside removed' });
+    const insideHidden = screen.getByRole('button', { name: 'Inside hidden' });
+    const firstVisible = screen.getByText('First visible summary');
+    const last = screen.getByRole('button', { name: 'Last visible' });
+
+    expect(dialog).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(insideRemoved).toHaveFocus();
+
+    fireEvent.keyDown(insideRemoved, { key: 'Tab' });
+    expect(insideHidden).toHaveFocus();
+
+    fireEvent.keyDown(insideHidden, { key: 'Tab' });
+    expect(firstVisible).toHaveFocus();
+
+    fireEvent.keyDown(firstVisible, { key: 'Tab' });
+    expect(last).toHaveFocus();
+
+    fireEvent.keyDown(last, { key: 'Tab', shiftKey: true });
+    expect(firstVisible).toHaveFocus();
+  });
+
+  it('includes a native first summary when its tabIndex reports negative', () => {
+    render(
+      <StaticHarness withInitialFocus={false}>
+        <details open>
+          <summary>Fallback summary</summary>
+        </details>
+      </StaticHarness>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Static dialog' });
+    const summary = screen.getByText('Fallback summary');
+    Object.defineProperty(summary, 'tabIndex', { configurable: true, value: -1 });
+
+    expect(summary.tabIndex).toBe(-1);
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(summary).toHaveFocus();
+  });
 });
 
 describe('useDialogKeyboardFocus Escape consumption', () => {

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import UpgradePanel from './UpgradePanel';
 
@@ -70,6 +70,89 @@ describe('UpgradePanel', () => {
       itemType: 'equipmentStation', equipmentId: 'eq2',
     });
     expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'BUY_EQUIPMENT' }));
+  });
+});
+
+describe('UpgradePanel service counter affordability', () => {
+  const panelState = (funds, serviceTables = []) => ({
+    upgrades: [],
+    restaurant: { funds, expansionLevel: 1 },
+    serviceTables,
+    equipment: [],
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['NaN', Number.NaN],
+    ['infinite', Number.POSITIVE_INFINITY],
+    ['a numeric string', '500'],
+    ['negative', -1],
+  ])('disables the service counter for %s funds', (_label, funds) => {
+    const dispatch = vi.fn();
+    const startPlacement = vi.fn();
+    useGameState.mockReturnValue(panelState(funds));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<UpgradePanel onStartPlacement={startPlacement} />);
+
+    const button = screen.getByRole('button', { name: 'Buy ($300)' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveStyle({ background: '#333', color: '#666', cursor: 'not-allowed' });
+    fireEvent.click(button);
+
+    expect(startPlacement).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('recovers on rerender from one cent short to exact funds and only starts placement', () => {
+    const dispatch = vi.fn();
+    const startPlacement = vi.fn();
+    const serviceTables = [{ id: 'st1' }, { id: 'st2' }];
+    useGameState.mockReturnValue(panelState(299.99, serviceTables));
+    useDispatch.mockReturnValue(dispatch);
+
+    const { rerender } = render(<UpgradePanel onStartPlacement={startPlacement} />);
+
+    expect(screen.getByText(/2 installed\./)).toBeVisible();
+    let button = screen.getByRole('button', { name: 'Buy ($300)' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveStyle({ background: '#333', color: '#666', cursor: 'not-allowed' });
+    fireEvent.click(button);
+    expect(startPlacement).not.toHaveBeenCalled();
+
+    useGameState.mockReturnValue(panelState(300, serviceTables));
+    rerender(<UpgradePanel onStartPlacement={startPlacement} />);
+
+    expect(screen.getByText(/2 installed\./)).toBeVisible();
+    button = screen.getByRole('button', { name: 'Buy ($300)' });
+    expect(button).toBeEnabled();
+    expect(button).toHaveStyle({ background: '#f0a500', color: '#111', cursor: 'pointer' });
+    fireEvent.click(button);
+
+    expect(startPlacement).toHaveBeenCalledTimes(1);
+    expect(startPlacement).toHaveBeenCalledWith('serviceTable');
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('guards the real click handler beyond the disabled DOM state', () => {
+    const dispatch = vi.fn();
+    const startPlacement = vi.fn();
+    useGameState.mockReturnValue(panelState(299.99));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<UpgradePanel onStartPlacement={startPlacement} />);
+
+    const button = screen.getByRole('button', { name: 'Buy ($300)' });
+    expect(button).toBeDisabled();
+
+    // React suppresses DOM clicks on disabled controls, so invoke the rendered
+    // handler directly to prove the handler itself refuses the action.
+    const reactPropsKey = Object.keys(button).find(key => key.startsWith('__reactProps$'));
+    expect(reactPropsKey).toBeTruthy();
+    button[reactPropsKey].onClick();
+
+    expect(startPlacement).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });
 

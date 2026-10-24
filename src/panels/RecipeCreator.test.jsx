@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import RecipeCreator from './RecipeCreator';
+import { CUSTOM_RECIPE_STATS } from '../data/recipes';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
@@ -400,5 +401,184 @@ describe('RecipeCreator instance field identity', () => {
     expect(within(one).getByText(priceMessage)).toBe(firstPriceError);
     expect(within(two).getByText(priceMessage)).toBe(describedElement(second.price));
     expect(describedElement(second.price)).not.toBe(firstPriceError);
+  });
+});
+
+describe('RecipeCreator custom base-stat disclosure', () => {
+  const ownedOvenState = {
+    equipment: [{ id: 'eq2', name: 'Oven', owned: true }],
+    dishes: [],
+    recipeSlots: 1,
+  };
+  const disclosureText = 'Creation randomly assigns base prep work from 120 to 239 game seconds and base popularity from 30 to 59. Actual preparation time and order demand depend on other factors.';
+
+  const renderCustomCreator = (state = ownedOvenState) => {
+    useGameState.mockReturnValue(state);
+    const dispatch = vi.fn();
+    const onClose = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    const view = render(<RecipeCreator onClose={onClose} />);
+    return { ...view, dispatch, onClose };
+  };
+
+  const fillValidDish = () => {
+    fireEvent.change(screen.getByLabelText('Dish name:'), { target: { value: 'Soup' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Price: $' }), { target: { value: '12' } });
+  };
+
+  const expectCreatedDish = ({ dispatch, prepTime, popularity }) => {
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'ADD_DISH',
+      dish: {
+        id: 'dish-123456789',
+        name: 'Soup',
+        base: 'Bread',
+        method: 'Grilled',
+        price: 12,
+        prepTime,
+        quality: 1,
+        popularity,
+        cuisine: 'generic',
+        requiredEquipmentId: 'eq2',
+        unlocked: true,
+      },
+    });
+  };
+
+  it('exports frozen custom recipe stat bounds', () => {
+    expect(CUSTOM_RECIPE_STATS).toEqual({
+      prepTime: { min: 120, max: 239 },
+      popularity: { min: 30, max: 59 },
+    });
+    expect(Object.isFrozen(CUSTOM_RECIPE_STATS)).toBe(true);
+    expect(Object.isFrozen(CUSTOM_RECIPE_STATS.prepTime)).toBe(true);
+    expect(Object.isFrozen(CUSTOM_RECIPE_STATS.popularity)).toBe(true);
+  });
+
+  it('renders the exact disclosure as a wrapping paragraph linked to Create', () => {
+    renderCustomCreator();
+    const create = screen.getByRole('button', { name: 'Create' });
+    const disclosure = screen.getByText(disclosureText);
+
+    expect(disclosure.tagName).toBe('P');
+    expect(disclosure).toHaveTextContent(disclosureText);
+    expect(disclosureText).toBe(`Creation randomly assigns base prep work from ${CUSTOM_RECIPE_STATS.prepTime.min} to ${CUSTOM_RECIPE_STATS.prepTime.max} game seconds and base popularity from ${CUSTOM_RECIPE_STATS.popularity.min} to ${CUSTOM_RECIPE_STATS.popularity.max}. Actual preparation time and order demand depend on other factors.`);
+    expect(disclosureText).not.toMatch(/%|ETA/i);
+
+    const descriptionId = create.getAttribute('aria-describedby');
+    expect(descriptionId).toBeTruthy();
+    expect(document.getElementById(descriptionId)).toBe(disclosure);
+    expect(create).toHaveAccessibleDescription(disclosureText);
+    expect(disclosure.compareDocumentPosition(create) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('uses a unique useId-derived disclosure for each instance', () => {
+    useGameState.mockReturnValue(ownedOvenState);
+    useDispatch.mockReturnValue(vi.fn());
+    render(
+      <>
+        <div data-testid="creator-one"><RecipeCreator onClose={vi.fn()} /></div>
+        <div data-testid="creator-two"><RecipeCreator onClose={vi.fn()} /></div>
+      </>,
+    );
+    const one = screen.getByTestId('creator-one');
+    const two = screen.getByTestId('creator-two');
+
+    const firstDisclosure = within(one).getByText(disclosureText);
+    const secondDisclosure = within(two).getByText(disclosureText);
+    const firstCreate = within(one).getByRole('button', { name: 'Create' });
+    const secondCreate = within(two).getByRole('button', { name: 'Create' });
+
+    expect(firstDisclosure.id).toBeTruthy();
+    expect(firstDisclosure.id).not.toBe(secondDisclosure.id);
+    expect(firstDisclosure.id).toMatch(/-custom-stats$/);
+    expect(secondDisclosure.id).toMatch(/-custom-stats$/);
+    expect(firstCreate).toHaveAttribute('aria-describedby', firstDisclosure.id);
+    expect(secondCreate).toHaveAttribute('aria-describedby', secondDisclosure.id);
+    expect(firstCreate).toHaveAccessibleDescription(disclosureText);
+    expect(secondCreate).toHaveAccessibleDescription(disclosureText);
+  });
+
+  it('rolls inclusive lower endpoints at 0', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(123456789);
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValueOnce(0).mockReturnValueOnce(0);
+    const { dispatch, onClose } = renderCustomCreator();
+    fillValidDish();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expectCreatedDish({ dispatch, prepTime: 120, popularity: 30 });
+    expect(randomSpy).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the existing midpoint payload at 0.5', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(123456789);
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const { dispatch } = renderCustomCreator();
+    expect(randomSpy).not.toHaveBeenCalled();
+
+    fillValidDish();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expectCreatedDish({ dispatch, prepTime: 180, popularity: 45 });
+    expect(randomSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('rolls inclusive upper endpoints at 1 - Number.EPSILON', () => {
+    const nearOne = 1 - Number.EPSILON;
+    vi.spyOn(Date, 'now').mockReturnValue(123456789);
+    const randomSpy = vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(nearOne)
+      .mockReturnValueOnce(nearOne);
+    const { dispatch } = renderCustomCreator();
+    fillValidDish();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expectCreatedDish({ dispatch, prepTime: 239, popularity: 59 });
+    expect(randomSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('draws exactly twice in prep-then-popularity order for a valid creation', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(123456789);
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValueOnce(0.25).mockReturnValueOnce(0.75);
+    const { dispatch, onClose } = renderCustomCreator();
+    expect(randomSpy).not.toHaveBeenCalled();
+
+    fillValidDish();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(randomSpy).toHaveBeenCalledTimes(2);
+    expectCreatedDish({ dispatch, prepTime: 150, popularity: 52 });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not draw randomness on render or invalid Create attempts', () => {
+    const randomSpy = vi.spyOn(Math, 'random');
+    const { dispatch, onClose, rerender } = renderCustomCreator();
+    expect(randomSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(randomSpy).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    fillValidDish();
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Price: $' }), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(randomSpy).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    useGameState.mockReturnValue({
+      equipment: [{ id: 'eq2', name: 'Oven', owned: false }],
+      dishes: [],
+      recipeSlots: 1,
+    });
+    rerender(<RecipeCreator onClose={onClose} />);
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Price: $' }), { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(randomSpy).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

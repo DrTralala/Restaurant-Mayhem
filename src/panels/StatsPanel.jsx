@@ -1,11 +1,14 @@
 import { useRef, useEffect, useId } from 'react';
-import { useGameState } from '../state/GameContext';
+import { useDispatch, useGameState } from '../state/GameContext';
+import { requestNewSandbox } from '../state/newSandbox';
 import { getCanvasFont, TYPOGRAPHY } from '../typography';
 import { getServiceSummary } from './serviceSummary';
 import { getQueuePatienceSummary } from './queuePatienceSummary';
 import { getFoodDeadlineSummary } from './foodDeadlineSummary';
 import { getDailyPayroll, isRestaurantOpen } from '../simulation/clock';
 import { DIRT_REPUTATION_THRESHOLD, getDirtReputationLossPerMinute } from '../simulation/dirt';
+import { getQueuePartyCount, QUEUE_PARTY_CAPACITY } from '../simulation/customerQueue';
+import { getRevenueChart } from './revenueChart';
 
 const statBox = { ...TYPOGRAPHY.secondary, background: '#1a1a2e', borderRadius: 6, padding: 10, border: '1px solid #0f3460' };
 
@@ -38,6 +41,7 @@ function formatFunds(value) {
 
 export default function StatsPanel() {
   const state = useGameState();
+  const dispatch = useDispatch();
   const canvasRef = useRef(null);
   const completedFinancesId = useId();
   const partyReviewHistory = Array.isArray(state.partyReviewHistory)
@@ -58,6 +62,8 @@ export default function StatsPanel() {
   const recentFinances = (Array.isArray(state.dailyHistory) ? state.dailyHistory : [])
     .slice(-7).reverse();
   const service = getServiceSummary(state);
+  const queuePartyCount = getQueuePartyCount(state.queue);
+  const remainingPartySlots = Math.max(0, QUEUE_PARTY_CAPACITY - queuePartyCount);
   const queuePatience = getQueuePatienceSummary(state);
   const foodDeadline = getFoodDeadlineSummary(state);
   const restaurantOpen = isRestaurantOpen(state);
@@ -79,20 +85,22 @@ export default function StatsPanel() {
     const ctx = canvas.getContext('2d');
     canvas.width = canvas.clientWidth;
     canvas.height = canvas.clientHeight;
+    if (!ctx) return;
 
-    const data = state.dailyHistory.slice(-7);
-    if (data.length === 0) return;
+    const chart = getRevenueChart(state.dailyHistory, canvas.width, canvas.height);
+    if (!chart || chart.bars.length === 0) return;
 
-    const maxRev = Math.max(...data.map(d => d.revenue), 1);
-    const barWidth = canvas.width / data.length - 4;
+    ctx.fillStyle = '#888';
+    ctx.fillRect(0, chart.baselineY, canvas.width, 1);
 
-    data.forEach((d, i) => {
-      const h = (d.revenue / maxRev) * (canvas.height - 20);
-      ctx.fillStyle = '#f0a500';
-      ctx.fillRect(i * (barWidth + 4) + 2, canvas.height - h, barWidth, h);
+    chart.bars.forEach(bar => {
+      if (bar.value !== null && bar.value !== 0 && bar.height > 0) {
+        ctx.fillStyle = '#f0a500';
+        ctx.fillRect(bar.x, bar.y, bar.width, bar.height);
+      }
       ctx.fillStyle = '#888';
       ctx.font = getCanvasFont('compact');
-      ctx.fillText(`D${d.day}`, i * (barWidth + 4) + 2, canvas.height - 2);
+      ctx.fillText(bar.dayLabel, bar.x, canvas.height - 2);
     });
   }, [state.dailyHistory]);
 
@@ -113,6 +121,10 @@ export default function StatsPanel() {
         >
           Revenue values are listed in Completed-day finances.
         </canvas>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+          Bars above zero show positive revenue; bars below zero show negative revenue.
+          Unavailable values are omitted.
+        </p>
       </div>
 
       <section aria-label="Current-day finances" style={{ marginTop: 16 }}>
@@ -198,6 +210,16 @@ export default function StatsPanel() {
         <div style={statBox}>
           Entry queue: {service.queueParties} parties · {service.queueGuests} guests
         </div>
+        <div style={{ ...statBox, marginTop: 8 }}>
+          <div>Queue admission slots: {queuePartyCount} / {QUEUE_PARTY_CAPACITY} parties</div>
+          <div>Remaining party slots: {remainingPartySlots}</div>
+          {queuePartyCount >= QUEUE_PARTY_CAPACITY && (
+            <div>Queue admission capacity reached.</div>
+          )}
+        </div>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+          The limit counts parties, not guests. A full queue blocks new walk-ins and scheduled party admission; free slots do not guarantee an arrival or a seat.
+        </p>
         <h5 style={{ ...TYPOGRAPHY.secondary, margin: '10px 0 8px' }}>Queue patience</h5>
         {queuePatience.length === 0 ? <p style={TYPOGRAPHY.secondary}>No parties waiting.</p> : (
           <ul aria-label="Queue patience" style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 8 }}>
@@ -293,12 +315,7 @@ export default function StatsPanel() {
       </div>
 
       <button
-        onClick={() => {
-          if (window.confirm('Start a new game? All progress will be lost.')) {
-            localStorage.removeItem('restaurant-sim-save');
-            window.location.reload();
-          }
-        }}
+        onClick={() => requestNewSandbox(dispatch)}
         style={{
           ...TYPOGRAPHY.control,
           marginTop: 16, width: '100%',

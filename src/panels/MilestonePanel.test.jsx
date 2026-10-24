@@ -36,7 +36,7 @@ describe('MilestonePanel', () => {
     expect(screen.queryByText('Reward: No reward')).not.toBeInTheDocument();
   });
 
-  it('preserves VIP capitalization in reward labels', () => {
+  it('labels an unsupported unlock VIP reward as no reward', () => {
     useGameState.mockReturnValue({
       restaurant: { totalServed: 0, funds: 0, reputation: 0, day: 1 },
       equipment: [],
@@ -51,8 +51,47 @@ describe('MilestonePanel', () => {
 
     render(<MilestonePanel />);
 
-    expect(screen.getByText('Reward: Unlock VIP')).toBeInTheDocument();
-    expect(screen.queryByText('Reward: Unlock vip')).not.toBeInTheDocument();
+    expect(screen.getByText('Reward: No reward')).toBeInTheDocument();
+    expect(screen.queryByText('Reward: Unlock VIP')).not.toBeInTheDocument();
+  });
+
+  it.each(['unlockVIP', 'newStaffSlot', 'unknownCustomReward'])(
+    'labels an unsupported %s reward on a custom milestone as no reward',
+    rewardType => {
+      useGameState.mockReturnValue({
+        restaurant: { totalServed: 0, funds: 0, reputation: 0, day: 1 },
+        equipment: [],
+        milestones: [{
+          id: `custom-${rewardType}`,
+          description: 'A custom goal',
+          condition: { type: 'servedTotal', threshold: 1 },
+          reward: { type: rewardType },
+          achieved: false,
+        }],
+      });
+
+      render(<MilestonePanel />);
+
+      expect(screen.getByText('Reward: No reward')).toBeInTheDocument();
+    },
+  );
+
+  it('retains the New dish slot label for an explicit custom newDishSlot reward', () => {
+    useGameState.mockReturnValue({
+      restaurant: { totalServed: 0, funds: 0, reputation: 0, day: 1 },
+      equipment: [],
+      milestones: [{
+        id: 'custom-dish-slot',
+        description: 'A custom dish goal',
+        condition: { type: 'servedTotal', threshold: 1 },
+        reward: { type: 'newDishSlot' },
+        achieved: false,
+      }],
+    });
+
+    render(<MilestonePanel />);
+
+    expect(screen.getByText('Reward: New dish slot')).toBeInTheDocument();
   });
 
   it('shows the exact cash bonus for a canonical built-in milestone', () => {

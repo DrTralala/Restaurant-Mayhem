@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useDispatch, useGameState } from '../state/GameContext';
 import { createInitialState } from '../state/initialState';
 import { hydrateState } from '../state/persistence';
+import { requestNewSandbox } from '../state/newSandbox';
 import { loadLatestRepositoryState, saveRepositoryState } from '../state/repositorySaves';
 import { isSaveValidationError } from '../state/saveValidation';
 import { TYPOGRAPHY } from '../typography';
@@ -87,9 +88,7 @@ export default function SettingsMenu({ isOpen, onToggle, onClose, modal = false 
   };
 
   const handleNewGame = () => {
-    if (!window.confirm('Start a new sandbox? This replaces your current restaurant, any career and its local autosave. No backup is created. Cancel keeps this restaurant.')) return;
-    localStorage.removeItem('restaurant-sim-save');
-    dispatch({ type: 'LOAD_STATE', state: createInitialState() });
+    if (!requestNewSandbox(dispatch)) return;
     onClose?.();
     setMessage('New game started');
   };

@@ -3,6 +3,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ManagementModal from './ManagementModal';
 import SpeedControls from '../components/SpeedControls';
+import { createInitialState } from '../state/initialState';
+import { acceptServiceContract } from '../simulation/serviceContracts';
 
 const { dispatch, gameState } = vi.hoisted(() => ({
   dispatch: vi.fn(),
@@ -33,7 +35,6 @@ vi.mock('./StaffPanel', () => ({ default: ({ onLocateStaff, locateDisabled, loca
 vi.mock('./MilestonePanel', () => ({ default: () => <div>Milestone panel</div> }));
 vi.mock('./StatsPanel', () => ({ default: () => <div>Stats panel</div> }));
 vi.mock('./HoursPanel', () => ({ default: () => <div>Hours panel</div> }));
-vi.mock('./ServiceContractsPanel', () => ({ default: () => <div>Contracts panel</div> }));
 vi.mock('./CareerPanel', () => ({ default: () => <div>Career panel</div> }));
 
 const SECTION_LABELS = ['Upgrades', 'Items', 'Staff', 'Milestones', 'Stats', 'Hours', 'Contracts', 'Opening Week'];
@@ -57,7 +58,7 @@ function ManagementHarness() {
 describe('ManagementModal', () => {
   beforeEach(() => {
     dispatch.mockClear();
-    gameState.current = { paused: false, speed: 1 };
+    gameState.current = createInitialState();
   });
 
   it('opens on Upgrades without a Menu tab', () => {
@@ -241,6 +242,33 @@ describe('ManagementModal', () => {
 
     fireEvent.keyDown(close, { key: 'Tab' });
     expect(first).toHaveFocus();
+  });
+
+  it('reaches the real Contracts panel Details and Guest details summaries with Tab', () => {
+    gameState.current = acceptServiceContract(createInitialState(), { templateId: 'office-lunch' });
+    render(<ManagementModal isOpen onClose={vi.fn()} initialTab="contracts" />);
+    const close = screen.getByRole('button', { name: 'Close management' });
+    const guestDetails = screen.getByText('Guest details');
+    const withdraw = screen.getByRole('button', { name: 'Withdraw contract' });
+    const office = screen.getByRole('region', { name: 'Office lunch offer' });
+    const details = within(office).getByText('Details');
+
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: 'Tab' });
+    expect(guestDetails).toHaveFocus();
+
+    fireEvent.keyDown(guestDetails, { key: 'Tab' });
+    expect(withdraw).toHaveFocus();
+
+    fireEvent.keyDown(withdraw, { key: 'Tab', shiftKey: true });
+    expect(guestDetails).toHaveFocus();
+
+    fireEvent.keyDown(guestDetails, { key: 'Tab', shiftKey: true });
+    expect(close).toHaveFocus();
+
+    withdraw.focus();
+    fireEvent.keyDown(withdraw, { key: 'Tab' });
+    expect(details).toHaveFocus();
   });
 
   it('recalculates tab order when switching to a tab with dynamic controls', () => {

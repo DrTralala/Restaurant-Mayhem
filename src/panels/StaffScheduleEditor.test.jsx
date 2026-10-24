@@ -463,6 +463,164 @@ describe('StaffScheduleEditor', () => {
   });
 });
 
+describe('janitor coverage observation', () => {
+  const observationCopy = 'A schedule observation, not a staffing requirement. Scheduled Work does not guarantee availability.';
+  const rowCopy = 'No janitors scheduled to Work in this period.';
+
+  function janitorObservation() {
+    const heading = screen.getByRole('heading', { name: 'Janitor schedule coverage' });
+    const section = heading.parentElement;
+    const list = within(section).getByRole('list', { name: 'Periods without scheduled janitors' });
+    return { heading, section, list };
+  }
+
+  function observationRows() {
+    return within(janitorObservation().list).getAllByRole('listitem').map(item => item.textContent);
+  }
+
+  it('lists only open periods without janitors in a separate neutral section after the cook and waiter gaps', () => {
+    const cook = { id: 'c1', name: 'Marco', role: 'cook', schedule: allWork() };
+    const waiter = { id: 'w1', name: 'Anna', role: 'waiter', schedule: allWork() };
+    render(<ScheduleHarness staff={cook} staffList={[cook, waiter]} openHour={8.5} closeHour={9} />);
+
+    const gapsHeading = screen.getByRole('heading', { name: 'Open-hours schedule gaps' });
+    const { heading, section, list } = janitorObservation();
+
+    expect(gapsHeading.parentElement.contains(heading)).toBe(false);
+    expect(gapsHeading.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(observationRows()).toEqual([`08:30 to 09:00 · ${rowCopy}`]);
+    expect(within(section).getByText(observationCopy)).toBeInTheDocument();
+    expect(section).toHaveStyle({ background: '#0d1528', border: '1px solid #223d62' });
+    expect(within(section).getByText(observationCopy)).toHaveStyle({ color: '#9da9bd' });
+    expect(list).toHaveStyle({ color: '#c9d7ec' });
+    expect(within(list).getAllByRole('listitem')[0]).toHaveStyle({ overflowWrap: 'anywhere' });
+    expect(section.querySelector('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+  });
+
+  it('formats overnight and all-day observation ranges with boundary times', () => {
+    const cook = { id: 'c1', name: 'Marco', role: 'cook', schedule: allWork() };
+    const waiter = { id: 'w1', name: 'Anna', role: 'waiter', schedule: allWork() };
+    const { rerender } = render(
+      <ScheduleHarness staff={cook} staffList={[cook, waiter]} openHour={22} closeHour={2} />,
+    );
+
+    expect(observationRows()).toEqual([
+      `00:00 to 02:00 · ${rowCopy}`,
+      `22:00 to 24:00 (midnight) · ${rowCopy}`,
+    ]);
+
+    rerender(<ScheduleHarness staff={cook} staffList={[cook, waiter]} openHour={0} closeHour={0} />);
+
+    expect(observationRows()).toEqual([`00:00 to 24:00 (midnight) · ${rowCopy}`]);
+  });
+
+  it('adds and removes the observation as the current draft janitor changes', () => {
+    const cook = { id: 'c1', name: 'Marco', role: 'cook', schedule: allWork() };
+    const waiter = { id: 'w1', name: 'Anna', role: 'waiter', schedule: allWork() };
+    const janitor = { id: 'j1', name: 'Sam', role: 'janitor', schedule: allWork() };
+    render(<ScheduleHarness staff={janitor} staffList={[cook, waiter, janitor]} openHour={0} closeHour={0} />);
+
+    expect(screen.queryByRole('heading', { name: 'Janitor schedule coverage' })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Duty' }), { target: { value: 'rest' } });
+    fireEvent.click(screen.getByRole('button', { name: 'All day' }));
+
+    expect(observationRows()).toEqual([`00:00 to 24:00 (midnight) · ${rowCopy}`]);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Duty' }), { target: { value: 'work' } });
+    fireEvent.click(screen.getByRole('button', { name: 'All day' }));
+
+    expect(screen.queryByRole('heading', { name: 'Janitor schedule coverage' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Periods without scheduled janitors' })).not.toBeInTheDocument();
+    expect(screen.queryByText(observationCopy)).not.toBeInTheDocument();
+  });
+
+  it('uses saved teammate janitor coverage and ignores the current draft when another role is edited', () => {
+    const cook = { id: 'c1', name: 'Marco', role: 'cook', schedule: allWork() };
+    const waiter = { id: 'w1', name: 'Anna', role: 'waiter', schedule: allWork() };
+    const workingJanitor = { id: 'j1', name: 'Sam', role: 'janitor', schedule: allWork() };
+    const { rerender } = render(
+      <ScheduleHarness staff={cook} staffList={[cook, waiter, workingJanitor]} openHour={0} closeHour={0} />,
+    );
+
+    expect(screen.queryByRole('heading', { name: 'Janitor schedule coverage' })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Duty' }), { target: { value: 'rest' } });
+    fireEvent.click(screen.getByRole('button', { name: 'All day' }));
+
+    expect(screen.queryByRole('heading', { name: 'Janitor schedule coverage' })).not.toBeInTheDocument();
+
+    const restingJanitor = { ...workingJanitor, schedule: Array(48).fill('rest') };
+    rerender(
+      <ScheduleHarness staff={cook} staffList={[cook, waiter, restingJanitor]} openHour={0} closeHour={0} />,
+    );
+
+    expect(observationRows()).toEqual([`00:00 to 24:00 (midnight) · ${rowCopy}`]);
+  });
+
+  it('keeps coverage counts, cook and waiter gaps, advisory copy and Apply unchanged when janitors are zero', () => {
+    const cook = { id: 'c1', name: 'Marco', role: 'cook', schedule: allWork() };
+    const restingWaiter = { id: 'w1', name: 'Anna', role: 'waiter', schedule: Array(48).fill('rest') };
+    const onApply = vi.fn();
+    render(
+      <ScheduleHarness
+        staff={cook}
+        staffList={[cook, restingWaiter]}
+        openHour={0}
+        closeHour={0}
+        onApply={onApply}
+      />,
+    );
+
+    const preview = screen.getByRole('list', { name: 'Team coverage preview' });
+    expect(within(preview).getAllByRole('listitem').map(item => item.textContent)).toEqual([
+      '00:00 to 24:00 (midnight) · Open · Cooks 1, Waiters 0, Janitors 0',
+    ]);
+    const gaps = screen.getByRole('list', { name: 'Open-hours schedule gaps' });
+    expect(within(gaps).getAllByRole('listitem').map(item => item.textContent)).toEqual([
+      '00:00 to 24:00 (midnight) · No waiters scheduled to Work.',
+    ]);
+    expect(screen.getByText(
+      'Based on this draft and saved team schedules. Nonzero counts do not guarantee enough staff or actual availability.',
+    )).toBeInTheDocument();
+    expect(observationRows()).toEqual([`00:00 to 24:00 (midnight) · ${rowCopy}`]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply schedule' }));
+
+    expect(screen.getByRole('button', { name: 'Apply schedule' })).toBeEnabled();
+    expect(onApply).toHaveBeenCalledWith(allWork());
+  });
+
+  it('does not modify deeply frozen inputs while deriving the observation', () => {
+    const cookSchedule = Object.freeze(Array(48).fill('work'));
+    const waiterSchedule = Object.freeze(Array(48).fill('work'));
+    const janitorSchedule = Object.freeze(Array(48).fill('rest'));
+    const cook = Object.freeze({ id: 'c1', name: 'Marco', role: 'cook', schedule: cookSchedule });
+    const waiter = Object.freeze({ id: 'w1', name: 'Anna', role: 'waiter', schedule: waiterSchedule });
+    const janitor = Object.freeze({ id: 'j1', name: 'Sam', role: 'janitor', schedule: janitorSchedule });
+    const staffList = Object.freeze([cook, waiter, janitor]);
+    render(
+      <ScheduleHarness
+        initialSchedule={janitorSchedule}
+        staff={janitor}
+        staffList={staffList}
+        openHour={0}
+        closeHour={0}
+      />,
+    );
+
+    expect(observationRows()).toEqual([`00:00 to 24:00 (midnight) · ${rowCopy}`]);
+    expect(cookSchedule).toEqual(Array(48).fill('work'));
+    expect(waiterSchedule).toEqual(Array(48).fill('work'));
+    expect(janitorSchedule).toEqual(Array(48).fill('rest'));
+    expect(Object.isFrozen(cookSchedule)).toBe(true);
+    expect(Object.isFrozen(waiterSchedule)).toBe(true);
+    expect(Object.isFrozen(janitorSchedule)).toBe(true);
+    expect(Object.isFrozen(staffList)).toBe(true);
+  });
+});
+
 const SLOT_COUNT = 48;
 
 function expandCoveragePeriods(periods) {

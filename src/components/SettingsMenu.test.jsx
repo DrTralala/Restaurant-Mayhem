@@ -1,13 +1,29 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SettingsMenu from './SettingsMenu';
 
 const dispatch = vi.fn();
+const { requestNewSandboxMock } = vi.hoisted(() => ({ requestNewSandboxMock: vi.fn() }));
 vi.mock('../state/GameContext', () => ({
   useDispatch: () => dispatch,
   useGameState: () => ({ careerRun: { needsDecision: true } }),
 }));
-beforeEach(() => dispatch.mockClear());
+vi.mock('../state/newSandbox', async importOriginal => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    requestNewSandbox: (...args) => {
+      requestNewSandboxMock(...args);
+      return actual.requestNewSandbox(...args);
+    },
+  };
+});
+beforeEach(() => {
+  dispatch.mockClear();
+  requestNewSandboxMock.mockClear();
+  localStorage.clear();
+});
+afterEach(() => vi.restoreAllMocks());
 
 function settings(props = {}) {
   return <><SettingsMenu isOpen modal onToggle={() => {}} onClose={() => {}} {...props} />
@@ -209,5 +225,52 @@ describe('Settings disclosure state', () => {
     fireEvent.keyDown(screen.getByRole('button', { name: 'Load game' }), { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
+describe('confirmed sandbox reset', () => {
+  const EXACT_CONFIRMATION = 'Start a new sandbox? This replaces your current restaurant, any career and its local autosave. No backup is created. Cancel keeps this restaurant.';
+
+  it('cancels without removing storage, dispatching, closing or reporting success', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const removeItem = vi.spyOn(localStorage, 'removeItem');
+    const onClose = vi.fn();
+    render(settings({ onClose }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'New game' }));
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(EXACT_CONFIRMATION);
+    expect(requestNewSandboxMock).toHaveBeenCalledTimes(1);
+    expect(requestNewSandboxMock).toHaveBeenCalledWith(dispatch);
+    expect(removeItem).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('confirms with the exact copy, removes the autosave, dispatches fresh state and then closes', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const removeItem = vi.spyOn(localStorage, 'removeItem');
+    const onClose = vi.fn();
+    localStorage.setItem('restaurant-sim-save', JSON.stringify({ synthetic: true }));
+    render(settings({ onClose }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'New game' }));
+
+    expect(confirm).toHaveBeenCalledWith(EXACT_CONFIRMATION);
+    expect(requestNewSandboxMock).toHaveBeenCalledWith(dispatch);
+    expect(removeItem).toHaveBeenCalledTimes(1);
+    expect(removeItem).toHaveBeenCalledWith('restaurant-sim-save');
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'LOAD_STATE',
+      state: expect.objectContaining({
+        careerRun: null,
+        restaurant: expect.objectContaining({ funds: 600, day: 1 }),
+      }),
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('status')).toHaveTextContent('New game started');
   });
 });

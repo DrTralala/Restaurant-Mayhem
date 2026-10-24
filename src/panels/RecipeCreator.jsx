@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
-import { BASES, METHODS, BASE_EQUIPMENT_MAP } from '../data/recipes';
+import { BASES, METHODS, BASE_EQUIPMENT_MAP, CUSTOM_RECIPE_STATS } from '../data/recipes';
 import { TYPOGRAPHY } from '../typography';
 
 const selectStyle = { ...TYPOGRAPHY.control, background: '#1a1a2e', color: '#ccc', border: '1px solid #333', padding: '4px 8px', borderRadius: 4, marginLeft: 8 };
@@ -24,6 +24,7 @@ export default function RecipeCreator({ onClose }) {
   const nameErrorId = `${idPrefix}-name-error`;
   const priceId = `${idPrefix}-price`;
   const priceErrorId = `${idPrefix}-price-error`;
+  const customStatsDescriptionId = `${idPrefix}-custom-stats`;
 
   const requiredEquipmentId = BASE_EQUIPMENT_MAP[method];
   const equipment = requiredEquipmentId
@@ -44,9 +45,9 @@ export default function RecipeCreator({ onClose }) {
       base,
       method,
       price: numericPrice,
-      prepTime: 120 + Math.floor(Math.random() * 120),
+      prepTime: CUSTOM_RECIPE_STATS.prepTime.min + Math.floor(Math.random() * (CUSTOM_RECIPE_STATS.prepTime.max - CUSTOM_RECIPE_STATS.prepTime.min + 1)),
       quality: 1,
-      popularity: 30 + Math.floor(Math.random() * 30),
+      popularity: CUSTOM_RECIPE_STATS.popularity.min + Math.floor(Math.random() * (CUSTOM_RECIPE_STATS.popularity.max - CUSTOM_RECIPE_STATS.popularity.min + 1)),
       cuisine: 'generic',
       requiredEquipmentId,
       unlocked: true,
@@ -116,8 +117,12 @@ export default function RecipeCreator({ onClose }) {
         )}
       </div>
 
+      <p id={customStatsDescriptionId} style={{ ...TYPOGRAPHY.secondary, marginBottom: 8 }}>
+        {`Creation randomly assigns base prep work from ${CUSTOM_RECIPE_STATS.prepTime.min} to ${CUSTOM_RECIPE_STATS.prepTime.max} game seconds and base popularity from ${CUSTOM_RECIPE_STATS.popularity.min} to ${CUSTOM_RECIPE_STATS.popularity.max}. Actual preparation time and order demand depend on other factors.`}
+      </p>
+
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={handleCreate} disabled={!canCreate} style={{
+        <button onClick={handleCreate} disabled={!canCreate} aria-describedby={customStatsDescriptionId} style={{
           ...btnStyle, opacity: canCreate ? 1 : 0.5,
         }}>
           Create

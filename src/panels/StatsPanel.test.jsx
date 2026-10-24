@@ -1,10 +1,29 @@
-import { beforeEach, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import StatsPanel from './StatsPanel';
 import { DIRT_REPUTATION_THRESHOLD } from '../simulation/dirt';
+import { getCanvasFont } from '../typography';
 
-const { mockUseGameState } = vi.hoisted(() => ({ mockUseGameState: vi.fn() }));
-vi.mock('../state/GameContext', () => ({ useGameState: () => mockUseGameState() }));
+const { mockUseGameState, mockUseDispatch, requestNewSandboxMock } = vi.hoisted(() => ({
+  mockUseGameState: vi.fn(),
+  mockUseDispatch: vi.fn(),
+  requestNewSandboxMock: vi.fn(),
+}));
+vi.mock('../state/GameContext', () => ({
+  useGameState: () => mockUseGameState(),
+  useDispatch: () => mockUseDispatch,
+}));
+vi.mock('../state/newSandbox', async importOriginal => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    requestNewSandbox: (...args) => {
+      requestNewSandboxMock(...args);
+      return actual.requestNewSandbox(...args);
+    },
+  };
+});
 
 const baseState = {
   dailyHistory: [],
@@ -20,6 +39,28 @@ const baseState = {
 const PENDING_FOOD_CAVEAT = 'Based on recorded customer timers, not a delivery ETA. '
   + 'Delivered or cancelled outcomes are excluded; service-item reconciliation occurs in the simulation.';
 
+const REVENUE_CHART_CAPTION = 'Bars above zero show positive revenue; '
+  + 'bars below zero show negative revenue. Unavailable values are omitted.';
+
+function createRecordingContext() {
+  const calls = { rects: [], texts: [] };
+  const ctx = {
+    fillStyle: '#000',
+    font: '',
+    fillRect(x, y, width, height) {
+      calls.rects.push({
+        x, y, width, height, fillStyle: this.fillStyle, font: this.font,
+      });
+    },
+    fillText(text, x, y) {
+      calls.texts.push({
+        text, x, y, fillStyle: this.fillStyle, font: this.font,
+      });
+    },
+  };
+  return { ctx, calls };
+}
+
 function queuedMember(remaining = 100, maximum = 100, overrides = {}) {
   return {
     patience: remaining,
@@ -31,12 +72,24 @@ function queuedMember(remaining = 100, maximum = 100, overrides = {}) {
 }
 
 beforeEach(() => {
+  Object.defineProperty(HTMLCanvasElement.prototype, 'clientWidth', {
+    configurable: true,
+    get: () => 300,
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, 'clientHeight', {
+    configurable: true,
+    get: () => 120,
+  });
   HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
     fillRect: vi.fn(),
     fillText: vi.fn(),
   }));
   mockUseGameState.mockReturnValue(baseState);
+  mockUseDispatch.mockClear();
+  requestNewSandboxMock.mockClear();
+  localStorage.clear();
 });
+afterEach(() => vi.restoreAllMocks());
 
 it('shows empty party review aggregates', () => {
   render(<StatsPanel />);
@@ -1232,4 +1285,308 @@ it('rerenders pending-food timing immutably and leaves the existing queue unchan
   expect(within(queue).getByText('Party 1: 1 guest')).toBeInTheDocument();
   expect(JSON.stringify(firstCustomers)).toBe(snapshot);
   expect(firstCustomers[0].foodDeadlineAt).toBe(130);
+});
+
+it('records signed revenue as a grey baseline, gold bars and chronological day labels', () => {
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [
+      { day: 1, revenue: 100 },
+      { day: 2, revenue: -50 },
+      { day: 3, revenue: 0 },
+      { day: 4, revenue: null },
+      { day: 5, revenue: Number.POSITIVE_INFINITY },
+    ],
+  });
+  render(<StatsPanel />);
+
+  const canvas = document.querySelector('canvas');
+  expect(canvas.width).toBe(300);
+  expect(canvas.height).toBe(120);
+  expect(screen.getByText(REVENUE_CHART_CAPTION)).toBeInTheDocument();
+
+  expect(calls.rects).toHaveLength(3);
+  const [baseline, positive, negative] = calls.rects;
+  expect(baseline).toMatchObject({
+    x: 0, width: 300, height: 1, fillStyle: '#888',
+  });
+  expect(baseline.y).toBeCloseTo(200 / 3, 10);
+  expect(positive).toMatchObject({ x: 2, width: 56, fillStyle: '#f0a500' });
+  expect(positive.y).toBeCloseTo(0, 10);
+  expect(positive.height).toBeCloseTo(200 / 3, 10);
+  expect(negative).toMatchObject({ x: 62, width: 56, fillStyle: '#f0a500' });
+  expect(negative.y).toBeCloseTo(200 / 3, 10);
+  expect(negative.height).toBeCloseTo(100 / 3, 10);
+
+  expect(calls.texts.map(call => call.text)).toEqual(['D1', 'D2', 'D3', 'D4', 'D5']);
+  expect(calls.texts.map(call => call.x)).toEqual([2, 62, 122, 182, 242]);
+  expect(calls.texts.every(call => call.y === 118)).toBe(true);
+  expect(calls.texts.every(call => call.fillStyle === '#888')).toBe(true);
+  expect(calls.texts.every(call => call.font === getCanvasFont('compact'))).toBe(true);
+
+  for (const rect of calls.rects) {
+    for (const value of [rect.x, rect.y, rect.width, rect.height]) {
+      expect(Number.isFinite(value)).toBe(true);
+    }
+    expect(rect.width).toBeGreaterThanOrEqual(0);
+    expect(rect.height).toBeGreaterThanOrEqual(0);
+  }
+  for (const text of calls.texts) {
+    expect(text.text).toMatch(/^D(?:\d+|-?\d+(?:\.\d+)?|\?)$/);
+    expect(Number.isFinite(text.x)).toBe(true);
+    expect(Number.isFinite(text.y)).toBe(true);
+  }
+});
+
+it('draws no plot for empty or missing history', () => {
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  mockUseGameState.mockReturnValue({ ...baseState, dailyHistory: [] });
+  const { rerender } = render(<StatsPanel />);
+
+  expect(calls.rects).toHaveLength(0);
+  expect(calls.texts).toHaveLength(0);
+  expect(screen.getByText(REVENUE_CHART_CAPTION)).toBeInTheDocument();
+
+  const withoutHistory = { ...baseState };
+  delete withoutHistory.dailyHistory;
+  mockUseGameState.mockReturnValue(withoutHistory);
+  rerender(<StatsPanel />);
+
+  expect(calls.rects).toHaveLength(0);
+  expect(calls.texts).toHaveLength(0);
+});
+
+it('skips canvas drawing safely when the 2d context becomes unavailable on rerender', () => {
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 1, revenue: 10 }],
+  });
+  const { rerender } = render(<StatsPanel />);
+
+  expect(calls.rects).toHaveLength(2);
+  expect(calls.texts).toHaveLength(1);
+
+  const nullContext = vi.fn(() => null);
+  HTMLCanvasElement.prototype.getContext = nullContext;
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 2, revenue: 20 }],
+  });
+  expect(() => rerender(<StatsPanel />)).not.toThrow();
+
+  expect(nullContext).toHaveBeenCalled();
+  expect(calls.rects).toHaveLength(2);
+  expect(calls.texts).toHaveLength(1);
+});
+
+const QUEUE_ADMISSION_CAVEAT = 'The limit counts parties, not guests. '
+  + 'A full queue blocks new walk-ins and scheduled party admission; '
+  + 'free slots do not guarantee an arrival or a seat.';
+
+function queueParties(count, membersPerParty = 1) {
+  return Array.from({ length: count }, (_, index) => ({
+    partyId: `p${index + 1}`,
+    members: Array.from({ length: membersPerParty }, (_, memberIndex) => queuedMember(100, 100, {
+      id: `p${index + 1}-m${memberIndex + 1}`,
+    })),
+  }));
+}
+
+function serviceNowSection() {
+  return screen.getByRole('region', { name: 'Service now' });
+}
+
+it('shows queue admission slots and remaining slots below capacity', () => {
+  mockUseGameState.mockReturnValue({ ...baseState, queue: queueParties(2, 2) });
+  render(<StatsPanel />);
+
+  const section = serviceNowSection();
+  expect(within(section).getByText('Entry queue: 2 parties · 4 guests')).toBeInTheDocument();
+  expect(within(section).getByText('Queue admission slots: 2 / 8 parties')).toBeInTheDocument();
+  expect(within(section).getByText('Remaining party slots: 6')).toBeInTheDocument();
+  expect(within(section).queryByText('Queue admission capacity reached.')).not.toBeInTheDocument();
+  expect(within(section).getByText(QUEUE_ADMISSION_CAVEAT)).toBeInTheDocument();
+  expect(section.querySelector('[aria-live], [role="status"]')).toBeNull();
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+});
+
+it('counts empty party records at exact capacity and shows zero remaining', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    queue: [...queueParties(7), { partyId: 'empty', members: [] }],
+  });
+  render(<StatsPanel />);
+
+  const section = serviceNowSection();
+  expect(within(section).getByText('Entry queue: 7 parties · 7 guests')).toBeInTheDocument();
+  expect(within(section).getByText('Queue admission slots: 8 / 8 parties')).toBeInTheDocument();
+  expect(within(section).getByText('Remaining party slots: 0')).toBeInTheDocument();
+  expect(within(section).getByText('Queue admission capacity reached.')).toBeInTheDocument();
+  expect(within(section).getByText(QUEUE_ADMISSION_CAVEAT)).toBeInTheDocument();
+});
+
+it('clamps remaining slots at zero and keeps the reached notice above capacity', () => {
+  mockUseGameState.mockReturnValue({ ...baseState, queue: queueParties(9) });
+  render(<StatsPanel />);
+
+  const section = serviceNowSection();
+  expect(within(section).getByText('Entry queue: 9 parties · 9 guests')).toBeInTheDocument();
+  expect(within(section).getByText('Queue admission slots: 9 / 8 parties')).toBeInTheDocument();
+  expect(within(section).getByText('Remaining party slots: 0')).toBeInTheDocument();
+  expect(within(section).getByText('Queue admission capacity reached.')).toBeInTheDocument();
+});
+
+it('counts canonical party records while leaving nonempty service counts unchanged', () => {
+  const queue = [
+    {
+      partyId: 'multi',
+      members: [
+        queuedMember(100, 100, { id: 'multi-1' }),
+        queuedMember(100, 100, { id: 'multi-2' }),
+        queuedMember(100, 100, { id: 'multi-3' }),
+      ],
+    },
+    { ...queuedMember(100, 100), id: 'legacy-1', partyId: 'legacy' },
+    { ...queuedMember(100, 100), id: 'legacy-2', partyId: 'legacy' },
+    { partyId: 'grouped', members: [queuedMember(100, 100, { id: 'grouped-1' })] },
+    { partyId: 'grouped', members: [queuedMember(100, 100, { id: 'grouped-2' })] },
+    { partyId: 'empty', members: [] },
+  ];
+  mockUseGameState.mockReturnValue({ ...baseState, queue });
+  render(<StatsPanel />);
+
+  const section = serviceNowSection();
+  expect(within(section).getByText('Entry queue: 3 parties · 7 guests')).toBeInTheDocument();
+  expect(within(section).getByText('Queue admission slots: 4 / 8 parties')).toBeInTheDocument();
+  expect(within(section).getByText('Remaining party slots: 4')).toBeInTheDocument();
+  expect(within(section).queryByText('Queue admission capacity reached.')).not.toBeInTheDocument();
+});
+
+it('treats a missing queue as zero admission parties', () => {
+  const withoutQueue = { ...baseState };
+  delete withoutQueue.queue;
+  mockUseGameState.mockReturnValue(withoutQueue);
+  render(<StatsPanel />);
+
+  const section = serviceNowSection();
+  expect(within(section).getByText('Entry queue: 0 parties · 0 guests')).toBeInTheDocument();
+  expect(within(section).getByText('Queue admission slots: 0 / 8 parties')).toBeInTheDocument();
+  expect(within(section).getByText('Remaining party slots: 8')).toBeInTheDocument();
+  expect(within(section).queryByText('Queue admission capacity reached.')).not.toBeInTheDocument();
+  expect(within(section).getByText(QUEUE_ADMISSION_CAVEAT)).toBeInTheDocument();
+});
+
+it('keeps admission slots derived from frozen queue data across pause and open-state changes', () => {
+  const frozenQueue = Object.freeze([
+    Object.freeze({
+      partyId: 'p1',
+      members: Object.freeze([Object.freeze(queuedMember(10, 20, { id: 'p1-m1' }))]),
+    }),
+    Object.freeze({
+      partyId: 'p2',
+      members: Object.freeze([Object.freeze(queuedMember(25, 100, { id: 'p2-m1' }))]),
+    }),
+  ]);
+  const snapshot = JSON.stringify(frozenQueue);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: {
+      ...baseState.restaurant,
+      gameTime: 20 * 3600,
+      openHour: 9,
+      closeHour: 17,
+      walkInsPaused: true,
+    },
+    queue: frozenQueue,
+  });
+  const { rerender } = render(<StatsPanel />);
+
+  let section = serviceNowSection();
+  expect(within(section).getByText('Queue admission slots: 2 / 8 parties')).toBeInTheDocument();
+  expect(within(section).getByText('Remaining party slots: 6')).toBeInTheDocument();
+  expect(within(section).queryByText('Queue admission capacity reached.')).not.toBeInTheDocument();
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: {
+      ...baseState.restaurant,
+      gameTime: 10 * 3600,
+      openHour: 9,
+      closeHour: 17,
+      walkInsPaused: false,
+    },
+    queue: frozenQueue,
+  });
+  rerender(<StatsPanel />);
+
+  section = serviceNowSection();
+  expect(within(section).getByText('Queue admission slots: 2 / 8 parties')).toBeInTheDocument();
+  expect(within(section).getByText('Remaining party slots: 6')).toBeInTheDocument();
+  expect(within(section).queryByText('Queue admission capacity reached.')).not.toBeInTheDocument();
+  expect(JSON.stringify(frozenQueue)).toBe(snapshot);
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    queue: [...frozenQueue, {
+      partyId: 'p3',
+      members: [queuedMember(100, 100, { id: 'p3-m1' })],
+    }],
+  });
+  rerender(<StatsPanel />);
+
+  section = serviceNowSection();
+  expect(within(section).getByText('Queue admission slots: 3 / 8 parties')).toBeInTheDocument();
+  expect(within(section).getByText('Remaining party slots: 5')).toBeInTheDocument();
+  expect(JSON.stringify(frozenQueue)).toBe(snapshot);
+});
+
+describe('confirmed sandbox reset', () => {
+  const EXACT_CONFIRMATION = 'Start a new sandbox? This replaces your current restaurant, any career and its local autosave. No backup is created. Cancel keeps this restaurant.';
+
+  it('cancels without removing storage or dispatching', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const removeItem = vi.spyOn(localStorage, 'removeItem');
+    render(<StatsPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New game' }));
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(EXACT_CONFIRMATION);
+    expect(requestNewSandboxMock).toHaveBeenCalledTimes(1);
+    expect(requestNewSandboxMock).toHaveBeenCalledWith(mockUseDispatch);
+    expect(removeItem).not.toHaveBeenCalled();
+    expect(mockUseDispatch).not.toHaveBeenCalled();
+  });
+
+  it('confirms with the exact copy, removes the autosave and dispatches one fresh state', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const removeItem = vi.spyOn(localStorage, 'removeItem');
+    localStorage.setItem('restaurant-sim-save', JSON.stringify({ synthetic: true }));
+    render(<StatsPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New game' }));
+
+    expect(confirm).toHaveBeenCalledWith(EXACT_CONFIRMATION);
+    expect(requestNewSandboxMock).toHaveBeenCalledWith(mockUseDispatch);
+    expect(removeItem).toHaveBeenCalledTimes(1);
+    expect(removeItem).toHaveBeenCalledWith('restaurant-sim-save');
+    expect(mockUseDispatch).toHaveBeenCalledTimes(1);
+    expect(mockUseDispatch).toHaveBeenCalledWith({
+      type: 'LOAD_STATE',
+      state: expect.objectContaining({
+        careerRun: null,
+        restaurant: expect.objectContaining({ funds: 600, day: 1 }),
+      }),
+    });
+  });
+
+  it('does not reload the page when reset is requested', () => {
+    const source = readFileSync('src/panels/StatsPanel.jsx', 'utf8');
+    expect(source).not.toMatch(/location\.reload/);
+  });
 });

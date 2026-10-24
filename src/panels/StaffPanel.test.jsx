@@ -407,6 +407,138 @@ describe('StaffPanel', () => {
 
     expect(screen.getByText('Morale: 80%')).toBeInTheDocument();
   });
+
+  it.each([
+    ['missing', undefined],
+    ['NaN', Number.NaN],
+    ['positive infinity', Number.POSITIVE_INFINITY],
+    ['string', '80'],
+    ['null', null],
+  ])('shows Unavailable for %s current morale', (_label, morale) => {
+    const worker = { id: 's1', name: 'Marco', role: 'cook', skill: 3, salary: 200 };
+    if (morale !== undefined) worker.morale = morale;
+    useGameState.mockReturnValue(makeState({ staff: [worker] }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    const value = within(getStaffCard('s1')).getByText(/^Morale:/);
+    expect(value).toHaveTextContent('Morale: Unavailable');
+    expect(value).not.toHaveTextContent(/NaN%|Infinity%/);
+  });
+
+  it.each([
+    ['fractional', 79.6, 'Morale: 80%'],
+    ['zero', 0, 'Morale: 0%'],
+    ['negative', -12.4, 'Morale: -12%'],
+  ])('keeps %s finite current morale as %s', (_label, morale, expected) => {
+    useGameState.mockReturnValue(makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale, salary: 200 }],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    expect(within(getStaffCard('s1')).getByText(/^Morale:/)).toHaveTextContent(expected);
+  });
+
+  it('recovers the current morale display when a rerender supplies a finite value', () => {
+    let state = makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: Number.NaN, salary: 200 }],
+    });
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(vi.fn());
+
+    const { rerender } = render(<StaffPanel />);
+    expect(within(getStaffCard('s1')).getByText(/^Morale:/)).toHaveTextContent('Morale: Unavailable');
+
+    state = { ...state, staff: [{ ...state.staff[0], morale: 79.6 }] };
+    rerender(<StaffPanel />);
+
+    expect(within(getStaffCard('s1')).getByText(/^Morale:/)).toHaveTextContent('Morale: 80%');
+  });
+});
+
+describe('StaffPanel current task', () => {
+  it('shows busy, idle, cashier and unassigned labels below the role and skill summary', () => {
+    useGameState.mockReturnValue(makeState({
+      cashierStations: [
+        { id: 'cashier1', assignedStaffId: 's2' },
+        { id: 'cashier2', assignedStaffId: 's3' },
+      ],
+      staff: [
+        { id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 },
+        { id: 's2', name: 'Anna', role: 'waiter', skill: 3, morale: 80, salary: 150, task: { type: 'take_order' } },
+        { id: 's3', name: 'Luca', role: 'waiter', skill: 2, morale: 80, salary: 150, task: null },
+        { id: 's4', name: 'Mia', role: 'waiter', skill: 1, morale: 80, salary: 150, task: null },
+      ],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    const anna = getStaffCard('s2');
+    const annaTask = within(anna).getByText('Current task: Taking order');
+    const annaSummary = within(anna).getByText(/Skill: 3\/10/);
+    expect(annaSummary.nextElementSibling).toBe(annaTask);
+    expect(annaTask.tagName).toBe('DIV');
+    expect(annaTask.closest('[aria-live], [role="timer"]')).toBeNull();
+
+    expect(within(getStaffCard('s1')).getByText('Current task: Available')).toBeVisible();
+    expect(within(getStaffCard('s3')).getByText('Current task: Staffing cashier')).toBeVisible();
+    expect(within(getStaffCard('s4')).getByText('Current task: Available')).toBeVisible();
+
+    const duty = within(anna).getByTestId('staff-status-s2');
+    expect(duty).toHaveTextContent(/Effective duty: Work/);
+    expect(duty).not.toHaveTextContent(/Current task/);
+    expect(within(anna).getByRole('button', { name: 'Edit schedule for Anna' })).toBeEnabled();
+  });
+
+  it('shows the cook service-counter task label used by the details panel', () => {
+    useGameState.mockReturnValue(makeState({
+      staff: [
+        { id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200, task: { type: 'place_dish_on_service' } },
+      ],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    expect(within(getStaffCard('s1'))
+      .getByText('Current task: Placing order on service counter')).toBeVisible();
+  });
+
+  it('updates the roster label on rerender without changing duty or controls', () => {
+    let state = makeState({
+      cashierStations: [{ id: 'cashier1', assignedStaffId: 's2' }],
+      staff: [
+        { id: 's2', name: 'Anna', role: 'waiter', skill: 3, morale: 80, salary: 150, task: { type: 'take_order' } },
+      ],
+    });
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(vi.fn());
+
+    const { rerender } = render(<StaffPanel />);
+    const card = getStaffCard('s2');
+    const dutyBefore = within(card).getByTestId('staff-status-s2').textContent;
+    expect(within(card).getByText('Current task: Taking order')).toBeVisible();
+
+    state = { ...state, staff: state.staff.map(worker => ({ ...worker, task: { type: 'mystery' } })) };
+    rerender(<StaffPanel />);
+    expect(within(getStaffCard('s2')).getByText('Current task: Task unavailable')).toBeVisible();
+
+    state = { ...state, staff: state.staff.map(worker => ({ ...worker, task: null })) };
+    rerender(<StaffPanel />);
+    expect(within(getStaffCard('s2')).getByText('Current task: Staffing cashier')).toBeVisible();
+
+    state = { ...state, cashierStations: [] };
+    rerender(<StaffPanel />);
+    expect(within(getStaffCard('s2')).getByText('Current task: Available')).toBeVisible();
+
+    const updatedCard = getStaffCard('s2');
+    expect(within(updatedCard).getByTestId('staff-status-s2').textContent).toBe(dutyBefore);
+    expect(within(updatedCard).getByRole('button', { name: 'Edit schedule for Anna' })).toBeEnabled();
+  });
 });
 
 describe('StaffPanel hiring costs', () => {

@@ -12,6 +12,7 @@ import StaffScheduleEditor, {
   getStaffSchedule,
 } from './StaffScheduleEditor';
 import { getStaffHirePreview } from './staffHirePreview';
+import { getStaffTaskLabel } from './staffTaskLabel';
 import { getStaffTrainingPreview } from './staffTrainingPreview';
 
 const ROLES = Object.keys(STAFF_SALARIES);
@@ -379,7 +380,10 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
             </div>
           <div style={{ ...TYPOGRAPHY.secondary, margin: '4px 0' }}>
             Skill: {skill}/10
-            <span style={{ marginLeft: 16 }}>Morale: {Math.round(s.morale)}%</span>
+            <span style={{ marginLeft: 16 }}>Morale: {Number.isFinite(s.morale) ? `${Math.round(s.morale)}%` : 'Unavailable'}</span>
+          </div>
+          <div style={{ ...TYPOGRAPHY.secondary, margin: '4px 0', overflowWrap: 'anywhere' }}>
+            Current task: {getStaffTaskLabel(s, state.cashierStations)}
           </div>
           {trainingPreview && (
             <div style={{ ...TYPOGRAPHY.secondary, margin: '4px 0' }}>

@@ -1,3 +1,8 @@
+export const CUSTOM_RECIPE_STATS = Object.freeze({
+  prepTime: Object.freeze({ min: 120, max: 239 }),
+  popularity: Object.freeze({ min: 30, max: 59 }),
+});
+
 export const BASES = [
   'Bread', 'Pasta', 'Rice', 'Potato', 'Chicken', 'Beef', 'Fish', 'Vegetables', 'Eggs', 'Cheese',
 ];

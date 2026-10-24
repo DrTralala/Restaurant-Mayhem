@@ -6,6 +6,7 @@ const TABBABLE_SELECTOR = [
   'select',
   'textarea',
   'a[href]',
+  'summary',
   '[tabindex]',
   '[contenteditable="true"]',
 ].join(',');
@@ -24,9 +25,22 @@ function isHiddenOrInert(element) {
   return false;
 }
 
+function isFirstDirectSummary(element) {
+  const details = element.parentElement;
+  return element.tagName === 'SUMMARY'
+    && details?.tagName === 'DETAILS'
+    && details.querySelector(':scope > summary') === element;
+}
+
+function isTabCandidate(element) {
+  if (element.tagName !== 'SUMMARY') return element.tabIndex >= 0;
+  if (element.hasAttribute('tabindex')) return element.tabIndex >= 0;
+  return isFirstDirectSummary(element);
+}
+
 function tabbableDescendants(dialog) {
   return Array.from(dialog.querySelectorAll(TABBABLE_SELECTOR)).filter(element =>
-    element.tabIndex >= 0
+    isTabCandidate(element)
     && !isDisabled(element)
     && !isHiddenOrInert(element));
 }
