@@ -4,6 +4,7 @@ import { createDishOrderSnapshot, getResolvedDish, normaliseCookbookState } from
 import { createCareerRun } from './careerRun';
 import { acceptServiceContract } from './serviceContracts';
 import { commitPaidVisit } from './paidVisits';
+import { getMenuSalesCount } from './menuSales';
 import { calculateRevenue } from './revenue';
 
 function fixture() {
@@ -44,6 +45,46 @@ describe('atomic paid visit producer', () => {
     expect(next.restaurant).toBe(state.restaurant);
   });
 
+  it('records charged dish and drink units once in the current-day menu-sales branch', () => {
+    const state = fixture();
+    state.unlockedDrinkIds = ['water'];
+    Object.assign(state.customers[0], {
+      drinkId: 'water', drinkPriceAtOrder: 5, orderSubtotal: 17,
+      orderedServiceItemIds: ['service-item-1', 'drink-item'],
+    });
+    state.serviceItems.push({
+      id: 'drink-item', kind: 'drink', menuItemId: 'water', customerId: 'c1', state: 'delivered',
+    });
+
+    const { state: next } = commit(state, receipt('c1', 17, 2));
+
+    expect(next.menuSales).toEqual({
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 1 }],
+      drinks: [{ key: 'water', count: 1 }],
+    });
+    expect(getMenuSalesCount(next, 'dish', 'starter-toast')).toBe(1);
+    expect(getMenuSalesCount(next, 'drink', 'water')).toBe(1);
+  });
+
+  it('resets stale telemetry to the payment day before applying its charged units', () => {
+    const state = fixture();
+    state.restaurant = { ...state.restaurant, day: 2, gameTime: 2 * 86400 + 100 };
+    state.menuSales = {
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 9 }],
+      drinks: [{ key: 'water', count: 4 }],
+    };
+
+    const { state: next } = commit(state);
+
+    expect(next.menuSales).toEqual({
+      day: 2,
+      dishes: [{ key: 'starter-toast', count: 1 }],
+      drinks: [],
+    });
+  });
+
   it('fans the same sequence and qualifying dish facts out to all three real consumers', () => {
     let state = acceptServiceContract(fixture(), { templateId: 'office-lunch' });
     const active = state.serviceContracts.active;
@@ -73,6 +114,7 @@ describe('atomic paid visit producer', () => {
     }
     expect(state.cookbook.entries.toast.paidPortions).toBe(15);
     expect(state.careerRun.paidMeals).toBe(15);
+    expect(getMenuSalesCount(state, 'dish', 'starter-toast')).toBe(15);
     expect(state.restaurant.funds).toBe(600);
     expect(state.recipeSlots).toBe(1);
   });
@@ -97,9 +139,12 @@ describe('atomic paid visit producer', () => {
     expect(calculateRevenue(state).cookbook.entries.toast.paidPortions).toBe(0);
   });
 
-  it('retains valid credit after menu removal and physical plate cleanup', () => {
+  it('retains valid credit after menu removal and physical plate cleanup without retired-item sales', () => {
     const state = { ...fixture(), dishes: [], serviceItems: [] };
-    expect(commit(state).state.cookbook.entries.toast.paidPortions).toBe(1);
+    const next = commit(state).state;
+    expect(next.cookbook.entries.toast.paidPortions).toBe(1);
+    expect(next.menuSales).toEqual({ day: 1, dishes: [], drinks: [] });
+    expect(getMenuSalesCount(next, 'dish', 'starter-toast')).toBe(0);
   });
 
   it('cancelled food retains identity but the paid drink cannot charge or fulfil the historical food line', () => {
@@ -113,6 +158,11 @@ describe('atomic paid visit producer', () => {
     expect(next.cookbook.entries.toast.paidPortions).toBe(0);
     expect(next.careerRun.paidMeals).toBe(0);
     expect(next.cookbook.lastAppliedPaidVisitSequence).toBe(1);
+    expect(next.menuSales).toEqual({
+      day: 1,
+      dishes: [],
+      drinks: [{ key: 'water', count: 1 }],
+    });
   });
 
   it('projects drink-only none, custom paid food, and conservative unknown legacy food', () => {
@@ -209,5 +259,10 @@ describe('atomic paid visit producer', () => {
     expect(result.state).not.toHaveProperty('cookbook');
     expect(result.state).not.toHaveProperty('careerRun');
     expect(result.state).not.toHaveProperty('serviceContracts');
+    expect(result.state.menuSales).toEqual({
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 1 }],
+      drinks: [],
+    });
   });
 });

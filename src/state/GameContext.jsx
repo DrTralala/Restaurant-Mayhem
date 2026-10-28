@@ -14,7 +14,7 @@ import { getDrink, getResolvedDrink, normaliseDrinkOverrides } from '../data/dri
 import { getPlaceable } from '../data/placeables';
 import { getEquipmentLevelMultipliers, getEquipmentUpgradeQuote } from '../data/equipment';
 import { getGlobalUpgradeQuote } from '../data/upgrades';
-import { clampReputation } from '../simulation/balance';
+import { getGlobalUpgradeEffectPreview } from '../simulation/globalUpgradePurchase';
 import { assignWaiterToStation } from '../simulation/cashiers';
 import {
   getNextNumericId,
@@ -24,17 +24,17 @@ import {
 } from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
 import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
-import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseOperatingHour } from '../simulation/clock';
+import { normaliseMenuSales } from '../simulation/menuSales';
+import { prepareStaffHire } from '../simulation/staffHiring';
 import {
   getStaffBonusPreview,
   getStaffTrainingCost,
-  STAFF_SALARIES,
 } from '../simulation/staffProgression';
 import { updateAutomaticDishwashers } from '../simulation/dishwashing';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { getExpansionPreview } from '../simulation/expansion';
-import { createStaffDutyDefaults, validateStaffSchedule } from '../simulation/staffSchedules';
+import { validateStaffSchedule } from '../simulation/staffSchedules';
 import {
   getStaffTaskLegacyRate,
   getStaffTaskTiming,
@@ -590,14 +590,15 @@ function reduceGameAction(state, action) {
     case 'BUY_UPGRADE': {
       const upgrade = state.upgrades.find(candidate => candidate.id === action.id);
       const quote = getGlobalUpgradeQuote(upgrade, state.restaurant.funds);
-      if (!quote?.affordable) return state;
-      const reputation = upgrade.effects?.type === 'reputation'
-        ? clampReputation(state.restaurant.reputation
-          + (Number.isFinite(upgrade.effects.value) ? upgrade.effects.value : 0))
-        : state.restaurant.reputation;
+      const effect = getGlobalUpgradeEffectPreview(upgrade, state.restaurant.reputation);
+      if (!quote?.affordable || !effect.canApply) return state;
       return {
         ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - quote.cost, reputation },
+        restaurant: {
+          ...state.restaurant,
+          funds: state.restaurant.funds - quote.cost,
+          reputation: effect.reputationAfterPurchase,
+        },
         upgrades: state.upgrades.map(u =>
           u.id === action.id ? { ...u, level: quote.nextLevel } : u
         ),
@@ -637,29 +638,12 @@ function reduceGameAction(state, action) {
       };
     }
     case 'HIRE_STAFF': {
-      const salary = STAFF_SALARIES[action.staff?.role];
-      if (!action.staff || salary == null || !canAfford(state, salary)) return state;
-      const { ...staff } = action.staff;
-      const hiredStaff = {
-        ...staff,
-        ...createStaffDutyDefaults(),
-        task: null,
-        activityPhase: null,
-        idleUntil: null,
-      };
-      const occupiedIds = [...state.staff, ...(state.customers || []),
-        ...(state.queue || []).flatMap(party => party.members || [party]),
-        ...(state.queueDepartures || [])];
-      if (hiredStaff.id == null || occupiedIds.some(actor => String(actor.id) === String(hiredStaff.id))) return state;
-      const unplacedHire = { ...hiredStaff, x: null, y: null };
-      const allocatedStaff = allocateStaffPositions(state, [
-        ...state.staff, { ...withCarriedServiceItemIds(unplacedHire, []), salary },
-      ]);
-      if (!allocatedStaff) return state;
+      const result = prepareStaffHire(state, action.staff);
+      if (!result.ok) return state;
       return {
         ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - salary },
-        staff: allocatedStaff,
+        restaurant: { ...state.restaurant, funds: state.restaurant.funds - result.cost },
+        staff: result.staff,
       };
     }
     case 'SET_STAFF_SCHEDULE': {
@@ -911,6 +895,12 @@ export function gameReducer(state, action) {
   if (state.navigationFault && action.type === 'TOGGLE_PAUSE') return state;
   let candidate = reduceGameAction(state, action);
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE') return candidate;
+  if (candidate.dishes !== state.dishes) {
+    candidate = {
+      ...candidate,
+      menuSales: normaliseMenuSales(candidate.menuSales, candidate),
+    };
+  }
   if (candidate.equipment !== state.equipment && candidate.cookbook) {
     candidate = { ...candidate, cookbook: reconcileCookbookDiscoveries(candidate) };
   }

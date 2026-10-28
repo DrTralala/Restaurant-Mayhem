@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import UpgradePanel from './UpgradePanel';
+import { UPGRADES } from '../data/upgrades';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
@@ -655,6 +656,43 @@ describe('UpgradePanel global upgrade quotes', () => {
 
     expect(screen.getByText('Level 0 → $0')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Buy' })).toBeEnabled();
+  });
+
+  it('disables capped Wall Art and gives the cap reason to the button', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue({
+      ...panelState([UPGRADES.find(upgrade => upgrade.id === 'u7')]),
+      restaurant: { funds: 1000, expansionLevel: 1, reputation: 5 },
+    });
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<UpgradePanel />);
+
+    const card = screen.getByText('Wall Art').closest('div');
+    const button = within(card).getByRole('button', { name: 'Buy' });
+    expect(button).toBeDisabled();
+    const descriptionId = button.getAttribute('aria-describedby');
+    expect(descriptionId).toBeTruthy();
+    expect(document.getElementById(descriptionId))
+      .toHaveTextContent('Reputation is already at the 5-star cap; this upgrade would not increase it.');
+    const reactPropsKey = Object.keys(button).find(key => key.startsWith('__reactProps$'));
+    expect(reactPropsKey).toBeTruthy();
+    button[reactPropsKey].onClick();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('shows the capped partial reputation gain rather than the configured gain', () => {
+    useGameState.mockReturnValue({
+      ...panelState([UPGRADES.find(upgrade => upgrade.id === 'u7')], 1000),
+      restaurant: { funds: 1000, expansionLevel: 1, reputation: 4.95 },
+    });
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<UpgradePanel />);
+
+    const card = screen.getByText('Wall Art').closest('div');
+    expect(within(card).getByText('Reputation gain: +0.05 (to 5).')).toBeVisible();
+    expect(within(card).getByRole('button', { name: 'Buy' })).toBeEnabled();
   });
 
   it('treats exact funds as affordable and one cent short as unaffordable', () => {

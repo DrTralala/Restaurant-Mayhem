@@ -5,6 +5,7 @@ import { getNameGender } from '../canvas/characterAppearance';
 import { getStaffBonusPreview, getStaffTrainingCost, STAFF_BONUS_COST, STAFF_SALARIES } from '../simulation/staffProgression';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 import { isCareerDecisionPending } from '../simulation/careerRun';
+import { prepareStaffHire } from '../simulation/staffHiring';
 import StaffScheduleEditor, {
   formatDutyMode,
   formatGameTime,
@@ -17,6 +18,12 @@ import { getStaffTrainingPreview } from './staffTrainingPreview';
 
 const ROLES = Object.keys(STAFF_SALARIES);
 const NAMES = ['Marco', 'Anna', 'Luca', 'Sofia', 'Giovanni', 'Isabella', 'Mario', 'Elena'];
+const HIRE_FAILURE_MESSAGES = {
+  'invalid-candidate': 'This hire could not be prepared. Close and reopen the hire list, then try again.',
+  'unavailable-funds': 'There are not enough available funds to hire this role.',
+  'duplicate-identity': 'This hire could not be added because its identity is already in use. Try again.',
+  'no-safe-space': 'No safe space is available to place this staff member. Move staff or obstacles to clear a floor tile, then try again.',
+};
 const ROLE_FILTERS = [
   { value: 'all', label: 'All' },
   { value: 'cook', label: 'Cooks' },
@@ -49,6 +56,7 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
   const [roleFilter, setRoleFilter] = useState('all');
   const [scheduleDrafts, setScheduleDrafts] = useState({});
   const [editingScheduleId, setEditingScheduleId] = useState(null);
+  const [hireError, setHireError] = useState(null);
   const rawFunds = state.restaurant?.funds;
   const staff = Array.isArray(state.staff) ? state.staff : [];
 
@@ -103,6 +111,10 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
     if (decisionPending) setEditingScheduleId(null);
   }, [decisionPending]);
 
+  useEffect(() => {
+    setHireError(null);
+  }, [generation]);
+
   const handleRoleFilter = (nextFilter) => {
     const identity = renameIdentityRef.current;
     if (identity) {
@@ -124,18 +136,23 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
     const name = namePool[Math.floor(Math.random() * namePool.length)];
     const skill = 1 + Math.floor(Math.random() * 3);
     const salary = STAFF_SALARIES[role];
-    dispatch({
-      type: 'HIRE_STAFF',
-      staff: {
-        id: `staff-${Date.now()}`,
-        name,
-        gender: getNameGender(name),
-        role,
-        skill,
-        morale: 80,
-        salary,
-      },
-    });
+    const candidate = {
+      id: `staff-${Date.now()}`,
+      name,
+      gender: getNameGender(name),
+      role,
+      skill,
+      morale: 80,
+      salary,
+    };
+    const result = prepareStaffHire(state, candidate);
+    if (!result.ok) {
+      setHireError(HIRE_FAILURE_MESSAGES[result.reason]
+        || 'This hire could not be completed. Check the restaurant and try again.');
+      return;
+    }
+    dispatch({ type: 'HIRE_STAFF', staff: candidate });
+    setHireError(null);
     setShowHire(false);
   };
 
@@ -233,7 +250,8 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
         <button ref={hireButtonRef} type="button" disabled={decisionPending}
           onClick={() => {
             if (decisionRef.current) return;
-            setShowHire(!showHire);
+            setHireError(null);
+            setShowHire(current => !current);
           }} style={{
             ...TYPOGRAPHY.control,
             background: '#f0a500', color: '#111', border: 'none',
@@ -286,6 +304,11 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
           <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '0 0 8px' }}>
             Assumes unchanged staff and salaries. Full payroll is charged at the next midnight without proration. Excludes all other receipts and spending.
           </p>
+          {hireError && (
+            <p role="alert" style={{ ...TYPOGRAPHY.secondary, color: '#f2d08a', margin: '0 0 8px' }}>
+              {hireError}
+            </p>
+          )}
           <div data-testid="hire-role-list" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {ROLES.map(role => {
               const salary = STAFF_SALARIES[role];

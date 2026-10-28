@@ -79,7 +79,7 @@ import { allocateStaffPositions } from './navigation/staffAllocation';
 import { positionAvailable, quarantineNavigation } from './navigation/occupancy';
 
 function paidVisitFields(state) {
-  return Object.fromEntries(['paidVisitSequence', 'cookbook', 'serviceContracts', 'careerRun']
+  return Object.fromEntries(['paidVisitSequence', 'cookbook', 'serviceContracts', 'careerRun', 'menuSales']
     .filter(key => Object.hasOwn(state, key)).map(key => [key, state[key]]));
 }
 

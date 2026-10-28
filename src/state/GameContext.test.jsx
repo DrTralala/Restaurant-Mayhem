@@ -1,6 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GameProvider, useDispatch, useGameState } from './GameContext';
+import { gameReducer, GameProvider, useDispatch, useGameState } from './GameContext';
 import { createInitialState } from './initialState';
 import { hydrateState } from './persistence';
 import { movementSaveSnapshot } from './movementPersistence';
@@ -93,6 +93,19 @@ function renderReducer(overrides = {}) {
       return current.state;
     },
   };
+}
+
+function makeNoSafeHireState() {
+  const state = createInitialState();
+  const world = getRestaurantWorld(state.restaurant);
+  const blockers = [];
+  for (let y = Math.ceil(world.diningY / 20) * 20;
+    y <= world.kitchenY + world.floorH; y += 20) {
+    for (let x = Math.ceil(world.floorX / 20) * 20; x < world.doorX; x += 20) {
+      blockers.push({ id: `blocked-hire-${x}-${y}`, x, y, state: 'idle' });
+    }
+  }
+  return { ...state, customers: blockers };
 }
 
 describe('GameProvider operating-hours actions', () => {
@@ -404,6 +417,23 @@ describe('GameProvider staff actions', () => {
     expect(first.schedule).not.toBe(second.schedule);
     first.schedule[0] = 'rest';
     expect(second.schedule[0]).toBe('work');
+  });
+
+  it('rejects a hire when every safe floor position is occupied without changing funds or staff', () => {
+    const initial = makeNoSafeHireState();
+    const game = renderReducer(initial);
+    const before = game.state;
+    const beforeStaff = before.staff.map(worker => ({ ...worker }));
+    const funds = before.restaurant.funds;
+
+    game.dispatch({
+      type: 'HIRE_STAFF',
+      staff: { id: 'blocked-hire-attempt', name: 'No Space', role: 'cook', salary: 1 },
+    });
+
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant.funds).toBe(funds);
+    expect(game.state.staff).toEqual(beforeStaff);
   });
 
   it('accepts only a complete cyclic staff schedule and copies the caller array', () => {
@@ -1093,6 +1123,16 @@ describe('GameProvider authoritative placement actions', () => {
 describe('GameProvider guarded economy actions', () => {
   beforeEach(() => localStorage.clear());
 
+  it('rejects the real Wall Art purchase when reputation is already capped', () => {
+    const initial = createInitialState();
+    const state = {
+      ...initial,
+      restaurant: { ...initial.restaurant, funds: 600, reputation: 5 },
+    };
+
+    expect(gameReducer(state, { type: 'BUY_UPGRADE', id: 'u7' })).toBe(state);
+  });
+
   it('uses the selected upgrade state to derive its cost and maximum level', () => {
     const game = renderReducer({ restaurant: { funds: 1000 } });
 
@@ -1135,7 +1175,7 @@ describe('GameProvider guarded economy actions', () => {
     expect(capped.state.restaurant.reputation).toBe(5);
   });
 
-  it('ignores malformed reputation effect values while completing a valid purchase', () => {
+  it('rejects malformed reputation effect values without charging or advancing the upgrade', () => {
     const game = renderReducer({
       restaurant: { funds: 150, reputation: 2 },
       upgrades: [{
@@ -1143,11 +1183,13 @@ describe('GameProvider guarded economy actions', () => {
         effects: { type: 'reputation', value: Number.NaN },
       }],
     });
+    const before = game.state;
 
     game.dispatch({ type: 'BUY_UPGRADE', id: 'broken-decor' });
 
-    expect(game.state.restaurant).toMatchObject({ funds: 0, reputation: 2 });
-    expect(game.state.upgrades[0].level).toBe(1);
+    expect(game.state).toBe(before);
+    expect(game.state.restaurant).toMatchObject({ funds: 150, reputation: 2 });
+    expect(game.state.upgrades[0].level).toBe(0);
   });
 
   describe('global upgrade quote safety', () => {
@@ -2196,6 +2238,71 @@ describe('GameProvider pause toggles', () => {
 
     game.dispatch({ type: 'TOGGLE_PAUSE' });
     expect(game.state).toMatchObject({ speed, paused: false });
+  });
+});
+
+describe('GameProvider menu sales telemetry', () => {
+  beforeEach(() => localStorage.clear());
+
+  const customDish = {
+    id: 'custom-dish', name: 'Custom dish', price: 9, prepTime: 30,
+    quality: 1, popularity: 50,
+  };
+
+  it('removes deleted custom and cookbook dish IDs without disturbing current counters', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      dishes: [initial.dishes[0], customDish],
+      menuSales: {
+        day: 1,
+        dishes: [
+          { key: 'starter-toast', count: 1 },
+          { key: 'custom-dish', count: 3 },
+        ],
+        drinks: [],
+      },
+    });
+
+    game.dispatch({ type: 'REMOVE_DISH', id: 'custom-dish' });
+
+    expect(game.state.dishes.map(dish => dish.id)).toEqual(['starter-toast']);
+    expect(game.state.menuSales).toEqual({
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 1 }],
+      drinks: [],
+    });
+
+    game.dispatch({ type: 'REMOVE_DISH', id: 'starter-toast' });
+
+    expect(game.state.dishes).toEqual([]);
+    expect(game.state.menuSales).toEqual({ day: 1, dishes: [], drinks: [] });
+  });
+
+  it('preserves counters through price, name, quality and suspension changes', () => {
+    const initial = createInitialState();
+    const game = renderReducer({
+      dishes: [customDish],
+      menuSales: {
+        day: 1,
+        dishes: [{ key: 'custom-dish', count: 4 }],
+        drinks: [{ key: 'water', count: 2 }],
+      },
+    });
+    const expectedSales = {
+      day: 1,
+      dishes: [{ key: 'custom-dish', count: 4 }],
+      drinks: [{ key: 'water', count: 2 }],
+    };
+
+    game.dispatch({ type: 'UPDATE_DISH', id: 'custom-dish', changes: { price: 20 } });
+    expect(game.state.menuSales).toEqual(expectedSales);
+    game.dispatch({ type: 'UPDATE_DISH', id: 'custom-dish', changes: { name: 'Renamed' } });
+    expect(game.state.menuSales).toEqual(expectedSales);
+    game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'custom-dish' });
+    expect(game.state.dishes[0].quality).toBe(2);
+    expect(game.state.menuSales).toEqual(expectedSales);
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'custom-dish', suspended: true });
+    expect(game.state.menuSales).toEqual(expectedSales);
   });
 });
 

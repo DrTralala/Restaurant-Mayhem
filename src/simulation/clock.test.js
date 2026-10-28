@@ -68,6 +68,73 @@ describe('advanceClock', () => {
     expect(result.notifications[0].message).toContain('Day 1');
   });
 
+  it('resets menu sales on the first crossed midnight without changing monetary history', () => {
+    const state = {
+      restaurant: { funds: 1000, dailyRevenue: 200, gameTime: 86399, day: 1 },
+      staff: [{ salary: 100 }],
+      dailyHistory: [],
+      notifications: [],
+      menuSales: {
+        day: 1,
+        dishes: [{ key: 'starter-toast', count: 4 }],
+        drinks: [{ key: 'water', count: 2 }],
+      },
+    };
+
+    const result = advanceClock(state, 1);
+
+    expect(result.restaurant).toMatchObject({ funds: 900, dailyRevenue: 0, day: 2 });
+    expect(result.dailyHistory).toEqual([
+      { day: 1, revenue: 200, payroll: 100, profit: 100 },
+    ]);
+    expect(result.menuSales).toEqual({ day: 2, dishes: [], drinks: [] });
+  });
+
+  it('resets menu sales to the final day across multiple midnight crossings', () => {
+    const state = {
+      restaurant: { funds: 1000, dailyRevenue: 75, gameTime: 86399, day: 4 },
+      staff: [{ salary: 100 }],
+      dailyHistory: [],
+      notifications: [],
+      menuSales: {
+        day: 4,
+        dishes: [{ key: 'starter-toast', count: 7 }],
+        drinks: [],
+      },
+    };
+
+    const result = advanceClock(state, 86401);
+
+    expect(result.restaurant).toMatchObject({ funds: 800, dailyRevenue: 0, day: 6 });
+    expect(result.dailyHistory).toEqual([
+      { day: 4, revenue: 75, payroll: 100, profit: -25 },
+      { day: 5, revenue: 0, payroll: 100, profit: -100 },
+    ]);
+    expect(result.menuSales).toEqual({ day: 6, dishes: [], drinks: [] });
+  });
+
+  it('preserves current menu sales when no midnight is crossed', () => {
+    const menuSales = {
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 4 }],
+      drinks: [{ key: 'water', count: 2 }],
+    };
+    const state = {
+      restaurant: { funds: 1000, dailyRevenue: 75, gameTime: 100, day: 1 },
+      staff: [{ salary: 100 }],
+      dailyHistory: [],
+      notifications: [],
+      menuSales,
+    };
+
+    const result = advanceClock(state, 50);
+
+    expect(result.restaurant).toMatchObject({ funds: 1000, dailyRevenue: 75, day: 1 });
+    expect(result.dailyHistory).toEqual([]);
+    expect(result.menuSales).toEqual(menuSales);
+    expect(result.menuSales).toBe(menuSales);
+  });
+
   it('deducts valid payroll once for each crossed midnight', () => {
     const state = {
       restaurant: { funds: 1000, dailyRevenue: 75, gameTime: 86399, day: 4 },

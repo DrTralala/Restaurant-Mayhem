@@ -5,6 +5,7 @@ import StaffPanel from './StaffPanel';
 import ManagementModal from './ManagementModal';
 import { FONT_FAMILY } from '../typography';
 import { createInitialState } from '../state/initialState';
+import { getRestaurantWorld } from '../simulation/world';
 
 const trainingCostOverride = vi.hoisted(() => ({ value: undefined }));
 
@@ -28,7 +29,16 @@ vi.mock('../simulation/staffProgression', async importOriginal => {
   };
 });
 
+vi.mock('../simulation/navigation/staffAllocation', async importOriginal => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    allocateStaffPositions: vi.fn(actual.allocateStaffPositions),
+  };
+});
+
 import { useGameState, useDispatch, useGameGeneration, gameReducer } from '../state/GameContext';
+import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -49,6 +59,19 @@ function makeState(overrides = {}) {
     restaurant: { funds: 500 },
     ...overrides,
   };
+}
+
+function makeNoSafeHireState() {
+  const state = createInitialState();
+  const world = getRestaurantWorld(state.restaurant);
+  const blockers = [];
+  for (let y = Math.ceil(world.diningY / 20) * 20;
+    y <= world.kitchenY + world.floorH; y += 20) {
+    for (let x = Math.ceil(world.floorX / 20) * 20; x < world.doorX; x += 20) {
+      blockers.push({ id: `blocked-hire-${x}-${y}`, x, y, state: 'idle' });
+    }
+  }
+  return { ...state, customers: blockers };
 }
 
 function getStaffCard(id) {
@@ -542,6 +565,49 @@ describe('StaffPanel current task', () => {
 });
 
 describe('StaffPanel hiring costs', () => {
+  it('does not allocate staff positions during an ordinary render', () => {
+    useGameState.mockReturnValue(makeState());
+    useDispatch.mockReturnValue(vi.fn());
+    allocateStaffPositions.mockClear();
+
+    render(<StaffPanel />);
+
+    expect(allocateStaffPositions).not.toHaveBeenCalled();
+  });
+
+  it('keeps the hire chooser open and explains a blocked floor without changing funds or staff', () => {
+    const initial = makeNoSafeHireState();
+    const beforeFunds = initial.restaurant.funds;
+    const beforeStaff = initial.staff.map(worker => ({ ...worker }));
+    let generation = 0;
+    useGameState.mockImplementation(() => panelHarness.current.state);
+    useDispatch.mockImplementation(() => panelHarness.current.dispatch);
+    useGameGeneration.mockImplementation(() => generation);
+
+    const { rerender } = render(<StatefulStaffPanel initial={initial} />);
+    fireEvent.click(screen.getByRole('button', { name: '+ Hire' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cook' }));
+
+    expect(screen.getByText('Hire staff')).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(/no safe space/i);
+    expect(panelHarness.current.state.restaurant.funds).toBe(beforeFunds);
+    expect(panelHarness.current.state.staff).toEqual(beforeStaff);
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Hire' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('Hire staff')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '+ Hire' }));
+    expect(screen.getByText('Hire staff')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cook' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/no safe space/i);
+    generation = 1;
+    rerender(<StatefulStaffPanel initial={initial} />);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Hire staff')).toBeVisible();
+  });
+
   it('shows canonical upfront and daily costs for every role, linked to its hire button', () => {
     useGameState.mockReturnValue(makeState({ restaurant: { funds: 500 } }));
     useDispatch.mockReturnValue(vi.fn());

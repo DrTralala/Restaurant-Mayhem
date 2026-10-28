@@ -16,6 +16,7 @@ function legacy() {
   delete raw.serviceContracts;
   delete raw.paidVisitSequence;
   delete raw.careerRun;
+  delete raw.menuSales;
   raw.dishes = raw.dishes.map(({ cookbookId, ...dish }) => dish);
   return raw;
 }
@@ -30,6 +31,13 @@ function orderFixture() {
 }
 
 describe('additive v10 feature persistence', () => {
+  it('starts a new sandbox with an empty day-1 sales branch', () => {
+    const fresh = createInitialState();
+    expect(fresh.menuSales).toEqual({
+      day: fresh.restaurant.day, dishes: [], drinks: [],
+    });
+  });
+
   it('loads a truly old sandbox without changing cash/time or awarding historical credit', () => {
     const raw = legacy();
     raw.restaurant.totalServed = 1000;
@@ -45,7 +53,73 @@ describe('additive v10 feature persistence', () => {
     expect(state.dishes[0].cookbookId).toBe('toast');
     expect(state.serviceContracts.active).toBeNull();
     expect(state.completedCustomers).toEqual(raw.completedCustomers);
+    expect(state.menuSales).toEqual({ day: raw.restaurant.day, dishes: [], drinks: [] });
   });
+  it('normalises malformed optional menu sales before strict validation in both entry points', () => {
+    const raw = {
+      ...createInitialState(),
+      menuSales: {
+        day: 1,
+        dishes: [
+          { key: 'starter-toast', count: 2, strayId: 7 },
+          { key: 'removed-dish', count: 4 },
+          { key: 'starter-toast', count: 99 },
+        ],
+        drinks: [{ key: 'water', count: 3, nestedId: 9 }],
+        strayMenuId: 42,
+      },
+    };
+    expect(() => validateSavedState(raw)).toThrow();
+
+    const expected = {
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 2 }],
+      drinks: [{ key: 'water', count: 3 }],
+    };
+    expect(hydrateState(raw, createInitialState()).menuSales).toEqual(expected);
+
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
+    const loaded = loadState();
+    expect(loaded).not.toBeNull();
+    expect(loaded.menuSales).toEqual(expected);
+    expect(hydrateState(loaded, createInitialState()).menuSales).toEqual(expected);
+  });
+
+  it.each([
+    null,
+    {},
+    { day: 1, dishes: 'bad', drinks: [] },
+    { day: 1, dishes: [], drinks: 'bad' },
+    { day: 2, dishes: [{ key: 'starter-toast', count: 4 }], drinks: [] },
+  ])('fills empty current-day menu sales for malformed value %s', value => {
+    const raw = { ...createInitialState(), menuSales: value };
+
+    expect(hydrateState(raw, createInitialState()).menuSales).toEqual({
+      day: 1, dishes: [], drinks: [],
+    });
+  });
+
+  it('round-trips valid menu sales including a custom dish ID ending in Id', () => {
+    const raw = createInitialState();
+    raw.dishes = [...raw.dishes, {
+      id: 'custom-menuId', name: 'Custom dish', price: 9, prepTime: 30,
+      quality: 1, popularity: 50,
+    }];
+    raw.menuSales = {
+      day: 1,
+      dishes: [{ key: 'custom-menuId', count: 2 }, { key: 'starter-toast', count: 1 }],
+      drinks: [{ key: 'iced-tea', count: 3 }],
+    };
+    expect(saveState(raw)).toBe(true);
+
+    const loaded = loadState();
+    expect(loaded.menuSales).toEqual(raw.menuSales);
+    const hydrated = hydrateState(loaded, createInitialState());
+    expect(hydrated.menuSales).toEqual(raw.menuSales);
+    expect(hydrated.dishes.find(dish => dish.id === 'custom-menuId'))
+      .toMatchObject({ id: 'custom-menuId', price: 9 });
+  });
+
   it('migrates recoverable raw order stats/price before starter adoption with no authored provenance', () => {
     const raw = orderFixture();
     // Only a complete original bill can opt into strict snapshot checkout.

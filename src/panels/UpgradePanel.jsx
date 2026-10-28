@@ -4,10 +4,15 @@ import { getEquipmentLevelMultipliers, getEquipmentUpgradeQuote } from '../data/
 import { getGlobalUpgradeQuote } from '../data/upgrades';
 import { PLACEABLES } from '../data/placeables';
 import { MAX_EXPANSION_LEVEL, getExpansionPreview } from '../simulation/expansion';
+import { getGlobalUpgradeEffectPreview } from '../simulation/globalUpgradePurchase';
 import { TYPOGRAPHY } from '../typography';
 
 function formatShortfallAmount(amount) {
   return Number.isInteger(amount) ? `${amount}` : amount.toFixed(2);
+}
+
+function formatReputationAmount(amount) {
+  return Number(amount.toPrecision(12)).toString();
 }
 
 function getCashShortfall(quote, funds) {
@@ -29,6 +34,7 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
   const expansion = getExpansionPreview(state.restaurant);
   const expansionHelpId = useId();
   const shortfallHelpId = useId();
+  const effectHelpId = useId();
   const expansionMaxed = expansion != null && expansion.nextLevel == null;
   const expansionDisabled = !expansion || expansionMaxed || !expansion.affordable;
 
@@ -38,11 +44,22 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
         {state.upgrades.map((u, index) => {
           const quote = getGlobalUpgradeQuote(u, state.restaurant.funds);
+          const effect = getGlobalUpgradeEffectPreview(u, state.restaurant.reputation);
+          const reputationEffect = u.effects?.type === 'reputation';
           const maxed = Array.isArray(u.costs) && u.costs.length > 0
             && Number.isInteger(u.level) && u.level === u.costs.length;
-          const disabled = maxed || !quote?.affordable;
+          const disabled = maxed || !quote?.affordable || !effect.canApply;
           const shortfall = getCashShortfall(quote, state.restaurant.funds);
           const shortfallId = shortfall ? `${shortfallHelpId}-global-${index}` : undefined;
+          const effectMessage = reputationEffect && quote
+            ? effect.canApply
+              ? `Reputation gain: +${formatReputationAmount(effect.reputationGain)} (to ${formatReputationAmount(effect.reputationAfterPurchase)}).`
+              : Number.isFinite(state.restaurant.reputation) && state.restaurant.reputation >= 5
+                ? 'Reputation is already at the 5-star cap; this upgrade would not increase it.'
+                : 'No positive reputation gain is available with the current reputation and effect.'
+            : null;
+          const effectMessageId = effectMessage ? `${effectHelpId}-global-${index}` : undefined;
+          const describedBy = [shortfallId, effectMessageId].filter(Boolean).join(' ') || undefined;
           return (
             <div key={u.id} style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, border: '1px solid #0f3460' }}>
               <strong style={TYPOGRAPHY.subheading}>{u.name}</strong>
@@ -59,12 +76,19 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
                   {shortfall}
                 </p>
               )}
+              {effectMessage && (
+                <p id={effectMessageId} style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0' }}>
+                  {effectMessage}
+                </p>
+              )}
               <button
                 onClick={() => {
-                  if (quote?.affordable) dispatch({ type: 'BUY_UPGRADE', id: u.id });
+                  if (quote?.affordable && effect.canApply) {
+                    dispatch({ type: 'BUY_UPGRADE', id: u.id });
+                  }
                 }}
                 disabled={disabled}
-                aria-describedby={shortfallId}
+                aria-describedby={describedBy}
                 style={{
                   ...TYPOGRAPHY.control,
                   background: disabled ? '#333' : '#f0a500',
