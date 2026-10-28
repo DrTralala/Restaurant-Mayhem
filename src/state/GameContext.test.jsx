@@ -2328,6 +2328,24 @@ describe('GameProvider pause toggles', () => {
   });
 });
 
+describe('gameReducer speed actions', () => {
+  const state = createInitialState();
+
+  it.each([0, 3, -1, Number.NaN, Number.POSITIVE_INFINITY, '2', null, undefined])(
+    'ignores unsupported speed payload %s',
+    speed => {
+      expect(gameReducer(state, { type: 'SET_SPEED', speed })).toBe(state);
+    },
+  );
+
+  it.each([1, 2, 4])('accepts supported speed %s', speed => {
+    const result = gameReducer(state, { type: 'SET_SPEED', speed });
+
+    expect(result).not.toBe(state);
+    expect(result.speed).toBe(speed);
+  });
+});
+
 describe('GameProvider menu sales telemetry', () => {
   beforeEach(() => localStorage.clear());
 

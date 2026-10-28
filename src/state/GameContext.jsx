@@ -480,6 +480,7 @@ function reduceGameAction(state, action) {
     case 'TICK':
       return action.nextState;
     case 'SET_SPEED':
+      if (![1, 2, 4].includes(action.speed)) return state;
       return { ...state, speed: action.speed };
     case 'SET_OPERATING_HOURS': {
       const openHour = normaliseOperatingHour(action.openHour, null);
