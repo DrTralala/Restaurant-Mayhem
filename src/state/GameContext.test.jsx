@@ -95,6 +95,31 @@ function renderReducer(overrides = {}) {
   };
 }
 
+function makeCustomDish(overrides = {}) {
+  const { cookbookId, masteryPerk, ...dish } = createInitialState().dishes[0];
+  return { ...dish, id: 'custom-test-dish', ...overrides };
+}
+
+function invalidCustomDishPatches() {
+  const requiredFields = ['name', 'base', 'method', 'cuisine'];
+  return [
+    ['zero prep time', { prepTime: 0 }],
+    ['NaN prep time', { prepTime: Number.NaN }],
+    ['infinite prep time', { prepTime: Number.POSITIVE_INFINITY }],
+    ['negative popularity', { popularity: -1 }],
+    ['popularity above 100', { popularity: 101 }],
+    ['NaN popularity', { popularity: Number.NaN }],
+    ...requiredFields.map(field => [`missing ${field}`, { [field]: undefined }]),
+    ...requiredFields.flatMap(field => [
+      [`blank ${field}`, { [field]: '' }],
+      [`whitespace-only ${field}`, { [field]: '   ' }],
+    ]),
+    ['blank equipment ID', { requiredEquipmentId: '' }],
+    ['whitespace-only equipment ID', { requiredEquipmentId: '   ' }],
+    ['non-text equipment ID', { requiredEquipmentId: 42 }],
+  ];
+}
+
 function makeNoSafeHireState() {
   const state = createInitialState();
   const world = getRestaurantWorld(state.restaurant);
@@ -2023,15 +2048,13 @@ describe('GameProvider guarded economy actions', () => {
   });
 
   it('canonicalises valid dish creation and rejects malformed dishes', () => {
-    const initial = createInitialState();
     const game = renderReducer({ dishes: [], recipeSlots: 3 });
     const validDish = {
-      ...initial.dishes[0],
+      ...makeCustomDish(),
       id: 'new-dish',
       price: 100.6,
       quality: 10,
     };
-    delete validDish.cookbookId; // This regression exercises unrestricted custom creation.
 
     game.dispatch({ type: 'ADD_DISH', dish: validDish });
     expect(game.state.dishes).toEqual([{ ...validDish, price: 100, quality: 1 }]);
@@ -2042,6 +2065,37 @@ describe('GameProvider guarded economy actions', () => {
     game.dispatch({ type: 'ADD_DISH', dish: { ...validDish, id: '' } });
 
     expect(game.state.dishes).toHaveLength(1);
+  });
+
+  it.each(invalidCustomDishPatches())('rejects custom dish creation with %s', (_label, patch) => {
+    const state = { ...createInitialState(), dishes: [] };
+    const dish = { ...makeCustomDish({ id: 'invalid-custom-dish' }), ...patch };
+
+    expect(gameReducer(state, { type: 'ADD_DISH', dish })).toBe(state);
+  });
+
+  it.each(invalidCustomDishPatches())('rejects custom dish updates with %s atomically', (_label, patch) => {
+    const dish = makeCustomDish();
+    const state = { ...createInitialState(), dishes: [dish] };
+
+    expect(gameReducer(state, {
+      type: 'UPDATE_DISH', id: dish.id, changes: { name: 'Would-be partial update', ...patch },
+    })).toBe(state);
+  });
+
+  it('updates a valid custom dish name and canonical price while protecting its identity and quality', () => {
+    const dish = makeCustomDish();
+    const state = { ...createInitialState(), dishes: [dish] };
+
+    const next = gameReducer(state, {
+      type: 'UPDATE_DISH', id: dish.id,
+      changes: {
+        id: 'forged-id', cookbookId: 'toast', masteryPerk: 'speed', quality: 10,
+        name: 'Renamed dish', price: 18.6,
+      },
+    });
+
+    expect(next.dishes).toEqual([{ ...dish, name: 'Renamed dish', price: 19 }]);
   });
 
   it('normalises fractional quality before enforcing the paid maximum', () => {
@@ -2245,8 +2299,9 @@ describe('GameProvider menu sales telemetry', () => {
   beforeEach(() => localStorage.clear());
 
   const customDish = {
-    id: 'custom-dish', name: 'Custom dish', price: 9, prepTime: 30,
-    quality: 1, popularity: 50,
+    id: 'custom-dish', name: 'Custom dish', base: 'Rice', method: 'Steamed',
+    cuisine: 'generic', requiredEquipmentId: null, price: 9, prepTime: 30,
+    quality: 1, popularity: 50, cookbookId: null, masteryPerk: null,
   };
 
   it('removes deleted custom and cookbook dish IDs without disturbing current counters', () => {

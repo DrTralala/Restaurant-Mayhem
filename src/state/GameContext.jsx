@@ -3,7 +3,11 @@ import { TYPOGRAPHY } from '../typography';
 import { createCareerInitialState, createInitialState } from './initialState';
 import { getCareerScenario } from '../data/careerScenarios';
 import { continueCareerAsSandbox, isCareerDecisionPending } from '../simulation/careerRun';
-import { reconcileCookbookDiscoveries, reduceCookbookAction } from '../simulation/cookbook';
+import {
+  reconcileCookbookDiscoveries,
+  reduceCookbookAction,
+  validateDishOrderSnapshot,
+} from '../simulation/cookbook';
 import { isMenuItemSuspended } from '../simulation/menuEconomy';
 import { acceptServiceContract, withdrawServiceContract } from '../simulation/serviceContracts';
 import { hydrateState, loadState, saveState } from './persistence';
@@ -50,6 +54,31 @@ import { getFixtureSaleEligibility, sellFixtures } from './fixtureSales';
 import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
 
 const STARTING_DISH_QUALITY = 1;
+
+function hasValidCustomDishSnapshot(dish) {
+  try {
+    validateDishOrderSnapshot({
+      schemaVersion: 1,
+      serviceItemId: dish.id,
+      menuItemId: dish.id,
+      cookbookId: null,
+      orderedAt: 0,
+      name: dish.name,
+      base: dish.base,
+      method: dish.method,
+      cuisine: dish.cuisine,
+      requiredEquipmentId: dish.requiredEquipmentId,
+      price: dish.price,
+      quality: dish.quality,
+      prepTime: dish.prepTime,
+      popularity: dish.popularity,
+      masteryPerk: null,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function canAfford(state, cost) {
   return Number.isFinite(cost)
@@ -510,13 +539,15 @@ function reduceGameAction(state, action) {
         || [...(state.customers || []), ...(state.serviceItems || [])].some(holder =>
           holder.dishOrderSnapshot?.menuItemId === dish.id)) return state;
       const { cookbookId, masteryPerk, ...customDish } = dish;
+      const candidate = {
+        ...customDish,
+        price: Math.min(100, Math.max(1, Math.round(dish.price))),
+        quality: STARTING_DISH_QUALITY,
+      };
+      if (!hasValidCustomDishSnapshot(candidate)) return state;
       return {
         ...state,
-        dishes: [...state.dishes, {
-          ...customDish,
-          price: Math.min(100, Math.max(1, Math.round(dish.price))),
-          quality: STARTING_DISH_QUALITY,
-        }],
+        dishes: [...state.dishes, candidate],
       };
     }
     case 'REMOVE_DISH':
@@ -533,10 +564,12 @@ function reduceGameAction(state, action) {
         if (!Number.isFinite(changes.price)) delete changes.price;
         else changes.price = Math.min(100, Math.max(1, Math.round(changes.price)));
       }
+      const updatedDish = { ...dish, ...changes };
+      if (!hasValidCustomDishSnapshot(updatedDish)) return state;
       return {
         ...state,
         dishes: state.dishes.map(candidate => candidate.id === action.id
-          ? { ...candidate, ...changes }
+          ? updatedDish
           : candidate),
       };
     }
