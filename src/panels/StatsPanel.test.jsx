@@ -1187,6 +1187,38 @@ it('shows the pending-food timing section with no recorded candidates', () => {
   expect(within(section).getByText(PENDING_FOOD_CAVEAT)).toBeInTheDocument();
 });
 
+it('shows ordered-dish blockers as overlapping structural counts and updates immutably', () => {
+  const { rerender } = render(<StatsPanel />);
+  let section = screen.getByRole('region', { name: 'Ordered-dish blockers' });
+  expect(within(section).getByText('Eligible ordered dishes with no employed cook: 0'))
+    .toBeInTheDocument();
+  expect(within(section).getByText('Eligible ordered dishes with no compatible station: 0'))
+    .toBeInTheDocument();
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    customers: [{ id: 'customer-1', state: 'seated', foodOutcome: 'pending' }],
+    serviceItems: [{
+      id: 'item-1', customerId: 'customer-1', kind: 'dish', menuItemId: 'toast',
+      state: 'ordered', assignedStaffId: null,
+    }],
+    dishes: [{ id: 'toast', requiredEquipmentId: 'eq1' }],
+    staff: [],
+    kitchenStations: [],
+  });
+  rerender(<StatsPanel />);
+
+  section = screen.getByRole('region', { name: 'Ordered-dish blockers' });
+  expect(within(section).getByText('Eligible ordered dishes with no employed cook: 1'))
+    .toBeInTheDocument();
+  expect(within(section).getByText('Eligible ordered dishes with no compatible station: 1'))
+    .toBeInTheDocument();
+  expect(within(section).getByText(/These are structural prerequisites only/))
+    .toHaveTextContent(/may overlap/);
+  expect(within(section).getByText(/not wait-time or ETA estimates/))
+    .toHaveTextContent(/guarantees of order arrival or preparation/);
+});
+
 it('shows pending timer counts, the earliest known deadline and the unknown notice', () => {
   mockUseGameState.mockReturnValue({
     ...baseState,

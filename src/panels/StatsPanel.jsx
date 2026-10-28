@@ -6,6 +6,7 @@ import { getServiceSummary } from './serviceSummary';
 import { getCleanupSummary } from './cleanupSummary';
 import { getQueuePatienceSummary } from './queuePatienceSummary';
 import { getFoodDeadlineSummary } from './foodDeadlineSummary';
+import { getKitchenBlockerSummary } from './kitchenBlockerSummary';
 import { getDailyPayroll, isRestaurantOpen } from '../simulation/clock';
 import { DIRT_REPUTATION_THRESHOLD, getDirtReputationLossPerMinute } from '../simulation/dirt';
 import { getQueuePartyCount, QUEUE_PARTY_CAPACITY } from '../simulation/customerQueue';
@@ -77,6 +78,7 @@ export default function StatsPanel() {
   const remainingPartySlots = Math.max(0, QUEUE_PARTY_CAPACITY - queuePartyCount);
   const queuePatience = getQueuePatienceSummary(state);
   const foodDeadline = getFoodDeadlineSummary(state);
+  const kitchenBlockers = getKitchenBlockerSummary(state);
   const restaurantOpen = isRestaurantOpen(state);
   const dailyPayroll = getDailyPayroll(state.staff || []);
   const revenue = state.restaurant.dailyRevenue;
@@ -258,6 +260,24 @@ export default function StatsPanel() {
         </div>
         <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
           Current counts, not totals. One guest may order multiple items. Queue includes guests not shown outside. Delivered items and cleanup are excluded.
+        </p>
+      </section>
+
+      <section aria-label="Ordered-dish blockers" style={{ marginTop: 16 }}>
+        <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Ordered-dish blockers</h4>
+        <div style={{ ...TYPOGRAPHY.secondary, display: 'grid', gap: 8 }}>
+          <div style={statBox}>
+            Eligible ordered dishes with no employed cook: {kitchenBlockers.noCook}
+          </div>
+          <div style={statBox}>
+            Eligible ordered dishes with no compatible station: {kitchenBlockers.noCompatibleStation}
+          </div>
+        </div>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+          Counts include uncancelled ordered dishes belonging to active customers that are
+          unassigned and unbatched. These are structural prerequisites only, not wait-time or
+          ETA estimates or guarantees of order arrival or preparation; counts may overlap for
+          the same dish.
         </p>
       </section>
 
