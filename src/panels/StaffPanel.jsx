@@ -59,6 +59,7 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
   const [hireError, setHireError] = useState(null);
   const rawFunds = state.restaurant?.funds;
   const staff = Array.isArray(state.staff) ? state.staff : [];
+  const scheduleToggleRef = useRef(null);
 
   const sortedStaff = [...staff].sort((left, right) => {
     const leftSkill = Number.isFinite(Number(left.skill)) ? Number(left.skill) : Number.NEGATIVE_INFINITY;
@@ -213,6 +214,8 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
   };
 
   const cancelSchedule = (id) => {
+    const scheduleToggle = scheduleToggleRef.current;
+    if (scheduleToggle?.isConnected && !scheduleToggle.disabled) scheduleToggle.focus();
     setScheduleDrafts(current => {
       if (!Object.prototype.hasOwnProperty.call(current, id)) return current;
       const next = { ...current };
@@ -224,6 +227,8 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
 
   const applySchedule = (id, schedule) => {
     if (decisionRef.current) return;
+    const scheduleToggle = scheduleToggleRef.current;
+    if (scheduleToggle?.isConnected && !scheduleToggle.disabled) scheduleToggle.focus();
     dispatch({ type: 'SET_STAFF_SCHEDULE', id, schedule });
     setScheduleDrafts(current => {
       const next = { ...current };
@@ -493,6 +498,7 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
             <button
+              ref={scheduleEditorOpen ? scheduleToggleRef : null}
               type="button"
               aria-label={`${scheduleEditorOpen ? 'Hide' : 'Edit'} schedule for ${s.name}`}
               aria-expanded={scheduleEditorOpen}

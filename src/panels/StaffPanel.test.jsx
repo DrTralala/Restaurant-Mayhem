@@ -190,15 +190,141 @@ describe('StaffPanel', () => {
 
     render(<StaffPanel />);
     const card = getStaffCard('s1');
-    fireEvent.click(within(card).getByRole('button', { name: 'Edit schedule for Marco' }));
+    const scheduleToggle = within(card).getByRole('button', { name: 'Edit schedule for Marco' });
+    fireEvent.click(scheduleToggle);
     fireEvent.change(within(card).getByRole('combobox', { name: 'Duty' }), { target: { value: 'pto' } });
     fireEvent.change(within(card).getByRole('combobox', { name: 'From' }), { target: { value: '0' } });
     fireEvent.change(within(card).getByRole('combobox', { name: 'To' }), { target: { value: '2' } });
     fireEvent.click(within(card).getByRole('button', { name: 'Set range' }));
-    fireEvent.click(within(card).getByRole('button', { name: 'Apply schedule' }));
+    const apply = within(card).getByRole('button', { name: 'Apply schedule' });
+    apply.focus();
+    fireEvent.click(apply);
 
     expect(dispatch).not.toHaveBeenCalled();
     expect(screen.getByRole('alert')).toHaveTextContent(/14 half-hour slots|7 in-game hours/i);
+    expect(scheduleToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(apply).toHaveFocus();
+  });
+
+  it('returns focus to the worker schedule toggle after Cancel closes the editor', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    const scheduleToggle = within(card).getByRole('button', { name: 'Edit schedule for Marco' });
+    fireEvent.click(scheduleToggle);
+
+    const cancel = within(card).getByRole('button', { name: 'Cancel schedule' });
+    cancel.focus();
+    fireEvent.click(cancel);
+
+    expect(scheduleToggle).toHaveFocus();
+    expect(scheduleToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('returns focus to the worker schedule toggle after a valid Apply dispatches and closes the editor', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [{
+        id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200,
+        schedule: Array(48).fill('work'),
+      }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    const scheduleToggle = within(card).getByRole('button', { name: 'Edit schedule for Marco' });
+    fireEvent.click(scheduleToggle);
+
+    const apply = within(card).getByRole('button', { name: 'Apply schedule' });
+    apply.focus();
+    fireEvent.click(apply);
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_STAFF_SCHEDULE', id: 's1', schedule: Array(48).fill('work'),
+    });
+    expect(scheduleToggle).toHaveFocus();
+    expect(scheduleToggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('does not restore focus to a schedule toggle when career state externally closes the editor', () => {
+    let state = makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    });
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(vi.fn());
+
+    const { rerender } = render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    const scheduleToggle = within(card).getByRole('button', { name: 'Edit schedule for Marco' });
+    fireEvent.click(scheduleToggle);
+    within(card).getByRole('button', { name: 'Cancel schedule' }).focus();
+
+    state = { ...state, careerRun: { needsDecision: true } };
+    rerender(<StaffPanel />);
+
+    expect(screen.queryByRole('button', { name: 'Cancel schedule' })).not.toBeInTheDocument();
+    expect(scheduleToggle).toBeDisabled();
+    expect(scheduleToggle).not.toHaveFocus();
+  });
+
+  it('does not focus another worker schedule toggle when the edited worker is removed', () => {
+    let state = makeState({
+      staff: [
+        { id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 },
+        { id: 's2', name: 'Anna', role: 'waiter', skill: 3, morale: 80, salary: 150 },
+      ],
+    });
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(vi.fn());
+
+    const { rerender } = render(<StaffPanel />);
+    const removedCard = getStaffCard('s1');
+    const removedToggle = within(removedCard).getByRole('button', { name: 'Edit schedule for Marco' });
+    const remainingToggle = within(getStaffCard('s2')).getByRole('button', { name: 'Edit schedule for Anna' });
+    fireEvent.click(removedToggle);
+    within(removedCard).getByRole('button', { name: 'Cancel schedule' }).focus();
+
+    state = { ...state, staff: state.staff.filter(worker => worker.id !== 's1') };
+    rerender(<StaffPanel />);
+
+    expect(removedToggle.isConnected).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Cancel schedule' })).not.toBeInTheDocument();
+    expect(remainingToggle).toBeInTheDocument();
+    expect(remainingToggle).not.toHaveFocus();
+  });
+
+  it('keeps focus inside an open schedule editor across an ordinary game tick rerender', () => {
+    let state = makeState({
+      restaurant: { funds: 500, gameTime: 0 },
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    });
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(vi.fn());
+
+    const { rerender } = render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    const scheduleToggle = within(card).getByRole('button', { name: 'Edit schedule for Marco' });
+    fireEvent.click(scheduleToggle);
+    const duty = within(card).getByRole('combobox', { name: 'Duty' });
+    duty.focus();
+
+    state = {
+      ...state,
+      restaurant: { ...state.restaurant, gameTime: 1800 },
+      staff: state.staff.map(worker => ({ ...worker, morale: 79, task: { type: 'clean_table' } })),
+    };
+    rerender(<StaffPanel />);
+
+    expect(within(getStaffCard('s1')).getByRole('combobox', { name: 'Duty' })).toHaveFocus();
+    expect(scheduleToggle).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('copies another worker schedule into the open draft without dispatching immediately', () => {
