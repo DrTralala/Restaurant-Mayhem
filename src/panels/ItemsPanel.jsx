@@ -8,6 +8,10 @@ import { TYPOGRAPHY } from '../typography';
 
 const PLACEMENT_COPY = 'Buy starts placement. Charged only after valid placement; cancelling costs nothing. Footprints exclude access space and do not guarantee a valid position.';
 
+function formatShortfallAmount(amount) {
+  return Number.isInteger(amount) ? `${amount}` : amount.toFixed(2);
+}
+
 export default function ItemsPanel({ onStartPlacement = () => {} }) {
   const state = useGameState();
   const uid = useId();
@@ -34,9 +38,22 @@ export default function ItemsPanel({ onStartPlacement = () => {} }) {
           const fundsValid = Number.isFinite(funds) && funds >= 0;
           const costValid = Number.isFinite(cost) && cost >= 0;
           const disabled = !fundsValid || !costValid || funds < cost;
+          const shortfall = !fundsValid
+            ? 'Funds unavailable.'
+            : costValid && funds < cost
+              ? `Needs $${formatShortfallAmount(cost - funds)} more.`
+              : null;
           const descriptionId = `${uid}-item-${item.type}-description`;
           const footprintId = `${uid}-item-${item.type}-footprint`;
           const quarterFootprintId = `${uid}-item-${item.type}-quarter-footprint`;
+          const shortfallId = `${uid}-item-${item.type}-shortfall`;
+          const describedBy = [
+            placementCopyId,
+            descriptionId,
+            footprintId,
+            rotatable ? quarterFootprintId : null,
+            shortfall ? shortfallId : null,
+          ].filter(Boolean).join(' ');
           return (
              <div key={item.type} style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, border: '1px solid #0f3460' }}>
                <strong style={TYPOGRAPHY.subheading}>{item.name}</strong>
@@ -50,11 +67,14 @@ export default function ItemsPanel({ onStartPlacement = () => {} }) {
                    {`Quarter-turn footprint: ${quarterFootprint.width} × ${quarterFootprint.height} world units.`}
                  </p>
                )}
+               {shortfall && (
+                 <p id={shortfallId} style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0' }}>
+                   {shortfall}
+                 </p>
+               )}
                <button
                  aria-label={`Buy ${item.name} ($${cost})`}
-                 aria-describedby={rotatable
-                   ? `${placementCopyId} ${descriptionId} ${footprintId} ${quarterFootprintId}`
-                   : `${placementCopyId} ${descriptionId} ${footprintId}`}
+                 aria-describedby={describedBy}
                  disabled={disabled}
                  onClick={() => onStartPlacement(item.type)}
                  style={{

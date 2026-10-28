@@ -290,6 +290,77 @@ describe('ItemsPanel', () => {
     expect(startPlacement).toHaveBeenCalledWith('chair');
   });
 
+  it('shows and describes exact item shortfalls, then removes them when funds reach the cost', () => {
+    useDispatch.mockReturnValue(vi.fn());
+    useGameState.mockReturnValue({ restaurant: { funds: 49.5 } });
+
+    const { rerender } = render(<ItemsPanel onStartPlacement={vi.fn()} />);
+
+    const chair = screen.getByRole('button', { name: 'Buy Dining chair ($50)' });
+    const chairReason = within(chair.parentElement).getByText('Needs $0.50 more.');
+    const chairDescriptionIds = chair.getAttribute('aria-describedby').split(/\s+/);
+    expect(chairDescriptionIds).toContain(chairReason.id);
+    expect(chairDescriptionIds).toContain(screen.getByText(/^Buy starts placement\./).id);
+    expect(chairDescriptionIds).toContain(
+      within(chair.parentElement).getByText('Adds one movable chair next to a table with an available seat.').id,
+    );
+    expect(chairDescriptionIds).toContain(
+      within(chair.parentElement).getByText('Default footprint: 20 × 20 world units.').id,
+    );
+    expect(chairDescriptionIds).toContain(
+      within(chair.parentElement).getByText('Quarter-turn footprint: 20 × 20 world units.').id,
+    );
+    expect(chairDescriptionIds).toHaveLength(5);
+    expect(chairReason.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+    for (const id of chairDescriptionIds) {
+      expect(document.getElementById(id)).not.toBeNull();
+    }
+
+    useGameState.mockReturnValue({ restaurant: { funds: 300 } });
+    rerender(<ItemsPanel onStartPlacement={vi.fn()} />);
+    expect(within(screen.getByRole('button', { name: 'Buy Couch ($400)' }).parentElement)
+      .getByText('Needs $100 more.')).toBeInTheDocument();
+
+    useGameState.mockReturnValue({ restaurant: { funds: 400 } });
+    rerender(<ItemsPanel onStartPlacement={vi.fn()} />);
+    const exactCouch = screen.getByRole('button', { name: 'Buy Couch ($400)' });
+    expect(exactCouch).toBeEnabled();
+    expect(within(exactCouch.parentElement).queryByText('Needs $100 more.')).not.toBeInTheDocument();
+    expect(document.getElementById(chairReason.id)).toBeNull();
+    expect(exactCouch.getAttribute('aria-describedby').split(/\s+/))
+      .not.toContain(chairReason.id);
+  });
+
+  it('explains unavailable funds without rendering a misleading shortfall amount', () => {
+    useDispatch.mockReturnValue(vi.fn());
+
+    for (const state of [
+      { restaurant: {} },
+      {},
+      { restaurant: { funds: Number.NaN } },
+      { restaurant: { funds: Number.POSITIVE_INFINITY } },
+      { restaurant: { funds: Number.NEGATIVE_INFINITY } },
+      { restaurant: { funds: -5 } },
+    ]) {
+      useGameState.mockReturnValue(state);
+      const { unmount } = render(<ItemsPanel onStartPlacement={vi.fn()} />);
+
+      const buttons = screen.getAllByRole('button', { name: /^Buy / });
+      expect(buttons).toHaveLength(8);
+      const unavailableIds = [];
+      for (const button of buttons) {
+        expect(button).toBeDisabled();
+        const unavailable = within(button.parentElement).getByText('Funds unavailable.');
+        expect(button.getAttribute('aria-describedby').split(/\s+/)).toContain(unavailable.id);
+        expect(unavailable.textContent).toBe('Funds unavailable.');
+        unavailableIds.push(unavailable.id);
+      }
+      expect(new Set(unavailableIds).size).toBe(8);
+
+      unmount();
+    }
+  });
+
   it('shows canonical default and quarter-turn footprints without grid rounding', () => {
     useGameState.mockReturnValue({ restaurant: { funds: 5000 } });
     useDispatch.mockReturnValue(vi.fn());
