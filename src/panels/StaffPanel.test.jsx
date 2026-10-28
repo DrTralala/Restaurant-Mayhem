@@ -373,6 +373,25 @@ describe('StaffPanel', () => {
     expect(['Marco', 'Anna', 'Luca', 'Mario']).not.toContain(hiredName);
   });
 
+  it('allows a hire when a legacy staff name is not a string', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [{ id: 'legacy', name: null, role: 'cook', skill: 1, morale: 80, salary: 200 }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    render(<StaffPanel />);
+    fireEvent.click(screen.getByRole('button', { name: '+ Hire' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cook' }));
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0][0]).toMatchObject({
+      type: 'HIRE_STAFF',
+      staff: { role: 'cook', name: 'Marco' },
+    });
+  });
+
   it('dispatches a janitor hire with a $120 salary', () => {
     const dispatch = vi.fn();
     useGameState.mockReturnValue(makeState({ restaurant: { funds: 500 } }));

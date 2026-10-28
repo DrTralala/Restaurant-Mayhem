@@ -724,13 +724,19 @@ function reduceGameAction(state, action) {
       };
       return invalidateMovementRuntime(released, action.id);
     }
-    case 'RENAME_STAFF':
+    case 'RENAME_STAFF': {
+      if (action.id == null || typeof action.name !== 'string') return state;
+      const staff = state.staff.find(candidate => candidate.id === action.id);
+      if (!staff) return state;
+      const name = action.name.trim();
+      if (!name) return state;
       return {
         ...state,
-        staff: state.staff.map(s =>
-          s.id === action.id ? { ...s, name: action.name } : s
+        staff: state.staff.map(candidate =>
+          candidate.id === staff.id ? { ...candidate, name } : candidate
         ),
       };
+    }
     case 'SET_STAFF_SALARY': {
       const staff = state.staff.find(candidate => candidate.id === action.id);
       if (!staff || !Number.isFinite(action.salary) || action.salary < staff.salary) return state;

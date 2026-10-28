@@ -130,7 +130,9 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
     if (decisionRef.current) return;
     const preview = getStaffHirePreview({ funds: rawFunds, staff }, role);
     if (!preview || !preview.canHire) return;
-    const usedNames = new Set(staff.map(worker => worker.name.toLowerCase()));
+    const usedNames = new Set(staff
+      .filter(worker => typeof worker?.name === 'string')
+      .map(worker => worker.name.toLowerCase()));
     const availableNames = NAMES.filter(name => !usedNames.has(name.toLowerCase()));
     const namePool = availableNames.length > 0 ? availableNames : NAMES;
     const name = namePool[Math.floor(Math.random() * namePool.length)];

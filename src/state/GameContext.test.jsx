@@ -351,6 +351,39 @@ describe('GameProvider staff actions', () => {
     expect(screen.getByText('Matteo')).toBeInTheDocument();
   });
 
+  it.each([
+    ['null', null],
+    ['object', {}],
+    ['number', 42],
+    ['blank', '   '],
+    ['empty', ''],
+  ])('ignores a %s staff name atomically', (_label, name) => {
+    const game = renderReducer();
+    const before = game.state;
+
+    game.dispatch({ type: 'RENAME_STAFF', id: 'starter-cook', name });
+
+    expect(game.state).toBe(before);
+  });
+
+  it('ignores a rename for an unknown staff target atomically', () => {
+    const game = renderReducer();
+    const before = game.state;
+
+    game.dispatch({ type: 'RENAME_STAFF', id: 'missing', name: 'Ada' });
+
+    expect(game.state).toBe(before);
+  });
+
+  it('trims a valid staff name before storing it', () => {
+    const game = renderReducer();
+
+    game.dispatch({ type: 'RENAME_STAFF', id: 'starter-cook', name: ' Ada ' });
+
+    const result = game.state;
+    expect(result.staff[0].name).toBe('Ada');
+  });
+
   it('updates only the selected staff salary', () => {
     render(
       <GameProvider>
