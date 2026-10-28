@@ -67,7 +67,7 @@ describe('shared feature defaults and actions', () => {
     expect(next.restaurant).toBe(state.restaurant);
     expect(next.navigationFault).toBe(state.navigationFault);
   });
-  it.each(['TICK', 'TOGGLE_PAUSE', 'SET_SPEED', 'ADD_TABLE', 'ADD_DISH', 'UPDATE_DISH',
+  it.each(['TICK', 'TOGGLE_PAUSE', 'SET_SPEED', 'ADD_DISH', 'UPDATE_DISH',
     'REMOVE_DISH', 'CHOOSE_DISH_MASTERY', 'ADD_COOKBOOK_DISH', 'ACCEPT_SERVICE_CONTRACT',
     'WITHDRAW_SERVICE_CONTRACT', 'HIRE_STAFF', 'FIRE_STAFF', 'MOVE_STAFF', 'PLACE_ITEM',
     'SELL_ITEMS', 'SET_OPERATING_HOURS', 'UNLOCK_DRINK', 'RENAME_STAFF'])('pending decision blocks %s', type => {

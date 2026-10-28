@@ -26,23 +26,6 @@ function StaffNameHarness() {
   );
 }
 
-function TableHarness() {
-  const state = useGameState();
-  const dispatch = useDispatch();
-  const newestTableId = state.tables.at(-1).id;
-  const rotations = state.chairs
-    .filter(chair => chair.tableId === newestTableId)
-    .map(chair => chair.rotation)
-    .join(',');
-
-  return (
-    <>
-      <span data-testid="newest-chair-rotations">{rotations}</span>
-      <button onClick={() => dispatch({ type: 'ADD_TABLE' })}>Add table</button>
-    </>
-  );
-}
-
 function ItemHarness() {
   const state = useGameState();
   const dispatch = useDispatch();
@@ -553,49 +536,10 @@ describe('GameProvider staff actions', () => {
 describe('GameProvider furniture actions', () => {
   beforeEach(() => localStorage.clear());
 
-  it('faces chairs added with a table inwards', () => {
-    render(
-      <GameProvider>
-        <TableHarness />
-      </GameProvider>,
-    );
+  it('rejects the obsolete free table action without changing state', () => {
+    const state = createInitialState();
 
-    act(() => screen.getByRole('button', { name: 'Add table' }).click());
-
-    expect(screen.getByTestId('newest-chair-rotations')).toHaveTextContent('2,0,1,3');
-  });
-
-  it('allocates an added table after the greatest existing table suffix', () => {
-    const game = renderReducer({
-      tables: [
-        { id: 't1', seats: 4, status: 'empty', x: 200, y: 200 },
-        { id: 't3', seats: 4, status: 'empty', x: 360, y: 200 },
-      ],
-      chairs: [],
-    });
-
-    game.dispatch({ type: 'ADD_TABLE' });
-
-    expect(game.state.tables.at(-1).id).toBe('t4');
-  });
-
-  it('allocates four unique chairs after the greatest existing chair suffix', () => {
-    const game = renderReducer({
-      chairs: [
-        { id: 'ch1', tableId: 't1', x: 210, y: 180 },
-        { id: 'ch5', tableId: 't1', x: 210, y: 240 },
-      ],
-    });
-
-    game.dispatch({ type: 'ADD_TABLE' });
-
-    const newTableId = game.state.tables.at(-1).id;
-    const newChairIds = game.state.chairs
-      .filter(chair => chair.tableId === newTableId)
-      .map(chair => chair.id);
-    expect(newChairIds).toEqual(['ch6', 'ch7', 'ch8', 'ch9']);
-    expect(new Set(game.state.chairs.map(chair => chair.id)).size)
-      .toBe(game.state.chairs.length);
+    expect(gameReducer(state, { type: 'ADD_TABLE', x: 100, y: 100 })).toBe(state);
   });
 
   it('buys tables and chairs while deducting their item prices', () => {

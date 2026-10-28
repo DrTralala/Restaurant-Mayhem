@@ -22,7 +22,6 @@ import { getGlobalUpgradeEffectPreview } from '../simulation/globalUpgradePurcha
 import { assignWaiterToStation } from '../simulation/cashiers';
 import {
   getNextNumericId,
-  getNextNumericIds,
   snapPlacement,
   validatePlacement,
 } from '../simulation/placement';
@@ -781,27 +780,6 @@ function reduceGameAction(state, action) {
         staff: settled.staff.map(s =>
           s.id === action.id ? { ...s, morale: bonus.morale } : s
         ),
-      };
-    }
-    case 'ADD_TABLE': {
-      const newId = getNextNumericId(state.tables, 't');
-      const count = state.tables.length;
-      const col = count % 2;
-      const row = Math.floor(count / 2);
-      const tx = 200 + col * 200;
-      const ty = 200 + row * 200;
-      const seats = 4;
-      const chairIds = getNextNumericIds(state.chairs, 'ch', 4);
-      const newChairs = [
-        { id: chairIds[0], tableId: newId, x: tx + 10, y: ty - 20, rotation: 2 },
-        { id: chairIds[1], tableId: newId, x: tx + 10, y: ty + 40, rotation: 0 },
-        { id: chairIds[2], tableId: newId, x: tx - 20, y: ty + 10, rotation: 1 },
-        { id: chairIds[3], tableId: newId, x: tx + 40, y: ty + 10, rotation: 3 },
-      ];
-      return {
-        ...state,
-        tables: [...state.tables, { id: newId, seats, status: 'empty', x: tx, y: ty }],
-        chairs: [...state.chairs, ...newChairs],
       };
     }
     case 'BUY_TABLE': {
