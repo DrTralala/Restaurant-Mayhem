@@ -39,6 +39,7 @@ describe('getFoodDeadlineSummary', () => {
       unknownCount: 0,
       deadlineAt: 140,
       remainingSeconds: 40,
+      target: { customerId: 'legacy', dishId: null, tableId: null },
     });
   });
 
@@ -55,6 +56,7 @@ describe('getFoodDeadlineSummary', () => {
       unknownCount: 0,
       deadlineAt: null,
       remainingSeconds: null,
+      target: null,
     });
   });
 
@@ -89,6 +91,25 @@ describe('getFoodDeadlineSummary', () => {
       unknownCount: 3,
       deadlineAt: 140,
       remainingSeconds: 40,
+      target: { customerId: 'legacy-known', dishId: null, tableId: null },
+    });
+  });
+
+  it('does not select a target when pending customers have only unknown timers', () => {
+    const summary = getFoodDeadlineSummary(stateWith([
+      customer({
+        id: 'unknown', dishId: 'dish', tableId: 'table', foodOutcome: 'pending',
+        foodDeadlineAt: null, foodPatienceBudget: null,
+      }),
+    ]));
+
+    expect(summary).toEqual({
+      pendingCount: 1,
+      knownCount: 0,
+      unknownCount: 1,
+      deadlineAt: null,
+      remainingSeconds: null,
+      target: null,
     });
   });
 
@@ -105,6 +126,7 @@ describe('getFoodDeadlineSummary', () => {
         unknownCount: 0,
         deadlineAt: 120,
         remainingSeconds: null,
+        target: { customerId: 'known', dishId: null, tableId: null },
       });
     },
   );
@@ -120,6 +142,7 @@ describe('getFoodDeadlineSummary', () => {
       unknownCount: 0,
       deadlineAt: 120,
       remainingSeconds: 0,
+      target: { customerId: 'known', dishId: null, tableId: null },
     });
     expect(getFoodDeadlineSummary(stateWith(customers, 200))).toEqual({
       pendingCount: 1,
@@ -127,6 +150,7 @@ describe('getFoodDeadlineSummary', () => {
       unknownCount: 0,
       deadlineAt: 120,
       remainingSeconds: 0,
+      target: { customerId: 'known', dishId: null, tableId: null },
     });
   });
 
@@ -137,6 +161,7 @@ describe('getFoodDeadlineSummary', () => {
       unknownCount: 0,
       deadlineAt: null,
       remainingSeconds: null,
+      target: null,
     };
 
     expect(getFoodDeadlineSummary(stateWith([]))).toEqual(expected);
@@ -163,9 +188,58 @@ describe('getFoodDeadlineSummary', () => {
       unknownCount: 1,
       deadlineAt: 160,
       remainingSeconds: 60,
+      target: { customerId: 'known', dishId: null, tableId: null },
     });
     expect(JSON.stringify(state)).toBe(snapshot);
     expect(state.customers.map(entry => entry.id)).toEqual(['known', 'unknown']);
     expect(random).not.toHaveBeenCalled();
+  });
+
+  it('copies recorded customer order identity for the earliest known food target', () => {
+    const state = { restaurant: { gameTime: 100 }, customers: [
+      {
+        id: 'guest', dishId: 'dish', tableId: 'table', foodOutcome: 'pending',
+        foodDeadlineAt: 120, foodPatienceBudget: 30,
+      },
+    ] };
+
+    expect(getFoodDeadlineSummary(state).target).toEqual({
+      customerId: 'guest', dishId: 'dish', tableId: 'table',
+    });
+  });
+
+  it('keeps the first input target when known deadlines tie', () => {
+    const summary = getFoodDeadlineSummary(stateWith([
+      customer({ id: 'first', dishId: 'first-dish', tableId: 'first-table', foodOutcome: 'pending' }),
+      customer({ id: 'second', dishId: 'second-dish', tableId: 'second-table', foodOutcome: 'pending' }),
+    ]));
+
+    expect(summary.target).toEqual({
+      customerId: 'first', dishId: 'first-dish', tableId: 'first-table',
+    });
+  });
+
+  it('sanitises missing and malformed identity values while retaining finite numeric IDs', () => {
+    const missing = getFoodDeadlineSummary(stateWith([
+      customer({ id: undefined, dishId: {}, tableId: Number.NaN, foodOutcome: 'pending' }),
+    ]));
+    const numeric = getFoodDeadlineSummary(stateWith([
+      customer({ id: 42, dishId: 17, tableId: 5.5, foodOutcome: 'pending' }),
+    ]));
+
+    expect(missing.target).toEqual({ customerId: null, dishId: null, tableId: null });
+    expect(numeric.target).toEqual({ customerId: 42, dishId: 17, tableId: 5.5 });
+  });
+
+  it('rejects blank identity strings but preserves nonblank strings and finite numeric zero', () => {
+    const summary = getFoodDeadlineSummary(stateWith([
+      customer({
+        id: ' \t ', dishId: '  custom dish  ', tableId: 0, foodOutcome: 'pending',
+      }),
+    ]));
+
+    expect(summary.target).toEqual({
+      customerId: null, dishId: '  custom dish  ', tableId: 0,
+    });
   });
 });

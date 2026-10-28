@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { UPGRADES } from '../data/upgrades';
 import {
   advanceStaffTaskProgress,
   getStaffPerformanceMultiplier,
@@ -65,6 +66,26 @@ describe('staff performance', () => {
     };
 
     expect(getStaffTaskRate(state, worker)).toBe(1.25);
+  });
+
+  it.each([
+    [0, 1],
+    [1, 1.1],
+    [2, 1.2],
+  ])('applies Faster Oven level %i only to dish preparation', (level, dishRate) => {
+    const state = {
+      kitchenStations: [{ id: 'station', equipmentId: 'oven' }],
+      equipment: [{ id: 'oven', owned: true, speedMultiplier: 1 }],
+      upgrades: [{ ...UPGRADES.find(upgrade => upgrade.effects.type === 'globalSpeed'), level }],
+    };
+    const worker = { role: 'cook', skill: 1, morale: 50 };
+
+    expect(getStaffTaskRate(state, {
+      ...worker,
+      task: { type: 'prepare_dish', serviceItemId: 'dish', stationId: 'station' },
+    })).toBe(dishRate);
+    expect(getStaffTaskRate(state, { ...worker, task: { type: 'prepare_drink' } })).toBe(1);
+    expect(getStaffTaskRate(state, { ...worker, task: { type: 'take_order' } })).toBe(1);
   });
 
   it('applies the approved skill thresholds only to the affected work', () => {

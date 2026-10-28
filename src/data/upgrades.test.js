@@ -5,6 +5,13 @@ const upgrade = (level, costs, extra = {}) => ({
   id: 'u3', name: 'Faster Oven', level, costs, ...extra,
 });
 
+describe('upgrade catalogue', () => {
+  it('describes Faster Oven as dish preparation work rate', () => {
+    expect(UPGRADES.find(upgrade => upgrade.effects.type === 'globalSpeed').description)
+      .toBe('Dish preparation work rate +10% per level.');
+  });
+});
+
 describe('getGlobalUpgradeQuote', () => {
   it('quotes the current level cost without requiring a known id', () => {
     expect(getGlobalUpgradeQuote(upgrade(0, [400, 800]), 1000)).toEqual({

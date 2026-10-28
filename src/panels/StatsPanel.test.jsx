@@ -190,6 +190,74 @@ it('shows distinct current queue and pending service counts, excluding delivered
   expect(screen.getByText(/Funds:/)).toHaveTextContent('Funds: $600');
 });
 
+it('shows the accessible cleanup backlog separately from pending service', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    tables: [
+      { status: 'dirty' },
+      { status: 'occupied' },
+      { status: 'cleaning' },
+    ],
+    serviceItems: [
+      { kind: 'dish', state: 'dirty_at_table', customerId: null },
+      { kind: 'drink', state: 'dirty_at_table', customerId: 'missing-owner' },
+      { kind: 'dish', state: 'carried_dirty' },
+      { kind: 'drink', state: 'queued_for_wash' },
+      { kind: 'dish', state: 'washing' },
+      { kind: 'dish', state: 'to_clean' },
+      { kind: 'napkin', state: 'washing' },
+    ],
+  });
+  render(<StatsPanel />);
+
+  const cleanup = screen.getByRole('region', { name: 'Cleanup backlog' });
+  expect(within(cleanup).getByRole('heading', { name: 'Cleanup backlog' })).toBeInTheDocument();
+  expect(within(cleanup).getByText('Dirty tables awaiting cleaning: 1')).toBeInTheDocument();
+  expect(within(cleanup).getByText('Dirty items awaiting collection: 2')).toBeInTheDocument();
+  expect(within(cleanup).getByText('Carried dirty items: 1')).toBeInTheDocument();
+  expect(within(cleanup).getByText('Queued for washing: 1')).toBeInTheDocument();
+  expect(within(cleanup).getByText('Being washed: 1')).toBeInTheDocument();
+  expect(within(cleanup).getByText('Current counts, not clearance estimates. Dirty tables are not '
+    + 'all unavailable tables. Floor messes and discarded food waste are excluded.'))
+    .toBeInTheDocument();
+
+  const service = screen.getByRole('region', { name: 'Service now' });
+  expect(within(service).getByText('Pending service items (dishes + drinks)')).toBeInTheDocument();
+  expect(within(service).getByText('Awaiting preparation: 0')).toBeInTheDocument();
+  expect(within(service).getByText('Being carried: 0')).toBeInTheDocument();
+  expect(within(service).getByText('Current counts, not totals. One guest may order multiple items. '
+    + 'Queue includes guests not shown outside. Delivered items and cleanup are excluded.'))
+    .toBeInTheDocument();
+  expect(within(service).queryByText('Dirty items awaiting collection: 2')).not.toBeInTheDocument();
+});
+
+it('rerenders updated cleanup counts after an immutable state replacement', () => {
+  const { rerender } = render(<StatsPanel />);
+  const cleanup = screen.getByRole('region', { name: 'Cleanup backlog' });
+  expect(within(cleanup).getByText('Dirty tables awaiting cleaning: 0')).toBeInTheDocument();
+  expect(within(cleanup).getByText('Dirty items awaiting collection: 0')).toBeInTheDocument();
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    tables: [{ status: 'dirty' }, { status: 'dirty' }, { status: 'occupied' }],
+    serviceItems: [
+      { kind: 'dish', state: 'dirty_at_table' },
+      { kind: 'drink', state: 'carried_dirty' },
+      { kind: 'dish', state: 'queued_for_wash' },
+      { kind: 'drink', state: 'washing' },
+    ],
+  });
+  rerender(<StatsPanel />);
+
+  const updated = screen.getByRole('region', { name: 'Cleanup backlog' });
+  expect(within(updated).getByText('Dirty tables awaiting cleaning: 2')).toBeInTheDocument();
+  expect(within(updated).getByText('Dirty items awaiting collection: 1')).toBeInTheDocument();
+  expect(within(updated).getByText('Carried dirty items: 1')).toBeInTheDocument();
+  expect(within(updated).getByText('Queued for washing: 1')).toBeInTheDocument();
+  expect(within(updated).getByText('Being washed: 1')).toBeInTheDocument();
+  expect(within(updated).queryByText('Dirty tables awaiting cleaning: 0')).not.toBeInTheDocument();
+});
+
 it('rerenders updated queue and stage counts after an immutable state replacement', () => {
   const { rerender } = render(<StatsPanel />);
   const initial = screen.getByRole('region', { name: 'Service now' });
@@ -1146,6 +1214,85 @@ it('shows pending timer counts, the earliest known deadline and the unknown noti
   expect(within(section).queryByText('Food timing unavailable.')).not.toBeInTheDocument();
   expect(within(section).queryByText('Deadline reached.')).not.toBeInTheDocument();
   expect(within(section).getByText(PENDING_FOOD_CAVEAT)).toBeInTheDocument();
+});
+
+it('shows and immutably updates the recorded identity of the earliest known food target', () => {
+  const firstCustomers = Object.freeze([
+    Object.freeze({
+      id: 'later-guest', dishId: 'later-dish', tableId: 'later-table',
+      foodOutcome: 'pending', foodDeadlineAt: 160, foodPatienceBudget: 30,
+    }),
+    Object.freeze({
+      id: 'guest', dishId: 'dish', tableId: 'table',
+      foodOutcome: 'pending', foodDeadlineAt: 120, foodPatienceBudget: 30,
+    }),
+  ]);
+  const snapshot = JSON.stringify(firstCustomers);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: { ...baseState.restaurant, gameTime: 100 },
+    customers: firstCustomers,
+  });
+  const { rerender } = render(<StatsPanel />);
+
+  let section = screen.getByRole('region', { name: 'Pending-food timing' });
+  expect(within(section).getByText(
+    'Earliest known food target: Guest guest · Dish dish · Table table.',
+  )).toBeInTheDocument();
+
+  const nextCustomers = Object.freeze([
+    Object.freeze({
+      id: 'next-guest', dishId: 'next-dish', tableId: 'next-table',
+      foodOutcome: 'pending', foodDeadlineAt: 115, foodPatienceBudget: 30,
+    }),
+  ]);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: { ...baseState.restaurant, gameTime: 100 },
+    customers: nextCustomers,
+  });
+  rerender(<StatsPanel />);
+
+  section = screen.getByRole('region', { name: 'Pending-food timing' });
+  expect(within(section).getByText(
+    'Earliest known food target: Guest next-guest · Dish next-dish · Table next-table.',
+  )).toBeInTheDocument();
+  expect(within(section).queryByText(
+    'Earliest known food target: Guest guest · Dish dish · Table table.',
+  )).not.toBeInTheDocument();
+  expect(JSON.stringify(firstCustomers)).toBe(snapshot);
+});
+
+it('shows an unavailable food target when all selected identity fields are invalid', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: { ...baseState.restaurant, gameTime: 100 },
+    customers: [{
+      id: {}, dishId: Number.NaN, tableId: false,
+      foodOutcome: 'pending', foodDeadlineAt: 120, foodPatienceBudget: 30,
+    }],
+  });
+  render(<StatsPanel />);
+
+  const section = screen.getByRole('region', { name: 'Pending-food timing' });
+  expect(within(section).getByText('Earliest known food target: Unavailable.'))
+    .toBeInTheDocument();
+});
+
+it('shows an unavailable food target when all recorded identity strings are blank', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: { ...baseState.restaurant, gameTime: 100 },
+    customers: [{
+      id: ' \t ', dishId: '', tableId: '\n',
+      foodOutcome: 'pending', foodDeadlineAt: 120, foodPatienceBudget: 30,
+    }],
+  });
+  render(<StatsPanel />);
+
+  const section = screen.getByRole('region', { name: 'Pending-food timing' });
+  expect(within(section).getByText('Earliest known food target: Unavailable.'))
+    .toBeInTheDocument();
 });
 
 it('shows food timing unavailable for an invalid game time while retaining the counts', () => {

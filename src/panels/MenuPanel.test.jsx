@@ -620,6 +620,39 @@ describe('MenuPanel drinks', () => {
         'No items are available for new walk-in orders. Guests without an order may leave unhappy.',
       )).not.toBeInTheDocument();
     });
+
+    it('keeps demand, affordability and the walk-in warning in sync after menu changes', () => {
+      const base = useGameState();
+      const view = render(<MenuPanel />);
+      const dishCard = () => within(screen.getByRole('article', { name: 'Toast menu item' }));
+      const initialDemand = dishCard().getByText(/Estimated demand: /).textContent;
+      expect(initialDemand).not.toBe('Estimated demand: 0%');
+      expect(screen.getByText('Can afford an order containing a dish: 80.4%')).toBeInTheDocument();
+      expect(screen.queryByText(
+        'No items are available for new walk-in orders. Guests without an order may leave unhappy.',
+      )).not.toBeInTheDocument();
+
+      const repriced = { ...base, dishes: [{ ...base.dishes[0], price: 19 }] };
+      useGameState.mockReturnValue(repriced);
+      view.rerender(<MenuPanel />);
+      expect(dishCard().getByText(/Estimated demand: /).textContent).not.toBe(initialDemand);
+      expect(screen.getByText('Can afford an order containing a dish: 53.6%')).toBeInTheDocument();
+
+      useGameState.mockReturnValue({
+        ...repriced,
+        restaurant: {
+          ...repriced.restaurant, suspendedDishIds: ['toast'], suspendedDrinkIds: ['water'],
+        },
+      });
+      view.rerender(<MenuPanel />);
+
+      expect(dishCard().getByText('Estimated demand: 0%')).toBeInTheDocument();
+      expect(screen.getByText('Can afford an order containing a dish: 0%')).toBeInTheDocument();
+      expect(screen.getByText('Can afford any order, including drink-only: 0%')).toBeInTheDocument();
+      expect(screen.getByText(
+        'No items are available for new walk-in orders. Guests without an order may leave unhappy.',
+      )).toBeInTheDocument();
+    });
   });
 
   describe('draft menu prices', () => {
@@ -1203,5 +1236,50 @@ describe('paid today counters', () => {
     expect(explanation).toHaveTextContent('not a demand percentage');
     expect(explanation).toHaveTextContent('older saves');
     expect(explanation).toHaveTextContent('removing a dish clears its paid count');
+  });
+
+  it('shows complete gross and labels known partial gross distinctly', () => {
+    const base = useGameState();
+    useGameState.mockReturnValue({
+      ...base,
+      restaurant: { ...base.restaurant, day: 3 },
+      menuSales: {
+        day: 3,
+        dishes: [{ key: 'toast', count: 2, gross: 13.5, grossComplete: true }],
+        drinks: [{ key: 'water', count: 2, gross: 8, grossComplete: false }],
+      },
+    });
+    render(<MenuPanel />);
+
+    const dishCard = within(screen.getByRole('article', { name: 'Toast menu item' }));
+    const waterCard = within(screen.getByRole('article', { name: 'Water menu item' }));
+    expect(dishCard.getByText('Gross sales today: $13.50')).toBeInTheDocument();
+    expect(waterCard.getByText('Tracked gross sales: $8 (partial)')).toBeInTheDocument();
+    expect(dishCard.getByText('Paid today: 2')).toBeInTheDocument();
+
+    const explanation = screen.getByText(/Paid today counts charged units/);
+    expect(explanation).toHaveTextContent('exclude tips');
+    expect(explanation).toHaveTextContent('not profit');
+    expect(explanation).toHaveTextContent('legacy count-only data');
+    expect(explanation).toHaveTextContent('removing a dish clears its paid count');
+  });
+
+  it('marks legacy or zero-known partial gross as unavailable', () => {
+    const base = useGameState();
+    useGameState.mockReturnValue({
+      ...base,
+      restaurant: { ...base.restaurant, day: 3 },
+      menuSales: {
+        day: 3,
+        dishes: [{ key: 'toast', count: 2 }],
+        drinks: [{ key: 'water', count: 2, gross: 0, grossComplete: false }],
+      },
+    });
+    render(<MenuPanel />);
+
+    expect(within(screen.getByRole('article', { name: 'Toast menu item' }))
+      .getByText('Gross sales today: unavailable')).toBeInTheDocument();
+    expect(within(screen.getByRole('article', { name: 'Water menu item' }))
+      .getByText('Gross sales today: unavailable')).toBeInTheDocument();
   });
 });

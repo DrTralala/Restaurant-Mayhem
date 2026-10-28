@@ -2268,7 +2268,7 @@ describe('GameProvider menu sales telemetry', () => {
     expect(game.state.dishes.map(dish => dish.id)).toEqual(['starter-toast']);
     expect(game.state.menuSales).toEqual({
       day: 1,
-      dishes: [{ key: 'starter-toast', count: 1 }],
+      dishes: [{ key: 'starter-toast', count: 1, gross: 0, grossComplete: false }],
       drinks: [],
     });
 
@@ -2290,8 +2290,8 @@ describe('GameProvider menu sales telemetry', () => {
     });
     const expectedSales = {
       day: 1,
-      dishes: [{ key: 'custom-dish', count: 4 }],
-      drinks: [{ key: 'water', count: 2 }],
+      dishes: [{ key: 'custom-dish', count: 4, gross: 0, grossComplete: false }],
+      drinks: [{ key: 'water', count: 2, gross: 0, grossComplete: false }],
     };
 
     game.dispatch({ type: 'UPDATE_DISH', id: 'custom-dish', changes: { price: 20 } });

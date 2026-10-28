@@ -60,8 +60,8 @@ describe('atomic paid visit producer', () => {
 
     expect(next.menuSales).toEqual({
       day: 1,
-      dishes: [{ key: 'starter-toast', count: 1 }],
-      drinks: [{ key: 'water', count: 1 }],
+      dishes: [{ key: 'starter-toast', count: 1, gross: 12, grossComplete: true }],
+      drinks: [{ key: 'water', count: 1, gross: 5, grossComplete: true }],
     });
     expect(getMenuSalesCount(next, 'dish', 'starter-toast')).toBe(1);
     expect(getMenuSalesCount(next, 'drink', 'water')).toBe(1);
@@ -80,7 +80,7 @@ describe('atomic paid visit producer', () => {
 
     expect(next.menuSales).toEqual({
       day: 2,
-      dishes: [{ key: 'starter-toast', count: 1 }],
+      dishes: [{ key: 'starter-toast', count: 1, gross: 12, grossComplete: true }],
       drinks: [],
     });
   });
@@ -122,6 +122,11 @@ describe('atomic paid visit producer', () => {
   it('uses live markers rather than a stale argument and keeps idempotency after revenue drain/serialisation', () => {
     const before = fixture();
     const paid = commit(before).state;
+    expect(paid.menuSales).toEqual({
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 1, gross: 12, grossComplete: true }],
+      drinks: [],
+    });
     const drained = calculateRevenue({ ...paid, completedCustomers: [receipt()] });
     const restored = JSON.parse(JSON.stringify(drained));
     const result = commitPaidVisit(restored, { customer: before.customers[0], payment: receipt(), paidAt: 36000 });
@@ -161,7 +166,7 @@ describe('atomic paid visit producer', () => {
     expect(next.menuSales).toEqual({
       day: 1,
       dishes: [],
-      drinks: [{ key: 'water', count: 1 }],
+      drinks: [{ key: 'water', count: 1, gross: 5, grossComplete: true }],
     });
   });
 
@@ -261,7 +266,7 @@ describe('atomic paid visit producer', () => {
     expect(result.state).not.toHaveProperty('serviceContracts');
     expect(result.state.menuSales).toEqual({
       day: 1,
-      dishes: [{ key: 'starter-toast', count: 1 }],
+      dishes: [{ key: 'starter-toast', count: 1, gross: 12, grossComplete: true }],
       drinks: [],
     });
   });

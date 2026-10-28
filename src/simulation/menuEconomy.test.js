@@ -5,6 +5,7 @@ import {
   createSpendingProfile,
   estimateMenuDemand,
   estimateMenuItemDemand,
+  getMenuAnalysis,
   getBasketWeight,
   getMenuAffordabilitySummary,
   getSpendingTierProbabilities,
@@ -740,5 +741,83 @@ describe('menu item suspension', () => {
       ...expensive,
       restaurant: { reputation: 1, suspendedDishIds: ['costly'] },
     })).toBe(false);
+  });
+});
+
+describe('combined menu analysis', () => {
+  const cookbookState = {
+    restaurant: { reputation: 1 },
+    dishes: [{ id: 'cookbook-toast', cookbookId: 'toast' }],
+    cookbook: {
+      schemaVersion: 2,
+      entries: {
+        toast: {
+          discovered: true, paidPortions: 0, perk: null,
+          menuSettings: { name: 'Toasted Bread', price: 12, quality: 1 },
+        },
+      },
+    },
+    unlockedDrinkIds: ['water'],
+  };
+  const fixtures = {
+    mixed: {
+      state: menuState,
+      expected: {
+        affordability: { dishShare: 0.8692307692307691, anyOrderShare: 1 },
+        demand: {
+          dishes: new Map([['cheap', 66], ['premium', 16]]),
+          drinks: new Map([['water', 20], ['coffee', 14]]),
+        },
+        hasAvailableMenu: true,
+      },
+    },
+    suspended: {
+      state: suspensionState,
+      expected: {
+        affordability: { dishShare: 0.31707614403600903, anyOrderShare: 1 },
+        demand: { dishes: new Map([['premium', 30]]), drinks: new Map([['water', 76]]) },
+        hasAvailableMenu: true,
+      },
+    },
+    cookbook: {
+      state: cookbookState,
+      expected: {
+        affordability: { dishShare: 0.676923076923077, anyOrderShare: 1 },
+        demand: { dishes: new Map([['cookbook-toast', 64]]), drinks: new Map([['water', 47]]) },
+        hasAvailableMenu: true,
+      },
+    },
+    expensive: {
+      state: {
+        restaurant: { reputation: 1 },
+        dishes: [{ id: 'expensive', price: 150, quality: 5, popularity: 50, prepTime: 120 }],
+        unlockedDrinkIds: [],
+      },
+      expected: {
+        affordability: { dishShare: 0, anyOrderShare: 0 },
+        demand: { dishes: new Map(), drinks: new Map() },
+        hasAvailableMenu: true,
+      },
+    },
+    empty: {
+      state: { restaurant: { reputation: 3 }, dishes: [], unlockedDrinkIds: [], drinkOverrides: {} },
+      expected: {
+        affordability: { dishShare: 0, anyOrderShare: 0 },
+        demand: { dishes: new Map(), drinks: new Map() },
+        hasAvailableMenu: false,
+      },
+    },
+  };
+
+  it.each(Object.entries(fixtures))('pins existing helper results for the %s menu', (_name, fixture) => {
+    expect(getMenuAnalysis(fixture.state)).toEqual(fixture.expected);
+  });
+
+  it.each(Object.entries(fixtures))('matches the public wrappers for the %s menu', (_name, { state }) => {
+    expect(getMenuAnalysis(state)).toEqual({
+      affordability: getMenuAffordabilitySummary(state),
+      demand: estimateMenuDemand(state),
+      hasAvailableMenu: hasAvailableWalkInMenu(state),
+    });
   });
 });

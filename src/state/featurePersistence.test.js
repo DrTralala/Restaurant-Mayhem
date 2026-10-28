@@ -73,8 +73,8 @@ describe('additive v10 feature persistence', () => {
 
     const expected = {
       day: 1,
-      dishes: [{ key: 'starter-toast', count: 2 }],
-      drinks: [{ key: 'water', count: 3 }],
+      dishes: [{ key: 'starter-toast', count: 2, gross: 0, grossComplete: false }],
+      drinks: [{ key: 'water', count: 3, gross: 0, grossComplete: false }],
     };
     expect(hydrateState(raw, createInitialState()).menuSales).toEqual(expected);
 
@@ -113,11 +113,65 @@ describe('additive v10 feature persistence', () => {
     expect(saveState(raw)).toBe(true);
 
     const loaded = loadState();
-    expect(loaded.menuSales).toEqual(raw.menuSales);
+    const expectedMenuSales = {
+      day: 1,
+      dishes: [
+        { key: 'custom-menuId', count: 2, gross: 0, grossComplete: false },
+        { key: 'starter-toast', count: 1, gross: 0, grossComplete: false },
+      ],
+      drinks: [{ key: 'iced-tea', count: 3, gross: 0, grossComplete: false }],
+    };
+    expect(loaded.menuSales).toEqual(expectedMenuSales);
     const hydrated = hydrateState(loaded, createInitialState());
-    expect(hydrated.menuSales).toEqual(raw.menuSales);
+    expect(hydrated.menuSales).toEqual(expectedMenuSales);
     expect(hydrated.dishes.find(dish => dish.id === 'custom-menuId'))
       .toMatchObject({ id: 'custom-menuId', price: 9 });
+  });
+
+  it('round-trips incomplete gross completeness through save, load and hydration', () => {
+    const raw = createInitialState();
+    raw.menuSales = {
+      day: raw.restaurant.day,
+      dishes: [{ key: 'starter-toast', count: 2, gross: 6.5, grossComplete: false }],
+      drinks: [],
+    };
+
+    expect(saveState(raw)).toBe(true);
+    const loaded = loadState();
+    expect(loaded.menuSales).toEqual(raw.menuSales);
+    expect(hydrateState(loaded, createInitialState()).menuSales).toEqual(raw.menuSales);
+  });
+
+  it('resets contradictory gross metadata after saving without backfilling sale counts', () => {
+    const raw = createInitialState();
+    raw.menuSales = {
+      day: raw.restaurant.day,
+      dishes: [
+        { key: raw.dishes[0].id, count: 0, gross: 10, grossComplete: true },
+      ],
+      drinks: [
+        { key: 'water', count: 2, gross: 0, grossComplete: true },
+        { key: 'tea', count: 3, gross: 0, grossComplete: false },
+        { key: 'soda', count: 0, gross: 0, grossComplete: true },
+        { key: 'coffee', count: 0, gross: 10, grossComplete: false },
+      ],
+    };
+
+    expect(saveState(raw)).toBe(true);
+    const loaded = loadState();
+
+    expect(loaded.menuSales).toEqual({
+      day: raw.restaurant.day,
+      dishes: [
+        { key: raw.dishes[0].id, count: 0, gross: 0, grossComplete: false },
+      ],
+      drinks: [
+        { key: 'water', count: 2, gross: 0, grossComplete: false },
+        { key: 'tea', count: 3, gross: 0, grossComplete: false },
+        { key: 'soda', count: 0, gross: 0, grossComplete: true },
+        { key: 'coffee', count: 0, gross: 0, grossComplete: false },
+      ],
+    });
   });
 
   it('migrates recoverable raw order stats/price before starter adoption with no authored provenance', () => {

@@ -32,7 +32,20 @@ function normaliseRecords(value, isValidKey) {
     const { key, count } = record;
     if (!isKey(key) || !isCount(count) || !isValidKey(key) || seen.has(key)) continue;
     seen.add(key);
-    records.push({ key, count });
+    const hasGross = has(record, 'gross');
+    const hasGrossComplete = has(record, 'grossComplete');
+    const validGrossMetadata = hasGross && hasGrossComplete
+      && Number.isFinite(record.gross) && record.gross >= 0
+      && typeof record.grossComplete === 'boolean';
+    const contradictoryGrossMetadata = validGrossMetadata
+      && ((count === 0 && record.gross > 0)
+        || (count > 0 && record.gross === 0 && record.grossComplete));
+    const legacyGrossMetadata = !hasGross && !hasGrossComplete;
+    const gross = validGrossMetadata && !contradictoryGrossMetadata ? record.gross : 0;
+    const grossComplete = validGrossMetadata && !contradictoryGrossMetadata
+      ? record.grossComplete
+      : legacyGrossMetadata && count === 0;
+    records.push({ key, count, gross, grossComplete });
   }
   return records;
 }
@@ -40,7 +53,8 @@ function normaliseRecords(value, isValidKey) {
 /**
  * Return the current game day's telemetry, bounded by the live menu and the
  * canonical drink catalogue. Missing, stale or malformed values become empty;
- * malformed records and duplicate keys are dropped without summing counts.
+ * invalid identity/count records and duplicate keys are dropped without summing
+ * counts. Gross metadata is separately normalised as complete, legacy or partial.
  */
 export function normaliseMenuSales(value, state) {
   const day = getCurrentDay(state);
@@ -61,9 +75,17 @@ function incrementRecords(records, id, amount, isValidKey) {
   const next = records.map(record => {
     if (record.key !== id) return record;
     found = true;
-    return { key: id, count: Math.min(MAX_COUNT, record.count + 1) };
+    const sum = record.gross + amount;
+    const gross = Number.isFinite(sum) ? sum : record.gross;
+    const grossComplete = record.grossComplete && Number.isFinite(sum);
+    return {
+      key: id,
+      count: Math.min(MAX_COUNT, record.count + 1),
+      gross,
+      grossComplete,
+    };
   });
-  return found ? next : [...records, { key: id, count: 1 }];
+  return found ? next : [...records, { key: id, count: 1, gross: amount, grossComplete: true }];
 }
 
 /** Increment one unit for each positive charged line in the current-day branch. */
@@ -85,4 +107,17 @@ export function getMenuSalesCount(state, kind, id) {
   const records = kind === 'dish' ? current.dishes : current.drinks;
   const record = records.find(candidate => candidate.key === id);
   return record ? record.count : 0;
+}
+
+/** Return the known gross for a current-day menu item and whether it is complete. */
+export function getMenuSalesGross(state, kind, id) {
+  if ((kind !== 'dish' && kind !== 'drink') || !isKey(id)) {
+    return { gross: 0, complete: true };
+  }
+  const current = normaliseMenuSales(state?.menuSales, state);
+  const records = kind === 'dish' ? current.dishes : current.drinks;
+  const record = records.find(candidate => candidate.key === id);
+  return record
+    ? { gross: record.gross, complete: record.grossComplete }
+    : { gross: 0, complete: true };
 }

@@ -4,11 +4,19 @@ function hasValidFoodTimer(customer) {
   return getFoodPatienceFraction(customer, 0) !== null;
 }
 
+function recordedIdentity(value) {
+  return (typeof value === 'string' && value.trim().length > 0)
+    || (typeof value === 'number' && Number.isFinite(value))
+    ? value
+    : null;
+}
+
 export function getFoodDeadlineSummary(state, now = state?.restaurant?.gameTime) {
   let pendingCount = 0;
   let knownCount = 0;
   let unknownCount = 0;
   let deadlineAt = null;
+  let target = null;
 
   for (const customer of Array.isArray(state?.customers) ? state.customers : []) {
     const outcome = customer?.foodOutcome;
@@ -25,6 +33,11 @@ export function getFoodDeadlineSummary(state, now = state?.restaurant?.gameTime)
     knownCount++;
     if (deadlineAt === null || customer.foodDeadlineAt < deadlineAt) {
       deadlineAt = customer.foodDeadlineAt;
+      target = {
+        customerId: recordedIdentity(customer.id),
+        dishId: recordedIdentity(customer.dishId),
+        tableId: recordedIdentity(customer.tableId),
+      };
     }
   }
 
@@ -32,5 +45,5 @@ export function getFoodDeadlineSummary(state, now = state?.restaurant?.gameTime)
     ? Math.max(0, deadlineAt - now)
     : null;
 
-  return { pendingCount, knownCount, unknownCount, deadlineAt, remainingSeconds };
+  return { pendingCount, knownCount, unknownCount, deadlineAt, remainingSeconds, target };
 }

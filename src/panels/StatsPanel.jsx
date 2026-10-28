@@ -3,6 +3,7 @@ import { useDispatch, useGameState } from '../state/GameContext';
 import { requestNewSandbox } from '../state/newSandbox';
 import { getCanvasFont, TYPOGRAPHY } from '../typography';
 import { getServiceSummary } from './serviceSummary';
+import { getCleanupSummary } from './cleanupSummary';
 import { getQueuePatienceSummary } from './queuePatienceSummary';
 import { getFoodDeadlineSummary } from './foodDeadlineSummary';
 import { getDailyPayroll, isRestaurantOpen } from '../simulation/clock';
@@ -27,6 +28,15 @@ function formatExhaustionSeconds(seconds) {
   const whole = Math.ceil(seconds);
   if (whole < 60) return `${whole}s`;
   return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, '0')}s`;
+}
+
+function formatFoodTarget(target) {
+  const identifiers = [
+    target?.customerId != null ? `Guest ${target.customerId}` : null,
+    target?.dishId != null ? `Dish ${target.dishId}` : null,
+    target?.tableId != null ? `Table ${target.tableId}` : null,
+  ].filter(Boolean);
+  return identifiers.length ? identifiers.join(' · ') : 'Unavailable';
 }
 
 function formatPatienceEstimate(party, restaurantOpen) {
@@ -62,6 +72,7 @@ export default function StatsPanel() {
   const recentFinances = (Array.isArray(state.dailyHistory) ? state.dailyHistory : [])
     .slice(-7).reverse();
   const service = getServiceSummary(state);
+  const cleanup = getCleanupSummary(state);
   const queuePartyCount = getQueuePartyCount(state.queue);
   const remainingPartySlots = Math.max(0, QUEUE_PARTY_CAPACITY - queuePartyCount);
   const queuePatience = getQueuePatienceSummary(state);
@@ -250,6 +261,20 @@ export default function StatsPanel() {
         </p>
       </section>
 
+      <section aria-label="Cleanup backlog" style={{ marginTop: 16 }}>
+        <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Cleanup backlog</h4>
+        <div style={{ ...TYPOGRAPHY.secondary, display: 'grid', gap: 8 }}>
+          <div style={statBox}>Dirty tables awaiting cleaning: {cleanup.dirtyTables}</div>
+          <div style={statBox}>Dirty items awaiting collection: {cleanup.dirtyAtTable}</div>
+          <div style={statBox}>Carried dirty items: {cleanup.carriedDirty}</div>
+          <div style={statBox}>Queued for washing: {cleanup.queuedForWash}</div>
+          <div style={statBox}>Being washed: {cleanup.washing}</div>
+        </div>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+          Current counts, not clearance estimates. Dirty tables are not all unavailable tables. Floor messes and discarded food waste are excluded.
+        </p>
+      </section>
+
       <section aria-label="Pending-food timing" style={{ marginTop: 16 }}>
         <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Pending-food timing</h4>
         {foodDeadline.pendingCount === 0 ? (
@@ -259,6 +284,11 @@ export default function StatsPanel() {
             <div style={statBox}>
               Known timers: {foodDeadline.knownCount}. Unknown timers: {foodDeadline.unknownCount}.
             </div>
+            {foodDeadline.knownCount > 0 && (
+              <div style={statBox}>
+                Earliest known food target: {formatFoodTarget(foodDeadline.target)}.
+              </div>
+            )}
             {foodDeadline.knownCount === 0 || !Number.isFinite(foodDeadline.remainingSeconds) ? (
               <div style={statBox}>Food timing unavailable.</div>
             ) : (

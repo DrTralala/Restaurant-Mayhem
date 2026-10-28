@@ -207,8 +207,7 @@ const ARCHETYPE_MIX = Object.freeze({
   rusher: 1 / 6,
   influencer: 1 / 6,
 });
-export function estimateMenuDemand(state) {
-  const baskets = buildMenuBaskets(state);
+function estimateDemandFromBaskets(state, baskets) {
   const dishes = new Map();
   const drinks = new Map();
   const tierMix = getSpendingTierProbabilities(state?.restaurant?.reputation);
@@ -248,15 +247,18 @@ export function estimateMenuDemand(state) {
   return { dishes: rounded(dishes), drinks: rounded(drinks) };
 }
 
+export function estimateMenuDemand(state) {
+  return estimateDemandFromBaskets(state, buildMenuBaskets(state));
+}
+
 export function estimateMenuItemDemand(state, kind, itemId) {
   if (kind !== 'dish' && kind !== 'drink') return 0;
   const demand = estimateMenuDemand(state);
   return (kind === 'dish' ? demand.dishes : demand.drinks).get(itemId) ?? 0;
 }
 
-export function getMenuAffordabilitySummary(state) {
+function affordabilityFromBaskets(state, menuBaskets) {
   const probabilities = getSpendingTierProbabilities(state.restaurant?.reputation);
-  const menuBaskets = buildMenuBaskets(state);
   let dishShare = 0;
   let anyOrderShare = 0;
   let dishTotal = 0;
@@ -280,5 +282,18 @@ export function getMenuAffordabilitySummary(state) {
   return {
     dishShare: dishTotal === budgetTotal ? 1 : Math.min(1, Math.max(0, dishShare)),
     anyOrderShare: anyOrderTotal === budgetTotal ? 1 : Math.min(1, Math.max(0, anyOrderShare)),
+  };
+}
+
+export function getMenuAffordabilitySummary(state) {
+  return affordabilityFromBaskets(state, buildMenuBaskets(state));
+}
+
+export function getMenuAnalysis(state) {
+  const baskets = buildMenuBaskets(state);
+  return {
+    affordability: affordabilityFromBaskets(state, baskets),
+    demand: estimateDemandFromBaskets(state, baskets),
+    hasAvailableMenu: baskets.length > 0,
   };
 }

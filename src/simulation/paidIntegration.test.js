@@ -419,7 +419,7 @@ describe('Iced Tea committed-price payment', () => {
     expect(paid.menuSales).toEqual({
       day: 1,
       dishes: [],
-      drinks: [{ key: 'iced-tea', count: 1 }],
+      drinks: [{ key: 'iced-tea', count: 1, gross: 4, grossComplete: true }],
     });
     expect(getMenuSalesCount(paid, 'drink', 'iced-tea')).toBe(1);
 
