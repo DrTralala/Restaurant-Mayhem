@@ -63,7 +63,7 @@ export default function RecipeCreator({ onClose }) {
 
       <div style={{ marginBottom: 8 }}>
         <label htmlFor={baseId} style={TYPOGRAPHY.secondary}>Base ingredient:</label>
-        <select id={baseId} value={base} onChange={e => setBase(e.target.value)} style={selectStyle}>
+        <select autoFocus id={baseId} value={base} onChange={e => setBase(e.target.value)} style={selectStyle}>
           {BASES.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
       </div>

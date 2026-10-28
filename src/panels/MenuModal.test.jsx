@@ -107,6 +107,39 @@ describe('MenuModal', () => {
     expect(backdrop).not.toHaveFocus();
   });
 
+  it('keeps outer modal Tab and Escape behaviour while entering menu subviews', () => {
+    render(<MenuHarness />);
+    const opener = screen.getByRole('button', { name: 'Menu' });
+    opener.focus();
+    fireEvent.click(opener);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
+    const back = screen.getByRole('button', { name: 'Back to menu' });
+    const close = screen.getByRole('button', { name: 'Close menu' });
+    expect(back).toHaveFocus();
+
+    fireEvent.keyDown(back, { key: 'Tab', shiftKey: true });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: 'Tab' });
+    expect(back).toHaveFocus();
+    fireEvent.keyDown(back, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Menu' })).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+
+    fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
+    const base = screen.getByRole('combobox', { name: 'Base ingredient:' });
+    const method = screen.getByRole('combobox', { name: 'Cooking method:' });
+    expect(base).toHaveFocus();
+    fireEvent.keyDown(base, { key: 'Tab' });
+    expect(method).toHaveFocus();
+    fireEvent.keyDown(method, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Menu' })).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
   it('recalculates the real panel order for dynamic inputs and removal controls', () => {
     gameState.current = {
       ...createInitialState(),

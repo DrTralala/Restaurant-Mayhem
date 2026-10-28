@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { DRINKS, getResolvedDrink } from '../data/drinks';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
@@ -37,11 +37,30 @@ export default function MenuPanel({ readOnly = false }) {
   const [showCookbook, setShowCookbook] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState(null);
   const cookbookButtonRef = useRef(null);
+  const newDishButtonRef = useRef(null);
+  const returnFocusRef = useRef(null);
   const unlockedDrinkIds = state.unlockedDrinkIds || [];
   const blocked = readOnly || state.careerRun?.needsDecision === true;
   const mutate = action => { if (!blocked) dispatch(action); };
   const canPay = cost => Number.isFinite(state.restaurant.funds)
     && Number.isFinite(cost) && cost >= 0 && state.restaurant.funds >= cost;
+
+  const closeCookbook = () => {
+    returnFocusRef.current = cookbookButtonRef;
+    setShowCookbook(false);
+  };
+  const closeCreator = () => {
+    returnFocusRef.current = newDishButtonRef;
+    setShowCreator(false);
+  };
+
+  useLayoutEffect(() => {
+    const openerRef = returnFocusRef.current;
+    if (!openerRef) return;
+    returnFocusRef.current = null;
+    const opener = openerRef.current;
+    if (opener?.isConnected && !opener.disabled) opener.focus();
+  }, [showCookbook, showCreator]);
 
   useEffect(() => {
     if (!pendingRemoval) return;
@@ -73,10 +92,10 @@ export default function MenuPanel({ readOnly = false }) {
   };
 
   if (showCookbook) {
-    return <CookbookPanel onClose={() => setShowCookbook(false)} readOnly={blocked} />;
+    return <CookbookPanel onClose={closeCookbook} readOnly={blocked} />;
   }
   if (showCreator && !blocked) {
-    return <RecipeCreator onClose={() => setShowCreator(false)} />;
+    return <RecipeCreator onClose={closeCreator} />;
   }
 
   const { affordability, demand, hasAvailableMenu: hasWalkInMenu } = getMenuAnalysis(state);
@@ -89,7 +108,7 @@ export default function MenuPanel({ readOnly = false }) {
           background: '#333', color: '#ccc', border: '1px solid #555', padding: '6px 14px', borderRadius: 4, cursor: 'pointer' }}>
           Cookbook
         </button>
-        <button disabled={blocked} onClick={() => { if (!blocked) { setPendingRemoval(null); setShowCreator(true); } }} style={{
+        <button ref={newDishButtonRef} disabled={blocked} onClick={() => { if (!blocked) { setPendingRemoval(null); setShowCreator(true); } }} style={{
           ...TYPOGRAPHY.control,
           background: '#f0a500', color: '#111', border: 'none',
           padding: '6px 14px', borderRadius: 4, cursor: 'pointer',

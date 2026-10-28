@@ -37,7 +37,7 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between', paddingRight: 40 }}>
         <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: 0 }}>Cookbook</h3>
-        <button onClick={onClose} style={buttonStyle}>Back to menu</button>
+        <button autoFocus onClick={onClose} style={buttonStyle}>Back to menu</button>
       </div>
       <p style={detailStyle}>Discover recipes, add them for free, then serve paid portions to choose a signature.</p>
       <p style={detailStyle}>Speed changes base cooking work, not the complete wait time. Custom recipes remain unrestricted.</p>

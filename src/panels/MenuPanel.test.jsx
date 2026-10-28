@@ -199,6 +199,78 @@ describe('MenuPanel drinks', () => {
     expect(screen.getByRole('heading', { name: 'Create new dish' })).toBeInTheDocument();
   });
 
+  it('focuses the first available control on entry to Cookbook and New dish', () => {
+    render(<MenuPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
+    expect(screen.getByRole('button', { name: 'Back to menu' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
+    expect(screen.getByRole('combobox', { name: 'Base ingredient:' })).toHaveFocus();
+  });
+
+  it('returns focus to the Cookbook opener after Back', () => {
+    render(<MenuPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
+
+    expect(screen.getByRole('button', { name: 'Cookbook' })).toHaveFocus();
+  });
+
+  it('preserves Cookbook focus across an ordinary parent rerender', () => {
+    const view = render(<MenuPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
+
+    const readyActions = screen.getByRole('button', { name: 'Ready actions' });
+    readyActions.focus();
+    const state = useGameState();
+    useGameState.mockReturnValue({
+      ...state,
+      restaurant: { ...state.restaurant, funds: state.restaurant.funds + 1 },
+    });
+    view.rerender(<MenuPanel />);
+
+    expect(readyActions).toHaveFocus();
+  });
+
+  it('preserves creator focus on rerender and restores the New dish opener on Cancel', () => {
+    const view = render(<MenuPanel />);
+    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
+
+    const dishName = screen.getByLabelText('Dish name:');
+    dishName.focus();
+    const state = useGameState();
+    useGameState.mockReturnValue({
+      ...state,
+      restaurant: { ...state.restaurant, funds: state.restaurant.funds + 1 },
+    });
+    view.rerender(<MenuPanel />);
+
+    expect(dishName).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: '+ New dish' })).toHaveFocus();
+  });
+
+  it('returns focus to New dish after successful creation', () => {
+    const state = useGameState();
+    useGameState.mockReturnValue({
+      ...state,
+      equipment: [...state.equipment, { id: 'eq2', name: 'Oven', owned: true }],
+    });
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    render(<MenuPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
+    fireEvent.change(screen.getByLabelText('Dish name:'), { target: { value: 'Soup' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls[0][0]).toMatchObject({ type: 'ADD_DISH', dish: { name: 'Soup' } });
+    expect(screen.getByRole('button', { name: '+ New dish' })).toHaveFocus();
+  });
+
   it('shows authored effective seconds, popularity and mastery separately from custom dishes', () => {
     let state = createInitialState();
     state = { ...state, ...normaliseCookbookState(state, { legacy: true }) };
