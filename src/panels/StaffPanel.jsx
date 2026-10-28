@@ -48,6 +48,7 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
   const decisionPending = isCareerDecisionPending(state);
   const locateHandler = typeof onLocateStaff === 'function' ? onLocateStaff : null;
   const bonusExplanationId = useId();
+  const hireChooserId = useId();
   const hireButtonRef = useRef(null);
   const [showHire, setShowHire] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -157,6 +158,7 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
     dispatch({ type: 'HIRE_STAFF', staff: candidate });
     setHireError(null);
     setShowHire(false);
+    hireButtonRef.current?.focus();
   };
 
   const startRename = (worker) => {
@@ -255,6 +257,8 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: 0 }}>Staff ({staff.length})</h3>
         <button ref={hireButtonRef} type="button" disabled={decisionPending}
+          aria-expanded={showHire}
+          aria-controls={hireChooserId}
           onClick={() => {
             if (decisionRef.current) return;
             setHireError(null);
@@ -303,7 +307,8 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
       )}
 
       {showHire && (
-        <div style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+        <div id={hireChooserId} role="region" aria-label="Hire staff"
+          style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, marginBottom: 12 }}>
           <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Hire staff</h4>
           <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '0 0 8px' }}>
             Hiring is charged immediately. Daily salaries are paid at midnight.

@@ -720,6 +720,31 @@ describe('StaffPanel hiring costs', () => {
     expect(allocateStaffPositions).not.toHaveBeenCalled();
   });
 
+  it('tracks the hire chooser disclosure and controls its visible region', () => {
+    useGameState.mockReturnValue(makeState());
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    const toggle = screen.getByRole('button', { name: '+ Hire' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    const chooserId = toggle.getAttribute('aria-controls');
+    expect(chooserId).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Hire staff' })).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const chooser = screen.getByRole('region', { name: 'Hire staff' });
+    expect(chooser.id).toBe(chooserId);
+    expect(document.getElementById(chooserId)).toBe(chooser);
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('region', { name: 'Hire staff' })).not.toBeInTheDocument();
+  });
+
   it('keeps the hire chooser open and explains a blocked floor without changing funds or staff', () => {
     const initial = makeNoSafeHireState();
     const beforeFunds = initial.restaurant.funds;
@@ -731,9 +756,13 @@ describe('StaffPanel hiring costs', () => {
 
     const { rerender } = render(<StatefulStaffPanel initial={initial} />);
     fireEvent.click(screen.getByRole('button', { name: '+ Hire' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Cook' }));
+    const cookButton = screen.getByRole('button', { name: 'Cook' });
+    cookButton.focus();
+    fireEvent.click(cookButton);
 
     expect(screen.getByText('Hire staff')).toBeVisible();
+    expect(screen.getByRole('button', { name: '+ Hire' })).toHaveAttribute('aria-expanded', 'true');
+    expect(cookButton).toHaveFocus();
     expect(screen.getByRole('alert')).toHaveTextContent(/no safe space/i);
     expect(panelHarness.current.state.restaurant.funds).toBe(beforeFunds);
     expect(panelHarness.current.state.staff).toEqual(beforeStaff);
@@ -745,8 +774,11 @@ describe('StaffPanel hiring costs', () => {
     expect(screen.getByText('Hire staff')).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cook' }));
+    const retryCookButton = screen.getByRole('button', { name: 'Cook' });
+    retryCookButton.focus();
+    fireEvent.click(retryCookButton);
     expect(screen.getByRole('alert')).toHaveTextContent(/no safe space/i);
+    expect(retryCookButton).toHaveFocus();
     generation = 1;
     rerender(<StatefulStaffPanel initial={initial} />);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -829,10 +861,13 @@ describe('StaffPanel hiring costs', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
 
     render(<StaffPanel />);
-    fireEvent.click(screen.getByText('+ Hire'));
+    const hireToggle = screen.getByRole('button', { name: '+ Hire' });
+    fireEvent.click(hireToggle);
     expect(screen.getByText('$120 to hire · $120/day')).toBeVisible();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Janitor' }));
+    const janitorButton = screen.getByRole('button', { name: 'Janitor' });
+    janitorButton.focus();
+    fireEvent.click(janitorButton);
 
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch.mock.calls[0][0]).toMatchObject({
@@ -841,6 +876,7 @@ describe('StaffPanel hiring costs', () => {
     });
     expect(screen.queryByText('$120 to hire · $120/day')).not.toBeInTheDocument();
     expect(screen.queryByText('Hire staff')).not.toBeInTheDocument();
+    expect(hireToggle).toHaveFocus();
   });
 });
 
@@ -2361,6 +2397,7 @@ describe('StaffPanel career decision controls', () => {
     expect(screen.getByText('Resolve the career decision before changing staff.')).toBeVisible();
     const hire = screen.getByRole('button', { name: '+ Hire' });
     expect(hire).toBeDisabled();
+    expect(hire).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(hire);
     expect(screen.queryByText('Hire staff')).not.toBeInTheDocument();
 
@@ -2407,7 +2444,11 @@ describe('StaffPanel career decision controls', () => {
     rerender(<StaffPanel />);
 
     expect(screen.getByText('Resolve the career decision before changing staff.')).toBeVisible();
-    expect(screen.getByRole('button', { name: '+ Hire' })).toBeDisabled();
+    const hire = screen.getByRole('button', { name: '+ Hire' });
+    expect(hire).toBeDisabled();
+    expect(hire).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(hire.getAttribute('aria-controls')))
+      .toBe(screen.getByRole('region', { name: 'Hire staff' }));
 
     ['Cook', 'Waiter', 'Janitor'].forEach(roleName => {
       const roleButton = screen.getByRole('button', { name: roleName });
