@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { SERVICE_CONTRACT_PREP_SECONDS } from '../data/serviceContracts';
 import { selectServiceContractView } from '../simulation/serviceContracts';
@@ -51,8 +51,8 @@ function timeLabel(state, time) {
   return `Day ${day}, ${secondsToGameTime(time)}`;
 }
 
-function ActionButton({ children, disabled, ...props }) {
-  return <button type="button" {...props} disabled={disabled}
+function ActionButton({ children, disabled, buttonRef, ...props }) {
+  return <button ref={buttonRef} type="button" {...props} disabled={disabled}
     style={{ ...buttonStyle, ...(disabled ? { opacity: 0.55, cursor: 'not-allowed' } : {}) }}>{children}</button>;
 }
 
@@ -81,9 +81,60 @@ export default function ServiceContractsPanel() {
   const dispatch = useDispatch();
   const [reviewing, setReviewing] = useState(null);
   const [withdrawing, setWithdrawing] = useState(null);
+  const [focusRequest, setFocusRequest] = useState(null);
+  const reviewConfirmationRef = useRef(null);
+  const withdrawalConfirmationRef = useRef(null);
+  const reviewTriggerRefs = useRef(new Map());
+  const withdrawalTriggerRef = useRef(null);
+  const offerHeadingRefs = useRef(new Map());
+  const activeHeadingRef = useRef(null);
+  const offersHeadingRef = useRef(null);
+  const withdrawalConfirmationFocused = useRef(false);
   const { active, offers } = selectServiceContractView(state);
+  const activeInstanceId = active?.instanceId ?? null;
   const decisionPending = state.careerRun?.needsDecision === true;
   const deadlineReached = active && state.restaurant.gameTime >= active.deadlineAt;
+  const previousActiveInstanceId = useRef(activeInstanceId);
+  const requestFocus = target => setFocusRequest(target);
+
+  useLayoutEffect(() => {
+    if (!focusRequest) return;
+    let target;
+    let fallback;
+    if (focusRequest.type === 'review-entry') target = reviewConfirmationRef.current;
+    if (focusRequest.type === 'withdraw-entry') target = withdrawalConfirmationRef.current;
+    if (focusRequest.type === 'review-trigger') {
+      target = reviewTriggerRefs.current.get(focusRequest.templateId);
+      fallback = offerHeadingRefs.current.get(focusRequest.templateId) || offersHeadingRef.current;
+    }
+    if (focusRequest.type === 'withdraw-trigger') {
+      target = withdrawalTriggerRef.current;
+      fallback = activeHeadingRef.current || offersHeadingRef.current;
+    }
+    if (focusRequest.type === 'accept-result') {
+      target = activeHeadingRef.current || offerHeadingRefs.current.get(focusRequest.templateId);
+      fallback = offersHeadingRef.current;
+    }
+    if (focusRequest.type === 'withdraw-result') {
+      target = activeHeadingRef.current || offersHeadingRef.current;
+      fallback = offersHeadingRef.current;
+    }
+    const usable = element => element?.isConnected && !element.disabled;
+    (usable(target) ? target : fallback)?.focus();
+    setFocusRequest(null);
+  }, [focusRequest]);
+
+  useLayoutEffect(() => {
+    const previousId = previousActiveInstanceId.current;
+    previousActiveInstanceId.current = activeInstanceId;
+    if (withdrawing && withdrawing === previousId && activeInstanceId !== previousId) {
+      if (withdrawalConfirmationFocused.current) {
+        (activeHeadingRef.current || offersHeadingRef.current)?.focus();
+      }
+      withdrawalConfirmationFocused.current = false;
+    }
+  }, [activeInstanceId, withdrawing]);
+
   // This live region changes only for phases and party admission, not
   // every game-second countdown or individual progress update.
   const announcement = active
@@ -100,7 +151,7 @@ export default function ServiceContractsPanel() {
       overflow: 'hidden', clipPath: 'inset(50%)' }}>{announcement}</div>
 
     {active && <section aria-label="Active contract" style={{ ...cardStyle, borderColor: '#f0a500', marginTop: 12 }}>
-      <h4 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '0 0 8px' }}>Active: {active.title}</h4>
+      <h4 ref={activeHeadingRef} tabIndex={-1} style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '0 0 8px' }}>Active: {active.title}</h4>
       <p>{active.phase === 'preparing' ? `Preparing — ${Math.ceil(active.preparationSeconds / 60)} game minutes until service`
         : `Service — ${Math.ceil(active.remainingSeconds / 60)} game minutes remaining`}</p>
       <p>Next arrival: {active.nextArrivalAt === null ? 'All bookings attempted' : timeLabel(state, active.nextArrivalAt)}</p>
@@ -123,24 +174,41 @@ export default function ServiceContractsPanel() {
           .map(guest => <GuestOutcome key={guest.guestId} guest={guest} label={guest.label} />)}</ul>
       </div>)}
       </details>
-      {withdrawing === active.instanceId ? <div role="group" aria-label="Confirm contract withdrawal">
+      {withdrawing === active.instanceId ? <div ref={withdrawalConfirmationRef} tabIndex={-1}
+        role="group" aria-label="Confirm contract withdrawal"
+        onFocusCapture={() => { withdrawalConfirmationFocused.current = true; }}
+        onBlurCapture={event => {
+          if (!event.currentTarget.contains(event.relatedTarget)) withdrawalConfirmationFocused.current = false;
+        }}>
         <ContractLiability terms={active.terms} />
         <p>Withdraw this contract? Existing guests remain, and their service continues.
           This uses today’s attempt.</p>
         <div style={controlsStyle}>
           <ActionButton disabled={decisionPending || deadlineReached} onClick={() => {
-            if (!decisionPending && !deadlineReached) dispatch({ type: 'WITHDRAW_SERVICE_CONTRACT', instanceId: active.instanceId });
+            if (!decisionPending && !deadlineReached) {
+              dispatch({ type: 'WITHDRAW_SERVICE_CONTRACT', instanceId: active.instanceId });
+              requestFocus({ type: 'withdraw-result', instanceId: active.instanceId });
+            }
             setWithdrawing(null);
           }}>Confirm withdrawal</ActionButton>
-          <ActionButton onClick={() => setWithdrawing(null)}>Keep contract</ActionButton>
+          <ActionButton onClick={() => {
+            setWithdrawing(null);
+            requestFocus({ type: 'withdraw-trigger' });
+          }}>Keep contract</ActionButton>
         </div>
-      </div> : <ActionButton disabled={decisionPending || deadlineReached} onClick={() => setWithdrawing(active.instanceId)}>Withdraw contract</ActionButton>}
+      </div> : <ActionButton buttonRef={withdrawalTriggerRef} disabled={decisionPending || deadlineReached} onClick={() => {
+        setWithdrawing(active.instanceId);
+        requestFocus({ type: 'withdraw-entry' });
+      }}>Withdraw contract</ActionButton>}
     </section>}
 
-    <h4 style={{ ...TYPOGRAPHY.control, color: '#bbb', margin: '16px 0 10px' }}>Contract offers</h4>
+    <h4 ref={offersHeadingRef} tabIndex={-1} style={{ ...TYPOGRAPHY.control, color: '#bbb', margin: '16px 0 10px' }}>Contract offers</h4>
     {offers.map(({ template, preview, terms, canAccept, blockedReason, warnings }) => <section key={template.id}
       aria-label={`${template.title} offer`} style={cardStyle}>
-      <h4 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '0 0 8px' }}>{template.title}</h4>
+      <h4 ref={node => {
+        if (node) offerHeadingRefs.current.set(template.id, node);
+        else offerHeadingRefs.current.delete(template.id);
+      }} tabIndex={-1} style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '0 0 8px' }}>{template.title}</h4>
       <p style={{ ...secondaryStyle, margin: '4px 0 8px' }}>{descriptions[template.id]}</p>
       <p style={{ margin: '8px 0' }}>{template.parties.reduce((n, party) => n + party.size, 0)} guests · {template.target} paid meals needed</p>
       <p style={{ ...secondaryStyle, margin: '8px 0' }}>{SERVICE_CONTRACT_PREP_SECONDS / 60} game minutes to prepare · {template.serviceDuration / 60} game minutes of service</p>
@@ -163,7 +231,8 @@ export default function ServiceContractsPanel() {
       </div>}
       <p>Scheduled Work does not guarantee availability or coverage throughout service.</p>
       {blockedReason && <p>{blockedLabels[blockedReason]}</p>}
-      {reviewing === template.id ? <div role="group" aria-label={`Confirm ${template.title}`}>
+      {reviewing === template.id ? <div ref={reviewConfirmationRef} tabIndex={-1}
+        role="group" aria-label={`Confirm ${template.title}`}>
         <p>Receive {money(terms.deposit)} now and {money(terms.balance)} on success at the deadline.</p>
         <ContractLiability terms={terms} />
         <p>Start preparation now? Arrival and deadline times are calculated again when you accept.</p>
@@ -171,12 +240,24 @@ export default function ServiceContractsPanel() {
           : <p>Projected times unavailable.</p>}
         <div style={controlsStyle}>
           <ActionButton disabled={!canAccept} onClick={() => {
-            if (canAccept) dispatch({ type: 'ACCEPT_SERVICE_CONTRACT', templateId: template.id });
+            if (canAccept) {
+              dispatch({ type: 'ACCEPT_SERVICE_CONTRACT', templateId: template.id });
+              requestFocus({ type: 'accept-result', templateId: template.id });
+            }
             setReviewing(null);
           }}>Accept and start preparation</ActionButton>
-          <ActionButton onClick={() => setReviewing(null)}>Cancel acceptance</ActionButton>
+          <ActionButton onClick={() => {
+            setReviewing(null);
+            requestFocus({ type: 'review-trigger', templateId: template.id });
+          }}>Cancel acceptance</ActionButton>
         </div>
-      </div> : <ActionButton disabled={!canAccept} onClick={() => setReviewing(template.id)}>Review {template.title}</ActionButton>}
+      </div> : <ActionButton buttonRef={node => {
+        if (node) reviewTriggerRefs.current.set(template.id, node);
+        else reviewTriggerRefs.current.delete(template.id);
+      }} disabled={!canAccept} onClick={() => {
+        setReviewing(template.id);
+        requestFocus({ type: 'review-entry', templateId: template.id });
+      }}>Review {template.title}</ActionButton>}
     </section>)}
   </div>;
 }

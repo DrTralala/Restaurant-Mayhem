@@ -107,6 +107,40 @@ describe('ServiceContractsPanel', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ type: 'ACCEPT_SERVICE_CONTRACT', templateId: 'office-lunch' });
   });
+  it('focuses review context without trapping Tab and restores focus to the review trigger on cancel', () => {
+    render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review Office lunch' }));
+    const confirmation = screen.getByRole('group', { name: 'Confirm Office lunch' });
+    expect(document.activeElement).toBe(confirmation);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(fireEvent.keyDown(confirmation, { key: 'Tab', cancelable: true })).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel acceptance' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Review Office lunch' }));
+  });
+  it('does not move focus back to review context on an unrelated state rerender', () => {
+    const { rerender } = render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review Office lunch' }));
+    const cancel = screen.getByRole('button', { name: 'Cancel acceptance' });
+    cancel.focus();
+
+    state = { ...state, restaurant: { ...state.restaurant, gameTime: state.restaurant.gameTime + 1 } };
+    rerender(<ServiceContractsPanel />);
+
+    expect(document.activeElement).toBe(cancel);
+  });
+  it('focuses the active contract heading after successful acceptance', () => {
+    const { rerender } = render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review Office lunch' }));
+    dispatch.mockImplementationOnce(({ templateId }) => {
+      state = acceptServiceContract(state, { templateId });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept and start preparation' }));
+    rerender(<ServiceContractsPanel />);
+
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Active: Office lunch' }));
+  });
   it('revalidates the confirmation when current state becomes blocked', () => {
     const { rerender } = render(<ServiceContractsPanel />);
     fireEvent.click(screen.getByRole('button', { name: 'Review Office lunch' }));
@@ -167,6 +201,63 @@ describe('ServiceContractsPanel', () => {
     expect(screen.getByRole('status')).toBeEmptyDOMElement();
     expect(state.serviceContracts.results).toHaveLength(1);
     expect(screen.getByText('Available next day')).toBeInTheDocument();
+  });
+  it('focuses withdrawal context, restores Keep focus to its trigger, and focuses offers after success', () => {
+    state = acceptServiceContract(state, { templateId: 'office-lunch' });
+    const { rerender } = render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Withdraw contract' }));
+    expect(document.activeElement).toBe(screen.getByRole('group', { name: 'Confirm contract withdrawal' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep contract' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Withdraw contract' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Withdraw contract' }));
+    dispatch.mockImplementationOnce(({ instanceId }) => {
+      state = withdrawServiceContract(state, { instanceId });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm withdrawal' }));
+    rerender(<ServiceContractsPanel />);
+
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Contract offers' }));
+  });
+  it('falls back to offer context when eligibility changes and disables the review trigger', () => {
+    const { rerender } = render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Review Office lunch' }));
+    state = { ...state, careerRun: { needsDecision: true } };
+    rerender(<ServiceContractsPanel />);
+    expect(screen.getByRole('button', { name: 'Accept and start preparation' })).toBeDisabled();
+    expect(document.activeElement).toBe(screen.getByRole('group', { name: 'Confirm Office lunch' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel acceptance' }));
+
+    expect(screen.getByRole('button', { name: 'Review Office lunch' })).toBeDisabled();
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Office lunch' }));
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('falls back to active contract context when Keep restores a disabled withdrawal trigger', () => {
+    state = acceptServiceContract(state, { templateId: 'office-lunch' });
+    const { rerender } = render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Withdraw contract' }));
+    expect(document.activeElement).toBe(screen.getByRole('group', { name: 'Confirm contract withdrawal' }));
+    state = { ...state, careerRun: { needsDecision: true } };
+    rerender(<ServiceContractsPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep contract' }));
+
+    expect(screen.getByRole('button', { name: 'Withdraw contract' })).toBeDisabled();
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Active: Office lunch' }));
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('moves focus to the current contract context when a pending withdrawal instance is replaced', () => {
+    state = acceptServiceContract(state, { templateId: 'office-lunch' });
+    const { rerender } = render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Withdraw contract' }));
+    const withdrawn = withdrawServiceContract(state, { instanceId: 'sc-1' });
+    state = acceptServiceContract(withdrawn, { templateId: 'family-service' });
+
+    rerender(<ServiceContractsPanel />);
+
+    expect(screen.queryByRole('group', { name: 'Confirm contract withdrawal' })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Active: Family service' }));
   });
   it('disables withdrawal during a career decision while retaining scheduled bookings', () => {
     state = { ...acceptServiceContract(state, { templateId: 'office-lunch' }), careerRun: { needsDecision: true } };
