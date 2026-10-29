@@ -25,6 +25,16 @@ export default function SettingsMenu({ isOpen, onToggle, onClose, modal = false 
   const dispatch = useDispatch();
   const [message, setMessage] = useState('');
   const panelRef = useRef(null);
+  const mountedRef = useRef(false);
+  const loadRequestRef = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadRequestRef.current += 1;
+    };
+  }, []);
+
   useEffect(() => {
     if (!isOpen) return undefined;
     const panel = panelRef.current;
@@ -64,23 +74,33 @@ export default function SettingsMenu({ isOpen, onToggle, onClose, modal = false 
   const handleSave = async () => {
     try {
       const { filename } = await saveRepositoryState(state);
+      if (!mountedRef.current) return;
       setMessage(`Saved as ${filename}`);
     } catch (error) {
+      if (!mountedRef.current) return;
       setMessage(error.message);
     }
   };
 
   const handleLoad = async () => {
+    const request = ++loadRequestRef.current;
+    const isCurrentRequest = () => mountedRef.current && request === loadRequestRef.current;
     const fresh = createInitialState();
     try {
       const { state: saved, filename } = await loadLatestRepositoryState();
+      if (!isCurrentRequest()) return;
       if (!saved || saved.version !== fresh.version) {
         setMessage('Saved game is incompatible');
         return;
       }
-      dispatch({ type: 'LOAD_STATE', state: hydrateState(saved, fresh) });
+      if (!isCurrentRequest()) return;
+      const hydrated = hydrateState(saved, fresh);
+      if (!isCurrentRequest()) return;
+      dispatch({ type: 'LOAD_STATE', state: hydrated });
+      if (!isCurrentRequest()) return;
       setMessage(`Loaded ${filename}`);
     } catch (error) {
+      if (!isCurrentRequest()) return;
       setMessage(isSaveValidationError(error) || error.message === 'Invalid saved navigation geometry'
         ? `Saved game is incompatible: ${error.message}`
         : error.message);
@@ -89,6 +109,7 @@ export default function SettingsMenu({ isOpen, onToggle, onClose, modal = false 
 
   const handleNewGame = () => {
     if (!requestNewSandbox(dispatch)) return;
+    loadRequestRef.current += 1;
     onClose?.();
     setMessage('New game started');
   };

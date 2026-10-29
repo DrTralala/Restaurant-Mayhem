@@ -1,13 +1,33 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SettingsMenu from './SettingsMenu';
+import { SAVE_VERSION } from '../state/saveVersion';
 
 const dispatch = vi.fn();
-const { requestNewSandboxMock } = vi.hoisted(() => ({ requestNewSandboxMock: vi.fn() }));
+const {
+  requestNewSandboxMock,
+  loadLatestRepositoryStateMock,
+  saveRepositoryStateMock,
+  hydrateStateMock,
+} = vi.hoisted(() => ({
+  requestNewSandboxMock: vi.fn(),
+  loadLatestRepositoryStateMock: vi.fn(),
+  saveRepositoryStateMock: vi.fn(),
+  hydrateStateMock: vi.fn(),
+}));
 vi.mock('../state/GameContext', () => ({
   useDispatch: () => dispatch,
   useGameState: () => ({ careerRun: { needsDecision: true } }),
 }));
+vi.mock('../state/repositorySaves', () => ({
+  loadLatestRepositoryState: loadLatestRepositoryStateMock,
+  saveRepositoryState: saveRepositoryStateMock,
+}));
+vi.mock('../state/persistence', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, hydrateState: (...args) => hydrateStateMock(...args) };
+});
 vi.mock('../state/newSandbox', async importOriginal => {
   const actual = await importOriginal();
   return {
@@ -21,6 +41,9 @@ vi.mock('../state/newSandbox', async importOriginal => {
 beforeEach(() => {
   dispatch.mockClear();
   requestNewSandboxMock.mockClear();
+  loadLatestRepositoryStateMock.mockReset();
+  saveRepositoryStateMock.mockReset();
+  hydrateStateMock.mockReset();
   localStorage.clear();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -272,5 +295,164 @@ describe('confirmed sandbox reset', () => {
     });
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('status')).toHaveTextContent('New game started');
+  });
+});
+
+describe('asynchronous Settings ownership', () => {
+  function deferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function compatibleLoad(filename = 'save.json') {
+    return { state: { version: SAVE_VERSION, filename }, filename };
+  }
+
+  async function settle(request, outcome) {
+    await act(async () => {
+      outcome(request);
+      try {
+        await request.promise;
+      } catch {
+        // The load handler owns the result of rejected requests.
+      }
+    });
+  }
+
+  it('does not commit a load after the owning Settings instance unmounts', async () => {
+    const request = deferred();
+    loadLatestRepositoryStateMock.mockReturnValue(request.promise);
+    const view = render(settings());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+    view.unmount();
+    await settle(request, pending => pending.resolve(compatibleLoad('old-session.json')));
+
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'LOAD_STATE' }));
+    expect(hydrateStateMock).not.toHaveBeenCalled();
+  });
+
+  it('invalidates pending loads synchronously when New game is confirmed without a remount', async () => {
+    const request = deferred();
+    loadLatestRepositoryStateMock.mockReturnValue(request.promise);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(settings());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New game' }));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'LOAD_STATE' }));
+
+    await settle(request, pending => pending.resolve(compatibleLoad('old-session.json')));
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(hydrateStateMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('New game started');
+  });
+
+  it('allows only the newest overlapping load to hydrate, dispatch and report success', async () => {
+    const older = deferred();
+    const newer = deferred();
+    loadLatestRepositoryStateMock
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
+    const hydrated = { loaded: 'newer' };
+    hydrateStateMock.mockReturnValue(hydrated);
+    render(settings());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+    await settle(newer, pending => pending.resolve(compatibleLoad('newer.json')));
+    await settle(older, pending => pending.resolve(compatibleLoad('older.json')));
+
+    expect(hydrateStateMock).toHaveBeenCalledTimes(1);
+    expect(hydrateStateMock).toHaveBeenCalledWith(compatibleLoad('newer.json').state, expect.any(Object));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({ type: 'LOAD_STATE', state: hydrated });
+    expect(screen.getByRole('status')).toHaveTextContent('Loaded newer.json');
+  });
+
+  it('does not report a stale rejection after a newer request succeeds', async () => {
+    const older = deferred();
+    const newer = deferred();
+    loadLatestRepositoryStateMock
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
+    hydrateStateMock.mockReturnValue({ loaded: 'newer' });
+    render(settings());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+    await settle(newer, pending => pending.resolve(compatibleLoad('newer.json')));
+    await settle(older, pending => pending.reject(new Error('stale load failed')));
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('status')).toHaveTextContent('Loaded newer.json');
+    expect(screen.queryByText('stale load failed')).not.toBeInTheDocument();
+  });
+
+  it('does not invalidate a load when the panel is ordinarily closed and reopened', async () => {
+    const request = deferred();
+    const hydrated = { loaded: true };
+    loadLatestRepositoryStateMock.mockReturnValue(request.promise);
+    hydrateStateMock.mockReturnValue(hydrated);
+    const view = render(settings());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+    view.rerender(settings({ isOpen: false }));
+    view.rerender(settings({ isOpen: true }));
+    await settle(request, pending => pending.resolve(compatibleLoad()));
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'LOAD_STATE', state: hydrated });
+    expect(screen.getByRole('status')).toHaveTextContent('Loaded save.json');
+  });
+
+  it('keeps load ownership valid after StrictMode effect cleanup and setup', async () => {
+    const request = deferred();
+    const hydrated = { loaded: true };
+    loadLatestRepositoryStateMock.mockReturnValue(request.promise);
+    hydrateStateMock.mockReturnValue(hydrated);
+    render(<StrictMode>{settings()}</StrictMode>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+    await settle(request, pending => pending.resolve(compatibleLoad()));
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'LOAD_STATE', state: hydrated });
+    expect(screen.getByRole('status')).toHaveTextContent('Loaded save.json');
+  });
+
+  it('shows current incompatible and rejected load results', async () => {
+    loadLatestRepositoryStateMock.mockResolvedValueOnce({
+      state: { version: SAVE_VERSION - 1 }, filename: 'incompatible.json',
+    });
+    render(settings());
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved game is incompatible');
+    expect(dispatch).not.toHaveBeenCalled();
+
+    loadLatestRepositoryStateMock.mockRejectedValueOnce(new Error('current load failed'));
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('current load failed'));
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not show a save completion message after unmount', async () => {
+    const request = deferred();
+    saveRepositoryStateMock.mockReturnValue(request.promise);
+    const view = render(settings());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save game' }));
+    expect(saveRepositoryStateMock).toHaveBeenCalledWith({ careerRun: { needsDecision: true } });
+    view.unmount();
+    await settle(request, pending => pending.resolve({ filename: 'saved.json' }));
+
+    expect(screen.queryByText('Saved as saved.json')).not.toBeInTheDocument();
   });
 });
