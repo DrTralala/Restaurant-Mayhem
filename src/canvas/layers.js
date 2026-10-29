@@ -361,6 +361,20 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}, indexes = c
     }
   }
 
+  // Keep the admission status visible above linked chairs that can overlap its label.
+  for (const table of state.tables) {
+    if (table.admissionHeld !== true) continue;
+    ctx.save();
+    ctx.fillStyle = '#2b2116';
+    ctx.fillRect(table.x - 12, table.y - 12, 64, 12);
+    ctx.fillStyle = '#ffd166';
+    ctx.font = getCanvasFont('compact');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Seating held', table.x + 20, table.y - 6);
+    ctx.restore();
+  }
+
   for (const station of state.kitchenStations || []) {
     const eq = station.equipmentId
       ? indexes.equipmentById.get(station.equipmentId)

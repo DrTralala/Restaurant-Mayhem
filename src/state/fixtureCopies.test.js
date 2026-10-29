@@ -153,6 +153,19 @@ describe('copyFixtures', () => {
     expect(result.serviceItems).toBe(state.serviceItems);
   });
 
+  it('does not copy an operational admission hold onto newly purchased tables', () => {
+    const state = makeState({
+      restaurant: { expansionLevel: 1, funds: 700 },
+      tables: [{ id: 't1', seats: 2, status: 'empty', admissionHeld: true, x: 200, y: 200 }],
+      chairs: [],
+    });
+
+    const result = copyFixtures(state, [{ type: 'table', id: 't1', x: 600, y: 300 }]);
+
+    expect(result.tables[0].admissionHeld).toBe(true);
+    expect(result.tables[1]).toEqual({ id: 't2', seats: 2, status: 'empty', x: 600, y: 300 });
+  });
+
   it('copies rotation, door roles, dimensions, and leaves runtime assignments behind', () => {
     const state = makeState({
       restaurant: { expansionLevel: 1, funds: 5000 },

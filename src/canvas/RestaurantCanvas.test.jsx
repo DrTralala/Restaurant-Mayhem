@@ -2513,6 +2513,66 @@ describe('RestaurantCanvas object movement', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'SET_DOOR_ROLE', id: 'door1', role: 'exit' });
   });
 
+  it('toggles seating holds from the latest table state and explains their all-party contract impact', () => {
+    const dispatch = vi.fn();
+    const currentTable = { ...state.tables[0], admissionHeld: false };
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({ ...state, tables: [currentTable] });
+    findClickedEntity.mockReturnValue({
+      type: 'table',
+      data: { ...currentTable, admissionHeld: true },
+      text: 'Dining table',
+    });
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+
+    fireEvent.click(canvas, { clientX: 160, clientY: 120 });
+
+    expect(screen.getByText(/blocks seating for all parties, including active contract guests/i))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hold seating' }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_TABLE_ADMISSION_HOLD', id: 't1', held: true,
+    });
+
+    const heldTable = { ...currentTable, status: 'occupied', admissionHeld: true };
+    useGameState.mockReturnValue({
+      ...state,
+      tables: [heldTable],
+    });
+    findClickedEntity.mockReturnValue({
+      type: 'table', data: { ...heldTable, admissionHeld: false }, text: 'Dining table',
+    });
+    rerender(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(canvas, { clientX: 160, clientY: 120 });
+    const release = screen.getByRole('button', { name: 'Release seating' });
+    expect(release).toBeEnabled();
+    fireEvent.click(release);
+    expect(dispatch).toHaveBeenLastCalledWith({
+      type: 'SET_TABLE_ADMISSION_HOLD', id: 't1', held: false,
+    });
+  });
+
+  it('disables enabling admission holds on non-empty tables and during career decisions', () => {
+    const table = { ...state.tables[0], status: 'occupied', admissionHeld: false };
+    useGameState.mockReturnValue({ ...state, tables: [table] });
+    findClickedEntity.mockReturnValue({ type: 'table', data: table, text: 'Dining table' });
+    const { container, rerender } = render(<RestaurantCanvas managementOpen={false} />);
+
+    fireEvent.click(container.querySelector('canvas'), { clientX: 160, clientY: 120 });
+    expect(screen.getByRole('button', { name: 'Hold seating' })).toBeDisabled();
+
+    useGameState.mockReturnValue({
+      ...state,
+      tables: [{ ...table, status: 'empty' }],
+      careerRun: { needsDecision: true },
+    });
+    rerender(<RestaurantCanvas managementOpen={false} />);
+
+    expect(screen.getByRole('button', { name: 'Hold seating' })).toBeDisabled();
+  });
+
   it('keeps door Move before both role actions in DOM order', () => {
     const door = { id: 'door1', y: 340 };
     useGameState.mockReturnValue({ ...state, doors: [door] });

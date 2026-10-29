@@ -126,6 +126,16 @@ describe('moveFixtures', () => {
     expect(result.customers[0]).not.toHaveProperty('navigationGoal');
   });
 
+  it('retains a table admission hold when moving the table', () => {
+    const state = makeState({
+      tables: [{ id: 't1', seats: 2, status: 'empty', admissionHeld: true, x: 200, y: 200 }],
+    });
+
+    const result = moveFixtures(state, [{ type: 'table', id: 't1', x: 300, y: 240 }]);
+
+    expect(result.tables[0]).toMatchObject({ x: 300, y: 240, admissionHeld: true });
+  });
+
   it('moves only the occupant of a chair moved independently', () => {
     const state = makeState({
       customers: [

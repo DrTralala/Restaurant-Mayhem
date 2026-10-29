@@ -280,6 +280,8 @@ function validateFixtureCollections(state) {
     validateRotation(record, `${key}[${index}]`);
   });
   validatePositioned(tables, 'tables');
+  tables.forEach((table, index) =>
+    validateOptionalBoolean(table, 'admissionHeld', `tables[${index}]`));
   validatePositioned(chairs, 'chairs');
   validatePositioned(kitchenStations, 'kitchenStations');
   validatePositioned(serviceTables, 'serviceTables');

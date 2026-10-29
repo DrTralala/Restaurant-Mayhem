@@ -861,6 +861,121 @@ describe('GameProvider furniture actions', () => {
   });
 });
 
+describe('table admission holds', () => {
+  it.each([
+    ['missing table ID', { type: 'SET_TABLE_ADMISSION_HOLD', held: true }],
+    ['unknown table ID', { type: 'SET_TABLE_ADMISSION_HOLD', id: 'missing', held: true }],
+    ['empty table ID', { type: 'SET_TABLE_ADMISSION_HOLD', id: '', held: true }],
+    ['missing held value', { type: 'SET_TABLE_ADMISSION_HOLD', id: 't1' }],
+    ['non-boolean held value', { type: 'SET_TABLE_ADMISSION_HOLD', id: 't1', held: 1 }],
+  ])('does nothing for a %s', (_label, action) => {
+    const state = createInitialState();
+
+    expect(gameReducer(state, action)).toBe(state);
+  });
+
+  it('does nothing when the table ID is duplicated', () => {
+    const state = {
+      ...createInitialState(),
+      tables: [
+        { id: 't1', status: 'empty', x: 100, y: 100 },
+        { id: 't1', status: 'empty', x: 300, y: 100 },
+      ],
+      chairs: [],
+    };
+
+    expect(gameReducer(state, {
+      type: 'SET_TABLE_ADMISSION_HOLD', id: 't1', held: true,
+    })).toBe(state);
+  });
+
+  it('does not accept an empty ID even if a malformed table has one', () => {
+    const state = {
+      ...createInitialState(),
+      tables: [{ id: '', status: 'empty', x: 100, y: 100 }],
+      chairs: [],
+    };
+
+    expect(gameReducer(state, {
+      type: 'SET_TABLE_ADMISSION_HOLD', id: '', held: true,
+    })).toBe(state);
+  });
+
+  it('does not enable a hold on a non-empty table', () => {
+    const state = {
+      ...createInitialState(),
+      tables: createInitialState().tables.map((table, index) => index === 0
+        ? { ...table, status: 'occupied' }
+        : table),
+    };
+
+    expect(gameReducer(state, {
+      type: 'SET_TABLE_ADMISSION_HOLD', id: 't1', held: true,
+    })).toBe(state);
+  });
+
+  it('holds only an empty table and releases a stale non-empty hold immutably', () => {
+    const initial = createInitialState();
+    const state = {
+      ...initial,
+      tables: initial.tables.map((table, index) => index === 0
+        ? { ...table, admissionHeld: false }
+        : index === 1
+          ? { ...table, status: 'occupied', admissionHeld: true, diningPartyId: 'stale-party' }
+          : table),
+    };
+    const held = gameReducer(state, {
+      type: 'SET_TABLE_ADMISSION_HOLD', id: 't1', held: true,
+    });
+
+    expect(held.tables[0]).toEqual({ ...state.tables[0], admissionHeld: true });
+    expect(held.tables[1]).toBe(state.tables[1]);
+    expect(held.chairs).toBe(state.chairs);
+    expect(held.restaurant).toBe(state.restaurant);
+
+    const released = gameReducer(held, {
+      type: 'SET_TABLE_ADMISSION_HOLD', id: 't2', held: false,
+    });
+
+    expect(released.tables[1]).toEqual({ ...held.tables[1], admissionHeld: false });
+    expect(released.tables[0]).toBe(held.tables[0]);
+    expect(released.chairs).toBe(held.chairs);
+    expect(released.restaurant).toBe(held.restaurant);
+  });
+
+  it('does not trigger unrelated spatial repair when changing only an admission flag', () => {
+    const initial = createInitialState();
+    const fault = { kind: 'unsafe-navigation-state', issues: [] };
+    const state = { ...initial, navigationFault: fault, paused: false };
+
+    const held = gameReducer(state, {
+      type: 'SET_TABLE_ADMISSION_HOLD', id: 't1', held: true,
+    });
+
+    expect(held.tables[0].admissionHeld).toBe(true);
+    expect(held.navigationFault).toBe(fault);
+    expect(held.paused).toBe(false);
+  });
+
+  it('blocks hold changes while a career decision is pending', () => {
+    const initial = createInitialState();
+    const state = {
+      ...initial,
+      careerRun: { needsDecision: true },
+      tables: initial.tables.map((table, index) => index === 0
+        ? { ...table, admissionHeld: true }
+        : table),
+    };
+
+    expect(gameReducer(state, {
+      type: 'SET_TABLE_ADMISSION_HOLD', id: 't1', held: false,
+    })).toBe(state);
+    expect(gameReducer(state, {
+      type: 'SET_TABLE_ADMISSION_HOLD', id: 't2', held: true,
+    })).toBe(state);
+  });
+});
+
 describe('GameProvider authoritative placement actions', () => {
   beforeEach(() => localStorage.clear());
 
@@ -884,6 +999,7 @@ describe('GameProvider authoritative placement actions', () => {
         expect(state.tables.at(-1)).toMatchObject({
           id: 't5', seats: 4, status: 'empty', x: 600, y: 300,
         });
+        expect(state.tables.at(-1)).not.toHaveProperty('admissionHeld');
       },
     },
     {

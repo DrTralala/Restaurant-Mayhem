@@ -1369,6 +1369,21 @@ export default function RestaurantCanvas({
   const selectedDishwasher = menu?.type === 'washStation' && menu.data?.type === 'automatic'
     ? (state.washStations || []).find(station => station.id === menu.data.id) || menu.data
     : null;
+  const menuTable = menu?.type === 'table'
+    ? (state.tables || []).find(table => String(table?.id) === String(menu.data?.id)) || null
+    : null;
+  const menuTableHeld = menuTable?.admissionHeld === true;
+  const careerDecisionPending = isCareerDecisionPending(state);
+  const menuTableHoldDisabled = careerDecisionPending
+    || (!menuTableHeld && menuTable?.status !== 'empty');
+
+  const handleTableAdmissionHold = () => {
+    if (!menuTable || careerDecisionPending) return;
+    const held = menuTable.admissionHeld === true;
+    if (!held && menuTable.status !== 'empty') return;
+    dispatch({ type: 'SET_TABLE_ADMISSION_HOLD', id: menuTable.id, held: !held });
+    setMenu(null);
+  };
 
   return (
     <div ref={wrapperRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -1407,9 +1422,23 @@ export default function RestaurantCanvas({
           }}
         >
           <div style={{ ...TYPOGRAPHY.secondary, color: '#888', padding: '2px 8px' }}>
-            {getFixtureLabel(state, { type: menu.type, data: menu.data }) || humaniseIdentifier(menu.type)}
+            {getFixtureLabel(state, { type: menu.type, data: menuTable || menu.data }) || humaniseIdentifier(menu.type)}
           </div>
           <DishwasherControls state={state} station={selectedDishwasher} dispatch={dispatch} />
+          {menu?.type === 'table' && menuTable && (
+            <>
+              <div style={{ ...TYPOGRAPHY.secondary, color: '#f1c66a', padding: '2px 8px' }}>
+                This hold blocks seating for all parties, including active contract guests.
+              </div>
+              <button
+                onClick={handleTableAdmissionHold}
+                disabled={menuTableHoldDisabled}
+                style={menuBtn}
+              >
+                {menuTableHeld ? 'Release seating' : 'Hold seating'}
+              </button>
+            </>
+          )}
           {menuDoor && (
             <>
               {canMoveMenuEntity && (

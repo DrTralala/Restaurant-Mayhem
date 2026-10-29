@@ -23,6 +23,16 @@ describe('party-owned table reservation', () => {
     expect(occupyTableForParty(reserved, 'old-party')).toBe(reserved);
   });
 
+  it('refuses a reservation on a table held from admission', () => {
+    expect(reserveTableForParty({ id: 't1', status: 'empty', admissionHeld: true },
+      'p1', [assignment])).toBeNull();
+  });
+
+  it('keeps explicitly unheld tables available for reservations', () => {
+    expect(reserveTableForParty({ id: 't1', status: 'empty', admissionHeld: false },
+      'p1', [assignment])).toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
+  });
+
   it('does not mutate the input table when reserving or occupying', () => {
     const table = { id: 't1', status: 'empty', reservationOwnerStaffId: 'guide', x: 200, y: 200 };
     const reserved = reserveTableForParty(table, 'new-party', [assignment]);

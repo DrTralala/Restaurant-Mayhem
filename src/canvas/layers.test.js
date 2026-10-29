@@ -398,6 +398,51 @@ describe('drawFurnitureLayer', () => {
     expect(ctx._calls.texts.some(call => /Table \d|Chair \d/.test(call.text))).toBe(false);
   });
 
+  it('draws a visible seating-held marker only for tables with an active hold', () => {
+    const ctx = recordCtx();
+    ctx.fillText = function fillText(text, x, y) {
+      this._calls.texts.push({ text, x, y, colour: this.fillStyle, font: this.font });
+    };
+    const state = {
+      tables: [
+        { id: 'held', x: 100, y: 100, status: 'empty', admissionHeld: true },
+        { id: 'open', x: 200, y: 100, status: 'empty', admissionHeld: false },
+      ],
+      chairs: [], kitchenStations: [], serviceTables: [], serviceItems: [], equipment: [], dishes: [],
+    };
+
+    drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.texts.filter(call => call.text === 'Seating held')).toHaveLength(1);
+    expect(ctx._calls.texts.find(call => call.text === 'Seating held')).toMatchObject({ x: 120, y: 94 });
+  });
+
+  it('draws the seating-held marker after a linked top chair that overlaps it', () => {
+    const ctx = recordCtx();
+    const drawOrder = [];
+    const fillText = ctx.fillText.bind(ctx);
+    const fillRect = ctx.fillRect.bind(ctx);
+    ctx.fillText = function recordMarker(text, x, y) {
+      if (text === 'Seating held') drawOrder.push('marker');
+      fillText(text, x, y);
+    };
+    ctx.fillRect = function recordTopChair(x, y, width, height) {
+      if (x === 110 && y === 80 && width === 20 && height === 20) {
+        drawOrder.push('top-chair');
+      }
+      fillRect(x, y, width, height);
+    };
+    const state = {
+      tables: [{ id: 'held', x: 100, y: 100, status: 'empty', admissionHeld: true }],
+      chairs: [{ id: 'top', tableId: 'held', x: 110, y: 80, rotation: 0 }],
+      kitchenStations: [], serviceTables: [], serviceItems: [], equipment: [], dishes: [],
+    };
+
+    drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
+
+    expect(drawOrder).toEqual(['top-chair', 'marker']);
+  });
+
   it('draws dining furniture and a rotated service counter from loaded sprites', () => {
     const ctx = recordCtx();
     const table = loadedSprite('table');

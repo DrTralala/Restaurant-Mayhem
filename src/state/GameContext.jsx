@@ -829,6 +829,22 @@ function reduceGameAction(state, action) {
           : door),
       };
     }
+    case 'SET_TABLE_ADMISSION_HOLD': {
+      const validId = (typeof action.id === 'string' && action.id.length > 0)
+        || (Number.isSafeInteger(action.id) && action.id >= 0);
+      if (!validId || typeof action.held !== 'boolean' || !Array.isArray(state.tables)) return state;
+      const matches = (state.tables || []).filter(table => sameId(table?.id, action.id));
+      if (matches.length !== 1) return state;
+      const table = matches[0];
+      if (action.held && table.status !== 'empty') return state;
+      if ((table.admissionHeld === true) === action.held) return state;
+      return {
+        ...state,
+        tables: state.tables.map(candidate => candidate === table
+          ? { ...candidate, admissionHeld: action.held }
+          : candidate),
+      };
+    }
     case 'PLACE_ITEM':
       return placeItem(state, action);
     case 'MOVE_FIXTURES':
@@ -944,7 +960,8 @@ export function gameReducer(state, action) {
     candidate = clearRemovedDishSuspension(state, candidate, action.id);
   }
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE'
-    || action.type === 'PRIORITISE_QUEUE_PARTY') return candidate;
+    || action.type === 'PRIORITISE_QUEUE_PARTY'
+    || action.type === 'SET_TABLE_ADMISSION_HOLD') return candidate;
   if (candidate.dishes !== state.dishes) {
     candidate = {
       ...candidate,

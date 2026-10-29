@@ -93,6 +93,49 @@ describe('self seating admission', () => {
     expect(prepareSelfSeating(next).customers).toHaveLength(1);
   });
 
+  it('treats an explicit false admission hold like the optional default', () => {
+    const state = queuedState({
+      tables: queuedState().tables.map(table => ({ ...table, admissionHeld: false })),
+    });
+
+    const next = prepareSelfSeating(state);
+
+    expect(next.queue).toEqual([]);
+    expect(next.customers[0]).toMatchObject({ state: 'entering', tableId: 't1' });
+    expect(next.tables[0]).toMatchObject({ status: 'reserved', admissionHeld: false });
+  });
+
+  it('skips a held empty table and admits the party at an available alternative', () => {
+    const fresh = createInitialState();
+    const state = queuedState({
+      tables: fresh.tables.filter(table => ['t1', 't2'].includes(table.id))
+        .map(table => table.id === 't1' ? { ...table, admissionHeld: true } : table),
+      chairs: fresh.chairs.filter(chair => ['t1', 't2'].includes(chair.tableId)),
+    });
+
+    const next = prepareSelfSeating(state);
+
+    expect(next.queue).toEqual([]);
+    expect(next.customers[0]).toMatchObject({ state: 'entering', tableId: 't2' });
+    expect(next.tables.find(table => table.id === 't1'))
+      .toMatchObject({ status: 'empty', admissionHeld: true });
+    expect(next.tables.find(table => table.id === 't2'))
+      .toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
+  });
+
+  it('keeps parties queued and does not invent a gate when all empty tables are held', () => {
+    const state = queuedState({
+      tables: queuedState().tables.map(table => ({ ...table, admissionHeld: true })),
+    });
+
+    const next = prepareSelfSeating(state);
+
+    expect(next.queue).toEqual(state.queue);
+    expect(next.customers).toEqual(state.customers);
+    expect(next.tables).toEqual(state.tables);
+    expect(next.queueAdmissionGate).toBe(state.queueAdmissionGate);
+  });
+
   it('admits the prioritised feasible party first in the real seating flow', () => {
     const older = partyOf(1, 'older');
     const selected = partyOf(1, 'selected');

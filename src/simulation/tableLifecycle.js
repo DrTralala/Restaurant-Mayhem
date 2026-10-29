@@ -12,7 +12,8 @@ const chairCentre = chair => finitePoint(chair) ? { x: chair.x + 10, y: chair.y 
  * `null` when the table is not empty or the assignments are not usable.
  */
 export function reserveTableForParty(table, partyId, assignments) {
-  if (table?.status !== 'empty' || partyId == null || !assignments?.length) return null;
+  if (table?.status !== 'empty' || table.admissionHeld === true
+    || partyId == null || !assignments?.length) return null;
   const customerIds = assignments.map(assignment => assignment.customerId);
   const chairIds = assignments.map(assignment => assignment.chairId);
   if (customerIds.some(id => id == null) || chairIds.some(id => id == null)

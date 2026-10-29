@@ -489,6 +489,34 @@ describe('additive v10 feature persistence', () => {
     expect(createInitialState().restaurant).not.toHaveProperty('walkInsPaused');
   });
 
+  it('round-trips optional table admission holds in v10 and treats absence as false', () => {
+    const fresh = createInitialState();
+    expect(fresh.tables[0]).not.toHaveProperty('admissionHeld');
+    expect(() => validateSavedState(fresh)).not.toThrow();
+    expect(hydrateState(fresh, createInitialState()).tables[0]).not.toHaveProperty('admissionHeld');
+
+    for (const value of [true, false]) {
+      localStorage.clear();
+      const raw = createInitialState();
+      raw.tables = raw.tables.map((table, index) => index === 0
+        ? { ...table, admissionHeld: value }
+        : table);
+
+      expect(saveState(raw)).toBe(true);
+      expect(loadState().tables[0].admissionHeld).toBe(value);
+      expect(hydrateState(loadState(), createInitialState()).tables[0].admissionHeld).toBe(value);
+      expect(hydrateState(loadState(), createInitialState()).version).toBe(raw.version);
+    }
+  });
+
+  it.each(['yes', 1, 0, null])('rejects malformed table admission hold %s', admissionHeld => {
+    const raw = createInitialState();
+    raw.tables[0] = { ...raw.tables[0], admissionHeld };
+
+    expect(() => validateSavedState(raw)).toThrow();
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
+  });
+
   it('round-trips the current logical queue order after a party is prioritised', () => {
     const raw = createInitialState();
     const originalQueue = [
