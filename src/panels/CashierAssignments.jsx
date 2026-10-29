@@ -16,6 +16,59 @@ function identityToken(value) {
   return `${typeof value}:${String(value)}`;
 }
 
+function staffBaseLabel(worker) {
+  return typeof worker?.name === 'string' && worker.name.trim().length > 0
+    ? worker.name : String(worker?.id);
+}
+
+function staffDisplayLabels(staff) {
+  const baseLabels = staff.map(staffBaseLabel);
+  const baseLabelCounts = new Map();
+  baseLabels.forEach(label => {
+    baseLabelCounts.set(label, (baseLabelCounts.get(label) ?? 0) + 1);
+  });
+
+  return new Map(staff.map((worker, index) => {
+    const baseLabel = baseLabels[index];
+    const label = baseLabelCounts.get(baseLabel) > 1
+      ? `${baseLabel} (${identityToken(worker?.id)})`
+      : baseLabel;
+    return [worker, label];
+  }));
+}
+
+function normalizeOptionLabel(label) {
+  return label.replace(/\s+/g, ' ').trim();
+}
+
+function uniqueOptionLabels(options) {
+  const labelCounts = new Map();
+  options.forEach(option => {
+    const label = normalizeOptionLabel(option.label);
+    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+  });
+
+  const reservedLabels = new Set(labelCounts.keys());
+  const usedLabels = new Set();
+  return options.map(option => {
+    let label = option.label;
+    if (labelCounts.get(normalizeOptionLabel(label)) > 1
+      || usedLabels.has(normalizeOptionLabel(label))) {
+      let attempt = 0;
+      do {
+        const suffix = attempt === 0
+          ? option.disambiguator : `${option.disambiguator}; ${attempt}`;
+        label = `${option.label} (${suffix})`;
+        attempt += 1;
+      } while (reservedLabels.has(normalizeOptionLabel(label))
+        || usedLabels.has(normalizeOptionLabel(label)));
+    }
+
+    usedLabels.add(normalizeOptionLabel(label));
+    return { ...option, label };
+  });
+}
+
 function reasonMessage(reason) {
   switch (reason) {
     case 'station-busy':
@@ -44,6 +97,7 @@ export default function CashierAssignments() {
   const decisionPending = isCareerDecisionPending(state);
   const stations = Array.isArray(state.cashierStations) ? state.cashierStations : [];
   const staff = Array.isArray(state.staff) ? state.staff : [];
+  const displayLabels = staffDisplayLabels(staff);
   const now = Number.isFinite(state.restaurant?.gameTime) ? state.restaurant.gameTime : 0;
   const eligibleWaiters = staff.filter(worker => validIdentity(worker?.id)
     && staff.filter(candidate => candidate?.id === worker.id).length === 1
@@ -91,6 +145,8 @@ export default function CashierAssignments() {
           const hasSelectedOption = selectedStaffId === null || eligibleTokens.has(selectedToken);
           const staleWorker = selectedStaffId !== null
             ? staff.find(worker => worker?.id === selectedStaffId) : null;
+          const staleWorkerLabel = displayLabels.get(staleWorker) ?? String(selectedStaffId);
+          const currentWorkerLabel = displayLabels.get(currentWorker) ?? String(currentStaffId);
           const clearResult = prepareCashierAssignment(state, station.id, null);
           const assignmentResult = prepareCashierAssignment(state, station.id, selectedStaffId);
           const changed = selectedStaffId !== currentStaffId;
@@ -98,6 +154,49 @@ export default function CashierAssignments() {
           const selectId = `${sectionId}-select-${index}`;
           const message = !assignmentResult.ok
             ? reasonMessage(assignmentResult.reason) : '';
+          const optionEntries = [{
+            key: UNASSIGNED_VALUE,
+            value: UNASSIGNED_VALUE,
+            label: 'Unassigned',
+            disabled: decisionPending || !clearResult.ok,
+            disambiguator: 'unassigned',
+          }];
+
+          if (selectedStaffId !== null && !hasSelectedOption) {
+            optionEntries.push({
+              key: selectedToken,
+              value: selectedToken,
+              label: `${staleWorkerLabel}${selectedStaffId === currentStaffId
+                ? ' (currently assigned, unavailable)' : ' (currently unavailable)'}`,
+              disabled: true,
+              disambiguator: identityToken(selectedStaffId),
+            });
+          }
+
+          eligibleWaiters.forEach(worker => {
+            const token = `waiter:${identityToken(worker.id)}`;
+            const result = prepareCashierAssignment(state, station.id, worker.id);
+            optionEntries.push({
+              key: token,
+              value: token,
+              label: displayLabels.get(worker),
+              disabled: decisionPending || !result.ok,
+              disambiguator: identityToken(worker.id),
+            });
+          });
+
+          if (currentStaffId !== null && selectedStaffId !== currentStaffId
+            && !currentWorkerEligible) {
+            optionEntries.push({
+              key: currentStaffToken,
+              value: currentStaffToken,
+              label: `${currentWorkerLabel} (currently assigned, unavailable)`,
+              disabled: true,
+              disambiguator: identityToken(currentStaffId),
+            });
+          }
+
+          const renderedOptions = uniqueOptionLabels(optionEntries);
 
           const handleChange = event => {
             const value = event.target.value;
@@ -136,31 +235,11 @@ export default function CashierAssignments() {
                   disabled={decisionPending}
                   style={{ ...TYPOGRAPHY.control, width: '100%', minHeight: 32, background: '#111', color: '#eee' }}
                 >
-                  <option value={UNASSIGNED_VALUE} disabled={decisionPending || !clearResult.ok}>
-                    Unassigned
-                  </option>
-                  {selectedStaffId !== null && !hasSelectedOption && (
-                    <option value={selectedToken} disabled>
-                      {`${staleWorker?.name || String(selectedStaffId)}${selectedStaffId === currentStaffId
-                        ? ' (currently assigned, unavailable)' : ' (currently unavailable)'}`}
+                  {renderedOptions.map(option => (
+                    <option key={option.key} value={option.value} disabled={option.disabled}>
+                      {option.label}
                     </option>
-                  )}
-                  {eligibleWaiters.map(worker => {
-                    const token = `waiter:${identityToken(worker.id)}`;
-                    const result = prepareCashierAssignment(state, station.id, worker.id);
-                    const label = worker.name || String(worker.id);
-                    return (
-                      <option key={token} value={token} disabled={decisionPending || !result.ok}>
-                        {label}
-                      </option>
-                    );
-                  })}
-                  {currentStaffId !== null && selectedStaffId !== currentStaffId
-                    && !currentWorkerEligible && (
-                    <option value={currentStaffToken} disabled>
-                      {`${currentWorker?.name || String(currentStaffId)} (currently assigned, unavailable)`}
-                    </option>
-                  )}
+                  ))}
                 </select>
                 {message && (
                   <p role="alert" style={{ ...TYPOGRAPHY.secondary, color: '#f2d08a', margin: '4px 0 0' }}>

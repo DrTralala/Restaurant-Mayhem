@@ -26,6 +26,12 @@ function makeState(overrides = {}) {
   };
 }
 
+function expectUniqueOptionLabels(select) {
+  const labels = within(select).getAllByRole('option').map(option =>
+    option.textContent.replace(/\s+/g, ' ').trim());
+  expect(new Set(labels).size).toBe(labels.length);
+}
+
 describe('CashierAssignments', () => {
   beforeEach(() => {
     useGameState.mockReset();
@@ -49,6 +55,170 @@ describe('CashierAssignments', () => {
     expect(dispatch).toHaveBeenCalledWith({
       type: 'ASSIGN_CASHIER', stationId: 2, staffId: 42,
     });
+  });
+
+  it('distinguishes same-name waiters by typed ID and preserves ID types on Apply', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [
+        { id: 1, name: 'Alex', role: 'waiter', task: null },
+        { id: '1', name: 'Alex', role: 'waiter', task: null },
+        { id: 2, name: 'Bea', role: 'waiter', task: null },
+      ],
+      cashierStations: [{ id: 2, x: 800, y: 120, w: 40, h: 40 }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<CashierAssignments />);
+
+    const select = screen.getByRole('combobox', { name: 'Cashier assignment for station 2' });
+    const numericAlex = screen.getByRole('option', { name: 'Alex (number:1)' });
+    const stringAlex = screen.getByRole('option', { name: 'Alex (string:1)' });
+    expect(screen.getByRole('option', { name: 'Bea' })).toBeInTheDocument();
+    expect(numericAlex.value).not.toBe(stringAlex.value);
+
+    fireEvent.change(select, { target: { value: numericAlex.value } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply station 2 assignment' }));
+    expect(dispatch).toHaveBeenNthCalledWith(1, {
+      type: 'ASSIGN_CASHIER', stationId: 2, staffId: 1,
+    });
+
+    fireEvent.change(select, { target: { value: stringAlex.value } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply station 2 assignment' }));
+    expect(dispatch).toHaveBeenNthCalledWith(2, {
+      type: 'ASSIGN_CASHIER', stationId: 2, staffId: '1',
+    });
+  });
+
+  it('uses safe fallback labels for unnamed waiters and unavailable current owners', () => {
+    useGameState.mockReturnValue(makeState({
+      staff: [
+        { id: 'owner', name: '   ', role: 'waiter', task: null, effectiveDuty: 'pto' },
+        { id: 42, role: 'waiter', task: null },
+      ],
+      cashierStations: [{ id: 2, x: 800, y: 120, w: 40, h: 40, assignedStaffId: 'owner' }],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<CashierAssignments />);
+
+    const select = screen.getByRole('combobox', { name: 'Cashier assignment for station 2' });
+    const currentOwner = screen.getByRole('option', {
+      name: 'owner (currently assigned, unavailable)',
+    });
+    const unnamedWaiter = screen.getByRole('option', { name: '42' });
+    expect(currentOwner).toBeDisabled();
+
+    fireEvent.change(select, { target: { value: unnamedWaiter.value } });
+
+    expect(screen.getByRole('option', {
+      name: 'owner (currently assigned, unavailable)',
+    })).toBeDisabled();
+  });
+
+  it('keeps unavailable-owner status labels distinct from literal staff names', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [
+        { id: 'owner', name: 'Alex', role: 'waiter', task: null, effectiveDuty: 'pto' },
+        {
+          id: 'candidate', name: 'Alex (currently assigned, unavailable)',
+          role: 'waiter', task: null,
+        },
+      ],
+      cashierStations: [{ id: 2, x: 800, y: 120, w: 40, h: 40, assignedStaffId: 'owner' }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<CashierAssignments />);
+
+    const select = screen.getByRole('combobox', { name: 'Cashier assignment for station 2' });
+    const ownerOption = within(select).getAllByRole('option')
+      .find(option => option.value === 'waiter:string:owner');
+    const candidateOption = within(select).getAllByRole('option')
+      .find(option => option.value === 'waiter:string:candidate');
+    expect(ownerOption).toBeDefined();
+    expect(candidateOption).toBeDefined();
+    expectUniqueOptionLabels(select);
+
+    fireEvent.change(select, { target: { value: candidateOption.value } });
+    expectUniqueOptionLabels(select);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply station 2 assignment' }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'ASSIGN_CASHIER', stationId: 2, staffId: 'candidate',
+    });
+  });
+
+  it('keeps generated typed suffixes distinct from literal staff names', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [
+        { id: 1, name: 'Alex', role: 'waiter', task: null },
+        { id: '1', name: 'Alex', role: 'waiter', task: null },
+        { id: 'literal', name: 'Alex (number:1)', role: 'waiter', task: null },
+        { id: 7, name: 'Bea', role: 'waiter', task: null },
+      ],
+      cashierStations: [{ id: 2, x: 800, y: 120, w: 40, h: 40 }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<CashierAssignments />);
+
+    const select = screen.getByRole('combobox', { name: 'Cashier assignment for station 2' });
+    const numericAlex = within(select).getAllByRole('option')
+      .find(option => option.value === 'waiter:number:1');
+    expectUniqueOptionLabels(select);
+    expect(numericAlex.value).toBe('waiter:number:1');
+    expect(screen.getByRole('option', { name: 'Bea' })).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: numericAlex.value } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply station 2 assignment' }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'ASSIGN_CASHIER', stationId: 2, staffId: 1,
+    });
+  });
+
+  it('keeps the Unassigned option distinct from a waiter named Unassigned', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [{ id: 'worker', name: 'Unassigned', role: 'waiter', task: null }],
+      cashierStations: [{ id: 2, x: 800, y: 120, w: 40, h: 40 }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<CashierAssignments />);
+
+    const select = screen.getByRole('combobox', { name: 'Cashier assignment for station 2' });
+    const workerOption = within(select).getAllByRole('option')
+      .find(option => option.value === 'waiter:string:worker');
+    expectUniqueOptionLabels(select);
+    expect(workerOption.value).toBe('waiter:string:worker');
+
+    fireEvent.change(select, { target: { value: workerOption.value } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply station 2 assignment' }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'ASSIGN_CASHIER', stationId: 2, staffId: 'worker',
+    });
+  });
+
+  it('rerenders staff labels when a waiter is renamed', () => {
+    let state = makeState();
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(vi.fn());
+
+    const { rerender } = render(<CashierAssignments />);
+
+    expect(screen.getByRole('option', { name: 'Ada' })).toBeInTheDocument();
+    state = {
+      ...state,
+      staff: state.staff.map(worker => worker.id === 'w1'
+        ? { ...worker, name: 'Ada Renamed' }
+        : worker),
+    };
+    rerender(<CashierAssignments />);
+
+    expect(screen.queryByRole('option', { name: 'Ada' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Ada Renamed' })).toBeInTheDocument();
   });
 
   it('dispatches an explicit null when clearing a safe station', () => {
