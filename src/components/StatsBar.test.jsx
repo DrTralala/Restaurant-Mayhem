@@ -39,6 +39,23 @@ it.each([[640739, '0d 0h 2m'], [640740, '0d 0h 1m'], [640799.9, 'Under 1 minute'
   },
 );
 
+it.each([
+  ['null', null],
+  ['undefined', undefined],
+  ['string', '2.5'],
+  ['NaN', Number.NaN],
+  ['Infinity', Number.POSITIVE_INFINITY],
+])('shows an unavailable active-career reputation actual for %s', (_, reputation) => {
+  state.careerRun = createCareerRun({ scenarioId: 'opening-week', runId: 'hud', startedAt: 36000 });
+  state.restaurant.gameTime = 36000;
+  state.restaurant.reputation = reputation;
+
+  render(<StatsBar />);
+
+  expect(screen.getByRole('button', { name: 'Opening Week progress' }))
+    .toHaveTextContent('Reputation: Unavailable / 2.00');
+});
+
 it('renders the analogue clock beside the text time', () => {
   render(<StatsBar />);
 

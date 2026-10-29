@@ -11,6 +11,9 @@ function formatFunds(value) {
 
 function careerCriterionText(criterion) {
   const reputation = criterion.id === 'reputation';
+  if (reputation && !Number.isFinite(criterion.actual)) {
+    return `Reputation: Unavailable / ${criterion.target.toFixed(2)} — unavailable`;
+  }
   const rounded = reputation ? criterion.actual.toFixed(2) : criterion.actual;
   const actual = reputation && !criterion.passed && Number(rounded) >= criterion.target
     ? criterion.actual : rounded;
