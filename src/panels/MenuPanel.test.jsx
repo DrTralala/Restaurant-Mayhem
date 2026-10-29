@@ -1176,6 +1176,62 @@ describe('MenuPanel drinks', () => {
       expect(screen.queryByRole('button', { name: /Confirm remove/ })).not.toBeInTheDocument();
     });
 
+    it('focuses Cookbook after a stateful cookbook removal with another dish remaining', () => {
+      const actions = [];
+      useGameState.mockImplementation(() => statefulHarness.current.state);
+      useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+      const initial = createInitialState();
+      initial.dishes.push(customDish('rye-toast', 'Rye Toast'));
+      render(<StatefulMenuPanel initial={initial} actions={actions} />);
+
+      const remove = removeButton('Toasted Bread');
+      remove.focus();
+      expect(remove).toHaveFocus();
+      fireEvent.click(remove);
+
+      expect(screen.queryByRole('article', { name: 'Toasted Bread menu item' })).not.toBeInTheDocument();
+      expect(screen.getByRole('article', { name: 'Rye Toast menu item' })).toBeInTheDocument();
+      expect(actions).toEqual([{ type: 'REMOVE_DISH', id: 'starter-toast' }]);
+      expect(screen.getByRole('button', { name: 'Cookbook' })).toHaveFocus();
+    });
+
+    it('focuses Cookbook after a stateful removal of the final cookbook dish', () => {
+      const actions = [];
+      useGameState.mockImplementation(() => statefulHarness.current.state);
+      useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+      render(<StatefulMenuPanel initial={createInitialState()} actions={actions} />);
+
+      const remove = removeButton('Toasted Bread');
+      remove.focus();
+      expect(remove).toHaveFocus();
+      fireEvent.click(remove);
+
+      expect(screen.queryByRole('article', { name: 'Toasted Bread menu item' })).not.toBeInTheDocument();
+      expect(screen.getByText('No dishes yet. Create your first dish!')).toBeInTheDocument();
+      expect(actions).toEqual([{ type: 'REMOVE_DISH', id: 'starter-toast' }]);
+      expect(screen.getByRole('button', { name: 'Cookbook' })).toHaveFocus();
+    });
+
+    it.each([
+      ['read-only', true, false],
+      ['career decision pending', false, true],
+    ])('does not dispatch or move focus for a blocked cookbook removal (%s)', (_label, readOnly, needsDecision) => {
+      const base = removalMenu();
+      useGameState.mockReturnValue(needsDecision ? { ...base, careerRun: { needsDecision: true } } : base);
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel readOnly={readOnly} />);
+
+      const cookbook = screen.getByRole('button', { name: 'Cookbook' });
+      cookbook.focus();
+      const remove = removeButton('Toasted Bread');
+      expect(remove).toBeDisabled();
+      fireEvent.click(remove);
+
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(cookbook).toHaveFocus();
+    });
+
     it('clears a custom confirmation when detouring to the cookbook and back', () => {
       const dispatch = vi.fn();
       useDispatch.mockReturnValue(dispatch);

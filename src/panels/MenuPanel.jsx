@@ -209,6 +209,7 @@ export default function MenuPanel({ readOnly = false }) {
                   setPendingRemoval({ id: dish.id, dish: rawDish, trigger: event.currentTarget });
                 } else {
                   mutate({ type: 'REMOVE_DISH', id: dish.id });
+                  cookbookButtonRef.current?.focus();
                 }
               }}
               style={{ ...TYPOGRAPHY.control, background: '#633', color: '#d44', border: '1px solid #844', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
