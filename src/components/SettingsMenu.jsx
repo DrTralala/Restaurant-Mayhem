@@ -96,6 +96,8 @@ export default function SettingsMenu({ isOpen, onToggle, onClose, modal = false 
       if (!isCurrentRequest()) return;
       const hydrated = hydrateState(saved, fresh);
       if (!isCurrentRequest()) return;
+      if (!window.confirm('Loading this save will replace the current session. Unsaved progress will be lost. Continue?')) return;
+      if (!isCurrentRequest()) return;
       dispatch({ type: 'LOAD_STATE', state: hydrated });
       if (!isCurrentRequest()) return;
       setMessage(`Loaded ${filename}`);

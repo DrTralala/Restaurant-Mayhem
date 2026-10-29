@@ -358,6 +358,7 @@ describe('asynchronous Settings ownership', () => {
   it('allows only the newest overlapping load to hydrate, dispatch and report success', async () => {
     const older = deferred();
     const newer = deferred();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     loadLatestRepositoryStateMock
       .mockReturnValueOnce(older.promise)
       .mockReturnValueOnce(newer.promise);
@@ -372,6 +373,8 @@ describe('asynchronous Settings ownership', () => {
 
     expect(hydrateStateMock).toHaveBeenCalledTimes(1);
     expect(hydrateStateMock).toHaveBeenCalledWith(compatibleLoad('newer.json').state, expect.any(Object));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/replace.*current/i));
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ type: 'LOAD_STATE', state: hydrated });
     expect(screen.getByRole('status')).toHaveTextContent('Loaded newer.json');
@@ -380,6 +383,7 @@ describe('asynchronous Settings ownership', () => {
   it('does not report a stale rejection after a newer request succeeds', async () => {
     const older = deferred();
     const newer = deferred();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     loadLatestRepositoryStateMock
       .mockReturnValueOnce(older.promise)
       .mockReturnValueOnce(newer.promise);
@@ -391,14 +395,52 @@ describe('asynchronous Settings ownership', () => {
     await settle(newer, pending => pending.resolve(compatibleLoad('newer.json')));
     await settle(older, pending => pending.reject(new Error('stale load failed')));
 
+    expect(confirm).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('status')).toHaveTextContent('Loaded newer.json');
     expect(screen.queryByText('stale load failed')).not.toBeInTheDocument();
   });
 
+  it('does not dispatch a valid load when replacement is declined', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    loadLatestRepositoryStateMock.mockResolvedValueOnce(compatibleLoad('declined.json'));
+    hydrateStateMock.mockReturnValue({ loaded: 'declined' });
+    render(settings());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/replace.*current/i));
+    expect(hydrateStateMock).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch if the request becomes stale while confirmation is open', async () => {
+    const request = deferred();
+    const newer = deferred();
+    loadLatestRepositoryStateMock
+      .mockReturnValueOnce(request.promise)
+      .mockReturnValueOnce(newer.promise);
+    hydrateStateMock.mockReturnValue({ loaded: 'stale-after-confirm' });
+    const confirm = vi.spyOn(window, 'confirm').mockImplementation(() => {
+      fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+      return true;
+    });
+    render(settings());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+    await settle(request, pending => pending.resolve(compatibleLoad('superseded.json')));
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/replace.*current/i));
+    expect(hydrateStateMock).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it('does not invalidate a load when the panel is ordinarily closed and reopened', async () => {
     const request = deferred();
     const hydrated = { loaded: true };
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     loadLatestRepositoryStateMock.mockReturnValue(request.promise);
     hydrateStateMock.mockReturnValue(hydrated);
     const view = render(settings());
@@ -408,6 +450,7 @@ describe('asynchronous Settings ownership', () => {
     view.rerender(settings({ isOpen: true }));
     await settle(request, pending => pending.resolve(compatibleLoad()));
 
+    expect(confirm).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ type: 'LOAD_STATE', state: hydrated });
     expect(screen.getByRole('status')).toHaveTextContent('Loaded save.json');
   });
@@ -415,6 +458,7 @@ describe('asynchronous Settings ownership', () => {
   it('keeps load ownership valid after StrictMode effect cleanup and setup', async () => {
     const request = deferred();
     const hydrated = { loaded: true };
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     loadLatestRepositoryStateMock.mockReturnValue(request.promise);
     hydrateStateMock.mockReturnValue(hydrated);
     render(<StrictMode>{settings()}</StrictMode>);
@@ -422,11 +466,13 @@ describe('asynchronous Settings ownership', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
     await settle(request, pending => pending.resolve(compatibleLoad()));
 
+    expect(confirm).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ type: 'LOAD_STATE', state: hydrated });
     expect(screen.getByRole('status')).toHaveTextContent('Loaded save.json');
   });
 
   it('shows current incompatible and rejected load results', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     loadLatestRepositoryStateMock.mockResolvedValueOnce({
       state: { version: SAVE_VERSION - 1 }, filename: 'incompatible.json',
     });
@@ -435,12 +481,14 @@ describe('asynchronous Settings ownership', () => {
 
     expect(await screen.findByRole('status')).toHaveTextContent('Saved game is incompatible');
     expect(dispatch).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
 
     loadLatestRepositoryStateMock.mockRejectedValueOnce(new Error('current load failed'));
     fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
 
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('current load failed'));
     expect(dispatch).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it('does not show a save completion message after unmount', async () => {
