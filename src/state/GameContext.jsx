@@ -51,6 +51,7 @@ import { moveFixtures } from './fixtureMoves';
 import { invalidateMovementRuntime, moveStaff } from './staffMoves';
 import { getFixtureSaleEligibility, sellFixtures } from './fixtureSales';
 import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
+import { prioritiseQueuedParty } from '../simulation/queuePriority';
 
 const STARTING_DISH_QUALITY = 1;
 
@@ -478,6 +479,10 @@ function reduceGameAction(state, action) {
       return withdrawServiceContract(state, { instanceId: action.instanceId });
     case 'TICK':
       return action.nextState;
+    case 'PRIORITISE_QUEUE_PARTY': {
+      const nextQueue = prioritiseQueuedParty(state.queue, action.partyId);
+      return nextQueue === state.queue ? state : { ...state, queue: nextQueue };
+    }
     case 'SET_SPEED':
       if (![1, 2, 4].includes(action.speed)) return state;
       return { ...state, speed: action.speed };
@@ -912,7 +917,8 @@ export function gameReducer(state, action) {
   if (isCareerDecisionPending(state) && action.type !== 'LOAD_STATE') return state;
   if (state.navigationFault && action.type === 'TOGGLE_PAUSE') return state;
   let candidate = reduceGameAction(state, action);
-  if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE') return candidate;
+  if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE'
+    || action.type === 'PRIORITISE_QUEUE_PARTY') return candidate;
   if (candidate.dishes !== state.dishes) {
     candidate = {
       ...candidate,

@@ -317,6 +317,48 @@ it('lists every queued party with logical ordinals and actual guest counts', () 
   expect(within(section).getByText('Entry queue: 2 parties · 3 guests')).toBeInTheDocument();
 });
 
+it('offers opaque per-party priority controls and disables the first and career-gated actions', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    queue: [
+      { partyId: 'opaque-first', members: [queuedMember()] },
+      { partyId: 'opaque-selected', members: [queuedMember()] },
+    ],
+  });
+  const { rerender } = render(<StatsPanel />);
+
+  const first = screen.getByRole('button', { name: 'Prioritise party opaque-first' });
+  const selected = screen.getByRole('button', { name: 'Prioritise party opaque-selected' });
+  expect(first).toBeDisabled();
+  expect(selected).toBeEnabled();
+  expect(screen.getByText(/Priority changes consideration order only; it does not seat a party immediately or move anyone physically in line, and may delay older parties\./))
+    .toBeInTheDocument();
+  fireEvent.click(selected);
+  expect(mockUseDispatch).toHaveBeenCalledWith({
+    type: 'PRIORITISE_QUEUE_PARTY', partyId: 'opaque-selected',
+  });
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(document.querySelector('[aria-live="assertive"]')).toBeNull();
+
+  mockUseDispatch.mockClear();
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    careerRun: { needsDecision: true },
+    queue: [
+      { partyId: 'career-first', members: [queuedMember()] },
+      { partyId: 'career-second', members: [queuedMember()] },
+    ],
+  });
+  rerender(<StatsPanel />);
+  const careerFirst = screen.getByRole('button', { name: 'Prioritise party career-first' });
+  const careerSecond = screen.getByRole('button', { name: 'Prioritise party career-second' });
+  expect(careerFirst).toBeDisabled();
+  expect(careerSecond).toBeDisabled();
+  careerSecond.disabled = false;
+  fireEvent.click(careerSecond);
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+});
+
 it('shows divergent percentages per party and uses the maximum of tied lowest guests', () => {
   mockUseGameState.mockReturnValue({
     ...baseState,

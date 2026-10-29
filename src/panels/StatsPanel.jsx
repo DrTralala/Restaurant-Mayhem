@@ -11,6 +11,7 @@ import { getDailyPayroll, isRestaurantOpen } from '../simulation/clock';
 import { DIRT_REPUTATION_THRESHOLD, getDirtReputationLossPerMinute } from '../simulation/dirt';
 import { getQueuePartyCount, QUEUE_PARTY_CAPACITY } from '../simulation/customerQueue';
 import { getRevenueChart } from './revenueChart';
+import { isCareerDecisionPending } from '../simulation/careerRun';
 
 const statBox = { ...TYPOGRAPHY.secondary, background: '#1a1a2e', borderRadius: 6, padding: 10, border: '1px solid #0f3460' };
 
@@ -55,6 +56,7 @@ export default function StatsPanel() {
   const dispatch = useDispatch();
   const canvasRef = useRef(null);
   const completedFinancesId = useId();
+  const queuePriorityHelpId = useId();
   const partyReviewHistory = Array.isArray(state.partyReviewHistory)
     ? state.partyReviewHistory
     : [];
@@ -91,6 +93,7 @@ export default function StatsPanel() {
   const dirtPressureText = dirtReputationLossPerMinute === 0
     ? '0'
     : `-${dirtReputationLossPerMinute.toFixed(3)}`;
+  const careerDecisionPending = isCareerDecisionPending(state);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -241,10 +244,30 @@ export default function StatsPanel() {
                 <div>Party {index + 1}: {party.guestCount} {party.guestCount === 1 ? 'guest' : 'guests'}</div>
                 <div>{formatPatience(party)}</div>
                 <div>{formatPatienceEstimate(party, restaurantOpen)}</div>
+                <button
+                  type="button"
+                  disabled={index === 0 || careerDecisionPending}
+                  aria-describedby={queuePriorityHelpId}
+                  onClick={() => {
+                    if (index === 0 || careerDecisionPending) return;
+                    dispatch({ type: 'PRIORITISE_QUEUE_PARTY', partyId: party.partyId });
+                  }}
+                  style={{
+                    ...TYPOGRAPHY.control,
+                    marginTop: 8,
+                    padding: '6px 8px',
+                    cursor: index === 0 || careerDecisionPending ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Prioritise party {party.partyId}
+                </button>
               </li>
             ))}
           </ul>
         )}
+        <p id={queuePriorityHelpId} style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+          Priority changes consideration order only; it does not seat a party immediately or move anyone physically in line, and may delay older parties.
+        </p>
         <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
           All queued parties are included, even those not shown outside. A party leaves when any guest runs out of queue patience. Percentages show the lowest-remaining guest's share of their own maximum. At current queue pressure, assuming no seating, arrivals or closing. This is game time until patience runs out, not a seating wait estimate. Pausing the simulation stops the countdown.
         </p>

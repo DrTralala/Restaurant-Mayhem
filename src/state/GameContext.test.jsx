@@ -2419,4 +2419,62 @@ describe('GameProvider fixture sale expectations', () => {
     expect(game.state.tables).toEqual([]);
     expect(game.state.restaurant.funds).toBe(750);
   });
+
+  it('prioritises a queued party without changing physical or restaurant state', () => {
+    const first = {
+      partyId: 'first', members: [{ id: 'first-member', partyId: 'first', state: 'queued' }],
+    };
+    const selected = {
+      partyId: 'selected', members: [{ id: 'selected-member', partyId: 'selected', state: 'queued' }],
+    };
+    const queueSlots = [
+      { memberId: 'first-member', partyId: 'first', x: 973, y: 390, slot: 0 },
+      { memberId: 'selected-member', partyId: 'selected', x: 973, y: 420, slot: 1 },
+    ];
+    const queueDepartures = [{ id: 'departing', partyId: 'older', departureReason: 'closed' }];
+    const queueAdmissionGate = {
+      partyId: 'entering', customerIds: ['entering-member'], tableId: 't1', doorId: 'door1',
+    };
+    const state = {
+      ...createInitialState(),
+      queue: [first, selected],
+      queueSlots,
+      queueDepartures,
+      queueAdmissionGate,
+    };
+
+    const next = gameReducer(state, { type: 'PRIORITISE_QUEUE_PARTY', partyId: 'selected' });
+
+    expect(next).not.toBe(state);
+    expect(next.queue).toEqual([selected, first]);
+    expect(next.queue[0]).toBe(selected);
+    expect(next.queue[1]).toBe(first);
+    expect(state.queue).toEqual([first, selected]);
+    expect(next.queueSlots).toBe(queueSlots);
+    expect(next.queueSlots[0]).toBe(queueSlots[0]);
+    expect(next.queueSlots[1]).toBe(queueSlots[1]);
+    expect(next.queueSlots.map(({ memberId, x, y }) => [memberId, x, y])).toEqual([
+      ['first-member', 973, 390], ['selected-member', 973, 420],
+    ]);
+    expect(next.queueDepartures).toBe(queueDepartures);
+    expect(next.customers).toBe(state.customers);
+    expect(next.tables).toBe(state.tables);
+    expect(next.queueAdmissionGate).toBe(queueAdmissionGate);
+    expect(next.restaurant).toBe(state.restaurant);
+  });
+
+  it('blocks queue prioritisation while a career decision is pending', () => {
+    const state = {
+      ...createInitialState(),
+      queue: [
+        { partyId: 'first', members: [{ id: 'first-member', partyId: 'first' }] },
+        { partyId: 'selected', members: [{ id: 'selected-member', partyId: 'selected' }] },
+      ],
+      careerRun: { needsDecision: true },
+    };
+
+    expect(gameReducer(state, {
+      type: 'PRIORITISE_QUEUE_PARTY', partyId: 'selected',
+    })).toBe(state);
+  });
 });

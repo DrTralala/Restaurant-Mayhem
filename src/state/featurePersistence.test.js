@@ -8,6 +8,7 @@ import { continueCareerAsSandbox, evaluateCareerRun } from '../simulation/career
 import { getResolvedDrink } from '../data/drinks';
 import { getStaffTaskDuration } from '../simulation/staffPerformance';
 import { buildAffordableBaskets } from '../simulation/menuEconomy';
+import { prioritiseQueuedParty } from '../simulation/queuePriority';
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 function legacy() {
@@ -471,6 +472,24 @@ describe('additive v10 feature persistence', () => {
     const hydrated = hydrateState(createInitialState(), createInitialState());
     expect(hydrated.restaurant.walkInsPaused).not.toBe(true);
     expect(createInitialState().restaurant).not.toHaveProperty('walkInsPaused');
+  });
+
+  it('round-trips the current logical queue order after a party is prioritised', () => {
+    const raw = createInitialState();
+    const originalQueue = [
+      { partyId: 'older-party', members: [{ id: 'older-member', partyId: 'older-party', state: 'queued' }] },
+      { partyId: 'later-party', members: [{ id: 'later-member', partyId: 'later-party', state: 'queued' }] },
+      { partyId: 'last-party', members: [{ id: 'last-member', partyId: 'last-party', state: 'queued' }] },
+    ];
+    raw.queue = prioritiseQueuedParty(originalQueue, 'later-party');
+
+    expect(saveState(raw)).toBe(true);
+    const loaded = loadState();
+    expect(loaded.queue.map(party => party.partyId))
+      .toEqual(['later-party', 'older-party', 'last-party']);
+    const hydrated = hydrateState(loaded, createInitialState());
+    expect(hydrated.queue.map(party => party.partyId))
+      .toEqual(['later-party', 'older-party', 'last-party']);
   });
 
   it.each(['yes', 1, 0, null])('rejects invalid walk-in pause value %s in both entry points', value => {

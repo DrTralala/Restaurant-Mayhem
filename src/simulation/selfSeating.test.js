@@ -4,6 +4,8 @@ import { cellToWorld } from './pathfinding';
 import { runTick } from './gameLoop';
 import { prepareCustomersForMovement } from './customers';
 import { prepareSelfSeating, reconcileSelfSeatingState, resolveSelfSeating } from './selfSeating';
+import { reconcileQueueSlots } from './customerQueue';
+import { prioritiseQueuedParty } from './queuePriority';
 import { captureNavigation } from './navigation/telemetry';
 
 function queuedState(overrides = {}) {
@@ -89,6 +91,62 @@ describe('self seating admission', () => {
     expect(next.customers[0]).toMatchObject({ state: 'entering', tableId: 't1' });
     expect(next.tables[0]).toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
     expect(prepareSelfSeating(next).customers).toHaveLength(1);
+  });
+
+  it('admits the prioritised feasible party first in the real seating flow', () => {
+    const older = partyOf(1, 'older');
+    const selected = partyOf(1, 'selected');
+    const state = queuedState({ queue: [older, selected] });
+    const queue = prioritiseQueuedParty(state.queue, 'selected');
+
+    const next = prepareSelfSeating({ ...state, queue });
+
+    expect(next.customers.map(customer => customer.partyId)).toEqual(['selected']);
+    expect(next.queue).toEqual([older]);
+    expect(next.tables[0]).toMatchObject({ status: 'reserved', diningPartyId: 'selected' });
+  });
+
+  it('still skips a first party that does not fit an available table', () => {
+    const incompatible = partyOf(5, 'incompatible');
+    const compatible = partyOf(1, 'compatible');
+
+    const next = prepareSelfSeating(queuedState({ queue: [incompatible, compatible] }));
+
+    expect(next.customers.map(customer => customer.partyId)).toEqual(['compatible']);
+    expect(next.queue).toEqual([incompatible]);
+  });
+
+  it('keeps an occupied admission gate blocking a prioritised queue', () => {
+    const admitted = prepareSelfSeating(queuedState());
+    const older = partyOf(1, 'older');
+    const selected = partyOf(1, 'selected');
+    const queue = prioritiseQueuedParty([older, selected], 'selected');
+    const blocked = prepareSelfSeating({ ...admitted, queue });
+
+    expect(blocked.queue).toEqual([selected, older]);
+    expect(blocked.customers).toEqual(admitted.customers);
+    expect(blocked.queueAdmissionGate).toEqual(admitted.queueAdmissionGate);
+    expect(blocked.tables.find(table => table.id === 't1'))
+      .toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
+  });
+
+  it('reconciles existing durable leases at their exact coordinates after reordering', () => {
+    const older = partyOf(1, 'older');
+    const selected = partyOf(1, 'selected');
+    const queue = prioritiseQueuedParty([older, selected], 'selected');
+    const queueSlots = [
+      { memberId: 'older-c1', partyId: 'older', x: 973, y: 390, slot: 0 },
+      { memberId: 'selected-c1', partyId: 'selected', x: 973, y: 420, slot: 1 },
+    ];
+    const state = queuedState({ queue: [older, selected], queueSlots });
+
+    const reconciled = reconcileQueueSlots({ ...state, queue }, queueSlots);
+
+    expect(reconciled.map(({ memberId, partyId, x, y }) => [memberId, partyId, x, y]))
+      .toEqual([
+        ['older-c1', 'older', 973, 390],
+        ['selected-c1', 'selected', 973, 420],
+      ]);
   });
 
   it('uses another empty chair when the first chair has no available approach', () => {
