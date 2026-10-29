@@ -172,7 +172,7 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
     renameIdentityRef.current = identity;
     setEditingIdentity(identity);
     setEditingId(worker.id);
-    setEditingName(worker.name);
+    setEditingName(typeof worker.name === 'string' ? worker.name : '');
   };
 
   const cancelRename = () => {

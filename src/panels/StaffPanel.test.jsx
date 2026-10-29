@@ -542,11 +542,56 @@ describe('StaffPanel', () => {
     const marcoCard = screen.getByText('Marco').parentElement.parentElement;
     fireEvent.click(within(marcoCard).getByText('Rename'));
     const renameInput = within(marcoCard).getByRole('textbox');
+    expect(renameInput).toHaveValue('Marco');
     expect(renameInput).toHaveStyle({ fontFamily: FONT_FAMILY, fontSize: '14px' });
     fireEvent.change(renameInput, { target: { value: '  Matteo  ' } });
     fireEvent.click(within(marcoCard).getByText('Save'));
 
     expect(dispatch).toHaveBeenCalledWith({ type: 'RENAME_STAFF', id: 's1', name: 'Matteo' });
+  });
+
+  it.each([
+    ['null', null],
+    ['absent', undefined],
+    ['numeric', 42],
+  ])('safely renames a staff member with a %s legacy name', (_label, name) => {
+    const dispatch = vi.fn();
+    const worker = { id: 'legacy', role: 'cook', skill: 1, morale: 80, salary: 200 };
+    if (name !== undefined) worker.name = name;
+    useGameState.mockReturnValue(makeState({ staff: [worker] }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+    const card = getStaffCard('legacy');
+    fireEvent.click(within(card).getByRole('button', { name: 'Rename' }));
+
+    const renameInput = within(card).getByRole('textbox');
+    expect(renameInput).toHaveValue('');
+    const save = within(card).getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+
+    fireEvent.change(renameInput, { target: { value: '  Riley  ' } });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'RENAME_STAFF', id: 'legacy', name: 'Riley' });
+  });
+
+  it('keeps a valid existing name in the rename draft and cancels without dispatching', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    fireEvent.click(within(card).getByRole('button', { name: 'Rename' }));
+
+    expect(within(card).getByRole('textbox')).toHaveValue('Marco');
+    fireEvent.click(within(card).getByRole('button', { name: 'Cancel' }));
+
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('shows staff list entries', () => {
