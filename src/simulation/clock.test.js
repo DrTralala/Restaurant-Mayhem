@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   DEFAULT_OPERATING_HOURS, RUSH_PERIODS,
   advanceClock, getClockHandAngles, getDailyPayroll, getRushHourMultiplier,
@@ -6,6 +6,134 @@ import {
 } from './clock';
 
 describe('advanceClock', () => {
+  it('reuses history and notification arrays when no midnight is crossed', () => {
+    const dailyHistory = [{ day: 1, revenue: 10, payroll: 4, profit: 6 }];
+    const notifications = [{ id: 'prior', message: 'Existing notification' }];
+    const state = {
+      restaurant: { gameTime: 100, day: 1 },
+      dailyHistory,
+      notifications,
+    };
+
+    const result = advanceClock(state, 1);
+
+    expect(result.dailyHistory).toBe(dailyHistory);
+    expect(result.notifications).toBe(notifications);
+  });
+
+  it.each([
+    ['midnight', 1],
+    ['multiple midnights', 86401],
+  ])('does not mutate frozen input histories across %s', (_crossing, dt) => {
+    const dailyHistory = Object.freeze([
+      Object.freeze({ day: 1, revenue: 10, payroll: 4, profit: 6 }),
+    ]);
+    const notifications = Object.freeze([
+      Object.freeze({ id: 'prior', message: 'Existing notification' }),
+    ]);
+    const state = {
+      restaurant: { funds: 100, dailyRevenue: 20, gameTime: 86399, day: 2 },
+      staff: [Object.freeze({ salary: 5 })],
+      dailyHistory,
+      notifications,
+    };
+    const historyBefore = [...dailyHistory];
+    const notificationsBefore = [...notifications];
+
+    const result = advanceClock(state, dt);
+
+    expect(dailyHistory).toEqual(historyBefore);
+    expect(notifications).toEqual(notificationsBefore);
+    expect(result.dailyHistory).not.toBe(dailyHistory);
+    expect(result.notifications).not.toBe(notifications);
+    expect(result.dailyHistory).toHaveLength(dt === 1 ? 2 : 3);
+    expect(result.notifications).toHaveLength(dt === 1 ? 2 : 3);
+  });
+
+  it('trims an overlong daily history without crossing midnight', () => {
+    const dailyHistory = Array.from({ length: 35 }, (_, index) => ({ day: index + 1 }));
+    const notifications = [];
+    const state = {
+      restaurant: { gameTime: 100, day: 36 },
+      dailyHistory,
+      notifications,
+    };
+
+    const result = advanceClock(state, 1);
+
+    expect(result.dailyHistory).toEqual(dailyHistory.slice(-30));
+    expect(result.dailyHistory).not.toBe(dailyHistory);
+    expect(dailyHistory).toHaveLength(35);
+    expect(result.notifications).toBe(notifications);
+  });
+
+  it('handles absent histories and notifications before and at midnight', () => {
+    const noMidnight = advanceClock({
+      restaurant: { gameTime: 100, day: 1 },
+    }, 1);
+    expect(noMidnight.dailyHistory).toEqual([]);
+    expect(noMidnight.notifications).toEqual([]);
+
+    const midnight = advanceClock({
+      restaurant: { funds: 100, dailyRevenue: 20, gameTime: 86399, day: 1 },
+    }, 1);
+    expect(midnight.dailyHistory).toEqual([
+      { day: 1, revenue: 20, payroll: 0, profit: 20 },
+    ]);
+    expect(midnight.notifications).toHaveLength(1);
+  });
+
+  it('preserves payroll, summary notifications, and final-day menu reset across midnights', () => {
+    const notifications = Object.freeze([
+      Object.freeze({ id: 'prior', message: 'Existing notification', time: 7 }),
+    ]);
+    const state = {
+      restaurant: { funds: 1000, dailyRevenue: 75, gameTime: 86399, day: 4 },
+      staff: [Object.freeze({ salary: 100 })],
+      dailyHistory: Object.freeze([]),
+      notifications,
+      menuSales: {
+        day: 4,
+        dishes: [{ key: 'toast', count: 3 }],
+        drinks: [{ key: 'water', count: 2 }],
+      },
+    };
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1234);
+
+    try {
+      const result = advanceClock(state, 86401);
+
+      expect(result.restaurant).toMatchObject({
+        funds: 800,
+        dailyRevenue: 0,
+        day: 6,
+      });
+      expect(result.dailyHistory).toEqual([
+        { day: 4, revenue: 75, payroll: 100, profit: -25 },
+        { day: 5, revenue: 0, payroll: 100, profit: -100 },
+      ]);
+      expect(result.notifications).toEqual([
+        { id: 'prior', message: 'Existing notification', time: 7 },
+        {
+          id: 'daily-summary-4-86399-0',
+          message: 'Day 4: Revenue $75.00, payroll $100.00, profit $-25.00',
+          time: 1234,
+        },
+        {
+          id: 'daily-summary-5-86399-1',
+          message: 'Day 5: Revenue $0.00, payroll $100.00, profit $-100.00',
+          time: 1234,
+        },
+      ]);
+      expect(notifications).toEqual([
+        { id: 'prior', message: 'Existing notification', time: 7 },
+      ]);
+      expect(result.menuSales).toEqual({ day: 6, dishes: [], drinks: [] });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('advances gameTime by dt', () => {
     const state = { restaurant: { gameTime: 100, day: 1, openHour: 10, closeHour: 22 }, dailyHistory: [] };
     const result = advanceClock(state, 5);

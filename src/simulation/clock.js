@@ -23,8 +23,12 @@ export function advanceClock(state, dt) {
   let dailyRevenue = Number.isFinite(state.restaurant.dailyRevenue)
     ? state.restaurant.dailyRevenue
     : 0;
-  let dailyHistory = [...(state.dailyHistory || [])];
-  let notifications = [...(state.notifications || [])];
+  let dailyHistory = state.dailyHistory || [];
+  let notifications = state.notifications || [];
+  if (crossedMidnights > 0) {
+    dailyHistory = [...dailyHistory];
+    notifications = [...notifications];
+  }
   const payroll = getDailyPayroll(state.staff || []);
 
   for (let offset = 0; offset < crossedMidnights; offset += 1) {
@@ -50,7 +54,7 @@ export function advanceClock(state, dt) {
       gameTime: newGameTime,
       day: newDay,
     },
-    dailyHistory: dailyHistory.slice(-30),
+    dailyHistory: dailyHistory.length <= 30 ? dailyHistory : dailyHistory.slice(-30),
     notifications,
     ...(crossedMidnights > 0
       ? { menuSales: { day: newDay, dishes: [], drinks: [] } }
