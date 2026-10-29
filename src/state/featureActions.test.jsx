@@ -4,6 +4,7 @@ import { createCareerInitialState, createInitialState } from './initialState';
 import { GameProvider, gameReducer, useDispatch, useGameGeneration, useGameState } from './GameContext';
 import { evaluateCareerRun, normaliseCareerRun } from '../simulation/careerRun';
 import { createDishOrderSnapshot, getResolvedDish, validateCookbookState } from '../simulation/cookbook';
+import { buildAffordableBaskets } from '../simulation/menuEconomy';
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 const start = { type: 'START_CAREER', scenarioId: 'opening-week', runId: 'run-a', confirmedReplace: true };
@@ -99,6 +100,32 @@ describe('shared feature defaults and actions', () => {
     state = gameReducer(state, { type: 'REMOVE_DISH', id: 'starter-toast' });
     state = gameReducer(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' });
     expect(state.dishes[0]).toMatchObject({ price: 15, quality: 2, cookbookId: 'toast' });
+  });
+  it('clears a removed cookbook dish suspension so same-ID re-addition returns to walk-in baskets', () => {
+    let state = gameReducer(createInitialState(), { type: 'REMOVE_DISH', id: 'starter-toast' });
+    state = gameReducer(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' });
+    const dishId = state.dishes[0].id;
+    expect(dishId).toBe('cookbook:toast');
+    state = {
+      ...state,
+      restaurant: { ...state.restaurant, suspendedDishIds: ['unrelated-dish', dishId] },
+    };
+    expect(buildAffordableBaskets(state, { spendingBudget: 100 })
+      .some(basket => basket.kind === 'dish' && basket.dish.id === dishId)).toBe(false);
+
+    const customers = state.customers;
+    state = gameReducer(state, { type: 'REMOVE_DISH', id: dishId });
+
+    expect(state.dishes).toEqual([]);
+    expect(state.restaurant.suspendedDishIds).toEqual(['unrelated-dish']);
+    expect(state.customers).toBe(customers);
+
+    state = gameReducer(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' });
+
+    expect(state.dishes[0].id).toBe(dishId);
+    expect(state.restaurant.suspendedDishIds).toEqual(['unrelated-dish']);
+    expect(buildAffordableBaskets(state, { spendingBudget: 100 })
+      .some(basket => basket.kind === 'dish' && basket.dish.id === dishId)).toBe(true);
   });
   it('keeps custom recipes free, unlimited and q1 while stripping authored metadata', () => {
     let state = createInitialState();

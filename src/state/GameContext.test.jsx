@@ -5,6 +5,7 @@ import { createInitialState } from './initialState';
 import { hydrateState } from './persistence';
 import { movementSaveSnapshot } from './movementPersistence';
 import { getRestaurantWorld } from '../simulation/world';
+import { createDishOrderSnapshot } from '../simulation/cookbook';
 import { getFixtureSaleExpectation, getSaleSelection } from './fixtureSales';
 import SettingsMenu from '../components/SettingsMenu';
 
@@ -276,7 +277,7 @@ describe('GameProvider menu suspension action', () => {
     expect(game.state).toBe(before);
   });
 
-  it('no-ops repeated requests and preserves stale excluded IDs without pruning', () => {
+  it('no-ops repeated requests and removes only the successfully removed dish suspension', () => {
     const game = renderReducer({ restaurant: { suspendedDishIds: ['stale-dish'] } });
 
     game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
@@ -294,7 +295,78 @@ describe('GameProvider menu suspension action', () => {
     game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
     game.dispatch({ type: 'REMOVE_DISH', id: 'starter-toast' });
     expect(game.state.dishes).toEqual([]);
-    expect(game.state.restaurant.suspendedDishIds).toEqual(['stale-dish', 'starter-toast']);
+    expect(game.state.restaurant.suspendedDishIds).toEqual(['stale-dish']);
+  });
+
+  it('cleans a removed custom dish suspension while preserving committed orders and sales semantics', () => {
+    const initial = createInitialState();
+    const dish = makeCustomDish({ id: 'custom-suspended' });
+    const snapshot = createDishOrderSnapshot({
+      ...dish, cookbookId: null, masteryPerk: null,
+    }, { serviceItemId: 'order-custom-suspended', orderedAt: 36000 });
+    const customer = {
+      id: 'ordered-custom-customer', dishId: dish.id, dishOrderSnapshot: snapshot,
+    };
+    const serviceItem = {
+      id: 'order-custom-suspended', customerId: customer.id, kind: 'dish',
+      menuItemId: dish.id, dishOrderSnapshot: { ...snapshot },
+    };
+    const game = renderReducer({
+      dishes: [...initial.dishes, dish],
+      restaurant: { suspendedDishIds: ['unrelated-dish', dish.id] },
+      customers: [customer],
+      serviceItems: [serviceItem],
+      menuSales: {
+        day: 1,
+        dishes: [
+          { key: initial.dishes[0].id, count: 1 },
+          { key: dish.id, count: 3 },
+        ],
+        drinks: [],
+      },
+    });
+    const before = game.state;
+
+    game.dispatch({ type: 'REMOVE_DISH', id: dish.id });
+
+    expect(game.state.dishes.map(candidate => candidate.id)).toEqual(['starter-toast']);
+    expect(game.state.restaurant.suspendedDishIds).toEqual(['unrelated-dish']);
+    expect(game.state.customers).toBe(before.customers);
+    expect(game.state.customers[0].dishOrderSnapshot).toBe(snapshot);
+    expect(game.state.serviceItems).toBe(before.serviceItems);
+    expect(game.state.serviceItems[0].dishOrderSnapshot).toEqual(snapshot);
+    expect(game.state.menuSales).toEqual({
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 1, gross: 0, grossComplete: false }],
+      drinks: [],
+    });
+  });
+
+  it('keeps unknown and blocked dish removals as identity no-ops', () => {
+    const unknown = renderReducer({ restaurant: { suspendedDishIds: ['stale-dish'] } });
+    const unknownBefore = unknown.state;
+
+    unknown.dispatch({ type: 'REMOVE_DISH', id: 'missing-dish' });
+
+    expect(unknown.state).toBe(unknownBefore);
+    expect(unknown.state.restaurant.suspendedDishIds).toEqual(['stale-dish']);
+
+    const blocked = renderReducer({
+      careerRun: { needsDecision: true },
+      restaurant: { suspendedDishIds: ['starter-toast'] },
+    });
+    const blockedBefore = blocked.state;
+
+    blocked.dispatch({ type: 'REMOVE_DISH', id: 'starter-toast' });
+
+    expect(blocked.state).toBe(blockedBefore);
+    expect(blocked.state.restaurant.suspendedDishIds).toEqual(['starter-toast']);
+
+    const active = renderReducer();
+    const activeBefore = active.state;
+    active.dispatch({ type: 'REMOVE_DISH', id: 'starter-toast' });
+    expect(active.state).not.toBe(activeBefore);
+    expect(active.state.restaurant).toBe(activeBefore.restaurant);
   });
 
   it('is blocked while a career decision is pending', () => {

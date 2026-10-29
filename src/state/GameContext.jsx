@@ -101,6 +101,22 @@ function setMenuItemSuspended(state, kind, id, suspended) {
   };
 }
 
+function clearRemovedDishSuspension(state, candidate, dishId) {
+  const removed = (state.dishes || []).some(dish => dish.id === dishId)
+    && !(candidate.dishes || []).some(dish => dish.id === dishId);
+  const suspendedDishIds = candidate.restaurant?.suspendedDishIds;
+  if (!removed || !Array.isArray(suspendedDishIds) || !suspendedDishIds.includes(dishId)) {
+    return candidate;
+  }
+  return {
+    ...candidate,
+    restaurant: {
+      ...candidate.restaurant,
+      suspendedDishIds: suspendedDishIds.filter(id => id !== dishId),
+    },
+  };
+}
+
 function getCataloguePrice(itemType, fallback = null) {
   return Number.isFinite(ITEM_PRICES[itemType]) ? ITEM_PRICES[itemType] : fallback;
 }
@@ -562,6 +578,7 @@ function reduceGameAction(state, action) {
       };
     }
     case 'REMOVE_DISH':
+      if (!state.dishes.some(dish => dish.id === action.id)) return state;
       return { ...state, dishes: state.dishes.filter(d => d.id !== action.id) };
     case 'UPDATE_DISH': {
       const dish = state.dishes.find(candidate => candidate.id === action.id);
@@ -923,6 +940,9 @@ export function gameReducer(state, action) {
   if (isCareerDecisionPending(state) && action.type !== 'LOAD_STATE') return state;
   if (state.navigationFault && action.type === 'TOGGLE_PAUSE') return state;
   let candidate = reduceGameAction(state, action);
+  if (action.type === 'REMOVE_DISH' && candidate !== state) {
+    candidate = clearRemovedDishSuspension(state, candidate, action.id);
+  }
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE'
     || action.type === 'PRIORITISE_QUEUE_PARTY') return candidate;
   if (candidate.dishes !== state.dishes) {
