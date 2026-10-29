@@ -47,6 +47,26 @@ it('renders the analogue clock beside the text time', () => {
   expect(screen.getByText('Closed')).toBeInTheDocument();
 });
 
+it.each([
+  [-1, '☆☆☆☆☆ -1.0'],
+  [6, '★★★★★ 6.0'],
+  [Number.MAX_VALUE, '★★★★★ 1.7976931348623157e+308'],
+  [3.7, '★★★☆☆ 3.7'],
+  [0, '☆☆☆☆☆ 0.0'],
+  [Number.NaN, 'Reputation unavailable'],
+  [Number.POSITIVE_INFINITY, 'Reputation unavailable'],
+  [null, 'Reputation unavailable'],
+  [undefined, 'Reputation unavailable'],
+  ['3.7', 'Reputation unavailable'],
+])('renders reputation safely for %s without changing its input', (rating, expected) => {
+  state.restaurant.reputation = rating;
+
+  render(<StatsBar />);
+
+  expect(screen.getByText(expected, { exact: true })).toBeInTheDocument();
+  expect(Object.is(state.restaurant.reputation, rating)).toBe(true);
+});
+
 it('shows Open at opening and Closed at the exclusive closing boundary', () => {
   state.restaurant.gameTime = 10 * 3600;
   const { rerender } = render(<StatsBar />);

@@ -22,6 +22,10 @@ export default function StatsBar({ onOpenCareer, onOpenContracts }) {
   const state = useGameState();
   const { restaurant } = state;
   const funds = formatFunds(restaurant.funds);
+  const rating = restaurant.reputation;
+  const filledStars = Number.isFinite(rating) ? Math.max(0, Math.min(5, Math.floor(rating))) : null;
+  const ratingText = filledStars === null ? 'Reputation unavailable'
+    : `${'★'.repeat(filledStars)}${'☆'.repeat(5 - filledStars)} ${rating.toFixed(1)}`;
   const open = isRestaurantOpen(state);
   const career = getCareerSummary(state.careerRun, restaurant);
   const minutes = career ? Math.ceil(career.remainingSeconds / 60) : 0;
@@ -35,7 +39,7 @@ export default function StatsBar({ onOpenCareer, onOpenContracts }) {
       padding: '8px 16px', background: '#16213e', borderBottom: '1px solid #0f3460',
     }}>
       <span role="group" aria-label={`Funds: ${funds}`} style={{ color: '#f0a500' }}>{funds}</span>
-      <span>{'★'.repeat(Math.floor(restaurant.reputation))}{'☆'.repeat(5 - Math.floor(restaurant.reputation))} {restaurant.reputation.toFixed(1)}</span>
+      <span>{ratingText}</span>
       <span>Day {restaurant.day}</span>
       <span>{restaurant.totalServed} served</span>
       <span style={{ ...TYPOGRAPHY.control, color: open ? '#67c587' : '#d57878' }}>
