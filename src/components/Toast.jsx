@@ -1,4 +1,4 @@
-import { useGameState } from '../state/GameContext';
+import { useGameGeneration, useGameState } from '../state/GameContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { TYPOGRAPHY } from '../typography';
 
@@ -81,8 +81,11 @@ function ToastBanner({ notification, onDismiss }) {
 
 export default function Toast() {
   const state = useGameState();
+  const generation = useGameGeneration();
   const [visible, setVisible] = useState([]);
   const seenIds = useRef(new Set());
+  const initializedRef = useRef(false);
+  const generationRef = useRef(generation);
 
   const dismiss = useCallback(id => {
     setVisible(current => current.filter(notification => notification.id !== id));
@@ -90,11 +93,24 @@ export default function Toast() {
 
   useEffect(() => {
     const notifications = state.notifications || [];
-    const latest = notifications[notifications.length - 1];
-    if (!latest || seenIds.current.has(latest.id)) return;
-    seenIds.current.add(latest.id);
-    setVisible(current => [...current, latest]);
-  }, [state.notifications]);
+    if (!initializedRef.current || !Object.is(generationRef.current, generation)) {
+      initializedRef.current = true;
+      generationRef.current = generation;
+      seenIds.current.clear();
+      for (const notification of notifications) seenIds.current.add(notification.id);
+      const latest = notifications[notifications.length - 1];
+      setVisible(latest ? [latest] : []);
+      return;
+    }
+
+    const unseen = [];
+    for (const notification of notifications) {
+      if (seenIds.current.has(notification.id)) continue;
+      seenIds.current.add(notification.id);
+      unseen.push(notification);
+    }
+    if (unseen.length > 0) setVisible(current => [...current, ...unseen]);
+  }, [generation, state.notifications]);
 
   if (visible.length === 0) return null;
 
@@ -104,7 +120,7 @@ export default function Toast() {
     }}>
       {visible.map(notification => (
         <ToastBanner
-          key={notification.id}
+          key={`${generation}:${notification.id}`}
           notification={notification}
           onDismiss={dismiss}
         />

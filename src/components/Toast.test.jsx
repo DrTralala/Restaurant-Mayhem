@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useGameState } from '../state/GameContext';
+import { useGameGeneration, useGameState } from '../state/GameContext';
 import Toast from './Toast';
 
 vi.mock('../state/GameContext', () => ({
+  useGameGeneration: vi.fn(),
   useGameState: vi.fn(),
 }));
 
@@ -23,6 +24,7 @@ function blurElement(element) {
 describe('Toast', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    useGameGeneration.mockReturnValue(0);
     useGameState.mockReturnValue({
       notifications: [{ id: 'milestone-1', message: 'Milestone: Serve 50 customers!' }],
     });
@@ -32,6 +34,128 @@ describe('Toast', () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  it('shows only the latest initial notification, then every unseen append once in order', () => {
+    const first = { id: 'a', message: 'Notification A' };
+    const latest = { id: 'b', message: 'Notification B' };
+    const third = { id: 'c', message: 'Notification C' };
+    const fourth = { id: 'd', message: 'Notification D' };
+    useGameState.mockReturnValue({ notifications: [first, latest] });
+    const { rerender } = render(<Toast />);
+
+    expect(screen.queryByText('Notification A')).not.toBeInTheDocument();
+    expect(screen.getByText('Notification B')).toBeInTheDocument();
+
+    useGameState.mockReturnValue({ notifications: [first, latest, third, fourth] });
+    rerender(<Toast />);
+
+    expect(screen.getAllByRole('status').map(banner => banner.firstChild.textContent)).toEqual([
+      'Notification B',
+      'Notification C',
+      'Notification D',
+    ]);
+
+    useGameState.mockReturnValue({ notifications: [fourth] });
+    rerender(<Toast />);
+    expect(screen.getAllByRole('status').map(banner => banner.firstChild.textContent)).toEqual([
+      'Notification B',
+      'Notification C',
+      'Notification D',
+    ]);
+  });
+
+  it('shows all first appended notifications after an empty history and deduplicates IDs', () => {
+    useGameState.mockReturnValue({ notifications: [] });
+    const { rerender } = render(<Toast />);
+
+    const notifications = [
+      { id: 'c', message: 'First C' },
+      { id: 'd', message: 'First D' },
+      { id: 'c', message: 'Duplicate C' },
+      { id: 'd', message: 'Duplicate D' },
+    ];
+    useGameState.mockReturnValue({ notifications });
+    rerender(<Toast />);
+
+    expect(screen.getAllByRole('status').map(banner => banner.firstChild.textContent)).toEqual([
+      'First C',
+      'First D',
+    ]);
+
+    useGameState.mockReturnValue({ notifications: [...notifications] });
+    rerender(<Toast />);
+    expect(screen.getAllByRole('status')).toHaveLength(2);
+  });
+
+  it('shows a day summary and Day 10 milestone from the same update', () => {
+    const prior = { id: 'prior', message: 'Previous notification' };
+    useGameState.mockReturnValue({ notifications: [prior] });
+    const { rerender } = render(<Toast />);
+
+    useGameState.mockReturnValue({ notifications: [
+      prior,
+      { id: 'midnight-summary', message: 'Day summary' },
+      { id: 'day-10-milestone', message: 'Day 10 milestone' },
+    ] });
+    rerender(<Toast />);
+
+    expect(screen.getByText('Day summary')).toBeInTheDocument();
+    expect(screen.getByText('Day 10 milestone')).toBeInTheDocument();
+    expect(screen.getAllByRole('status').map(banner => banner.firstChild.textContent)).toEqual([
+      'Previous notification',
+      'Day summary',
+      'Day 10 milestone',
+    ]);
+  });
+
+  it('keeps dismissed IDs dismissed when the same history is repeated', () => {
+    const dismissed = { id: 'dismissed', message: 'Dismiss this once' };
+    useGameState.mockReturnValue({ notifications: [dismissed] });
+    const { rerender } = render(<Toast />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss notification' }));
+    expect(screen.queryByText('Dismiss this once')).not.toBeInTheDocument();
+
+    useGameState.mockReturnValue({ notifications: [{ ...dismissed }] });
+    rerender(<Toast />);
+    expect(screen.queryByText('Dismiss this once')).not.toBeInTheDocument();
+  });
+
+  it('isolates notifications and timer lifetimes across game generations', () => {
+    const oldRun = { id: 'same-id', message: 'Old run notification' };
+    useGameState.mockReturnValue({ notifications: [oldRun] });
+    const { rerender } = render(<Toast />);
+
+    advanceTime(4000);
+    useGameGeneration.mockReturnValue(1);
+    useGameState.mockReturnValue({ notifications: [
+      { id: 'same-id', message: 'New run notification' },
+    ] });
+    rerender(<Toast />);
+
+    expect(screen.queryByText('Old run notification')).not.toBeInTheDocument();
+    expect(screen.getByText('New run notification')).toBeInTheDocument();
+    advanceTime(1000);
+    expect(screen.getByText('New run notification')).toBeInTheDocument();
+    advanceTime(3999);
+    expect(screen.getByText('New run notification')).toBeInTheDocument();
+    advanceTime(1);
+    expect(screen.queryByText('New run notification')).not.toBeInTheDocument();
+  });
+
+  it('starts with an isolated backlog after unmount and remount', () => {
+    const older = { id: 'older', message: 'Older notification' };
+    const latest = { id: 'latest', message: 'Latest notification' };
+    useGameState.mockReturnValue({ notifications: [older, latest] });
+    const { unmount } = render(<Toast />);
+    expect(screen.queryByText('Older notification')).not.toBeInTheDocument();
+    unmount();
+
+    useGameState.mockReturnValue({ notifications: [older, latest] });
+    render(<Toast />);
+    expect(screen.queryByText('Older notification')).not.toBeInTheDocument();
+    expect(screen.getByText('Latest notification')).toBeInTheDocument();
   });
 
   it('allows a notification to be dismissed immediately', () => {
