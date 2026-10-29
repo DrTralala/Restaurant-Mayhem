@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { hydrateState, loadState, saveState } from './state/persistence';
 import { loadLatestRepositoryState, saveRepositoryState } from './state/repositorySaves';
 
 const dispatch = vi.fn();
+const LOAD_CONFIRMATION = 'Loading this save will replace the current session. Unsaved progress will be lost. Continue?';
 const gameState = { version: 1, paused: true, notifications: [],
   restaurant: { gameTime: 36000, reputation: 1 } };
 
@@ -78,6 +79,7 @@ describe('settings menu', () => {
   });
 
   it('loads and hydrates the latest compatible repository save', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const saved = { version: 1, restaurant: { funds: 900 } };
     const hydrated = { ...gameState, restaurant: { funds: 900 } };
     loadLatestRepositoryState.mockResolvedValue({ state: saved, filename: '2026-08-13 2.36pm.json' });
@@ -87,7 +89,27 @@ describe('settings menu', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
 
     expect(await screen.findByText('Loaded 2026-08-13 2.36pm.json')).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledWith(LOAD_CONFIRMATION);
     expect(dispatch).toHaveBeenCalledWith({ type: 'LOAD_STATE', state: hydrated });
+  });
+
+  it('keeps the live game unchanged when replacement of a loaded save is declined', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const saved = { version: 1, restaurant: { funds: 900 } };
+    loadLatestRepositoryState.mockResolvedValue({ state: saved, filename: 'declined.json' });
+    hydrateState.mockReturnValue({ ...gameState, paused: false, restaurant: { funds: 900 } });
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    const resumeButton = screen.getByRole('button', { name: 'Resume game' });
+    fireEvent.click(screen.getByRole('button', { name: 'Load game' }));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+
+    expect(confirm).toHaveBeenCalledWith(LOAD_CONFIRMATION);
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'LOAD_STATE' }));
+    expect(screen.getByRole('button', { name: 'Resume game' })).toBe(resumeButton);
+    expect(screen.queryByText('Loaded declined.json')).not.toBeInTheDocument();
   });
 
   it('starts a fresh game after confirmation', () => {
