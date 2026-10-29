@@ -485,6 +485,7 @@ function placeItem(state, action) {
 
 const GameContext = createContext(null);
 const DispatchContext = createContext(null);
+const STAFF_REST_AMENITY_PREFERENCES = new Set(['automatic', 'couch', 'arcade']);
 
 function reduceGameAction(state, action) {
   const cookbookResult = reduceCookbookAction(state, action);
@@ -715,6 +716,22 @@ function reduceGameAction(state, action) {
         ...state,
         staff: state.staff.map(candidate => candidate.id === worker.id
           ? { ...candidate, schedule: [...action.schedule] }
+          : candidate),
+      };
+    }
+    case 'SET_STAFF_REST_AMENITY_PREFERENCE': {
+      const validId = (typeof action.id === 'string' && action.id.length > 0)
+        || (Number.isSafeInteger(action.id) && action.id >= 0);
+      if (!validId || !STAFF_REST_AMENITY_PREFERENCES.has(action.preference)
+        || !Array.isArray(state.staff)) return state;
+      const matches = state.staff.filter(worker => sameId(worker?.id, action.id));
+      if (matches.length !== 1) return state;
+      const worker = matches[0];
+      if ((worker.restAmenityPreference ?? 'automatic') === action.preference) return state;
+      return {
+        ...state,
+        staff: state.staff.map(candidate => candidate === worker
+          ? { ...candidate, restAmenityPreference: action.preference }
           : candidate),
       };
     }
@@ -961,7 +978,8 @@ export function gameReducer(state, action) {
   }
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE'
     || action.type === 'PRIORITISE_QUEUE_PARTY'
-    || action.type === 'SET_TABLE_ADMISSION_HOLD') return candidate;
+    || action.type === 'SET_TABLE_ADMISSION_HOLD'
+    || action.type === 'SET_STAFF_REST_AMENITY_PREFERENCE') return candidate;
   if (candidate.dishes !== state.dishes) {
     candidate = {
       ...candidate,

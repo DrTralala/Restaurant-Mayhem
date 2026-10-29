@@ -976,6 +976,79 @@ describe('table admission holds', () => {
   });
 });
 
+describe('staff rest amenity preferences', () => {
+  it.each(['reserved', 'occupied'])('changes only preference during an active %s use', phase => {
+    const initial = createInitialState();
+    const owner = initial.staff[0];
+    const amenityUse = {
+      amenityId: 'active-couch', slotIndex: 0, phase,
+      activityStartedAt: phase === 'occupied' ? 100 : null,
+      activityEndsAt: phase === 'occupied' ? 1_000 : null,
+      lastRecoveryAt: phase === 'occupied' ? 100 : null,
+    };
+    const task = { type: 'take_order', customerId: 'customer-1', startedAt: 10 };
+    const activeAmenity = {
+      id: 'active-couch', type: 'couch', x: 600, y: 500, rotation: 0,
+      slots: [
+        { index: 0, reservedBy: phase === 'reserved' ? owner.id : null,
+          occupiedBy: phase === 'occupied' ? owner.id : null },
+        { index: 1, reservedBy: null, occupiedBy: null },
+      ],
+    };
+    const state = {
+      ...initial,
+      staff: initial.staff.map(worker => worker.id === owner.id
+        ? { ...worker, task, amenityUse }
+        : worker),
+      staffAmenities: [activeAmenity],
+      tables: initial.tables.map((table, index) => index === 0
+        ? { ...table, admissionHeld: true }
+        : table),
+    };
+
+    const next = gameReducer(state, {
+      type: 'SET_STAFF_REST_AMENITY_PREFERENCE', id: owner.id, preference: 'couch',
+    });
+
+    const updated = next.staff.find(worker => worker.id === owner.id);
+    expect(updated.restAmenityPreference).toBe('couch');
+    expect(updated.task).toBe(task);
+    expect(updated.amenityUse).toBe(amenityUse);
+    expect(next.staffAmenities).toBe(state.staffAmenities);
+    expect(next.staffAmenities[0]).toBe(activeAmenity);
+    expect(next.tables).toBe(state.tables);
+    expect(next.tables[0].admissionHeld).toBe(true);
+  });
+
+  it.each([
+    ['missing ID', { preference: 'couch' }],
+    ['unknown ID', { id: 'missing', preference: 'couch' }],
+    ['missing preference', { id: 'starter-cook' }],
+    ['invalid preference', { id: 'starter-cook', preference: 'bed' }],
+  ])('does nothing for a %s', (_label, fields) => {
+    const state = createInitialState();
+    expect(gameReducer(state, {
+      type: 'SET_STAFF_REST_AMENITY_PREFERENCE', ...fields,
+    })).toBe(state);
+  });
+
+  it('does nothing when the staff target is duplicated or a career decision is pending', () => {
+    const initial = createInitialState();
+    const duplicated = {
+      ...initial,
+      staff: [...initial.staff, { ...initial.staff[0], id: 'starter-cook' }],
+    };
+    expect(gameReducer(duplicated, {
+      type: 'SET_STAFF_REST_AMENITY_PREFERENCE', id: 'starter-cook', preference: 'arcade',
+    })).toBe(duplicated);
+
+    const pending = { ...initial, careerRun: { needsDecision: true } };
+    expect(gameReducer(pending, {
+      type: 'SET_STAFF_REST_AMENITY_PREFERENCE', id: 'starter-cook', preference: 'arcade',
+    })).toBe(pending);
+  });
+});
+
 describe('GameProvider authoritative placement actions', () => {
   beforeEach(() => localStorage.clear());
 

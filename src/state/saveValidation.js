@@ -17,6 +17,7 @@ import { getOrderSnapshotSubtotal } from '../simulation/menuEconomy';
 
 const STAFF_ROLES = new Set(['cook', 'waiter', 'janitor']);
 const STAFF_DUTIES = new Set(['work', 'rest', 'pto']);
+const STAFF_REST_AMENITY_PREFERENCES = new Set(['automatic', 'couch', 'arcade']);
 const STAFF_DUTY_PHASES = new Set([
   'available', 'finishing_task', 'blocked_handoff', 'seeking_amenity',
   'waiting_for_amenity', 'travelling', 'active', 'exiting',
@@ -433,6 +434,7 @@ function validateStaff(staff) {
     validateOptionalFinite(worker, 'skill', path, { minimum: 1, maximum: 10, integer: true });
     validateOptionalFinite(worker, 'morale', path, { minimum: 0, maximum: 100 });
     validateOptionalFinite(worker, 'salary', path, { minimum: 0 });
+    validateOptionalEnum(worker, 'restAmenityPreference', path, STAFF_REST_AMENITY_PREFERENCES);
     validateOptionalEnum(worker, 'effectiveDuty', path, STAFF_DUTIES, { nullable: true });
     validateOptionalEnum(worker, 'dutyPhase', path, STAFF_DUTY_PHASES, { nullable: true });
     validateOptionalEnum(worker, 'activityPhase', path, STAFF_ACTIVITY_PHASES, { nullable: true });

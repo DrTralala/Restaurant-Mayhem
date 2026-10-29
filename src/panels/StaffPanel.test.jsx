@@ -87,6 +87,48 @@ function StatefulStaffPanel({ initial }) {
 }
 
 describe('StaffPanel', () => {
+  it('shows a labelled rest preference selector, updates from state, and keeps focus on ticks', () => {
+    let state = makeState({
+      restaurant: { funds: 500, gameTime: 0 },
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
+    });
+    const dispatch = vi.fn();
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(dispatch);
+
+    const { rerender } = render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    const preference = within(card).getByRole('combobox', {
+      name: 'Rest amenity preference for Marco',
+    });
+    expect(preference).toHaveValue('automatic');
+    expect(within(preference).getAllByRole('option').map(option => option.textContent))
+      .toEqual(['Automatic', 'Couch', 'Arcade']);
+    expect(within(card).getByText(/applies to the next rest-amenity selection/i)).toBeVisible();
+    expect(within(card).getByText(/falls back if.*unavailable|unreachable/i)).toBeVisible();
+    expect(within(card).getByText(/does not change an active reservation/i)).toBeVisible();
+
+    fireEvent.change(preference, { target: { value: 'arcade' } });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_STAFF_REST_AMENITY_PREFERENCE', id: 's1', preference: 'arcade',
+    });
+
+    preference.focus();
+    state = {
+      ...state,
+      restaurant: { ...state.restaurant, gameTime: 1_800 },
+      staff: [{ ...state.staff[0], restAmenityPreference: 'arcade', morale: 79 }],
+    };
+    rerender(<StaffPanel />);
+
+    const updated = within(getStaffCard('s1')).getByRole('combobox', {
+      name: 'Rest amenity preference for Marco',
+    });
+    expect(updated).toBe(preference);
+    expect(updated).toHaveValue('arcade');
+    expect(updated).toHaveFocus();
+  });
+
   it('shows cashier assignments only when cashier stations exist', () => {
     useGameState.mockReturnValue(makeState({
       cashierStations: [{ id: 'cashier-1', x: 800, y: 120, w: 40, h: 40 }],

@@ -39,6 +39,7 @@ export const STAFF_HANDOFF_TIMEOUT_SECONDS = STAFF_WELLBEING_CONSTANTS.handoffTi
 
 const DEFAULT_DUTY = 'work';
 const REST_TYPES = new Set(['couch', 'arcade']);
+const REST_AMENITY_PREFERENCES = new Set(['automatic', 'couch', 'arcade']);
 const VALID_DUTIES = new Set(['work', 'rest', 'pto']);
 const ACTIVE_PHASES = new Set(['active', 'exiting']);
 const WAITING_PHASES = new Set(['seeking_amenity', 'waiting_for_amenity']);
@@ -367,7 +368,12 @@ export function selectStaffWellbeingAmenity(state, staffId, now) {
       });
     }
   }
-  candidates.sort((left, right) => left.switchPenalty - right.switchPenalty
+  const preference = REST_AMENITY_PREFERENCES.has(worker.restAmenityPreference)
+    ? worker.restAmenityPreference : 'automatic';
+  candidates.sort((left, right) => (duty === 'rest' && preference !== 'automatic'
+    ? Number(left.amenity.type !== preference) - Number(right.amenity.type !== preference)
+    : 0)
+    || left.switchPenalty - right.switchPenalty
     || left.distance - right.distance
     || String(left.amenityId).localeCompare(String(right.amenityId))
     || left.slotIndex - right.slotIndex);

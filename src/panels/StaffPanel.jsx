@@ -389,6 +389,10 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
         const bonusDisabled = decisionPending || !bonus || !Number.isFinite(rawFunds) || rawFunds < STAFF_BONUS_COST;
         const bonusDescriptionId = `${bonusExplanationId}-bonus-${index}`;
         const trainingDescriptionId = `${bonusExplanationId}-training-${index}`;
+        const restPreferenceId = `${bonusExplanationId}-rest-amenity-${index}`;
+        const restPreferenceDescriptionId = `${restPreferenceId}-description`;
+        const restPreference = ['automatic', 'couch', 'arcade'].includes(s.restAmenityPreference)
+          ? s.restAmenityPreference : 'automatic';
         const locateUnavailable = !locateHandler || locateDisabled || decisionPending
           || !Number.isFinite(s.x) || !Number.isFinite(s.y);
         const scheduleEditorOpen = editingScheduleId === s.id && !decisionPending;
@@ -423,6 +427,31 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
           </div>
           <div style={{ ...TYPOGRAPHY.secondary, margin: '4px 0', overflowWrap: 'anywhere' }}>
             Current task: {getStaffTaskLabel(s, state.cashierStations)}
+          </div>
+          <div style={{ margin: '6px 0' }}>
+            <label htmlFor={restPreferenceId} style={{ ...TYPOGRAPHY.secondary, display: 'block', marginBottom: 4 }}>
+              Rest amenity preference
+            </label>
+            <select
+              id={restPreferenceId}
+              value={restPreference}
+              disabled={decisionPending}
+              aria-label={`Rest amenity preference for ${s.name}`}
+              aria-describedby={restPreferenceDescriptionId}
+              onChange={event => dispatch({
+                type: 'SET_STAFF_REST_AMENITY_PREFERENCE',
+                id: s.id,
+                preference: event.target.value,
+              })}
+              style={{ ...TYPOGRAPHY.control, background: '#111', color: '#ccc', border: '1px solid #555', borderRadius: 4, padding: '4px 6px' }}
+            >
+              <option value="automatic">Automatic</option>
+              <option value="couch">Couch</option>
+              <option value="arcade">Arcade</option>
+            </select>
+            <p id={restPreferenceDescriptionId} style={{ ...TYPOGRAPHY.secondary, color: '#8fa4c8', margin: '4px 0 0' }}>
+              Applies to the next rest-amenity selection only. The selector falls back if the preferred type is unavailable or unreachable. It is not a reservation and does not change an active reservation.
+            </p>
           </div>
           {trainingPreview && (
             <div style={{ ...TYPOGRAPHY.secondary, margin: '4px 0' }}>

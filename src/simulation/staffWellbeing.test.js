@@ -23,6 +23,7 @@ import {
   releaseAmenitySlot,
   reserveAmenitySlot,
   resolveStaffWellbeingAfterMovement,
+  selectStaffWellbeingAmenity,
   selectStaffWellbeingExit,
 } from './staffWellbeing';
 
@@ -306,6 +307,63 @@ describe('zero-duration work settlement', () => {
 });
 
 describe('staff wellbeing controller', () => {
+  it('preserves automatic switch-penalty-before-distance ordering', () => {
+    const current = state({
+      staff: [restWorker({ lastRestActivityType: 'couch' })],
+      staffAmenities: [couch('near-couch', 600, 500), arcade('far-arcade', 800, 500)],
+    });
+
+    const baselineSelection = selectStaffWellbeingAmenity(current, 'staff-1', 0);
+    expect(baselineSelection).toMatchObject({ amenityId: 'far-arcade', slotIndex: 0 });
+    expect(selectStaffWellbeingAmenity({
+      ...current,
+      staff: [{ ...current.staff[0], restAmenityPreference: 'automatic' }],
+    }, 'staff-1', 0)).toEqual(baselineSelection);
+  });
+
+  it('ranks a reachable preferred rest amenity first despite switch penalty and distance', () => {
+    const current = state({
+      staff: [restWorker({ lastRestActivityType: 'couch' })],
+      staffAmenities: [couch('far-couch', 800, 500), arcade('near-arcade', 600, 500)],
+    });
+    const preferCouch = {
+      ...current,
+      staff: [{ ...current.staff[0], restAmenityPreference: 'couch' }],
+    };
+    expect(selectStaffWellbeingAmenity(preferCouch, 'staff-1', 0).amenity.type).toBe('couch');
+  });
+
+  it.each([
+    ['occupied', [couch('busy-couch', 600, 500)], slots => slots.map(slot => ({
+      ...slot, reservedBy: 'another-worker',
+    }))],
+    ['unreachable', [couch('distant-couch', 5_000, 500)], slots => slots],
+    ['missing', [], () => []],
+  ])('falls back to existing sorting when a preferred type is %s', (_label, couches, updateSlots) => {
+    const preferredAmenities = couches.map(amenity => ({
+      ...amenity, slots: updateSlots(amenity.slots),
+    }));
+    const current = state({
+      staff: [restWorker({
+        restAmenityPreference: 'couch', lastRestActivityType: 'arcade',
+      })],
+      staffAmenities: [...preferredAmenities,
+        arcade('far-fallback-arcade', 800, 500), arcade('near-fallback-arcade', 700, 500)],
+    });
+
+    expect(selectStaffWellbeingAmenity(current, 'staff-1', 0)?.amenityId)
+      .toBe('near-fallback-arcade');
+  });
+
+  it('keeps PTO selection restricted to beds regardless of rest preference', () => {
+    const current = state({
+      staff: [ptoWorker({ restAmenityPreference: 'arcade', x: 590, y: 520 })],
+      staffAmenities: [bed(), couch('other-couch', 700, 500), arcade('other-arcade', 800, 500)],
+    });
+
+    expect(selectStaffWellbeingAmenity(current, 'staff-1', 0)?.amenity.type).toBe('bed');
+  });
+
   it.each([
     ['an orphan lease', {
       queue: [],

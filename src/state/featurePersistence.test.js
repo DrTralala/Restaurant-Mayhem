@@ -509,6 +509,36 @@ describe('additive v10 feature persistence', () => {
     }
   });
 
+  it('round-trips optional rest amenity preferences without adding a default field', () => {
+    const fresh = createInitialState();
+    expect(fresh.staff[0]).not.toHaveProperty('restAmenityPreference');
+    expect(() => validateSavedState(fresh)).not.toThrow();
+    expect(hydrateState(fresh, createInitialState()).staff[0])
+      .not.toHaveProperty('restAmenityPreference');
+
+    for (const preference of ['automatic', 'couch', 'arcade']) {
+      localStorage.clear();
+      const raw = createInitialState();
+      raw.staff = raw.staff.map((worker, index) => index === 0
+        ? { ...worker, restAmenityPreference: preference }
+        : worker);
+
+      expect(saveState(raw)).toBe(true);
+      expect(loadState().staff[0].restAmenityPreference).toBe(preference);
+      const hydrated = hydrateState(loadState(), createInitialState());
+      expect(hydrated.staff[0].restAmenityPreference).toBe(preference);
+      expect(hydrated.version).toBe(raw.version);
+    }
+  });
+
+  it.each(['bed', 'yes', 1, null])('rejects invalid present rest amenity preference %s', preference => {
+    const raw = createInitialState();
+    raw.staff[0] = { ...raw.staff[0], restAmenityPreference: preference };
+
+    expect(() => validateSavedState(raw)).toThrow();
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
+  });
+
   it.each(['yes', 1, 0, null])('rejects malformed table admission hold %s', admissionHeld => {
     const raw = createInitialState();
     raw.tables[0] = { ...raw.tables[0], admissionHeld };
