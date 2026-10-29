@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assignWaiterToStation,
+  clearUnavailableCashierAssignments,
   getAssignedCashierStation,
   getAvailableWaiterId,
 } from './cashiers';
@@ -45,6 +46,25 @@ describe('cashier station assignments', () => {
     expect(getAvailableWaiterId(staff, stations)).toBe('w3');
     expect(assignWaiterToStation(stations, staff, 'cashier1')).toEqual([
       { id: 'cashier1', assignedStaffId: 'w3' },
+    ]);
+  });
+
+  it('clears unavailable duty assignments but preserves an active payment owner', () => {
+    const stations = [
+      { id: 'resting', assignedStaffId: 'resting-waiter' },
+      { id: 'paying', assignedStaffId: 'paying-waiter' },
+      { id: 'working', assignedStaffId: 'working-waiter' },
+    ];
+    const staff = [
+      { id: 'resting-waiter', role: 'waiter', task: null, effectiveDuty: 'rest' },
+      { id: 'paying-waiter', role: 'waiter', task: { type: 'take_payment', stationId: 'paying' } },
+      { id: 'working-waiter', role: 'waiter', task: null },
+    ];
+
+    expect(clearUnavailableCashierAssignments(stations, staff)).toEqual([
+      { id: 'resting' },
+      stations[1],
+      stations[2],
     ]);
   });
 });

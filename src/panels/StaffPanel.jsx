@@ -15,6 +15,7 @@ import StaffScheduleEditor, {
 import { getStaffHirePreview } from './staffHirePreview';
 import { getStaffTaskLabel } from './staffTaskLabel';
 import { getStaffTrainingPreview } from './staffTrainingPreview';
+import CashierAssignments from './CashierAssignments';
 
 const ROLES = Object.keys(STAFF_SALARIES);
 const NAMES = ['Marco', 'Anna', 'Luca', 'Sofia', 'Giovanni', 'Isabella', 'Mario', 'Elena'];
@@ -279,6 +280,9 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
           Resolve the career decision before changing staff.
         </p>
       )}
+
+      {Array.isArray(state.cashierStations) && state.cashierStations.length > 0
+        && <CashierAssignments />}
 
       <div role="group" aria-label="Filter staff by role" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
         {ROLE_FILTERS.map(filter => {

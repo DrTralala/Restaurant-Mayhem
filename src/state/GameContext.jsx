@@ -20,6 +20,7 @@ import { getEquipmentLevelMultipliers, getEquipmentUpgradeQuote } from '../data/
 import { getGlobalUpgradeQuote } from '../data/upgrades';
 import { getGlobalUpgradeEffectPreview } from '../simulation/globalUpgradePurchase';
 import { assignWaiterToStation } from '../simulation/cashiers';
+import { prepareCashierAssignment } from '../simulation/cashierAssignment';
 import {
   getNextNumericId,
   snapPlacement,
@@ -482,6 +483,11 @@ function reduceGameAction(state, action) {
     case 'PRIORITISE_QUEUE_PARTY': {
       const nextQueue = prioritiseQueuedParty(state.queue, action.partyId);
       return nextQueue === state.queue ? state : { ...state, queue: nextQueue };
+    }
+    case 'ASSIGN_CASHIER': {
+      const prepared = prepareCashierAssignment(state, action.stationId, action.staffId);
+      return !prepared.ok || prepared.cashierStations === state.cashierStations
+        ? state : { ...state, cashierStations: prepared.cashierStations };
     }
     case 'SET_SPEED':
       if (![1, 2, 4].includes(action.speed)) return state;

@@ -39,6 +39,21 @@ describe('additive v10 feature persistence', () => {
     });
   });
 
+  it('round-trips the existing cashier assignedStaffId without adding a preference field', () => {
+    const raw = createInitialState();
+    raw.cashierStations = raw.cashierStations.map((station, index) => index === 0
+      ? { ...station, assignedStaffId: 'starter-cashier-waiter' }
+      : station);
+
+    expect(saveState(raw)).toBe(true);
+
+    const loaded = loadState();
+    expect(loaded.cashierStations[0].assignedStaffId).toBe('starter-cashier-waiter');
+    const hydrated = hydrateState(loaded, createInitialState());
+    expect(hydrated.cashierStations[0].assignedStaffId).toBe('starter-cashier-waiter');
+    expect(hydrated.cashierStations[0]).not.toHaveProperty('staffPreference');
+  });
+
   it('loads a truly old sandbox without changing cash/time or awarding historical credit', () => {
     const raw = legacy();
     raw.restaurant.totalServed = 1000;

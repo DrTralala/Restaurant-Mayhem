@@ -178,6 +178,49 @@ describe('GameProvider walk-in pause action', () => {
   });
 });
 
+describe('GameProvider cashier assignment action', () => {
+  it('assigns an idle waiter through the shared cashier assignment contract', () => {
+    const state = createInitialState();
+    const station = state.cashierStations[0];
+    const next = gameReducer(state, {
+      type: 'ASSIGN_CASHIER', stationId: station.id, staffId: 'starter-waiter',
+    });
+
+    expect(next).not.toBe(state);
+    expect(next.cashierStations[0]).toEqual({
+      ...station, assignedStaffId: 'starter-waiter',
+    });
+    expect(next.staff).toBe(state.staff);
+    expect(next.restaurant).toBe(state.restaurant);
+  });
+
+  it('atomically rejects an assignment when a checkout is using the target', () => {
+    const initial = createInitialState();
+    const state = {
+      ...initial,
+      customers: [
+        ...initial.customers,
+        { id: 'checkout-1', state: 'checkout_moving', cashierStationId: 'cashier1' },
+      ],
+    };
+
+    expect(gameReducer(state, {
+      type: 'ASSIGN_CASHIER', stationId: 'cashier1', staffId: 'starter-waiter',
+    })).toBe(state);
+  });
+
+  it('keeps cashier assignment actions behind the career decision gate', () => {
+    const state = {
+      ...createInitialState(),
+      careerRun: { needsDecision: true },
+    };
+
+    expect(gameReducer(state, {
+      type: 'ASSIGN_CASHIER', stationId: 'cashier1', staffId: 'starter-waiter',
+    })).toBe(state);
+  });
+});
+
 describe('GameProvider menu suspension action', () => {
   beforeEach(() => localStorage.clear());
 

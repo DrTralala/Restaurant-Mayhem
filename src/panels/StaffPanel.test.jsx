@@ -87,6 +87,22 @@ function StatefulStaffPanel({ initial }) {
 }
 
 describe('StaffPanel', () => {
+  it('shows cashier assignments only when cashier stations exist', () => {
+    useGameState.mockReturnValue(makeState({
+      cashierStations: [{ id: 'cashier-1', x: 800, y: 120, w: 40, h: 40 }],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    const { rerender } = render(<StaffPanel />);
+
+    expect(screen.getByRole('heading', { name: 'Cashier assignments' })).toBeInTheDocument();
+
+    useGameState.mockReturnValue(makeState({ cashierStations: [] }));
+    rerender(<StaffPanel />);
+
+    expect(screen.queryByRole('heading', { name: 'Cashier assignments' })).not.toBeInTheDocument();
+  });
+
   it('renders four accessible role filters and sorts a copied list by skill then stable ID', () => {
     const staff = [
       { id: 'z-worker', name: 'Zed', role: 'cook', skill: 2, morale: 80, salary: 200 },
