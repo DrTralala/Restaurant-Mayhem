@@ -12,6 +12,7 @@ import { DIRT_REPUTATION_THRESHOLD, getDirtReputationLossPerMinute } from '../si
 import { getQueuePartyCount, QUEUE_PARTY_CAPACITY } from '../simulation/customerQueue';
 import { getRevenueChart } from './revenueChart';
 import { isCareerDecisionPending } from '../simulation/careerRun';
+import TableSeatingHolds from './TableSeatingHolds';
 
 const statBox = { ...TYPOGRAPHY.secondary, background: '#1a1a2e', borderRadius: 6, padding: 10, border: '1px solid #0f3460' };
 
@@ -123,6 +124,8 @@ export default function StatsPanel() {
   return (
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
       <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', marginBottom: 12 }}>Statistics</h3>
+
+      <TableSeatingHolds />
 
       <div style={{ marginBottom: 16 }}>
         <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 4 }}>Daily revenue</h4>

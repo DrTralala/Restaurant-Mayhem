@@ -97,6 +97,29 @@ it('shows empty party review aggregates', () => {
   expect(screen.getByText('Completed reviews: 0')).toBeInTheDocument();
 });
 
+it('mounts table seating holds as a separate statistics section', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    tables: [{ id: 'stats-table', status: 'empty' }],
+  });
+  render(<StatsPanel />);
+
+  const holds = screen.getByRole('region', { name: 'Table seating holds' });
+  expect(within(holds).getByRole('heading', { name: 'Table seating holds' }))
+    .toBeInTheDocument();
+  expect(within(holds).getByRole('button', { name: 'Hold seating for table stats-table' }))
+    .toBeEnabled();
+  expect(within(screen.getByRole('region', { name: 'Service now' }))
+    .queryByRole('button', { name: /seating for table/ })).not.toBeInTheDocument();
+
+  fireEvent.click(within(holds).getByRole('button', {
+    name: 'Hold seating for table stats-table',
+  }));
+  expect(mockUseDispatch).toHaveBeenCalledWith({
+    type: 'SET_TABLE_ADMISSION_HOLD', id: 'stats-table', held: true,
+  });
+});
+
 it('shows aggregates and only the latest ten reviews newest first', () => {
   const scores = [-50, -5, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90];
   const partyReviewHistory = scores.map((score, index) => {
