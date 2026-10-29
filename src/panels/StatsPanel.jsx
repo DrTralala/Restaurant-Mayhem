@@ -1,4 +1,4 @@
-import { useRef, useEffect, useId } from 'react';
+import { useRef, useEffect, useLayoutEffect, useId } from 'react';
 import { useDispatch, useGameState } from '../state/GameContext';
 import { requestNewSandbox } from '../state/newSandbox';
 import { getCanvasFont, TYPOGRAPHY } from '../typography';
@@ -15,6 +15,7 @@ import { isCareerDecisionPending } from '../simulation/careerRun';
 import TableSeatingHolds from './TableSeatingHolds';
 
 const statBox = { ...TYPOGRAPHY.secondary, background: '#1a1a2e', borderRadius: 6, padding: 10, border: '1px solid #0f3460' };
+const REVENUE_CHART_MAX_BARS = 7;
 
 function formatPatience(party) {
   if (party.status === 'unknown') return 'Patience unknown';
@@ -52,10 +53,22 @@ function formatFunds(value) {
   return Number.isFinite(value) ? `$${Number.isInteger(value) ? value : value.toFixed(2)}` : 'Unavailable';
 }
 
+function getRevenueChartHistoryKey(history) {
+  const entries = Array.isArray(history) ? history.slice(-REVENUE_CHART_MAX_BARS) : [];
+  return JSON.stringify(entries.map(entry => ([
+    Number.isFinite(entry?.day) ? entry.day : null,
+    Number.isFinite(entry?.revenue) ? entry.revenue : null,
+  ])));
+}
+
 export default function StatsPanel() {
   const state = useGameState();
   const dispatch = useDispatch();
   const canvasRef = useRef(null);
+  const chartHistoryRef = useRef(state.dailyHistory);
+  const drawChartRef = useRef(null);
+  const chartHistoryKey = getRevenueChartHistoryKey(state.dailyHistory);
+  const previousChartHistoryKeyRef = useRef(chartHistoryKey);
   const completedFinancesId = useId();
   const queuePriorityHelpId = useId();
   const partyReviewHistory = Array.isArray(state.partyReviewHistory)
@@ -99,27 +112,62 @@ export default function StatsPanel() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    canvas.width = canvas.clientWidth;
-    canvas.height = canvas.clientHeight;
-    if (!ctx) return;
+    const drawChart = () => {
+      const cssWidth = canvas.clientWidth;
+      const cssHeight = canvas.clientHeight;
+      const pixelRatio = Number.isFinite(window.devicePixelRatio)
+        && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+      canvas.width = Math.round(cssWidth * pixelRatio);
+      canvas.height = Math.round(cssHeight * pixelRatio);
 
-    const chart = getRevenueChart(state.dailyHistory, canvas.width, canvas.height);
-    if (!chart || chart.bars.length === 0) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-    ctx.fillStyle = '#888';
-    ctx.fillRect(0, chart.baselineY, canvas.width, 1);
+      // Resizing the backing store resets the context state on every redraw.
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-    chart.bars.forEach(bar => {
-      if (bar.value !== null && bar.value !== 0 && bar.height > 0) {
-        ctx.fillStyle = '#f0a500';
-        ctx.fillRect(bar.x, bar.y, bar.width, bar.height);
-      }
+      const chart = getRevenueChart(chartHistoryRef.current, cssWidth, cssHeight);
+      if (!chart || chart.bars.length === 0) return;
+
       ctx.fillStyle = '#888';
-      ctx.font = getCanvasFont('compact');
-      ctx.fillText(bar.dayLabel, bar.x, canvas.height - 2);
-    });
+      ctx.fillRect(0, chart.baselineY, cssWidth, 1);
+
+      chart.bars.forEach(bar => {
+        if (bar.value !== null && bar.value !== 0 && bar.height > 0) {
+          ctx.fillStyle = '#f0a500';
+          ctx.fillRect(bar.x, bar.y, bar.width, bar.height);
+        }
+        ctx.fillStyle = '#888';
+        ctx.font = getCanvasFont('compact');
+        ctx.fillText(bar.dayLabel, bar.x, cssHeight - 2);
+      });
+    };
+
+    drawChartRef.current = drawChart;
+    drawChart();
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(drawChart);
+    resizeObserver?.observe(canvas);
+    window.addEventListener('resize', drawChart);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', drawChart);
+      drawChartRef.current = null;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    chartHistoryRef.current = state.dailyHistory;
   }, [state.dailyHistory]);
+
+  useEffect(() => {
+    if (previousChartHistoryKeyRef.current === chartHistoryKey) return;
+    previousChartHistoryKeyRef.current = chartHistoryKey;
+    drawChartRef.current?.();
+  }, [chartHistoryKey]);
 
   return (
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>

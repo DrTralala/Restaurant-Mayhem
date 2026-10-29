@@ -43,10 +43,16 @@ const REVENUE_CHART_CAPTION = 'Bars above zero show positive revenue; '
   + 'bars below zero show negative revenue. Unavailable values are omitted.';
 
 function createRecordingContext() {
-  const calls = { rects: [], texts: [] };
+  const calls = { rects: [], texts: [], clears: [], transforms: [] };
   const ctx = {
     fillStyle: '#000',
     font: '',
+    clearRect(x, y, width, height) {
+      calls.clears.push({ x, y, width, height });
+    },
+    setTransform(...transform) {
+      calls.transforms.push(transform);
+    },
     fillRect(x, y, width, height) {
       calls.rects.push({
         x, y, width, height, fillStyle: this.fillStyle, font: this.font,
@@ -61,6 +67,10 @@ function createRecordingContext() {
   return { ctx, calls };
 }
 
+let canvasClientWidth;
+let canvasClientHeight;
+let devicePixelRatio;
+
 function queuedMember(remaining = 100, maximum = 100, overrides = {}) {
   return {
     patience: remaining,
@@ -72,15 +82,25 @@ function queuedMember(remaining = 100, maximum = 100, overrides = {}) {
 }
 
 beforeEach(() => {
+  canvasClientWidth = 300;
+  canvasClientHeight = 120;
+  devicePixelRatio = 1;
+  vi.stubGlobal('ResizeObserver', undefined);
   Object.defineProperty(HTMLCanvasElement.prototype, 'clientWidth', {
     configurable: true,
-    get: () => 300,
+    get: () => canvasClientWidth,
   });
   Object.defineProperty(HTMLCanvasElement.prototype, 'clientHeight', {
     configurable: true,
-    get: () => 120,
+    get: () => canvasClientHeight,
+  });
+  Object.defineProperty(window, 'devicePixelRatio', {
+    configurable: true,
+    get: () => devicePixelRatio,
   });
   HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
+    clearRect: vi.fn(),
+    setTransform: vi.fn(),
     fillRect: vi.fn(),
     fillText: vi.fn(),
   }));
@@ -89,7 +109,10 @@ beforeEach(() => {
   requestNewSandboxMock.mockClear();
   localStorage.clear();
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 it('shows empty party review aggregates', () => {
   render(<StatsPanel />);
@@ -1626,6 +1649,260 @@ it('skips canvas drawing safely when the 2d context becomes unavailable on reren
   expect(nullContext).toHaveBeenCalled();
   expect(calls.rects).toHaveLength(2);
   expect(calls.texts).toHaveLength(1);
+});
+
+function installResizeObserverMock() {
+  const observers = [];
+  class ResizeObserverMock {
+    constructor(callback) {
+      this.callback = callback;
+      this.observe = vi.fn();
+      this.disconnect = vi.fn();
+      observers.push(this);
+    }
+  }
+  vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+  return observers;
+}
+
+it('updates the backing canvas size from CSS dimensions when ResizeObserver fires', () => {
+  const observers = installResizeObserverMock();
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 1, revenue: 100 }],
+  });
+  render(<StatsPanel />);
+
+  const canvas = document.querySelector('canvas');
+  expect(observers).toHaveLength(1);
+  expect(observers[0].observe).toHaveBeenCalledWith(canvas);
+  expect(canvas.width).toBe(300);
+
+  canvasClientWidth = 425;
+  observers[0].callback([{ target: canvas }], observers[0]);
+
+  expect(canvas.width).toBe(425);
+  expect(calls.rects.at(-2)).toMatchObject({ x: 0, width: 425, height: 1 });
+});
+
+it('scales backing dimensions for DPR 2 while drawing with CSS-pixel geometry', () => {
+  devicePixelRatio = 2;
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 1, revenue: 100 }],
+  });
+  render(<StatsPanel />);
+
+  const canvas = document.querySelector('canvas');
+  expect(canvas.width).toBe(600);
+  expect(canvas.height).toBe(240);
+  expect(calls.transforms).toEqual([[2, 0, 0, 2, 0, 0]]);
+  expect(calls.rects[0]).toMatchObject({ x: 0, width: 300, height: 1 });
+  expect(calls.texts[0]).toMatchObject({ text: 'D1', x: 2, y: 118 });
+});
+
+it('rounds fractional-DPR backing dimensions without changing CSS chart geometry', () => {
+  canvasClientWidth = 301;
+  canvasClientHeight = 121;
+  devicePixelRatio = 1.5;
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 1, revenue: 100 }],
+  });
+  render(<StatsPanel />);
+
+  const canvas = document.querySelector('canvas');
+  expect(canvas.width).toBe(452);
+  expect(canvas.height).toBe(182);
+  expect(calls.transforms).toEqual([[1.5, 0, 0, 1.5, 0, 0]]);
+  expect(calls.rects[0]).toMatchObject({ x: 0, width: 301, height: 1 });
+  expect(calls.texts[0]).toMatchObject({ text: 'D1', x: 2, y: 119 });
+});
+
+it.each([0, -2, Number.NaN, Number.POSITIVE_INFINITY])(
+  'uses DPR 1 when devicePixelRatio is not a positive finite number (%s)', dpr => {
+    devicePixelRatio = dpr;
+    const { ctx, calls } = createRecordingContext();
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+    mockUseGameState.mockReturnValue({
+      ...baseState,
+      dailyHistory: [{ day: 1, revenue: 100 }],
+    });
+    render(<StatsPanel />);
+
+    const canvas = document.querySelector('canvas');
+    expect(canvas.width).toBe(300);
+    expect(canvas.height).toBe(120);
+    expect(calls.transforms).toEqual([[1, 0, 0, 1, 0, 0]]);
+  },
+);
+
+it('clears old pixels when history becomes empty', () => {
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 1, revenue: 100 }],
+  });
+  const { rerender } = render(<StatsPanel />);
+  expect(calls.rects).toHaveLength(2);
+
+  mockUseGameState.mockReturnValue({ ...baseState, dailyHistory: [] });
+  rerender(<StatsPanel />);
+
+  expect(calls.clears).toHaveLength(2);
+  expect(calls.clears.at(-1)).toEqual({ x: 0, y: 0, width: 300, height: 120 });
+  expect(calls.rects).toHaveLength(2);
+  expect(calls.texts).toHaveLength(1);
+});
+
+it('resets the transform on every redraw instead of accumulating DPR scaling', () => {
+  devicePixelRatio = 2;
+  const observers = installResizeObserverMock();
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 1, revenue: 100 }],
+  });
+  render(<StatsPanel />);
+
+  observers[0].callback([], observers[0]);
+  observers[0].callback([], observers[0]);
+
+  expect(calls.transforms).toEqual([
+    [2, 0, 0, 2, 0, 0],
+    [2, 0, 0, 2, 0, 0],
+    [2, 0, 0, 2, 0, 0],
+  ]);
+});
+
+it('cleans up ResizeObserver and window resize subscriptions on unmount', () => {
+  const observers = installResizeObserverMock();
+  const addEventListener = vi.spyOn(window, 'addEventListener');
+  const removeEventListener = vi.spyOn(window, 'removeEventListener');
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 1, revenue: 100 }],
+  });
+  const { unmount } = render(<StatsPanel />);
+  const resizeRegistration = addEventListener.mock.calls.find(([type]) => type === 'resize');
+  expect(resizeRegistration).toBeDefined();
+  const resizeHandler = resizeRegistration[1];
+
+  unmount();
+
+  expect(observers[0].disconnect).toHaveBeenCalledTimes(1);
+  expect(removeEventListener).toHaveBeenCalledWith('resize', resizeHandler);
+});
+
+it('redraws on window resize when ResizeObserver is unavailable', () => {
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 1, revenue: 100 }],
+  });
+  render(<StatsPanel />);
+
+  const canvas = document.querySelector('canvas');
+  canvasClientWidth = 480;
+  window.dispatchEvent(new Event('resize'));
+
+  expect(canvas.width).toBe(480);
+  expect(calls.rects.at(-2)).toMatchObject({ x: 0, width: 480, height: 1 });
+});
+
+it('redraws for history changes but not for unrelated StatsPanel renders', () => {
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  const firstHistory = [{ day: 1, revenue: 100 }];
+  mockUseGameState.mockReturnValue({ ...baseState, dailyHistory: firstHistory });
+  const { rerender } = render(<StatsPanel />);
+  const initialRectCount = calls.rects.length;
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: { ...baseState.restaurant, dailyRevenue: 50 },
+    dailyHistory: firstHistory,
+  });
+  rerender(<StatsPanel />);
+  expect(calls.rects).toHaveLength(initialRectCount);
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 2, revenue: 200 }],
+  });
+  rerender(<StatsPanel />);
+  expect(calls.rects).toHaveLength(initialRectCount + 2);
+  expect(calls.texts.at(-1).text).toBe('D2');
+});
+
+it('keeps resize subscriptions stable across equal fresh history and draws latest chart data', () => {
+  const observers = installResizeObserverMock();
+  const addEventListener = vi.spyOn(window, 'addEventListener');
+  const { ctx, calls } = createRecordingContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ctx);
+  const firstHistory = [
+    { day: 1, revenue: 100, payroll: 40, profit: 60 },
+    { day: 2, revenue: -50, payroll: 25, profit: -75 },
+  ];
+  mockUseGameState.mockReturnValue({ ...baseState, dailyHistory: firstHistory });
+  const { rerender } = render(<StatsPanel />);
+  const initialRectCount = calls.rects.length;
+  const initialTextCount = calls.texts.length;
+
+  const equivalentHistory = firstHistory.map(entry => ({ ...entry }));
+  mockUseGameState.mockReturnValue({ ...baseState, dailyHistory: equivalentHistory });
+  rerender(<StatsPanel />);
+
+  expect(calls.rects).toHaveLength(initialRectCount);
+  expect(calls.texts).toHaveLength(initialTextCount);
+  expect(observers).toHaveLength(1);
+  expect(observers[0].disconnect).not.toHaveBeenCalled();
+  expect(observers[0].observe).toHaveBeenCalledTimes(1);
+  expect(addEventListener.mock.calls.filter(([type]) => type === 'resize')).toHaveLength(1);
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [
+      { day: 1, revenue: 100, payroll: 45, profit: 55 },
+      { day: 2, revenue: -50, payroll: 30, profit: -80 },
+    ],
+  });
+  rerender(<StatsPanel />);
+
+  expect(calls.rects).toHaveLength(initialRectCount);
+  expect(calls.texts).toHaveLength(initialTextCount);
+  expect(observers).toHaveLength(1);
+  expect(observers[0].disconnect).not.toHaveBeenCalled();
+  expect(addEventListener.mock.calls.filter(([type]) => type === 'resize')).toHaveLength(1);
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [
+      { day: 1, revenue: 100, payroll: 45, profit: 55 },
+      { day: 3, revenue: -25, payroll: 25, profit: -50 },
+    ],
+  });
+  rerender(<StatsPanel />);
+
+  expect(calls.rects).toHaveLength(initialRectCount + 3);
+  expect(calls.texts).toHaveLength(initialTextCount + 2);
+  expect(calls.texts.at(-1).text).toBe('D3');
+  expect(observers).toHaveLength(1);
+  expect(observers[0].disconnect).not.toHaveBeenCalled();
+  expect(addEventListener.mock.calls.filter(([type]) => type === 'resize')).toHaveLength(1);
+
+  canvasClientWidth = 500;
+  observers[0].callback([], observers[0]);
+  expect(calls.texts.slice(-2).map(call => call.text)).toEqual(['D1', 'D3']);
 });
 
 const QUEUE_ADMISSION_CAVEAT = 'The limit counts parties, not guests. '
