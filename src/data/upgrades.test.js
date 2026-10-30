@@ -1,14 +1,33 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getGlobalUpgradeQuote, UPGRADES } from './upgrades';
+import { getGlobalUpgradeDescription, getGlobalUpgradeQuote, UPGRADES } from './upgrades';
 
 const upgrade = (level, costs, extra = {}) => ({
   id: 'u3', name: 'Faster Oven', level, costs, ...extra,
 });
 
 describe('upgrade catalogue', () => {
+  it('describes Better Knives as capped dish-delivery happiness, not menu quality', () => {
+    expect(UPGRADES.find(upgrade => upgrade.id === 'u4').description)
+      .toBe('Dish delivery happiness +5 points per level. Rounded with other delivery bonuses; capped at 100 happiness. Drinks unaffected.');
+  });
   it('describes Faster Oven as dish preparation work rate', () => {
     expect(UPGRADES.find(upgrade => upgrade.effects.type === 'globalSpeed').description)
       .toBe('Dish preparation work rate +10% per level.');
+  });
+});
+
+describe('getGlobalUpgradeDescription', () => {
+  it.each([[0.05, '5'], [0.075, '7.5']])('uses saved quality effects (%s), not stale wording', (value, points) => {
+    const saved = Object.freeze({ description: 'Dish quality +5%', effects: Object.freeze({ type: 'qualityBonus', value }) });
+    expect(getGlobalUpgradeDescription(saved)).toBe(`Dish delivery happiness +${points} points per level. Rounded with other delivery bonuses; capped at 100 happiness. Drinks unaffected.`);
+    expect(saved.description).toBe('Dish quality +5%');
+  });
+
+  it('retains descriptions for other effects and invalid quality effects', () => {
+    for (const effects of [undefined, { type: 'globalSpeed', value: 0.1 }, ...[NaN, Infinity, -1, 0, '0.05'].map(value => ({ type: 'qualityBonus', value }))]) {
+      expect(getGlobalUpgradeDescription({ description: 'Saved text', effects })).toBe('Saved text');
+    }
+    expect(getGlobalUpgradeDescription(null)).toBeUndefined();
   });
 });
 

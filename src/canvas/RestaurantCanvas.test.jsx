@@ -3398,6 +3398,45 @@ describe('RestaurantCanvas locate requests', () => {
     },
   ];
 
+  it('centres a table once per token at preserved zoom without changing simulation state', () => {
+    const table = { id: 0, x: 100, y: 60 };
+    const { view, canvas, camera, onLocateResult } = renderWithViewport({ stateValue: { ...state, tables: [table] } });
+    camera.zoom = 2;
+    const request = { kind: 'table', id: '0', token: 1, generation: 0 };
+    view.rerender(<RestaurantCanvas locateRequest={request} onLocateResult={onLocateResult} />);
+    expect(camera).toMatchObject({ x: 160, y: 140, zoom: 2, manual: true });
+    expect(canvas).toHaveFocus();
+    expect(onLocateResult).toHaveBeenLastCalledWith({ token: 1, success: true });
+    expect(useDispatch()).not.toHaveBeenCalled();
+    useGameState.mockReturnValue({ ...state, tables: [{ ...table, x: 200 }] });
+    view.rerender(<RestaurantCanvas locateRequest={{ ...request }} onLocateResult={onLocateResult} />);
+    expect(camera.x).toBe(160);
+    expect(onLocateResult).toHaveBeenCalledTimes(1);
+    view.rerender(<RestaurantCanvas locateRequest={{ ...request, token: 2 }} onLocateResult={onLocateResult} />);
+    expect(camera.x).toBe(-40);
+    expect(onLocateResult).toHaveBeenCalledTimes(2);
+    expect(table).toEqual({ id: 0, x: 100, y: 60 });
+  });
+
+  it.each(['missing', 'ambiguous', 'coordinates', 'generation', 'placement', 'career', 'unknown kind'])(
+    'fails closed for table locate with %s', reason => {
+      const tables = reason === 'missing' ? []
+        : reason === 'ambiguous' ? [{ id: 0, x: 100, y: 60 }, { id: '0', x: 100, y: 60 }]
+          : [{ id: 0, x: reason === 'coordinates' ? NaN : 100, y: 60 }];
+      const { view, camera, onLocateResult } = renderWithViewport({ stateValue: {
+        ...state, tables, careerRun: reason === 'career' ? { needsDecision: true } : null,
+      } });
+      camera.x = 11;
+      camera.y = 12;
+      const request = { kind: reason === 'unknown kind' ? 'unknown' : 'table', id: 0, token: 1,
+        generation: reason === 'generation' ? 1 : 0 };
+      view.rerender(<RestaurantCanvas locateRequest={request} onLocateResult={onLocateResult}
+        placementRequest={reason === 'placement' ? { itemType: 'chair' } : null} />);
+      expect(camera).toMatchObject({ x: 11, y: 12 });
+      expect(onLocateResult).toHaveBeenCalledWith({ token: 1, success: false });
+    },
+  );
+
   it('centres the current employee at the preserved zoom and keeps the synced viewport on the next draw', () => {
     const worker = { id: 'worker', name: 'W', role: 'waiter', x: 120, y: 80 };
     const dispatch = vi.fn();

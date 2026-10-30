@@ -18,9 +18,14 @@ vi.mock('./canvas/RestaurantCanvas', () => ({ default: function Canvas({
     data-placement={String(placementRequest)}
     data-placement-type={placementRequest?.itemType ?? ''}
     data-locate-id={locateRequest ? String(locateRequest.id) : ''}
+    data-locate-kind={locateRequest?.kind ?? 'staff'}
     data-locate-token={locateRequest ? String(locateRequest.token) : ''}
     data-locate-generation={locateRequest ? String(locateRequest.generation) : ''}>
     <div ref={focusTargetRef} data-testid="canvas-focus-target" tabIndex={-1} />
+    <button onClick={() => dispatch({ type: 'TICK', nextState: { ...state,
+      customers: [{ id: 'deadline-guest', tableId: state.tables[0].id, foodOutcome: 'pending',
+        foodDeadlineAt: state.restaurant.gameTime + 30, foodPatienceBudget: 30 }],
+    } })}>Create pending food target</button>
     <button onClick={() => dispatch({ type: 'TICK', nextState: { ...state,
       restaurant: { ...state.restaurant, gameTime: 640800, day: 8 },
       careerRun: evaluateCareerRun(state.careerRun, { gameTime: 640800, reputation: 1 }),
@@ -158,6 +163,47 @@ describe('shared feature UI routes', () => {
 });
 
 describe('shared feature UI locate wiring', () => {
+  it('locates a deadline table with matching-result routing and table-specific failure feedback', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create pending food target' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Management' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stats', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Locate table' }));
+    const canvas = screen.getByTestId('canvas');
+    expect(canvas).toHaveAttribute('data-locate-kind', 'table');
+    expect(canvas).toHaveAttribute('data-locate-id', String(createInitialState().tables[0].id));
+    expect(canvas).toHaveAttribute('data-locate-token', '1');
+    expect(canvas).toHaveAttribute('data-locate-generation', '0');
+    fireEvent.click(screen.getByTestId('locate-result-stale'));
+    expect(managementIsOpen()).toBe(true);
+    expect(canvas).toHaveAttribute('data-locate-token', '1');
+    fireEvent.click(screen.getByTestId('locate-result-failure'));
+    expect(managementIsOpen()).toBe(true);
+    expect(screen.getByText('Table location unavailable.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Locate table' }));
+    expect(canvas).toHaveAttribute('data-locate-token', '2');
+    expect(screen.queryByText('Table location unavailable.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('locate-result-success'));
+    expect(managementIsOpen()).toBe(false);
+    expect(screen.getByTestId('canvas-focus-target')).toHaveFocus();
+  });
+
+  it('blocks deadline table locating during placement', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create pending food target' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Management' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Items', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Buy Dining chair ($50)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Management' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stats', exact: true }));
+    expect(screen.getByRole('button', { name: 'Locate table' })).toBeDisabled();
+    expect(screen.getByText('Finish or cancel placement before locating staff or tables.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Locate table' }));
+    expect(screen.getByTestId('canvas')).toHaveAttribute('data-locate-token', '');
+  });
+
   function openStaffTab() {
     fireEvent.click(screen.getByRole('button', { name: 'Management' }));
     fireEvent.click(screen.getByRole('button', { name: 'Staff', exact: true }));
@@ -251,7 +297,7 @@ describe('shared feature UI locate wiring', () => {
 
     const locate = screen.getByRole('button', { name: 'Locate Marco' });
     expect(locate).toBeDisabled();
-    expect(screen.getByText('Finish or cancel placement before locating staff.')).toBeInTheDocument();
+    expect(screen.getByText('Finish or cancel placement before locating staff or tables.')).toBeInTheDocument();
 
     fireEvent.click(locate);
     expect(canvas).toHaveAttribute('data-locate-token', '');

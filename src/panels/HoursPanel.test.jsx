@@ -102,6 +102,18 @@ describe('HoursPanel', () => {
     screen.getByRole('list', { name: 'Rush-period coverage' }),
   ).getAllByRole('listitem');
 
+  it('updates peak-time coverage when opening or closing exactly at the lunch peak', () => {
+    mockState.restaurant = { ...mockState.restaurant, openHour: 10, closeHour: 12.5 };
+    const { rerender } = render(<HoursPanel />);
+    expect(within(rushRows()[1]).getByText('Closed at peak time.')).toBeInTheDocument();
+
+    mockState.restaurant = { ...mockState.restaurant, openHour: 12.5, closeHour: 14 };
+    rerender(<HoursPanel />);
+    expect(within(rushRows()[1]).getByText('Open at peak time.')).toBeInTheDocument();
+    expect(within(rushRows()[1]).queryByText('Closed at peak time.')).not.toBeInTheDocument();
+    expect(within(rushRows()[0]).getByText('Closed at peak time.')).toBeInTheDocument();
+  });
+
   it('renders rush-period coverage for a partial morning window', () => {
     mockState.restaurant.openHour = 6;
     mockState.restaurant.closeHour = 6.5;

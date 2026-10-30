@@ -25,7 +25,7 @@ const TABS = [
 
 export default function ManagementModal({ isOpen, onClose, onStartPlacement,
   initialTab = 'upgrades', onStartCareer, onShowCareerResult,
-  onLocateStaff, locateDisabled = false, locateMessage = '' }) {
+  onLocateStaff, onLocateTable, locateDisabled = false, locateMessage = '' }) {
   const [tab, setTab] = useState(initialTab);
   const state = useGameState();
   const dispatch = useDispatch();
@@ -114,7 +114,8 @@ export default function ManagementModal({ isOpen, onClose, onStartPlacement,
             />
           )}
           {tab === 'milestones' && <MilestonePanel />}
-          {tab === 'stats' && <StatsPanel />}
+          {tab === 'stats' && <StatsPanel onLocateTable={onLocateTable}
+            locateDisabled={locateDisabled} locateMessage={locateMessage} />}
           {tab === 'hours' && <HoursPanel />}
           {tab === 'contracts' && <ServiceContractsPanel />}
           {tab === 'career' && <CareerPanel onStartRequested={onStartCareer} onShowResult={onShowCareerResult} />}

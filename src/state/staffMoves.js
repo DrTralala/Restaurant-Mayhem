@@ -10,6 +10,7 @@ import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulati
 import { recoverCookingBatches } from '../simulation/cookingBatches';
 import { releaseAmenitySlot, selectStaffWellbeingExit } from '../simulation/staffWellbeing';
 import { isPhysicallySeatedCustomerState } from '../simulation/customerSeating';
+import { getInterruptedPreparationTiming } from '../simulation/preparationInterruption';
 
 const REPAIR_OFFSETS = Object.freeze([
   { x: 40, y: 0 }, { x: -40, y: 0 }, { x: 0, y: 40 }, { x: 0, y: -40 },
@@ -253,7 +254,6 @@ export function invalidateMovementRuntime(state, id) {
 function resetPreparation(item, workerId, kind, now) {
   if (!item || item.assignedStaffId !== workerId || item.kind !== kind
     || !['ordered', 'preparing', 'ready'].includes(item.state)) return item;
-  const hasProgress = Number.isFinite(item.accumulatedWork) && item.accumulatedWork > 0;
   return {
     ...item,
     state: 'ordered',
@@ -261,11 +261,7 @@ function resetPreparation(item, workerId, kind, now) {
     serviceTableId: null,
     serviceSlotIndex: null,
     assignedStaffId: null,
-    ...(hasProgress
-      ? (Number.isFinite(now)
-        ? { lastProgressAt: Math.max(Number.isFinite(item.lastProgressAt) ? item.lastProgressAt : now, now) }
-        : {})
-      : { preparationStartedAt: null, readyAt: null, lastProgressAt: null }),
+    ...getInterruptedPreparationTiming(item, now),
   };
 }
 

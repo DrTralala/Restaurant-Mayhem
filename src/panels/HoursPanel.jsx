@@ -144,6 +144,9 @@ export default function HoursPanel() {
                 <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#888', marginTop: 4 }}>
                   {`Full-window peak: ${period.peakMultiplier}× at ${formatOperatingHour(period.peakHour)}.`}
                 </span>
+                <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#ddd', marginTop: 4 }}>
+                  {period.peakOpen ? 'Open at peak time.' : 'Closed at peak time.'}
+                </span>
                 <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#888', marginTop: 4 }}>
                   {`Open for ${period.openHours} of ${duration} hours.`}
                 </span>

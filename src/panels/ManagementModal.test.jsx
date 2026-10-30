@@ -33,7 +33,12 @@ vi.mock('./StaffPanel', () => ({ default: ({ onLocateStaff, locateDisabled, loca
   </div>
 ) }));
 vi.mock('./MilestonePanel', () => ({ default: () => <div>Milestone panel</div> }));
-vi.mock('./StatsPanel', () => ({ default: () => <div>Stats panel</div> }));
+vi.mock('./StatsPanel', () => ({ default: ({ onLocateTable, locateDisabled, locateMessage }) => (
+  <div>Stats panel
+    <button onClick={() => onLocateTable?.(0)} disabled={locateDisabled}>Locate table</button>
+    {locateMessage && <output>{locateMessage}</output>}
+  </div>
+) }));
 vi.mock('./HoursPanel', () => ({ default: () => <div>Hours panel</div> }));
 vi.mock('./CareerPanel', () => ({ default: () => <div>Career panel</div> }));
 
@@ -189,6 +194,18 @@ describe('ManagementModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Locate staff' }));
 
     expect(onLocateStaff).toHaveBeenCalledWith('s1');
+  });
+
+  it('forwards table locate requests and block feedback to Stats', () => {
+    const onLocateTable = vi.fn();
+    const { rerender } = render(<ManagementModal isOpen onClose={vi.fn()} initialTab="stats"
+      onLocateTable={onLocateTable} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Locate table' }));
+    expect(onLocateTable).toHaveBeenCalledWith(0);
+    rerender(<ManagementModal isOpen onClose={vi.fn()} initialTab="stats"
+      onLocateTable={onLocateTable} locateDisabled locateMessage="Table location unavailable." />);
+    expect(screen.getByRole('button', { name: 'Locate table' })).toBeDisabled();
+    expect(screen.getByText('Table location unavailable.')).toBeInTheDocument();
   });
 
   it('exposes a named modal dialog and focuses the named close control on entry', () => {

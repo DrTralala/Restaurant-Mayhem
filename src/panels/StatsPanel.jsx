@@ -13,6 +13,7 @@ import { getQueuePartyCount, QUEUE_PARTY_CAPACITY } from '../simulation/customer
 import { getRevenueChart } from './revenueChart';
 import { isCareerDecisionPending } from '../simulation/careerRun';
 import TableSeatingHolds from './TableSeatingHolds';
+import { getTableLocatePoint } from '../canvas/tableLocatePoint';
 
 const statBox = { ...TYPOGRAPHY.secondary, background: '#1a1a2e', borderRadius: 6, padding: 10, border: '1px solid #0f3460' };
 const REVENUE_CHART_MAX_BARS = 7;
@@ -61,7 +62,7 @@ function getRevenueChartHistoryKey(history) {
   ])));
 }
 
-export default function StatsPanel() {
+export default function StatsPanel({ onLocateTable, locateDisabled = false, locateMessage = '' }) {
   const state = useGameState();
   const dispatch = useDispatch();
   const canvasRef = useRef(null);
@@ -94,6 +95,9 @@ export default function StatsPanel() {
   const remainingPartySlots = Math.max(0, QUEUE_PARTY_CAPACITY - queuePartyCount);
   const queuePatience = getQueuePatienceSummary(state);
   const foodDeadline = getFoodDeadlineSummary(state);
+  const foodTableId = foodDeadline.target?.tableId;
+  const tableLocateDisabled = locateDisabled || isCareerDecisionPending(state)
+    || typeof onLocateTable !== 'function' || !getTableLocatePoint(state.tables, foodTableId);
   const kitchenBlockers = getKitchenBlockerSummary(state);
   const restaurantOpen = isRestaurantOpen(state);
   const dailyPayroll = getDailyPayroll(state.staff || []);
@@ -353,6 +357,15 @@ export default function StatsPanel() {
           ETA estimates or guarantees of order arrival or preparation; counts may overlap for
           the same dish.
         </p>
+        {kitchenBlockers.byDish.length > 0 && (
+          <ul aria-label="Blocked dishes" style={TYPOGRAPHY.secondary}>
+            {kitchenBlockers.byDish.map(dish => (
+              <li key={JSON.stringify([dish.menuItemId, dish.name])}>
+                {dish.name} ({dish.menuItemId}): no employed cook: {dish.noCook}; no compatible station: {dish.noCompatibleStation}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section aria-label="Cleanup backlog" style={{ marginTop: 16 }}>
@@ -383,6 +396,13 @@ export default function StatsPanel() {
                 Earliest known food target: {formatFoodTarget(foodDeadline.target)}.
               </div>
             )}
+            {foodTableId != null && (
+              <button type="button" disabled={tableLocateDisabled}
+                onClick={() => { if (!tableLocateDisabled) onLocateTable(foodTableId); }}
+                style={{ ...TYPOGRAPHY.control, justifySelf: 'start' }}>
+                Locate table
+              </button>
+            )}
             {foodDeadline.knownCount === 0 || !Number.isFinite(foodDeadline.remainingSeconds) ? (
               <div style={statBox}>Food timing unavailable.</div>
             ) : (
@@ -403,6 +423,7 @@ export default function StatsPanel() {
         <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
           Based on recorded customer timers, not a delivery ETA. Delivered or cancelled outcomes are excluded; service-item reconciliation occurs in the simulation.
         </p>
+        {locateMessage && <p role="status" style={TYPOGRAPHY.secondary}>{locateMessage}</p>}
       </section>
 
       <div style={{ marginTop: 16 }}>

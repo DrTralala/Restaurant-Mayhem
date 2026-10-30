@@ -1282,6 +1282,7 @@ it('shows ordered-dish blockers as overlapping structural counts and updates imm
     .toBeInTheDocument();
   expect(within(section).getByText('Eligible ordered dishes with no compatible station: 0'))
     .toBeInTheDocument();
+  expect(within(section).queryByRole('list', { name: 'Blocked dishes' })).not.toBeInTheDocument();
 
   mockUseGameState.mockReturnValue({
     ...baseState,
@@ -1305,6 +1306,61 @@ it('shows ordered-dish blockers as overlapping structural counts and updates imm
     .toHaveTextContent(/may overlap/);
   expect(within(section).getByText(/not wait-time or ETA estimates/))
     .toHaveTextContent(/guarantees of order arrival or preparation/);
+  const details = within(section).getByRole('list', { name: 'Blocked dishes' });
+  expect(within(details).getByRole('listitem')).toHaveTextContent(
+    'Dish toast (toast): no employed cook: 1; no compatible station: 1',
+  );
+  mockUseGameState.mockReturnValue(baseState);
+  rerender(<StatsPanel />);
+  expect(within(section).queryByRole('list', { name: 'Blocked dishes' })).not.toBeInTheDocument();
+});
+
+it('locates the raw earliest food table identity and updates it on rerender', () => {
+  const onLocateTable = vi.fn();
+  const pending = tableId => ({ id: 'guest', tableId, foodOutcome: 'pending',
+    foodDeadlineAt: 120, foodPatienceBudget: 30 });
+  const initial = { ...baseState, restaurant: { ...baseState.restaurant, gameTime: 100 },
+    customers: [pending(0)], tables: [{ id: '0', x: 100, y: 60 }] };
+  mockUseGameState.mockReturnValue(initial);
+  const { rerender } = render(<StatsPanel onLocateTable={onLocateTable} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Locate table' }));
+  expect(onLocateTable).toHaveBeenLastCalledWith(0);
+  mockUseGameState.mockReturnValue({ ...initial, customers: [pending('next')],
+    tables: [{ id: 'next', x: 200, y: 80 }] });
+  rerender(<StatsPanel onLocateTable={onLocateTable} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Locate table' }));
+  expect(onLocateTable).toHaveBeenLastCalledWith('next');
+  expect(initial.customers[0].tableId).toBe(0);
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+});
+
+it.each(['callback', 'placement', 'career', 'missing table', 'ambiguous table', 'coordinates'])(
+  'disables earliest table locating for %s', reason => {
+    const onLocateTable = vi.fn();
+    const tables = reason === 'missing table' ? []
+      : reason === 'ambiguous table' ? [{ id: 0, x: 10, y: 10 }, { id: '0', x: 20, y: 20 }]
+        : [{ id: 0, x: reason === 'coordinates' ? NaN : 100, y: 60 }];
+    mockUseGameState.mockReturnValue({ ...baseState, tables,
+      careerRun: reason === 'career' ? { needsDecision: true } : null,
+      customers: [{ id: 'guest', tableId: 0, foodOutcome: 'pending', foodDeadlineAt: 120, foodPatienceBudget: 30 }] });
+    render(<StatsPanel onLocateTable={reason === 'callback' ? undefined : onLocateTable}
+      locateDisabled={reason === 'placement'} locateMessage="Location blocked." />);
+    const button = screen.getByRole('button', { name: 'Locate table' });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onLocateTable).not.toHaveBeenCalled();
+    expect(screen.getByText('Location blocked.')).toBeInTheDocument();
+  },
+);
+
+it('does not substitute a later table when the earliest deadline has no table identity', () => {
+  mockUseGameState.mockReturnValue({ ...baseState, tables: [{ id: 'later', x: 10, y: 10 }],
+    customers: [
+      { id: 'first', foodOutcome: 'pending', foodDeadlineAt: 120, foodPatienceBudget: 30 },
+      { id: 'second', tableId: 'later', foodOutcome: 'pending', foodDeadlineAt: 160, foodPatienceBudget: 30 },
+    ] });
+  render(<StatsPanel onLocateTable={vi.fn()} />);
+  expect(screen.queryByRole('button', { name: 'Locate table' })).not.toBeInTheDocument();
 });
 
 it('shows pending timer counts, the earliest known deadline and the unknown notice', () => {

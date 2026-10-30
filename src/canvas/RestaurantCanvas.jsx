@@ -3,6 +3,7 @@ import { useGameState, useDispatch, useGameGeneration } from '../state/GameConte
 import { useRenderState, useRuntimeFault } from '../state/SimulationRuntime';
 import { isCareerDecisionPending } from '../simulation/careerRun';
 import { calculateFitCamera, createCamera, screenToWorld, adjustCameraZoom } from './camera';
+import { getTableLocatePoint } from './tableLocatePoint';
 import { loadSprites } from './sprites';
 import { drawFloorLayer, drawFurnitureLayer, drawObjectLabel, drawPlacementPreview, drawStaffLayer, drawCustomerLayer, drawQueueLayer, drawSelectionLayer } from './layers';
 import { findClickedEntity } from './interaction';
@@ -733,13 +734,16 @@ export default function RestaurantCanvas({
     const camera = cameraRef.current;
     const width = canvas?.clientWidth;
     const height = canvas?.clientHeight;
-    const worker = state.staff.find(candidate => candidate.id === locateRequest.id);
+    const point = locateRequest.kind === 'table'
+      ? getTableLocatePoint(state.tables, locateRequest.id)
+      : locateRequest.kind == null || locateRequest.kind === 'staff'
+        ? state.staff.find(candidate => candidate.id === locateRequest.id) : null;
     const canLocate = locateRequest.generation === generation
       && !placementRequest
       && !isCareerDecisionPending(state)
-      && Boolean(worker)
-      && Number.isFinite(worker?.x)
-      && Number.isFinite(worker?.y)
+      && Boolean(point)
+      && Number.isFinite(point?.x)
+      && Number.isFinite(point?.y)
       && Number.isFinite(width) && width > 0
       && Number.isFinite(height) && height > 0
       && Number.isFinite(camera.zoom) && camera.zoom > 0;
@@ -749,8 +753,8 @@ export default function RestaurantCanvas({
       return;
     }
 
-    camera.x = width / 2 - worker.x * camera.zoom;
-    camera.y = height / 2 - worker.y * camera.zoom;
+    camera.x = width / 2 - point.x * camera.zoom;
+    camera.y = height / 2 - point.y * camera.zoom;
     camera.manual = true;
     viewportRef.current = { w: width, h: height };
     canvas.focus();

@@ -11,9 +11,9 @@ describe('getRushSchedulePreview', () => {
     const preview = getRushSchedulePreview({ openHour: 0, closeHour: 0 });
 
     expect(preview).toEqual([
-      { name: 'Breakfast', startHour: 6, peakHour: 7, endHour: 8, peakMultiplier: 2, openHours: 2 },
-      { name: 'Lunch', startHour: 11, peakHour: 12.5, endHour: 14, peakMultiplier: 2.5, openHours: 3 },
-      { name: 'Dinner', startHour: 17, peakHour: 18.5, endHour: 20, peakMultiplier: 3, openHours: 3 },
+      { name: 'Breakfast', startHour: 6, peakHour: 7, endHour: 8, peakMultiplier: 2, openHours: 2, peakOpen: true },
+      { name: 'Lunch', startHour: 11, peakHour: 12.5, endHour: 14, peakMultiplier: 2.5, openHours: 3, peakOpen: true },
+      { name: 'Dinner', startHour: 17, peakHour: 18.5, endHour: 20, peakMultiplier: 3, openHours: 3, peakOpen: true },
     ]);
   });
 
@@ -23,6 +23,21 @@ describe('getRushSchedulePreview', () => {
     expect(preview.Breakfast.openHours).toBe(0.5);
     expect(preview.Lunch.openHours).toBe(0);
     expect(preview.Dinner.openHours).toBe(0);
+  });
+
+  it.each([
+    [10, 12.5, [false, false, false]],
+    [12.5, 14, [false, true, false]],
+    [19, 7, [false, false, false]],
+    [18.5, 7.5, [true, false, true]],
+    [0, 0, [true, true, true]],
+    [10, 10, [true, true, true]],
+    [24, 24, [true, true, true]],
+    [undefined, undefined, [true, true, true]],
+    [10.25, Number.NaN, [true, true, true]],
+  ])('reports peak coverage for hours %s–%s', (openHour, closeHour, expected) => {
+    expect(getRushSchedulePreview(Object.freeze({ openHour, closeHour }))
+      .map(period => period.peakOpen)).toEqual(expected);
   });
 
   it('excludes a period peak that sits exactly at closing time', () => {

@@ -6,6 +6,9 @@ export function getRushSchedulePreview(restaurant = {}) {
     for (let hour = period.startHour; hour < period.endHour; hour += 0.5) {
       if (isRestaurantOpen({ restaurant: { ...restaurant, gameTime: (hour + 0.25) * 3600 } })) openHours += 0.5;
     }
-    return { ...period, openHours };
+    const peakOpen = isRestaurantOpen({
+      restaurant: { ...restaurant, gameTime: period.peakHour * 3600 },
+    });
+    return { ...period, openHours, peakOpen };
   });
 }

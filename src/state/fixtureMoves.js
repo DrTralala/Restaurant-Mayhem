@@ -15,6 +15,7 @@ import { reconcileSelfSeatingState } from '../simulation/selfSeating';
 import { clearDiningOwnership } from '../simulation/tableLifecycle';
 import { getPartyKey } from '../simulation/partyReviews';
 import { isPhysicallySeatedCustomerState } from '../simulation/customerSeating';
+import { getInterruptedPreparationTiming } from '../simulation/preparationInterruption';
 
 function cancelNavigation(actor) {
   return clearNavigationGoal(actor);
@@ -239,7 +240,6 @@ export function moveFixtures(state, requestedMoves) {
     if (item.state === 'preparing'
       && (kitchenStationIds.has(item.stationId) || cancelledPreparation)) {
       const cancelledDrink = item.kind === 'drink';
-      const hasProgress = Number.isFinite(item.accumulatedWork) && item.accumulatedWork > 0;
       const now = next.restaurant?.gameTime;
       return {
         ...item,
@@ -250,11 +250,7 @@ export function moveFixtures(state, requestedMoves) {
           serviceTableId: null,
           serviceSlotIndex: null,
         } : {}),
-        ...(hasProgress
-          ? (Number.isFinite(now)
-            ? { lastProgressAt: Math.max(Number.isFinite(item.lastProgressAt) ? item.lastProgressAt : now, now) }
-            : {})
-          : { preparationStartedAt: null, readyAt: null, lastProgressAt: null }),
+        ...getInterruptedPreparationTiming(item, now),
       };
     }
     const cancelledWash = cancelledTasks.some(({ task }) =>

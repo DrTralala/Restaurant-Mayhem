@@ -4,6 +4,7 @@ import { isCheckoutState } from './checkout';
 import { chooseAffordableBasket } from './menuEconomy';
 import { createDishOrderSnapshot, validateDishOrderSnapshot, validateDishOrderSnapshots } from './cookbook';
 import { clearNavigationGoal } from './movement/navigationGoal';
+import { getInterruptedPreparationTiming } from './preparationInterruption';
 import {
   getCarriedServiceItemIds,
   getStaffCarryCapacity,
@@ -435,7 +436,6 @@ export function normaliseServiceItemOwnership(state) {
     }
     if (['ordered', 'preparing'].includes(item.state) && item.kind === 'drink'
       && !hasValidDrinkReservation(state, item)) {
-      const hasProgress = Number.isFinite(item.accumulatedWork) && item.accumulatedWork > 0;
       const now = state.restaurant?.gameTime;
       kept.push({
         ...item,
@@ -444,11 +444,7 @@ export function normaliseServiceItemOwnership(state) {
         serviceTableId: null,
         serviceSlotIndex: null,
         assignedStaffId: null,
-        ...(hasProgress
-          ? (Number.isFinite(now)
-            ? { lastProgressAt: Math.max(Number.isFinite(item.lastProgressAt) ? item.lastProgressAt : now, now) }
-            : {})
-          : { preparationStartedAt: null, readyAt: null, lastProgressAt: null }),
+        ...getInterruptedPreparationTiming(item, now),
       });
     } else if (['ordered', 'preparing'].includes(item.state)) {
       kept.push(item);

@@ -58,11 +58,11 @@ function AppSession() {
       setLocateRequest(null);
     }
   }, [decisionPending]);
-  const requestLocate = id => {
+  const requestLocate = (id, kind = 'staff') => {
     if (decisionPending || placementRequest) return;
     locateTokenRef.current += 1;
     setLocateNotice('');
-    setLocateRequest({ id, token: locateTokenRef.current, generation });
+    setLocateRequest({ id, kind, token: locateTokenRef.current, generation });
   };
   const handleLocateResult = result => {
     if (!locateRequest || !result || result.token !== locateRequest.token) return;
@@ -71,7 +71,7 @@ function AppSession() {
       setLocateNotice('');
       setModalOpen(false);
     } else {
-      setLocateNotice('Employee location unavailable.');
+      setLocateNotice(locateRequest.kind === 'table' ? 'Table location unavailable.' : 'Employee location unavailable.');
     }
   };
   const openManagement = tab => {
@@ -145,9 +145,10 @@ function AppSession() {
         onStartCareer={startCareer}
         onShowCareerResult={() => setSettingsOpen(false)}
         onLocateStaff={requestLocate}
+        onLocateTable={id => requestLocate(id, 'table')}
         locateDisabled={decisionPending || Boolean(placementRequest)}
         locateMessage={placementRequest
-          ? 'Finish or cancel placement before locating staff.'
+          ? 'Finish or cancel placement before locating staff or tables.'
           : locateNotice}
       />
       <MenuModal isOpen={menuOpen && !decisionPending} onClose={() => setMenuOpen(false)} />

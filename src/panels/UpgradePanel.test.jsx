@@ -13,6 +13,21 @@ import { useDispatch, useGameState } from '../state/GameContext';
 afterEach(() => vi.restoreAllMocks());
 
 describe('UpgradePanel', () => {
+  it('corrects saved quality wording using saved effects without changing purchase terms', () => {
+    const saved = Object.freeze({ id: 'u4', name: 'Better Knives', description: 'Dish quality +5%', level: 1,
+      costs: Object.freeze([350, 777]), effects: Object.freeze({ type: 'qualityBonus', value: 0.075 }) });
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue({ upgrades: [saved], restaurant: { funds: 777, expansionLevel: 1 }, serviceTables: [], equipment: [] });
+    useDispatch.mockReturnValue(dispatch);
+    render(<UpgradePanel />);
+    expect(screen.queryByText('Dish quality +5%')).not.toBeInTheDocument();
+    expect(screen.getByText('Dish delivery happiness +7.5 points per level. Rounded with other delivery bonuses; capped at 100 happiness. Drinks unaffected.')).toBeVisible();
+    const card = screen.getByText('Better Knives').parentElement;
+    expect(within(card).getByText('Level 1 → $777')).toBeVisible();
+    fireEvent.click(within(card).getByRole('button', { name: 'Buy' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'BUY_UPGRADE', id: 'u4' });
+    expect(saved.description).toBe('Dish quality +5%');
+  });
   it('displays finite equipment multipliers when state values are missing', () => {
     useGameState.mockReturnValue({
       upgrades: [],

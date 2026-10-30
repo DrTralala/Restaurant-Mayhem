@@ -45,16 +45,55 @@ function freeze(value) {
 }
 
 describe('getKitchenBlockerSummary', () => {
+  it('groups blocked orders by dish identity and name without double-counting reasons', () => {
+    const state = freeze(makeState({
+      dishes: [
+        { id: 'toast', name: 'Toast', requiredEquipmentId: 'eq1' },
+        { id: 'other-toast', name: 'Toast', requiredEquipmentId: 'eq2' },
+      ],
+      serviceItems: [dishItem('item-1'), dishItem('item-2', 'customer-item-1'),
+        dishItem('item-3', 'customer-item-1', { menuItemId: 'other-toast' })],
+      staff: [],
+    }));
+    expect(getKitchenBlockerSummary(state)).toMatchObject({
+      noCook: 3, noCompatibleStation: 1,
+      byDish: [
+        { menuItemId: 'toast', name: 'Toast', noCook: 2, noCompatibleStation: 0 },
+        { menuItemId: 'other-toast', name: 'Toast', noCook: 1, noCompatibleStation: 1 },
+      ],
+    });
+    expect(getKitchenBlockerSummary(makeState()).byDish).toEqual([]);
+  });
+
+  it('uses recorded snapshot names rather than renamed live dishes', () => {
+    const state = freeze(makeState({
+      staff: [], kitchenStations: [],
+      dishes: [{ id: 'toast', name: 'Renamed toast', requiredEquipmentId: 'eq1' }],
+      serviceItems: [dishItem('item-1', 'customer-item-1', {
+        dishOrderSnapshot: {
+          schemaVersion: 1, serviceItemId: 'item-1', menuItemId: 'toast', orderedAt: 0,
+          name: 'Original toast', base: 'bread', method: 'toast', cuisine: 'Western',
+          requiredEquipmentId: 'eq1', price: 5, quality: 1, prepTime: 60, popularity: 50,
+          cookbookId: null, masteryPerk: null,
+        },
+      })],
+    }));
+    expect(getKitchenBlockerSummary(state).byDish).toEqual([
+      { menuItemId: 'toast', name: 'Original toast', noCook: 1, noCompatibleStation: 1 },
+    ]);
+  });
+
   it('returns zero counts for an empty or incomplete state', () => {
-    expect(getKitchenBlockerSummary({})).toEqual({ noCook: 0, noCompatibleStation: 0 });
+    expect(getKitchenBlockerSummary({})).toEqual({ noCook: 0, noCompatibleStation: 0, byDish: [] });
     expect(getKitchenBlockerSummary({ serviceItems: [], customers: [] }))
-      .toEqual({ noCook: 0, noCompatibleStation: 0 });
+      .toEqual({ noCook: 0, noCompatibleStation: 0, byDish: [] });
   });
 
   it('counts the same eligible dish under both independent structural blockers', () => {
     const state = makeState({ staff: [], kitchenStations: [] });
 
-    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 1, noCompatibleStation: 1 });
+    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 1, noCompatibleStation: 1,
+      byDish: [{ menuItemId: 'toast', name: 'Dish toast', noCook: 1, noCompatibleStation: 1 }] });
   });
 
   it('recognises owned equipment stations and rejects unowned or incompatible equipment', () => {
@@ -85,7 +124,7 @@ describe('getKitchenBlockerSummary', () => {
       staff: [{ id: 'cook-1', role: 'cook', task: { type: 'prepare_dish', batchId: 'batch-1' } }],
     });
 
-    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 0, noCompatibleStation: 0 });
+    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 0, noCompatibleStation: 0, byDish: [] });
   });
 
   it('counts an employed cook even when currently off duty', () => {
@@ -125,7 +164,8 @@ describe('getKitchenBlockerSummary', () => {
       kitchenStations: [],
     });
 
-    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 1, noCompatibleStation: 1 });
+    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 1, noCompatibleStation: 1,
+      byDish: [{ menuItemId: 'toast', name: 'Dish toast', noCook: 1, noCompatibleStation: 1 }] });
   });
 
   it('skips items with an unresolved menu dish or malformed order snapshot', () => {
@@ -140,14 +180,15 @@ describe('getKitchenBlockerSummary', () => {
       kitchenStations: [],
     });
 
-    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 0, noCompatibleStation: 0 });
+    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 0, noCompatibleStation: 0, byDish: [] });
   });
 
   it('does not mutate frozen input', () => {
     const state = freeze(makeState({ staff: [], kitchenStations: [] }));
     const snapshot = JSON.stringify(state);
 
-    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 1, noCompatibleStation: 1 });
+    expect(getKitchenBlockerSummary(state)).toEqual({ noCook: 1, noCompatibleStation: 1,
+      byDish: [{ menuItemId: 'toast', name: 'Dish toast', noCook: 1, noCompatibleStation: 1 }] });
     expect(JSON.stringify(state)).toBe(snapshot);
   });
 });

@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { getEquipmentLevelMultipliers, getEquipmentUpgradeQuote } from '../data/equipment';
-import { getGlobalUpgradeQuote } from '../data/upgrades';
+import { getGlobalUpgradeDescription, getGlobalUpgradeQuote } from '../data/upgrades';
 import { PLACEABLES } from '../data/placeables';
 import { MAX_EXPANSION_LEVEL, getExpansionPreview } from '../simulation/expansion';
 import { getGlobalUpgradeEffectPreview } from '../simulation/globalUpgradePurchase';
@@ -63,7 +63,7 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
           return (
             <div key={u.id} style={{ background: '#1a1a2e', borderRadius: 8, padding: 12, border: '1px solid #0f3460' }}>
               <strong style={TYPOGRAPHY.subheading}>{u.name}</strong>
-              <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0' }}>{u.description}</p>
+              <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0' }}>{getGlobalUpgradeDescription(u)}</p>
               <p style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>
                 {maxed
                   ? `Level ${u.level} (Max)`
