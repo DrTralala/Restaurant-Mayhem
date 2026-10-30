@@ -87,6 +87,51 @@ function StatefulStaffPanel({ initial }) {
 }
 
 describe('StaffPanel', () => {
+  it('shows cumulative capacity investment but buys only the affordable next training level', () => {
+    const initial = createInitialState();
+    initial.restaurant.funds = 620;
+    initial.staff = [{ ...initial.staff[0], id: 's1', role: 'cook', skill: 3, morale: 80 }];
+    const originalKeys = Object.keys(initial.staff[0]).sort();
+    useGameState.mockImplementation(() => panelHarness.current.state);
+    useDispatch.mockImplementation(() => panelHarness.current.dispatch);
+
+    render(<StatefulStaffPanel initial={initial} />);
+
+    const card = getStaffCard('s1');
+    const milestone = within(card).getByRole('group', { name: 'Next capacity milestone' });
+    expect(milestone).toHaveTextContent('Skill 5 threshold');
+    expect(milestone).toHaveTextContent('2 training purchases · $1,700 total at current prices');
+    expect(milestone).toHaveTextContent('Milestone carry capacity: 1 → 2 items');
+    expect(milestone).toHaveTextContent('Train buys one level at a time.');
+    const train = within(card).getByRole('button', { name: 'Train ($620)' });
+    expect(train).toBeEnabled();
+    fireEvent.click(train);
+
+    expect(panelHarness.current.state.restaurant.funds).toBe(0);
+    expect(panelHarness.current.state.staff[0]).toMatchObject({ skill: 4, morale: 90 });
+    expect(Object.keys(panelHarness.current.state.staff[0]).sort()).toEqual(originalKeys);
+    expect(within(getStaffCard('s1')).getByRole('group', { name: 'Next capacity milestone' }))
+      .toHaveTextContent('1 training purchase · $1,080 total at current prices');
+    expect(within(getStaffCard('s1')).getByRole('button', { name: 'Train ($1080)' })).toBeDisabled();
+  });
+
+  it('labels fractional milestones as thresholds and hides them for maxed or invalid staff', () => {
+    useGameState.mockReturnValue(makeState({ staff: [
+      { id: 's1', name: 'Fractional', role: 'cook', skill: 4.5, morale: 80 },
+      { id: 's2', name: 'Maxed', role: 'waiter', skill: 10, morale: 80 },
+      { id: 's3', name: 'Invalid', role: 'janitor', skill: 0, morale: 80 },
+    ] }));
+    useDispatch.mockReturnValue(vi.fn());
+    render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    expect(within(card).getByText('After training: Skill 5.5/10 · Morale 90%')).toBeVisible();
+    expect(within(card).getByRole('group', { name: 'Next capacity milestone' }))
+      .toHaveTextContent('Skill 5 threshold · 1 training purchase · $1,420 total at current prices');
+    for (const id of ['s2', 's3']) {
+      expect(within(getStaffCard(id)).queryByRole('group', { name: 'Next capacity milestone' })).toBeNull();
+    }
+  });
+
   it('shows a labelled rest preference selector, updates from state, and keeps focus on ticks', () => {
     let state = makeState({
       restaurant: { funds: 500, gameTime: 0 },

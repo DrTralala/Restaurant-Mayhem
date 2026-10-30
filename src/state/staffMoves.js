@@ -9,14 +9,7 @@ import { isCheckoutState, requeueCheckoutCustomer } from '../simulation/checkout
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { recoverCookingBatches } from '../simulation/cookingBatches';
 import { releaseAmenitySlot, selectStaffWellbeingExit } from '../simulation/staffWellbeing';
-
-const SEATED_CUSTOMER_STATES = new Set([
-  'seated',
-  'ordering',
-  'waiting_for_items',
-  'waiting_for_party',
-  'eating',
-]);
+import { isPhysicallySeatedCustomerState } from '../simulation/customerSeating';
 
 const REPAIR_OFFSETS = Object.freeze([
   { x: 40, y: 0 }, { x: -40, y: 0 }, { x: 0, y: 40 }, { x: 0, y: -40 },
@@ -47,7 +40,7 @@ function staffPosition(state, worker, index) {
 }
 
 function seatedCustomerPosition(state, customer) {
-  if (!SEATED_CUSTOMER_STATES.has(customer?.state)) return null;
+  if (!isPhysicallySeatedCustomerState(customer?.state)) return null;
   const chair = (state.chairs || []).find(candidate => candidate.id === customer.chairId
     && candidate.tableId === customer.tableId);
   return finitePoint(chair) ? { x: chair.x + 10, y: chair.y + 10 } : null;
@@ -83,7 +76,7 @@ function isOnRestaurantFloor(state, point) {
 function isVerifiedSeatOriginCustomer(state, customer) {
   const residency = customer?.seatResidency;
   if (!residency || !['seated', 'departing'].includes(residency.phase)
-    || (!SEATED_CUSTOMER_STATES.has(customer.state)
+    || (!isPhysicallySeatedCustomerState(customer.state)
       && !isCheckoutState(customer) && customer.state !== 'leaving')) return false;
   const chair = (state.chairs || []).find(candidate => sameId(candidate?.id, customer.chairId));
   const table = (state.tables || []).find(candidate => sameId(candidate?.id, customer.tableId));

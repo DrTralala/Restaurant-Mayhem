@@ -1,4 +1,5 @@
 import { getDoors, getRestaurantWorld } from '../world';
+import { isPhysicallySeatedCustomerState } from '../customerSeating';
 import {
   cellKey, cellToWorld, createNavigationWorkspace, isSafeSegment, isTopInteriorWallCell,
   navigationFixtureRectangles, worldToCell,
@@ -71,7 +72,7 @@ export function seatedDeparturePorts(authority) {
   return ports;
 }
 
-const physicallySeated = actor => ['seated', 'ordering', 'waiting_for_items', 'waiting_for_party', 'eating'].includes(actor?.state);
+const physicallySeated = actor => isPhysicallySeatedCustomerState(actor?.state);
 const finitePoint = point => Number.isFinite(point?.x) && Number.isFinite(point?.y);
 const frozenPoint = point => Object.freeze({ x: point.x, y: point.y });
 const validGeneration = value => Number.isSafeInteger(value) && value > 0;

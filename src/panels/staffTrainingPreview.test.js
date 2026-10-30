@@ -24,6 +24,35 @@ afterEach(() => {
 });
 
 describe('getStaffTrainingPreview', () => {
+  it.each([
+    ['cook', 3, 5, 2, 1700, 1, 2],
+    ['cook', 4, 5, 1, 1080, 1, 2],
+    ['cook', 5, 10, 5, 38580, 2, 3],
+    ['cook', 9, 10, 1, 17600, 2, 3],
+    ['waiter', 3, 5, 2, 570, 1, 2],
+    ['waiter', 4, 5, 1, 340, 1, 2],
+    ['waiter', 5, 10, 5, 6690, 2, 3],
+    ['waiter', 9, 10, 1, 2570, 2, 3],
+    ['janitor', 3, 5, 2, 570, 1, 2],
+    ['janitor', 4, 5, 1, 340, 1, 2],
+    ['janitor', 5, 10, 5, 6690, 2, 3],
+    ['janitor', 9, 10, 1, 2570, 2, 3],
+    ['cook', 4.5, 5, 1, 1420, 1, 2],
+    ['cook', 9.5, 10, 1, 23280, 2, 3],
+    ['waiter', 4.5, 5, 1, 420, 1, 2],
+    ['waiter', 9.5, 10, 1, 3140, 2, 3],
+    ['janitor', 4.5, 5, 1, 420, 1, 2],
+    ['janitor', 9.5, 10, 1, 3140, 2, 3],
+  ])('forecasts %s skill %s capacity investment from actual purchase steps',
+    (role, skill, threshold, purchases, totalCost, carryBefore, carryAfter) => {
+      const frozen = freeze(worker({ role, skill }));
+      const snapshot = JSON.stringify(frozen);
+      expect(getStaffTrainingPreview(frozen).capacityMilestone).toEqual({
+        threshold, purchases, totalCost, carryBefore, carryAfter,
+      });
+      expect(JSON.stringify(frozen)).toBe(snapshot);
+    });
+
   it('previews the next skill, morale, carry capacity and morale multiplier for a cook', () => {
     const preview = getStaffTrainingPreview(worker({ role: 'cook', skill: 3, morale: 80 }));
 

@@ -463,6 +463,14 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
                   {trainingPreview.unlocks.map(unlock => <li key={unlock}>{unlock}</li>)}
                 </ul>
               )}
+              {trainingPreview.capacityMilestone && (
+                <div role="group" aria-label="Next capacity milestone" style={{ marginTop: 6 }}>
+                  <strong>Next capacity milestone</strong>
+                  <div>{`Skill ${trainingPreview.capacityMilestone.threshold} threshold · ${trainingPreview.capacityMilestone.purchases} training purchase${trainingPreview.capacityMilestone.purchases === 1 ? '' : 's'} · $${trainingPreview.capacityMilestone.totalCost.toLocaleString('en-US')} total at current prices`}</div>
+                  <div>{`Milestone carry capacity: ${trainingPreview.capacityMilestone.carryBefore} → ${trainingPreview.capacityMilestone.carryAfter} items`}</div>
+                  <div>Train buys one level at a time.</div>
+                </div>
+              )}
             </div>
           )}
           <div

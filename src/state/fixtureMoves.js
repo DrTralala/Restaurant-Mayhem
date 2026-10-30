@@ -14,14 +14,7 @@ import { reconcileFixtureResidencies } from '../simulation/movement/seatedDepart
 import { reconcileSelfSeatingState } from '../simulation/selfSeating';
 import { clearDiningOwnership } from '../simulation/tableLifecycle';
 import { getPartyKey } from '../simulation/partyReviews';
-
-const PHYSICALLY_SEATED_CUSTOMER_STATES = new Set([
-  'seated',
-  'ordering',
-  'waiting_for_items',
-  'waiting_for_party',
-  'eating',
-]);
+import { isPhysicallySeatedCustomerState } from '../simulation/customerSeating';
 
 function cancelNavigation(actor) {
   return clearNavigationGoal(actor);
@@ -175,7 +168,7 @@ export function moveFixtures(state, requestedMoves) {
       }];
     }));
   const affectedCustomerIds = new Set((state.customers || [])
-    .filter(customer => PHYSICALLY_SEATED_CUSTOMER_STATES.has(customer.state)
+    .filter(customer => isPhysicallySeatedCustomerState(customer.state)
       && (tableIds.has(customer.tableId) || chairIds.has(customer.chairId)))
     .map(customer => customer.id));
   const affected = {
@@ -207,7 +200,7 @@ export function moveFixtures(state, requestedMoves) {
   next.customers = (state.customers || []).map(customer => {
     let updated = customer;
     const delta = chairDeltas.get(customer.chairId);
-    if (delta && PHYSICALLY_SEATED_CUSTOMER_STATES.has(customer.state)
+    if (delta && isPhysicallySeatedCustomerState(customer.state)
       && customer.tableId === delta.tableId) {
       updated = cancelNavigation({
         ...updated,
@@ -297,7 +290,7 @@ export function moveFixtures(state, requestedMoves) {
       const ids = [...new Set([
         ...(table.diningCustomerIds || []).filter(id => !departing.some(customer => customer.id === id)),
         ...next.customers.filter(customer => customer.tableId === table.id
-          && PHYSICALLY_SEATED_CUSTOMER_STATES.has(customer.state)).map(customer => customer.id),
+          && isPhysicallySeatedCustomerState(customer.state)).map(customer => customer.id),
       ])];
       if (ids.length === 0) {
         const dirty = next.serviceItems.some(item => item.tableId === table.id && ['dirty_at_table', 'to_clean'].includes(item.state));

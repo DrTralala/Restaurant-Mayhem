@@ -2,6 +2,28 @@ import { getStaffTrainingCost } from '../simulation/staffProgression';
 import { getStaffCarryCapacity } from '../simulation/staffInventory';
 import { getStaffPerformanceMultiplier, getStaffTaskRate } from '../simulation/staffPerformance';
 
+function getCapacityMilestone(worker) {
+  const threshold = worker.skill < 5 ? 5 : 10;
+  let skill = worker.skill;
+  let purchases = 0;
+  let totalCost = 0;
+  // Follow real purchases rather than rounding fractional saved skills.
+  while (skill < threshold) {
+    const cost = getStaffTrainingCost({ ...worker, skill });
+    if (!Number.isFinite(cost) || cost < 0) return null;
+    totalCost += cost;
+    purchases += 1;
+    skill = Math.min(skill + 1, 10);
+  }
+  return {
+    threshold,
+    purchases,
+    totalCost,
+    carryBefore: getStaffCarryCapacity(worker),
+    carryAfter: getStaffCarryCapacity({ ...worker, skill }),
+  };
+}
+
 /**
  * Read-only preview of the next training outcome for a staff card.
  * Mirrors the TRAIN_STAFF reducer: skill min(skill + 1, 10) and morale
@@ -39,5 +61,6 @@ export function getStaffTrainingPreview(worker) {
     rateBefore: rate(worker),
     rateAfter: rate(next),
     unlocks,
+    capacityMilestone: getCapacityMilestone(worker),
   };
 }

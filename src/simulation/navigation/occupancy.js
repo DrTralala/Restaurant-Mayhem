@@ -5,10 +5,11 @@ import { getAmenityGeometry } from '../../data/staffAmenities';
 import { CHARACTER_CLEARANCE } from './destinations';
 import { createNavigationWorkspace, worldToCell } from '../movement/navigationWorkspace';
 import { hydrateSeatResidency } from '../movement/seatedDeparture';
+import { PHYSICALLY_SEATED_CUSTOMER_STATES, isPhysicallySeatedCustomerState } from '../customerSeating';
 
 export const finitePoint = point => Number.isFinite(point?.x) && Number.isFinite(point?.y);
 export const samePoint = (a, b) => finitePoint(a) && finitePoint(b) && a.x === b.x && a.y === b.y;
-export const seatedStates = new Set(['seated', 'ordering', 'waiting_for_items', 'waiting_for_party', 'eating']);
+export const seatedStates = new Set(PHYSICALLY_SEATED_CUSTOMER_STATES);
 const seatResidentStates = new Set([...seatedStates, 'checkout_queued', 'checkout_moving', 'leaving']);
 const sameId = (a, b) => a != null && b != null && String(a) === String(b);
 
@@ -54,7 +55,7 @@ function verifiedSeatOrigin(state, actor) {
 // state remains strict about explicit authority (including revoked records).
 function legacySeatOrigin(state, actor) {
   if (state?.version != null || actor?.seatResidency != null
-    || !finitePoint(actor) || !seatedStates.has(actor?.state)) return null;
+    || !finitePoint(actor) || !isPhysicallySeatedCustomerState(actor?.state)) return null;
   const chair = (state.chairs || []).find(candidate => sameId(candidate?.id, actor.chairId));
   const table = (state.tables || []).find(candidate => sameId(candidate?.id, actor.tableId));
   if (!chair || !table || !sameId(chair.tableId, table.id)) return null;
@@ -163,7 +164,7 @@ export function projectFixtureActors(before, after, moves) {
   return { ...after, customers: (after.customers || []).map(actor => {
     const move = byChair.get(String(actor.chairId));
     const old = (before.chairs || []).find(chair => sameId(chair.id, actor.chairId));
-    if (!move || !old || !seatedStates.has(actor.state) || !sameId(old.tableId, actor.tableId)) return actor;
+    if (!move || !old || !isPhysicallySeatedCustomerState(actor.state) || !sameId(old.tableId, actor.tableId)) return actor;
     return { ...actor, x: actor.x + move.x - old.x, y: actor.y + move.y - old.y,
       tableId: move.tableId ?? actor.tableId };
   }) };
