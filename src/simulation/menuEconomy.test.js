@@ -473,6 +473,36 @@ const competingMenuState = reputation => ({
 });
 
 describe('batch menu demand', () => {
+  it('reads the archetype distribution from the shared source', async () => {
+    const state = {
+      restaurant: { reputation: 1 },
+      dishes: [
+        { id: 'plain', price: 6, quality: 0, popularity: 0, prepTime: 600 },
+        { id: 'quality', price: 6, quality: 10, popularity: 0, prepTime: 600 },
+      ],
+      unlockedDrinkIds: [],
+    };
+    const existingDistribution = estimateMenuDemand(state);
+
+    vi.resetModules();
+    vi.doMock('../data/customerArchetypes', () => ({
+      WALK_IN_ARCHETYPE_MIX: { foodie: 1 },
+    }));
+
+    try {
+      const { estimateMenuDemand: estimateWithSharedDistribution } = await import('./menuEconomy');
+      const mockedDistribution = estimateWithSharedDistribution(state);
+
+      expect(mockedDistribution.dishes.get('quality'))
+        .toBeGreaterThan(existingDistribution.dishes.get('quality'));
+      expect(mockedDistribution.dishes.get('plain'))
+        .toBeLessThan(existingDistribution.dishes.get('plain'));
+    } finally {
+      vi.doUnmock('../data/customerArchetypes');
+      vi.resetModules();
+    }
+  });
+
   it('weights every integer budget rather than five representative points', () => {
     expect(estimateMenuItemDemand(singleDishState(7), 'dish', 'test')).toBe(95);
   });
@@ -810,14 +840,20 @@ describe('combined menu analysis', () => {
   };
 
   it.each(Object.entries(fixtures))('pins existing helper results for the %s menu', (_name, fixture) => {
-    expect(getMenuAnalysis(fixture.state)).toEqual(fixture.expected);
+    const { expectedGrossPer100, ...existingAnalysis } = getMenuAnalysis(fixture.state);
+    expect(existingAnalysis).toEqual(fixture.expected);
+    expect(Number.isFinite(expectedGrossPer100)).toBe(true);
+    expect(expectedGrossPer100).toBeGreaterThanOrEqual(0);
   });
 
   it.each(Object.entries(fixtures))('matches the public wrappers for the %s menu', (_name, { state }) => {
-    expect(getMenuAnalysis(state)).toEqual({
+    const { expectedGrossPer100, ...existingAnalysis } = getMenuAnalysis(state);
+    expect(existingAnalysis).toEqual({
       affordability: getMenuAffordabilitySummary(state),
       demand: estimateMenuDemand(state),
       hasAvailableMenu: hasAvailableWalkInMenu(state),
     });
+    expect(Number.isFinite(expectedGrossPer100)).toBe(true);
+    expect(expectedGrossPer100).toBeGreaterThanOrEqual(0);
   });
 });

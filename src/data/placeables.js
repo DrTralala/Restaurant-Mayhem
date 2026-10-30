@@ -80,7 +80,7 @@ export const PLACEABLES = {
   couch: {
     type: 'couch',
     label: 'Couch',
-    price: 400,
+    price: ITEM_PRICES.couch,
     width: 40,
     height: 20,
     grid: 20,
@@ -93,7 +93,7 @@ export const PLACEABLES = {
   arcade: {
     type: 'arcade',
     label: 'Arcade',
-    price: 800,
+    price: ITEM_PRICES.arcade,
     width: 20,
     height: 20,
     grid: 20,
@@ -106,7 +106,7 @@ export const PLACEABLES = {
   bed: {
     type: 'bed',
     label: 'Bed',
-    price: 500,
+    price: ITEM_PRICES.bed,
     width: 20,
     height: 40,
     grid: 20,

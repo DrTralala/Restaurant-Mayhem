@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DRINKS, getResolvedDrink, normaliseDrinkOverrides } from './drinks';
 
 describe('drink menu records', () => {
-  it('pins the five original canonical drinks and appends the Iced Tea trade-off', () => {
+  it('pins the five original canonical drinks and appends Iced Tea and Premium Lemonade', () => {
     expect(DRINKS).toEqual([
       Object.freeze({ id: 'water', name: 'Water', price: 2, unlockCost: null, quality: 1, popularity: 50, prepTime: 120, cuisine: 'beverage', requiredEquipmentId: null }),
       Object.freeze({ id: 'tea', name: 'Tea', price: 4, unlockCost: 150, quality: 1, popularity: 55, prepTime: 120, cuisine: 'beverage', requiredEquipmentId: null }),
@@ -11,6 +11,8 @@ describe('drink menu records', () => {
       Object.freeze({ id: 'juice', name: 'Juice', price: 7, unlockCost: 350, quality: 1, popularity: 70, prepTime: 120, cuisine: 'beverage', requiredEquipmentId: null }),
       Object.freeze({ id: 'iced-tea', name: 'Iced Tea', price: 4, unlockCost: 150,
         quality: 1, popularity: 45, prepTime: 90, cuisine: 'beverage', requiredEquipmentId: null }),
+      Object.freeze({ id: 'premium-lemonade', name: 'Premium Lemonade', price: 9, unlockCost: 450,
+        quality: 1, popularity: 75, prepTime: 180, cuisine: 'beverage', requiredEquipmentId: null }),
     ]);
     expect(Object.isFrozen(DRINKS)).toBe(true);
     expect(DRINKS.every(drink => Object.isFrozen(drink))).toBe(true);
@@ -25,6 +27,15 @@ describe('drink menu records', () => {
     expect(getResolvedDrink(state, 'iced-tea')).toEqual({
       id: 'iced-tea', name: 'Iced Tea', price: 12, unlockCost: 150,
       quality: 3, popularity: 45, prepTime: 90, cuisine: 'beverage', requiredEquipmentId: null,
+    });
+  });
+
+  it('resolves Premium Lemonade price and quality overrides without changing its catalogue stats', () => {
+    expect(getResolvedDrink({ drinkOverrides: {
+      'premium-lemonade': { price: 12, quality: 3, popularity: 99, prepTime: 5 },
+    } }, 'premium-lemonade')).toEqual({
+      id: 'premium-lemonade', name: 'Premium Lemonade', price: 12, unlockCost: 450,
+      quality: 3, popularity: 75, prepTime: 180, cuisine: 'beverage', requiredEquipmentId: null,
     });
   });
 

@@ -45,6 +45,44 @@ describe('spawnCustomers', () => {
     expect(random).toHaveBeenCalledTimes(9);
   });
 
+  it.each([
+    [0, 'regular'],
+    [1 / 6, 'regular'],
+    [2 / 6, 'regular'],
+    [3 / 6, 'foodie'],
+    [4 / 6, 'rusher'],
+    [5 / 6, 'influencer'],
+  ])('preserves archetype slot boundary %s as %s with one party archetype roll', (archetypeRoll, expected) => {
+    const samples = [0, 0, archetypeRoll, 0, 0, 0];
+    const random = vi.spyOn(Math, 'random').mockImplementation(() => samples.shift());
+
+    const result = spawnCustomers(baseState, 60);
+
+    expect(result.queue[0].members[0].archetype).toBe(expected);
+    expect(random).toHaveBeenCalledTimes(6);
+  });
+
+  it('reads walk-in archetypes from the shared source', async () => {
+    vi.resetModules();
+    vi.doMock('../data/customerArchetypes', () => ({
+      WALK_IN_ARCHETYPES: ['mocked-archetype'],
+    }));
+
+    try {
+      const { spawnCustomers: spawnWithSharedArchetypes } = await import('./customers');
+      const samples = [0, 0, 0, 0, 0, 0];
+      const random = vi.spyOn(Math, 'random').mockImplementation(() => samples.shift());
+
+      const result = spawnWithSharedArchetypes(baseState, 60);
+
+      expect(result.queue[0].members[0].archetype).toBe('mocked-archetype');
+      expect(random).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.doUnmock('../data/customerArchetypes');
+      vi.resetModules();
+    }
+  });
+
   it('avoids hydrated customer and party identities and leaves the existing pending review untouched', async () => {
     vi.resetModules();
     const [{ spawnCustomers: spawnAfterReload }, { hydrateState }, { createInitialState }, partyReviews] = await Promise.all([

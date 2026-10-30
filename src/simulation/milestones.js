@@ -51,7 +51,8 @@ export function getMilestoneProgress(milestone, state) {
 
 export function checkMilestones(state) {
   const milestones = normaliseMilestones(state?.milestones, []);
-  const notifications = [...(state?.notifications || [])];
+  let notifications = state?.notifications || [];
+  let appended = false;
   let recipeSlots = state.recipeSlots || 0;
   let runningFunds = state.restaurant?.funds;
   let appliedSum = 0;
@@ -82,6 +83,10 @@ export function checkMilestones(state) {
     }
 
     milestones[i] = { ...m, achieved: true };
+    if (!appended) {
+      notifications = [...notifications];
+      appended = true;
+    }
     notifications.push({
       id: `notif-${Date.now()}-${i}`,
       message: `Milestone: ${m.description}!${paidCashBonus ? ` Cash bonus $${paidCashBonus}` : ''}`,

@@ -1,4 +1,5 @@
 import { getResolvedDrink } from '../data/drinks';
+import { WALK_IN_ARCHETYPE_MIX } from '../data/customerArchetypes';
 import { clampReputation } from './balance';
 import { getResolvedDish } from './cookbook';
 
@@ -117,14 +118,34 @@ function toBasket(kind, dish = null, drink = null) {
   };
 }
 
-function buildMenuBaskets(state, customer) {
+function isValidPriceOverride(priceOverride) {
+  return priceOverride !== null
+    && typeof priceOverride === 'object'
+    && !Array.isArray(priceOverride)
+    && (priceOverride.kind === 'dish' || priceOverride.kind === 'drink')
+    && typeof priceOverride.id === 'string'
+    && priceOverride.id.length > 0
+    && Number.isInteger(priceOverride.price)
+    && priceOverride.price >= 1
+    && priceOverride.price <= 100;
+}
+
+function applyPriceOverride(item, kind, priceOverride) {
+  if (!item || !isValidPriceOverride(priceOverride)
+    || priceOverride.kind !== kind || priceOverride.id !== item.id) return item;
+  return { ...item, price: priceOverride.price };
+}
+
+function buildMenuBaskets(state, customer, priceOverride = null) {
   const contractBypass = typeof customer?.serviceContractId === 'string'
     && customer.serviceContractId.length > 0;
-  const dishes = (state?.dishes || []).map(dish => getResolvedDish(state, dish.id))
+  const dishes = (state?.dishes || []).map(dish => applyPriceOverride(
+    getResolvedDish(state, dish.id), 'dish', priceOverride,
+  ))
     .filter(dish => Number.isFinite(dish?.price))
     .filter(dish => contractBypass || !isMenuItemSuspended(state, 'dish', dish.id));
   const drinks = (state?.unlockedDrinkIds || [])
-    .map(id => getResolvedDrink(state, id)).filter(Boolean)
+    .map(id => applyPriceOverride(getResolvedDrink(state, id), 'drink', priceOverride)).filter(Boolean)
     .filter(drink => contractBypass || !isMenuItemSuspended(state, 'drink', drink.id));
   return [
     ...dishes.map(dish => toBasket('dish', dish)),
@@ -201,16 +222,11 @@ export function chooseAffordableBasket(state, customer, random = Math.random) {
   };
 }
 
-const ARCHETYPE_MIX = Object.freeze({
-  regular: 3 / 6,
-  foodie: 1 / 6,
-  rusher: 1 / 6,
-  influencer: 1 / 6,
-});
 function estimateDemandFromBaskets(state, baskets) {
   const dishes = new Map();
   const drinks = new Map();
   const tierMix = getSpendingTierProbabilities(state?.restaurant?.reputation);
+  let expectedGross = 0;
   for (const [spendingTier, tierProbability] of Object.entries(tierMix)) {
     const [minimum, maximum] = SPENDING_TIER_RANGES[spendingTier];
     for (let spendingBudget = minimum; spendingBudget <= maximum; spendingBudget += 1) {
@@ -224,7 +240,7 @@ function estimateDemandFromBaskets(state, baskets) {
       const kindWeightTotal = [...groups.keys()]
         .reduce((sum, kind) => sum + ORDER_KIND_WEIGHTS[kind], 0);
       if (!(kindWeightTotal > 0)) continue;
-      for (const [archetype, archetypeProbability] of Object.entries(ARCHETYPE_MIX)) {
+      for (const [archetype, archetypeProbability] of Object.entries(WALK_IN_ARCHETYPE_MIX)) {
         const customer = { spendingTier, spendingBudget, archetype };
         for (const [kind, group] of groups) {
           const weights = group.map(basket => getBasketWeight(basket, customer));
@@ -236,6 +252,7 @@ function estimateDemandFromBaskets(state, baskets) {
               * weights[index] / basketWeightTotal;
             if (basket.dish) dishes.set(basket.dish.id, (dishes.get(basket.dish.id) || 0) + probability);
             if (basket.drink) drinks.set(basket.drink.id, (drinks.get(basket.drink.id) || 0) + probability);
+            expectedGross += probability * basket.price;
           });
         }
       }
@@ -244,11 +261,14 @@ function estimateDemandFromBaskets(state, baskets) {
   const rounded = map => new Map([...map].map(
     ([id, probability]) => [id, Math.round(clamp01(probability) * 100)],
   ));
-  return { dishes: rounded(dishes), drinks: rounded(drinks) };
+  return {
+    demand: { dishes: rounded(dishes), drinks: rounded(drinks) },
+    expectedGrossPer100: expectedGross * 100,
+  };
 }
 
 export function estimateMenuDemand(state) {
-  return estimateDemandFromBaskets(state, buildMenuBaskets(state));
+  return estimateDemandFromBaskets(state, buildMenuBaskets(state)).demand;
 }
 
 export function estimateMenuItemDemand(state, kind, itemId) {
@@ -289,11 +309,13 @@ export function getMenuAffordabilitySummary(state) {
   return affordabilityFromBaskets(state, buildMenuBaskets(state));
 }
 
-export function getMenuAnalysis(state) {
-  const baskets = buildMenuBaskets(state);
+export function getMenuAnalysis(state, priceOverride = null) {
+  const baskets = buildMenuBaskets(state, undefined, priceOverride);
+  const { demand, expectedGrossPer100 } = estimateDemandFromBaskets(state, baskets);
   return {
     affordability: affordabilityFromBaskets(state, baskets),
-    demand: estimateDemandFromBaskets(state, baskets),
+    demand,
     hasAvailableMenu: baskets.length > 0,
+    expectedGrossPer100,
   };
 }

@@ -2,6 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
 import { useGameGeneration, useGameState } from '../state/GameContext';
 import { isCareerDecisionPending } from '../simulation/careerRun';
+import { getStaffFirePreview } from '../panels/staffFirePreview';
+
+const formatFunds = value => (Number.isFinite(value)
+  ? `$${Number.isInteger(value) ? value : value.toFixed(2)}`
+  : 'Unavailable');
 
 // Consent is bound to the raw worker id plus the visible identity (name, role)
 // and the game generation. Ordinary tick-driven object replacement keeps the
@@ -25,6 +30,9 @@ export default function StaffFireButton({ worker, onConfirm, style, children }) 
   const decisionRef = useRef(false);
 
   const decisionPending = isCareerDecisionPending(state);
+  const payrollPreview = pending
+    ? getStaffFirePreview({ funds: state?.restaurant?.funds, staff: state?.staff }, pending.id)
+    : null;
 
   // Latest committed values for the synchronous confirm guard; layout effects
   // run before the browser processes the next interaction.
@@ -124,6 +132,17 @@ export default function StaffFireButton({ worker, onConfirm, style, children }) 
           <p style={{ margin: 0 }}>
             {`Fire ${worker.name} (${role})? This removes the employee and releases their assigned work. Hiring again does not restore this employee's training.`}
           </p>
+          {payrollPreview && (
+            <div style={{ ...TYPOGRAPHY.secondary, color: '#f0b0b0' }}>
+              <div>{`Daily payroll before: ${formatFunds(payrollPreview.dailyPayrollBefore)}`}</div>
+              <div>{`Daily payroll after: ${formatFunds(payrollPreview.dailyPayrollAfter)}`}</div>
+              <div>{`Daily payroll savings: ${formatFunds(payrollPreview.dailySavings)}`}</div>
+              <div>{`Funds after next payroll: ${formatFunds(payrollPreview.fundsAfterPayroll)}`}</div>
+              <div style={{ color: '#d99a9a' }}>
+                Excludes future receipts and spending; payroll-only projection.
+              </div>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button type="button" autoFocus onClick={closePending} style={cancelButton}>
               Cancel

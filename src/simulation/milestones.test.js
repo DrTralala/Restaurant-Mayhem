@@ -204,6 +204,48 @@ describe('checkMilestones', () => {
     expect(result.notifications.length).toBe(0);
   });
 
+  it('preserves notification identity when no milestone awards a notification', () => {
+    const state = deepFreeze(buildState({
+      milestones: [
+        { id: 'already-achieved', description: 'Already achieved', condition: { type: 'servedTotal', threshold: 1 }, reward: { type: 'newDishSlot' }, achieved: true },
+        { id: 'not-yet-achieved', description: 'Not yet achieved', condition: { type: 'servedTotal', threshold: 10 }, reward: { type: 'newDishSlot' }, achieved: false },
+      ],
+      restaurant: { totalServed: 5, funds: 0, reputation: 0, day: 1 },
+      notifications: [{ id: 'prior', message: 'Prior notification' }],
+    }));
+    const before = JSON.stringify(state);
+
+    const result = checkMilestones(state);
+
+    expect(result.notifications).toBe(state.notifications);
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
+  it('preserves frozen input and milestone order when appending multiple notifications', () => {
+    const state = deepFreeze(buildState({
+      milestones: [
+        { id: 'first', description: 'First goal', condition: { type: 'servedTotal', threshold: 1 }, reward: { type: 'newDishSlot' }, achieved: false },
+        { id: 'second', description: 'Second goal', condition: { type: 'servedTotal', threshold: 2 }, reward: { type: 'newDishSlot' }, achieved: false },
+        { id: 'third', description: 'Third goal', condition: { type: 'servedTotal', threshold: 3 }, reward: { type: 'newDishSlot' }, achieved: false },
+      ],
+      restaurant: { totalServed: 3, funds: 0, reputation: 0, day: 1 },
+      notifications: [{ id: 'prior', message: 'Prior notification' }],
+    }));
+    const before = JSON.stringify(state);
+
+    const result = checkMilestones(state);
+
+    expect(result.notifications).not.toBe(state.notifications);
+    expect(result.notifications.map(notification => notification.message)).toEqual([
+      'Prior notification',
+      'Milestone: First goal!',
+      'Milestone: Second goal!',
+      'Milestone: Third goal!',
+    ]);
+    expect(result.milestones.map(milestone => milestone.achieved)).toEqual([true, true, true]);
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
   it('adds notification and applies newDishSlot reward when milestone first achieved', () => {
     const state = {
       milestones: [

@@ -258,6 +258,15 @@ describe('runTick', () => {
     expect(result.restaurant.gameTime).toBe(102);
   });
 
+  it('preserves notification identity when a runTick earns no milestone notification', () => {
+    const notifications = Object.freeze([
+      Object.freeze({ id: 'prior', message: 'Prior notification' }),
+    ]);
+    const result = runTick({ ...emptyState, notifications }, { gameDt: 1, movementDt: 0 });
+
+    expect(result.notifications).toBe(notifications);
+  });
+
   it('does not apply the speed multiplier a second time', () => {
     const state = { ...emptyState, speed: 2 };
     const result = runTick(state, { gameDt: 4, movementDt: 2 / 30 });

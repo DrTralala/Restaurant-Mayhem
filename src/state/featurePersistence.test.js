@@ -7,6 +7,8 @@ import { createDishOrderSnapshot, getResolvedDish } from '../simulation/cookbook
 import { continueCareerAsSandbox, evaluateCareerRun } from '../simulation/careerRun';
 import { getResolvedDrink } from '../data/drinks';
 import { getStaffTaskDuration } from '../simulation/staffPerformance';
+import { findPreparationTarget } from '../simulation/preparationPosition';
+import { resolveStaffAfterMovement } from '../simulation/staff';
 import { buildAffordableBaskets } from '../simulation/menuEconomy';
 import { prioritiseQueuedParty } from '../simulation/queuePriority';
 
@@ -432,7 +434,54 @@ describe('additive v10 feature persistence', () => {
     expect(getStaffTaskDuration(hydrated, cook)).toBe(90);
   });
 
-  it('keeps an old root-v10 drink set unchanged without auto-unlocking Iced Tea', () => {
+  it('round-trips unlocked Premium Lemonade overrides and active work through its 180 boundary', () => {
+    const saved = drinkPreparationFixture({
+      menuItemId: 'premium-lemonade',
+      unlockedDrinkIds: ['water', 'premium-lemonade'],
+      drinkOverrides: { 'premium-lemonade': { price: 12, quality: 2 } },
+    });
+    saved.staff = saved.staff.map(worker => worker.role === 'cook'
+      ? { ...worker, morale: 50 }
+      : worker);
+    expect(saveState(saved)).toBe(true);
+
+    const hydrated = hydrateState(loadState(), createInitialState());
+    expect(hydrated.unlockedDrinkIds).toEqual(['water', 'premium-lemonade']);
+    expect(hydrated.drinkOverrides).toEqual({ 'premium-lemonade': { price: 12, quality: 2 } });
+    expect(getResolvedDrink(hydrated, 'premium-lemonade')).toEqual({
+      id: 'premium-lemonade', name: 'Premium Lemonade', price: 12, unlockCost: 450,
+      quality: 2, popularity: 75, prepTime: 180, cuisine: 'beverage', requiredEquipmentId: null,
+    });
+
+    const cook = hydrated.staff.find(worker => worker.role === 'cook');
+    const item = hydrated.serviceItems.find(candidate => candidate.id === 'drink-1');
+    expect(item).toMatchObject({ state: 'preparing', accumulatedWork: 45, lastProgressAt: 100 });
+    expect(cook.task).toMatchObject({ type: 'prepare_drink', serviceItemId: 'drink-1' });
+    expect(getStaffTaskDuration(hydrated, cook)).toBe(180);
+
+    const station = hydrated.kitchenStations.find(candidate => candidate.id === item.stationId);
+    const target = findPreparationTarget({ ...hydrated, staff: [cook] }, station, cook);
+    expect(target).not.toBeNull();
+    const { navigationGoal: _navigationGoal, ...arrivedCook } = cook;
+    const placed = {
+      ...hydrated,
+      staff: hydrated.staff.map(worker => worker.id === cook.id
+        ? { ...arrivedCook, x: target.goal.x, y: target.goal.y }
+        : worker),
+    };
+    const at179 = resolveStaffAfterMovement({
+      ...placed, restaurant: { ...placed.restaurant, gameTime: 234 },
+    }, 0);
+    expect(at179.serviceItems.find(candidate => candidate.id === item.id))
+      .toMatchObject({ state: 'preparing', accumulatedWork: 179 });
+    const at180 = resolveStaffAfterMovement({
+      ...placed, restaurant: { ...placed.restaurant, gameTime: 235 },
+    }, 0);
+    expect(at180.serviceItems.find(candidate => candidate.id === item.id))
+      .toMatchObject({ state: 'carried' });
+  });
+
+  it('keeps an old root-v10 drink set unchanged without auto-unlocking later drinks', () => {
     const raw = {
       ...createInitialState(),
       unlockedDrinkIds: ['water', 'tea', 'soda', 'coffee', 'juice'],
@@ -443,6 +492,7 @@ describe('additive v10 feature persistence', () => {
     const hydrated = hydrateState(raw, createInitialState());
     expect(hydrated.unlockedDrinkIds).toEqual(['water', 'tea', 'soda', 'coffee', 'juice']);
     expect(hydrated.unlockedDrinkIds).not.toContain('iced-tea');
+    expect(hydrated.unlockedDrinkIds).not.toContain('premium-lemonade');
     expect(hydrated.version).toBe(createInitialState().version);
   });
 

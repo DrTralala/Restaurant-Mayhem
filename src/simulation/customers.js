@@ -1,4 +1,5 @@
 import { getRushHourMultiplier, isRestaurantOpen } from './clock';
+import { WALK_IN_ARCHETYPES } from '../data/customerArchetypes';
 import { advanceCharacterMovementBatch, getCharacterMovementStatus } from './movement';
 import {
   clearNavigationGoal,
@@ -238,8 +239,6 @@ function getPartyIdentityIds(state, queue) {
   ];
 }
 
-const ARCHETYPES = ['regular', 'regular', 'regular', 'foodie', 'rusher', 'influencer'];
-
 function partyKey(customer) {
   return customer.partyId ?? customer.id;
 }
@@ -316,7 +315,7 @@ export function spawnCustomers(state, dt = 1) {
   partyIdCounter = nextParty.counter;
   const partyId = nextParty.id;
   const usedCustomerIds = getCustomerIdentityIds(state, queue);
-  const archetype = ARCHETYPES[Math.floor(Math.random() * ARCHETYPES.length)];
+  const archetype = WALK_IN_ARCHETYPES[Math.floor(Math.random() * WALK_IN_ARCHETYPES.length)];
   const newCustomers = Array.from({ length: party.size }, () => {
     const nextCustomer = nextUnusedId('c', usedCustomerIds, customerIdCounter);
     customerIdCounter = nextCustomer.counter;

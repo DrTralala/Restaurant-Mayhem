@@ -73,6 +73,68 @@ describe('StaffFireButton', () => {
     expect(screen.getByRole('button', { name: 'Confirm fire Sofia' })).not.toHaveFocus();
   });
 
+  it('shows the live payroll and next-payroll-only projection in the pending confirmation', () => {
+    mockGameState.current = {
+      restaurant: { funds: 500.5 },
+      staff: [{ ...worker, salary: 140.25 }, { id: 'w2', salary: 40.75 }],
+    };
+    renderFire();
+
+    const region = openConfirmation();
+
+    expect(region).toHaveTextContent('Daily payroll before: $181');
+    expect(region).toHaveTextContent('Daily payroll after: $40.75');
+    expect(region).toHaveTextContent('Daily payroll savings: $140.25');
+    expect(region).toHaveTextContent('Funds after next payroll: $459.75');
+    expect(region).toHaveTextContent(/Excludes future receipts and spending/);
+    expect(region).not.toHaveTextContent('refund');
+    expect(region).not.toHaveTextContent('severance');
+  });
+
+  it('updates the open payroll projection from live state without dropping consent', () => {
+    mockGameState.current = {
+      restaurant: { funds: 500 },
+      staff: [{ ...worker, salary: 150.25 }, { id: 'w2', salary: 50.5 }],
+    };
+    const { rerender, onConfirm } = renderFire();
+    openConfirmation();
+    const region = screen.getByRole('region', { name: 'Fire Sofia?' });
+
+    expect(region).toHaveTextContent('Daily payroll before: $200.75');
+    expect(region).toHaveTextContent('Daily payroll after: $50.50');
+    expect(region).toHaveTextContent('Funds after next payroll: $449.50');
+
+    mockGameState.current = {
+      restaurant: { funds: -5.25 },
+      staff: [{ ...worker, salary: 120.75 }, { id: 'w2', salary: 25.25 }],
+    };
+    rerender(<StaffFireButton worker={worker} onConfirm={onConfirm}>Fire employee</StaffFireButton>);
+
+    expect(screen.getByRole('region', { name: 'Fire Sofia?' })).toHaveTextContent('Daily payroll before: $146');
+    expect(screen.getByRole('region', { name: 'Fire Sofia?' })).toHaveTextContent('Daily payroll after: $25.25');
+    expect(screen.getByRole('region', { name: 'Fire Sofia?' })).toHaveTextContent('Funds after next payroll: $-30.50');
+    expect(screen.getByRole('region', { name: 'Fire Sofia?' })).toBeInTheDocument();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('shows unavailable cash and hides a forecast when the strict worker id is unknown', () => {
+    mockGameState.current = {
+      restaurant: { funds: Number.POSITIVE_INFINITY },
+      staff: [{ ...worker, salary: 140.25 }, { id: 'w2', salary: 40.75 }],
+    };
+    const { rerender } = renderFire();
+    const region = openConfirmation();
+
+    expect(region).toHaveTextContent('Funds after next payroll: Unavailable');
+    expect(region).toHaveTextContent('Daily payroll after: $40.75');
+
+    mockGameState.current = { restaurant: { funds: 500 }, staff: [{ id: 7, salary: 100 }] };
+    rerender(<StaffFireButton worker={worker} onConfirm={vi.fn()}>Fire employee</StaffFireButton>);
+
+    expect(screen.getByRole('region', { name: 'Fire Sofia?' })).not.toHaveTextContent('Daily payroll before:');
+    expect(screen.getByRole('region', { name: 'Fire Sofia?' })).not.toHaveTextContent('Funds after next payroll:');
+  });
+
   it('cancel closes the confirmation, restores trigger focus and dispatches nothing', () => {
     const { onConfirm } = renderFire();
     const trigger = screen.getByRole('button', { name: 'Fire Sofia' });

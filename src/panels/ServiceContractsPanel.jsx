@@ -94,6 +94,8 @@ export default function ServiceContractsPanel() {
   const activeInstanceId = active?.instanceId ?? null;
   const decisionPending = state.careerRun?.needsDecision === true;
   const deadlineReached = active && state.restaurant.gameTime >= active.deadlineAt;
+  const needed = active ? active.target - active.fulfilledCount : 0;
+  const bestCase = active ? active.fulfilledCount + active.unresolvedCount : 0;
   const previousActiveInstanceId = useRef(activeInstanceId);
   const requestFocus = target => setFocusRequest(target);
 
@@ -166,6 +168,10 @@ export default function ServiceContractsPanel() {
         ? `Deposit received: ${money(active.terms.deposit)} · Success balance: ${money(active.terms.balance)}`
         : `Reward on success: ${money(active.terms.balance)} · Original no-deposit terms`}</p>
       {active.targetMet && <p style={{ color: '#8cba9d' }}>Target met — {money(active.terms.balance)} balance settles at {timeLabel(state, active.deadlineAt)}.</p>}
+      {!deadlineReached && !active.targetMet && <p style={secondaryStyle}>{bestCase < active.target
+        ? `Target no longer reachable — best case ${bestCase}/${active.target}.`
+        : `Best case: ${needed} further meal${needed === 1 ? '' : 's'} from unresolved guests.`}
+        {' '}This is a best-case count, not a guarantee.</p>}
       <details style={{ marginBottom: 8 }}><summary style={summaryStyle}>Guest details</summary>
       <MealRule id="contract-meal-rule" />
       {active.parties.map((party, index) => <div key={party.partyId} style={{ borderTop: '1px solid #0f3460', paddingTop: 8 }}>

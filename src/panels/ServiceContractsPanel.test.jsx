@@ -10,6 +10,14 @@ const dispatch = vi.fn();
 vi.mock('../state/GameContext', () => ({ useGameState: () => state, useDispatch: () => dispatch }));
 beforeEach(() => { state = createInitialState(); dispatch.mockClear(); });
 
+function setGuestOutcomes(fulfilledCount, unresolvedCount, unresolvedStatus = 'pending') {
+  const active = state.serviceContracts.active;
+  state = { ...state, serviceContracts: { ...state.serviceContracts, active: { ...active,
+    guests: active.guests.map((guest, index) => ({ ...guest,
+      status: index < fulfilledCount ? 'fulfilled_paid'
+        : index < fulfilledCount + unresolvedCount ? unresolvedStatus : 'not_fulfilled' })) } } };
+}
+
 describe('ServiceContractsPanel', () => {
   it('shows all exact offers and readiness information without dispatching on inspection', () => {
     const { unmount } = render(<ServiceContractsPanel />);
@@ -166,6 +174,56 @@ describe('ServiceContractsPanel', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Preparing');
     expect(screen.getByRole('status')).not.toHaveTextContent('minutes');
     expect(screen.getByRole('button', { name: 'Review Family service' })).toBeDisabled();
+  });
+  it('shows best-case further meals when scheduled guests can exactly meet the target', () => {
+    state = acceptServiceContract(state, { templateId: 'office-lunch' });
+    setGuestOutcomes(2, 2, 'scheduled');
+    render(<ServiceContractsPanel />);
+
+    const active = screen.getByRole('region', { name: 'Active contract' });
+    expect(within(active).getByText('0/6 admitted · 2 unresolved · 2 failed · 0 missed')).toBeInTheDocument();
+    expect(within(active).getByText(
+      'Best case: 2 further meals from unresolved guests. This is a best-case count, not a guarantee.',
+    )).toBeVisible();
+    expect(within(active).getByRole('button', { name: 'Withdraw contract' })).toBeEnabled();
+    expect(state.serviceContracts.active).not.toBeNull();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('says the target is no longer reachable when even all unresolved guests fall short', () => {
+    state = acceptServiceContract(state, { templateId: 'office-lunch' });
+    setGuestOutcomes(1, 2);
+    render(<ServiceContractsPanel />);
+
+    const active = screen.getByRole('region', { name: 'Active contract' });
+    expect(within(active).getByText(
+      'Target no longer reachable — best case 3/4. This is a best-case count, not a guarantee.',
+    )).toBeVisible();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('does not show reachability guidance after the target is met', () => {
+    state = acceptServiceContract(state, { templateId: 'office-lunch' });
+    setGuestOutcomes(4, 2);
+    render(<ServiceContractsPanel />);
+
+    const active = screen.getByRole('region', { name: 'Active contract' });
+    expect(within(active).getByText(/Target met —/)).toBeVisible();
+    expect(within(active).queryByText(/Best case:|Target no longer reachable/)).not.toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('retains the deadline settlement notice without reachability guidance', () => {
+    state = acceptServiceContract(state, { templateId: 'office-lunch' });
+    setGuestOutcomes(1, 2);
+    state = { ...state, restaurant: { ...state.restaurant,
+      gameTime: state.serviceContracts.active.deadlineAt } };
+    render(<ServiceContractsPanel />);
+
+    const active = screen.getByRole('region', { name: 'Active contract' });
+    expect(within(active).getByText(
+      'Deadline reached — resume the simulation to settle this contract.',
+    )).toBeVisible();
+    expect(within(active).queryByText(/Best case:|Target no longer reachable/)).not.toBeInTheDocument();
+    expect(state.serviceContracts.active).not.toBeNull();
+    expect(dispatch).not.toHaveBeenCalled();
   });
   it.each([1, 2])('keeps a loaded v%s contract on its original financial terms', rulesVersion => {
     state = acceptServiceContract(state, { templateId: 'office-lunch' });

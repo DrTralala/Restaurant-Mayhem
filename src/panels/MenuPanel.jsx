@@ -9,6 +9,7 @@ import { TYPOGRAPHY } from '../typography';
 import RecipeCreator from './RecipeCreator';
 import CookbookPanel from './CookbookPanel';
 import MenuPriceInput from './MenuPriceInput';
+import { createMenuPricePreviewPresentation } from './MenuPricePreview';
 
 function formatCoverage(share) {
   if (share === 0) return '0%';
@@ -98,7 +99,8 @@ export default function MenuPanel({ readOnly = false }) {
     return <RecipeCreator onClose={closeCreator} />;
   }
 
-  const { affordability, demand, hasAvailableMenu: hasWalkInMenu } = getMenuAnalysis(state);
+  const analysis = getMenuAnalysis(state);
+  const { affordability, demand, hasAvailableMenu: hasWalkInMenu } = analysis;
 
   return (
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
@@ -176,72 +178,79 @@ export default function MenuPanel({ readOnly = false }) {
           <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 8 }}>
             <span>Popularity: {dish.popularity}%</span>
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <MenuPriceInput
-              price={dish.price}
-              label={`${dish.name} price`}
-              disabled={blocked}
-              onCommit={price => mutate({ type: 'UPDATE_DISH', id: dish.id, changes: { price } })}
-            />
-            <button
-              aria-label={`Upgrade ${dish.name} quality ($${MENU_QUALITY_COST})`}
-              onClick={() => mutate({ type: 'UPGRADE_DISH_QUALITY', id: dish.id })}
-              disabled={blocked || dish.quality >= 10 || !canPay(MENU_QUALITY_COST)}
-              style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
-            >
-              + Quality (${MENU_QUALITY_COST})
-            </button>
-            <button
-              aria-label={`${suspended ? 'Resume' : 'Suspend'} ${dish.name} for walk-ins`}
-              aria-pressed={suspended}
-              disabled={blocked}
-              onClick={() => mutate({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: dish.id, suspended: !suspended })}
-              style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
-            >
-              {suspended ? 'Resume' : 'Suspend'}
-            </button>
-            <button
-              aria-label={`Remove ${dish.name} from menu`}
-              disabled={blocked}
-              onClick={event => {
-                if (blocked) return;
-                if (dish.cookbookId == null) {
-                  setPendingRemoval({ id: dish.id, dish: rawDish, trigger: event.currentTarget });
-                } else {
-                  mutate({ type: 'REMOVE_DISH', id: dish.id });
-                  cookbookButtonRef.current?.focus();
-                }
-              }}
-              style={{ ...TYPOGRAPHY.control, background: '#633', color: '#d44', border: '1px solid #844', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
-            >
-              Remove
-            </button>
-            {removalPending && (
-              <div
-                role="region"
-                aria-label={`Remove ${dish.name}? This permanently deletes its recipe.`}
-                onKeyDown={handleRemovalKeyDown}
-                style={{ ...TYPOGRAPHY.secondary, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, width: '100%', border: '1px solid #844', borderRadius: 4, padding: '6px 8px' }}
-              >
-                <p style={{ margin: 0, flex: '1 1 240px' }}>
-                  Removing this custom dish permanently deletes its recipe. Suspend it instead to stop new walk-in orders without deleting it.
-                </p>
+          <MenuPriceInput
+            price={dish.price}
+            label={`${dish.name} price`}
+            disabled={blocked}
+            onCommit={price => mutate({ type: 'UPDATE_DISH', id: dish.id, changes: { price } })}
+            getPreviewPresentation={price => createMenuPricePreviewPresentation({
+              state, kind: 'dish', id: dish.id, name: dish.name, price,
+              currentGrossPer100: analysis.expectedGrossPer100,
+            })}
+            renderControlRow={priceInput => (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {priceInput}
                 <button
-                  autoFocus
-                  onClick={cancelRemoval}
+                  aria-label={`Upgrade ${dish.name} quality ($${MENU_QUALITY_COST})`}
+                  onClick={() => mutate({ type: 'UPGRADE_DISH_QUALITY', id: dish.id })}
+                  disabled={blocked || dish.quality >= 10 || !canPay(MENU_QUALITY_COST)}
                   style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
                 >
-                  Cancel
+                  + Quality (${MENU_QUALITY_COST})
                 </button>
                 <button
-                  onClick={confirmRemoval}
+                  aria-label={`${suspended ? 'Resume' : 'Suspend'} ${dish.name} for walk-ins`}
+                  aria-pressed={suspended}
+                  disabled={blocked}
+                  onClick={() => mutate({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: dish.id, suspended: !suspended })}
+                  style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
+                >
+                  {suspended ? 'Resume' : 'Suspend'}
+                </button>
+                <button
+                  aria-label={`Remove ${dish.name} from menu`}
+                  disabled={blocked}
+                  onClick={event => {
+                    if (blocked) return;
+                    if (dish.cookbookId == null) {
+                      setPendingRemoval({ id: dish.id, dish: rawDish, trigger: event.currentTarget });
+                    } else {
+                      mutate({ type: 'REMOVE_DISH', id: dish.id });
+                      cookbookButtonRef.current?.focus();
+                    }
+                  }}
                   style={{ ...TYPOGRAPHY.control, background: '#633', color: '#d44', border: '1px solid #844', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
                 >
-                  Confirm remove {dish.name}
+                  Remove
                 </button>
+                {removalPending && (
+                  <div
+                    role="region"
+                    aria-label={`Remove ${dish.name}? This permanently deletes its recipe.`}
+                    onKeyDown={handleRemovalKeyDown}
+                    style={{ ...TYPOGRAPHY.secondary, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, width: '100%', border: '1px solid #844', borderRadius: 4, padding: '6px 8px' }}
+                  >
+                    <p style={{ margin: 0, flex: '1 1 240px' }}>
+                      Removing this custom dish permanently deletes its recipe. Suspend it instead to stop new walk-in orders without deleting it.
+                    </p>
+                    <button
+                      autoFocus
+                      onClick={cancelRemoval}
+                      style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={confirmRemoval}
+                      style={{ ...TYPOGRAPHY.control, background: '#633', color: '#d44', border: '1px solid #844', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
+                    >
+                      Confirm remove {dish.name}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          />
         </article>
         );
       })}
@@ -286,37 +295,44 @@ export default function MenuPanel({ readOnly = false }) {
                 <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 8 }}>
                   <span>Popularity: {resolvedDrink.popularity}%</span>
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  <MenuPriceInput
-                    price={resolvedDrink.price}
-                    label={`${resolvedDrink.name} price`}
-                    disabled={blocked}
-                    onCommit={price => mutate({
-                      type: 'UPDATE_DRINK', id: resolvedDrink.id,
-                      changes: { price },
-                    })}
-                  />
-                  <button
-                    aria-label={`Upgrade ${resolvedDrink.name} quality ($${MENU_QUALITY_COST})`}
-                    onClick={() => mutate({ type: 'UPGRADE_DRINK_QUALITY', id: resolvedDrink.id })}
-                    disabled={blocked || resolvedDrink.quality >= 10 || !canPay(MENU_QUALITY_COST)}
-                    style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
-                  >
-                    + Quality (${MENU_QUALITY_COST})
-                  </button>
-                  <button
-                    aria-label={`${suspended ? 'Resume' : 'Suspend'} ${resolvedDrink.name} for walk-ins`}
-                    aria-pressed={suspended}
-                    disabled={blocked}
-                    onClick={() => mutate({
-                      type: 'SET_MENU_ITEM_SUSPENDED', kind: 'drink',
-                      id: resolvedDrink.id, suspended: !suspended,
-                    })}
-                    style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
-                  >
-                    {suspended ? 'Resume' : 'Suspend'}
-                  </button>
-                </div>
+                <MenuPriceInput
+                  price={resolvedDrink.price}
+                  label={`${resolvedDrink.name} price`}
+                  disabled={blocked}
+                  onCommit={price => mutate({
+                    type: 'UPDATE_DRINK', id: resolvedDrink.id,
+                    changes: { price },
+                  })}
+                  getPreviewPresentation={price => createMenuPricePreviewPresentation({
+                    state, kind: 'drink', id: resolvedDrink.id, name: resolvedDrink.name,
+                    price, currentGrossPer100: analysis.expectedGrossPer100,
+                  })}
+                  renderControlRow={priceInput => (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {priceInput}
+                      <button
+                        aria-label={`Upgrade ${resolvedDrink.name} quality ($${MENU_QUALITY_COST})`}
+                        onClick={() => mutate({ type: 'UPGRADE_DRINK_QUALITY', id: resolvedDrink.id })}
+                        disabled={blocked || resolvedDrink.quality >= 10 || !canPay(MENU_QUALITY_COST)}
+                        style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
+                      >
+                        + Quality (${MENU_QUALITY_COST})
+                      </button>
+                      <button
+                        aria-label={`${suspended ? 'Resume' : 'Suspend'} ${resolvedDrink.name} for walk-ins`}
+                        aria-pressed={suspended}
+                        disabled={blocked}
+                        onClick={() => mutate({
+                          type: 'SET_MENU_ITEM_SUSPENDED', kind: 'drink',
+                          id: resolvedDrink.id, suspended: !suspended,
+                        })}
+                        style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
+                      >
+                        {suspended ? 'Resume' : 'Suspend'}
+                      </button>
+                    </div>
+                  )}
+                />
               </>
             ) : (
               <>

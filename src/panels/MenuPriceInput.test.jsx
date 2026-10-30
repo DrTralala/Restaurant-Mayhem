@@ -223,6 +223,155 @@ describe('MenuPriceInput', () => {
     expect(onCommit).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Water price')).toHaveValue(8);
   });
+
+  describe('preview lifecycle', () => {
+    const makePresentation = price => ({
+      accessibleName: 'Price preview for Water',
+      itemLine: `Water · Draft price: $${price}`,
+      description: 'Modelled whole-menu gross per 100 hypothetical walk-in guests.',
+      currentLabel: 'Current whole-menu gross per 100 hypothetical walk-in guests',
+      currentAmount: '$100.00',
+      draftLabel: 'Draft whole-menu gross per 100 hypothetical walk-in guests',
+      draftAmount: `$${(price * 10).toFixed(2)}`,
+      caveat: 'Not profit. Excludes service capacity and booked contracts; actual sales are not guaranteed.',
+    });
+
+    const sizingLayer = container => container.querySelector('[aria-hidden="true"]');
+
+    const expectInactiveSnapshot = (container, price) => {
+      expect(screen.queryByRole('group', { name: 'Price preview for Water' })).not.toBeInTheDocument();
+      const retained = sizingLayer(container);
+      expect(retained).toBeInTheDocument();
+      expect(retained).toHaveAttribute('inert');
+      expect(retained).toHaveStyle({ visibility: 'hidden', pointerEvents: 'none' });
+      expect(retained).toHaveTextContent(`Draft price: $${price}`);
+      expect(retained.querySelector('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+      expect(retained.querySelector('a[href], button, input, select, textarea, [tabindex]')).toBeNull();
+    };
+
+    it('renders the normalised draft and keeps its plain snapshot after Enter without changing control order', () => {
+      const onCommit = vi.fn();
+      const getPreviewPresentation = vi.fn(makePresentation);
+      const view = render(
+        <MenuPriceInput
+          price={8} label="Water price" onCommit={onCommit}
+          getPreviewPresentation={getPreviewPresentation}
+          renderControlRow={input => (
+            <div data-testid="control-row">
+              {input}
+              <button type="button">Quality</button>
+              <button type="button">Suspend</button>
+            </div>
+          )}
+        />,
+      );
+      const field = screen.getByLabelText('Water price');
+
+      fireEvent.change(field, { target: { value: '12.6' } });
+
+      const activePreview = screen.getByRole('group', { name: 'Price preview for Water' });
+      expect(activePreview).toHaveTextContent(/Water · Draft price: \$13/);
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(getPreviewPresentation).toHaveBeenCalledWith(13);
+      const row = screen.getByTestId('control-row');
+      expect(row.compareDocumentPosition(activePreview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(within(row).getByRole('button', { name: 'Quality' })).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Suspend' })).toBeInTheDocument();
+
+      fireEvent.keyDown(field, { key: 'Enter' });
+
+      expect(onCommit).toHaveBeenCalledOnce();
+      expect(onCommit).toHaveBeenCalledWith(13);
+      expectInactiveSnapshot(view.container, 13);
+      fireEvent.blur(field);
+      expect(onCommit).toHaveBeenCalledOnce();
+    });
+
+    it('retains the last shown values through invalid, unchanged, and blur transitions', () => {
+      const onCommit = vi.fn();
+      const getPreviewPresentation = vi.fn(makePresentation);
+      const view = render(
+        <MenuPriceInput price={8} label="Water price" onCommit={onCommit}
+          getPreviewPresentation={getPreviewPresentation} />,
+      );
+      const field = screen.getByLabelText('Water price');
+
+      fireEvent.change(field, { target: { value: '9' } });
+      expect(screen.getByRole('group', { name: 'Price preview for Water' }))
+        .toHaveTextContent(/Water · Draft price: \$9/);
+      getPreviewPresentation.mockClear();
+      fireEvent.change(field, { target: { value: '' } });
+      expectInactiveSnapshot(view.container, 9);
+      expect(getPreviewPresentation).not.toHaveBeenCalled();
+
+      fireEvent.change(field, { target: { value: '8.4' } });
+      expectInactiveSnapshot(view.container, 9);
+      expect(getPreviewPresentation).not.toHaveBeenCalled();
+
+      fireEvent.change(field, { target: { value: '10' } });
+      expect(screen.getByRole('group', { name: 'Price preview for Water' }))
+        .toHaveTextContent(/Water · Draft price: \$10/);
+      getPreviewPresentation.mockClear();
+      fireEvent.blur(field);
+
+      expectInactiveSnapshot(view.container, 10);
+      expect(onCommit).toHaveBeenCalledOnce();
+      expect(onCommit).toHaveBeenCalledWith(10);
+
+      getPreviewPresentation.mockClear();
+      fireEvent.change(field, { target: { value: '8.4' } });
+      expectInactiveSnapshot(view.container, 10);
+      expect(getPreviewPresentation).not.toHaveBeenCalled();
+      expect(onCommit).toHaveBeenCalledOnce();
+    });
+
+    it('retains the last active snapshot across Escape, stale price and disable, then releases it on unmount', () => {
+      const onCommit = vi.fn();
+      const getPreviewPresentation = vi.fn(makePresentation);
+      const view = render(
+        <MenuPriceInput price={8} label="Water price" onCommit={onCommit}
+          getPreviewPresentation={getPreviewPresentation} />,
+      );
+      const field = () => screen.getByLabelText('Water price');
+
+      fireEvent.change(field(), { target: { value: '9' } });
+      expect(screen.getByRole('group', { name: 'Price preview for Water' }))
+        .toHaveTextContent(/Water · Draft price: \$9/);
+      getPreviewPresentation.mockClear();
+      fireEvent.keyDown(field(), { key: 'Escape' });
+      expectInactiveSnapshot(view.container, 9);
+      expect(getPreviewPresentation).not.toHaveBeenCalled();
+      expect(onCommit).not.toHaveBeenCalled();
+
+      fireEvent.change(field(), { target: { value: '10' } });
+      expect(screen.getByRole('group', { name: 'Price preview for Water' }))
+        .toHaveTextContent(/Water · Draft price: \$10/);
+      getPreviewPresentation.mockClear();
+      view.rerender(
+        <MenuPriceInput price={20} label="Water price" onCommit={onCommit}
+          getPreviewPresentation={getPreviewPresentation} />,
+      );
+      expectInactiveSnapshot(view.container, 10);
+      expect(getPreviewPresentation).not.toHaveBeenCalled();
+      expect(field()).toHaveValue(20);
+
+      fireEvent.change(field(), { target: { value: '21' } });
+      expect(screen.getByRole('group', { name: 'Price preview for Water' }))
+        .toHaveTextContent(/Water · Draft price: \$21/);
+      getPreviewPresentation.mockClear();
+      view.rerender(
+        <MenuPriceInput price={20} label="Water price" disabled onCommit={onCommit}
+          getPreviewPresentation={getPreviewPresentation} />,
+      );
+      expectInactiveSnapshot(view.container, 21);
+      expect(getPreviewPresentation).not.toHaveBeenCalled();
+      expect(field()).toBeDisabled();
+
+      view.unmount();
+      expect(view.container.querySelector('[aria-hidden="true"]')).toBeNull();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('parseMenuPriceDraft', () => {

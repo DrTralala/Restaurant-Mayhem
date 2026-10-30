@@ -23,6 +23,10 @@ export const DRINKS = Object.freeze([
     id: 'iced-tea', name: 'Iced Tea', price: 4, unlockCost: 150,
     quality: 1, popularity: 45, prepTime: 90, cuisine: 'beverage', requiredEquipmentId: null,
   }),
+  Object.freeze({
+    id: 'premium-lemonade', name: 'Premium Lemonade', price: 9, unlockCost: 450,
+    quality: 1, popularity: 75, prepTime: 180, cuisine: 'beverage', requiredEquipmentId: null,
+  }),
 ]);
 
 export function getDrink(drinkId) {

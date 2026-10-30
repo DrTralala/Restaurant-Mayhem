@@ -5,7 +5,8 @@ import MenuPanel from './MenuPanel';
 import { useDispatch, useGameState, gameReducer } from '../state/GameContext';
 import { createInitialState } from '../state/initialState';
 import { createCookbookState, normaliseCookbookState } from '../simulation/cookbook';
-import { estimateMenuDemand } from '../simulation/menuEconomy';
+import { estimateMenuDemand, getMenuAnalysis } from '../simulation/menuEconomy';
+import * as menuEconomy from '../simulation/menuEconomy';
 
 vi.mock('../state/GameContext', async importOriginal => {
   const actual = await importOriginal();
@@ -111,6 +112,7 @@ describe('MenuPanel drinks', () => {
       ['Coffee', 'Price: $6 · Base prep: 120s · Popularity: 65%'],
       ['Juice', 'Price: $7 · Base prep: 120s · Popularity: 70%'],
       ['Iced Tea', 'Price: $4 · Base prep: 90s · Popularity: 45%'],
+      ['Premium Lemonade', 'Price: $9 · Base prep: 180s · Popularity: 75%'],
     ];
     for (const [name, text] of previews) {
       const card = screen.getByRole('article', { name: `${name} menu item` });
@@ -121,6 +123,13 @@ describe('MenuPanel drinks', () => {
     expect(within(icedTeaCard).getByRole('button', { name: 'Unlock Iced Tea ($150)' })).toBeInTheDocument();
     expect(within(icedTeaCard).queryByLabelText('Iced Tea price')).not.toBeInTheDocument();
     expect(within(icedTeaCard).queryByText(/Estimated demand:/)).not.toBeInTheDocument();
+
+    const lemonadeCard = screen.getByRole('article', { name: 'Premium Lemonade menu item' });
+    expect(within(lemonadeCard).getByRole('button', {
+      name: 'Unlock Premium Lemonade ($450)',
+    })).toBeInTheDocument();
+    expect(within(lemonadeCard).queryByLabelText('Premium Lemonade price')).not.toBeInTheDocument();
+    expect(within(lemonadeCard).queryByText(/Estimated demand:/)).not.toBeInTheDocument();
   });
 
   it('dispatches a canonical Iced Tea unlock and respects affordability and read-only guards', () => {
@@ -154,6 +163,43 @@ describe('MenuPanel drinks', () => {
     expect(within(card).getByRole('button', { name: 'Upgrade Iced Tea quality ($50)' })).toBeInTheDocument();
     expect(within(card).queryByRole('button', { name: /Unlock Iced Tea/ })).not.toBeInTheDocument();
     expect(within(card).queryByText('Price: $4 · Base prep: 90s · Popularity: 45%')).not.toBeInTheDocument();
+  });
+
+  it('shows unlocked Premium Lemonade with its canonical 180s duration and ordinary controls', () => {
+    const base = useGameState();
+    useGameState.mockReturnValue({
+      ...base, unlockedDrinkIds: ['water', 'premium-lemonade'],
+    });
+    render(<MenuPanel />);
+
+    const card = screen.getByRole('article', { name: 'Premium Lemonade menu item' });
+    expect(within(card).getByText('$9 · 180s prep')).toBeInTheDocument();
+    expect(within(card).getByText('Popularity: 75%')).toBeInTheDocument();
+    expect(within(card).getByLabelText('Premium Lemonade price')).toHaveValue(9);
+    expect(within(card).getByRole('button', {
+      name: 'Upgrade Premium Lemonade quality ($50)',
+    })).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /Unlock Premium Lemonade/ }))
+      .not.toBeInTheDocument();
+  });
+
+  it('dispatches the canonical Premium Lemonade unlock and enforces its funds boundary', () => {
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    const base = useGameState();
+    useGameState.mockReturnValue({
+      ...base, restaurant: { ...base.restaurant, funds: 450 },
+    });
+    const view = render(<MenuPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock Premium Lemonade ($450)' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'UNLOCK_DRINK', id: 'premium-lemonade' });
+
+    useGameState.mockReturnValue({
+      ...base, restaurant: { ...base.restaurant, funds: 449 },
+    });
+    view.rerender(<MenuPanel />);
+    expect(screen.getByRole('button', { name: 'Unlock Premium Lemonade ($450)' })).toBeDisabled();
   });
 
   it('dispatches a canonical Tea unlock', () => {
@@ -865,6 +911,130 @@ describe('MenuPanel drinks', () => {
       expect(dispatch).toHaveBeenCalledWith({
         type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'toast', suspended: true,
       });
+    });
+
+    it('previews cookbook dishes and resolved drinks locally, dispatching only on commit', () => {
+      const state = pricedMenu();
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel />);
+
+      const cookbookInput = screen.getByLabelText('Toasted Bread price');
+      fireEvent.change(cookbookInput, { target: { value: '30' } });
+
+      expect(dispatch).not.toHaveBeenCalled();
+      const cookbookPreview = screen.getByRole('group', { name: 'Price preview for Toasted Bread' });
+      expect(within(cookbookPreview).getByText(/Draft price: \$30/)).toBeInTheDocument();
+      expect(within(cookbookPreview).getByLabelText('Current whole-menu gross per 100 hypothetical walk-in guests'))
+        .toHaveTextContent(`$${getMenuAnalysis(state).expectedGrossPer100.toFixed(2)}`);
+      expect(within(cookbookPreview).getByLabelText('Draft whole-menu gross per 100 hypothetical walk-in guests'))
+        .toHaveTextContent(`$${getMenuAnalysis(state, {
+          kind: 'dish', id: 'cookbook-toast', price: 30,
+        }).expectedGrossPer100.toFixed(2)}`);
+
+      fireEvent.keyDown(cookbookInput, { key: 'Escape' });
+      expect(screen.queryByRole('group', { name: 'Price preview for Toasted Bread' })).not.toBeInTheDocument();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      const waterInput = screen.getByLabelText('Water price');
+      fireEvent.change(waterInput, { target: { value: '11' } });
+      expect(dispatch).not.toHaveBeenCalled();
+      const waterPreview = screen.getByRole('group', { name: 'Price preview for Water' });
+      expect(within(waterPreview).getByText(/Draft price: \$11/)).toBeInTheDocument();
+      expect(within(waterPreview).getByLabelText('Draft whole-menu gross per 100 hypothetical walk-in guests'))
+        .toHaveTextContent(`$${getMenuAnalysis(state, {
+          kind: 'drink', id: 'water', price: 11,
+        }).expectedGrossPer100.toFixed(2)}`);
+
+      fireEvent.keyDown(waterInput, { key: 'Enter' });
+
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch).toHaveBeenCalledWith({
+        type: 'UPDATE_DRINK', id: 'water', changes: { price: 11 },
+      });
+      expect(screen.queryByRole('group', { name: 'Price preview for Water' })).not.toBeInTheDocument();
+    });
+
+    it('keeps suspended-item price previews neutral for walk-in gross', () => {
+      const state = pricedMenu();
+      state.restaurant.suspendedDishIds = ['cookbook-toast'];
+      useGameState.mockReturnValue(state);
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel />);
+
+      fireEvent.change(screen.getByLabelText('Toasted Bread price'), { target: { value: '70' } });
+
+      const preview = screen.getByRole('group', { name: 'Price preview for Toasted Bread' });
+      expect(within(preview).getByLabelText('Current whole-menu gross per 100 hypothetical walk-in guests'))
+        .toHaveTextContent(`$${getMenuAnalysis(state).expectedGrossPer100.toFixed(2)}`);
+      expect(within(preview).getByLabelText('Draft whole-menu gross per 100 hypothetical walk-in guests'))
+        .toHaveTextContent(`$${getMenuAnalysis(state, {
+          kind: 'dish', id: 'cookbook-toast', price: 70,
+        }).expectedGrossPer100.toFixed(2)}`);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('keeps the active preview after the complete action row, including removal confirmation', () => {
+      useGameState.mockReturnValue(pricedMenu());
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel />);
+
+      const price = screen.getByLabelText('Toast price');
+      fireEvent.change(price, { target: { value: '14' } });
+      const row = price.parentElement;
+      const activePreview = screen.getByRole('group', { name: 'Price preview for Toast' });
+      expect(row.compareDocumentPosition(activePreview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(within(row).getByRole('button', { name: 'Upgrade Toast quality ($50)' })).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Suspend Toast for walk-ins' })).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Remove Toast from menu' })).toBeInTheDocument();
+
+      fireEvent.click(within(row).getByRole('button', { name: 'Remove Toast from menu' }));
+      const removal = within(row).getByRole('region', { name: 'Remove Toast? This permanently deletes its recipe.' });
+      expect(removal.compareDocumentPosition(activePreview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('uses only active draft analyses and retains the last plain forecast while inactive', () => {
+      const state = pricedMenu();
+      useGameState.mockReturnValue(state);
+      useDispatch.mockReturnValue(vi.fn());
+      const analysisSpy = vi.spyOn(menuEconomy, 'getMenuAnalysis');
+
+      try {
+        const view = render(<MenuPanel />);
+        expect(analysisSpy).toHaveBeenCalledOnce();
+        expect(analysisSpy).toHaveBeenCalledWith(state);
+        analysisSpy.mockClear();
+
+        const field = screen.getByLabelText('Water price');
+        fireEvent.change(field, { target: { value: '11' } });
+        const activeDraftCalls = analysisSpy.mock.calls.filter(([, override]) => override !== undefined);
+        expect(activeDraftCalls.length).toBeGreaterThan(0);
+        expect(activeDraftCalls.every(([analyzedState, override]) => analyzedState === state
+          && override.kind === 'drink' && override.id === 'water' && override.price === 11)).toBe(true);
+        const activePreview = screen.getByRole('group', { name: 'Price preview for Water' });
+        expect(activePreview).toHaveTextContent('Draft price: $11');
+
+        analysisSpy.mockClear();
+        fireEvent.keyDown(field, { key: 'Enter' });
+        expect(analysisSpy).not.toHaveBeenCalled();
+        expect(screen.queryByRole('group', { name: 'Price preview for Water' })).not.toBeInTheDocument();
+        const row = field.parentElement;
+        const retained = row.nextElementSibling.firstElementChild;
+        expect(retained).toHaveAttribute('aria-hidden', 'true');
+        expect(retained).toHaveTextContent('Draft price: $11');
+
+        analysisSpy.mockClear();
+        view.rerender(<MenuPanel />);
+        expect(analysisSpy).toHaveBeenCalledOnce();
+        expect(analysisSpy).toHaveBeenCalledWith(state);
+        expect(analysisSpy.mock.calls.some(([, override]) => override !== undefined)).toBe(false);
+        expect(retained).toHaveTextContent('Draft price: $11');
+      } finally {
+        analysisSpy.mockRestore();
+      }
     });
   });
 

@@ -90,7 +90,7 @@ describe('MenuModal', () => {
     const close = screen.getByRole('button', { name: 'Close menu' });
     const backdrop = screen.getByRole('button', { name: 'Dismiss menu' });
     const cookbook = screen.getByRole('button', { name: 'Cookbook' });
-    const last = screen.getByRole('button', { name: 'Unlock Iced Tea ($150)' });
+    const last = screen.getByRole('button', { name: 'Unlock Premium Lemonade ($450)' });
     expect(close).toHaveFocus();
 
     fireEvent.keyDown(close, { key: 'Tab' });
