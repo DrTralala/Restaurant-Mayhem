@@ -5,7 +5,7 @@ import { getCanvasFont, TYPOGRAPHY } from '../typography';
 import { getServiceSummary } from './serviceSummary';
 import { getCleanupSummary } from './cleanupSummary';
 import { getQueuePatienceSummary } from './queuePatienceSummary';
-import { getFoodDeadlineSummary } from './foodDeadlineSummary';
+import { getFoodDeadlineSummary, getFoodServiceTriage } from './foodDeadlineSummary';
 import { getKitchenBlockerSummary } from './kitchenBlockerSummary';
 import { getDailyPayroll, isRestaurantOpen } from '../simulation/clock';
 import { DIRT_REPUTATION_THRESHOLD, getDirtReputationLossPerMinute } from '../simulation/dirt';
@@ -17,6 +17,13 @@ import { getTableLocatePoint } from '../canvas/tableLocatePoint';
 
 const statBox = { ...TYPOGRAPHY.secondary, background: '#1a1a2e', borderRadius: 6, padding: 10, border: '1px solid #0f3460' };
 const REVENUE_CHART_MAX_BARS = 7;
+const FOOD_SERVICE_STAGE_LABELS = {
+  ordered: 'Awaiting preparation',
+  preparing: 'In preparation',
+  ready: 'Ready for collection',
+  on_service: 'On service counter',
+  carried: 'Being carried',
+};
 
 function formatPatience(party) {
   if (party.status === 'unknown') return 'Patience unknown';
@@ -95,9 +102,13 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
   const remainingPartySlots = Math.max(0, QUEUE_PARTY_CAPACITY - queuePartyCount);
   const queuePatience = getQueuePatienceSummary(state);
   const foodDeadline = getFoodDeadlineSummary(state);
+  const foodTriage = getFoodServiceTriage(state);
   const foodTableId = foodDeadline.target?.tableId;
   const tableLocateDisabled = locateDisabled || isCareerDecisionPending(state)
     || typeof onLocateTable !== 'function' || !getTableLocatePoint(state.tables, foodTableId);
+  const canLocateFoodOrder = order => !locateDisabled && !isCareerDecisionPending(state)
+    && typeof onLocateTable === 'function'
+    && Boolean(getTableLocatePoint(state.tables, order.tableId));
   const kitchenBlockers = getKitchenBlockerSummary(state);
   const restaurantOpen = isRestaurantOpen(state);
   const dailyPayroll = getDailyPayroll(state.staff || []);
@@ -418,6 +429,65 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
             {foodDeadline.unknownCount > 0 && (
               <div style={statBox}>Other pending deadlines are unknown.</div>
             )}
+            <ul
+              aria-label="Pending food orders"
+              style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 8 }}
+            >
+              {foodTriage.orders.map((order, index) => {
+                const locateDisabledForOrder = !canLocateFoodOrder(order);
+                const customerLabel = order.customerId == null
+                  ? 'food order'
+                  : `guest ${order.customerId}`;
+                return (
+                  <li
+                    key={JSON.stringify([
+                      order.customerId, order.dishId, order.tableId, order.deadlineAt, index,
+                    ])}
+                    style={{ ...statBox, overflowWrap: 'anywhere', minWidth: 0 }}
+                  >
+                    <div>{formatFoodTarget(order)}</div>
+                    <div>
+                      {Number.isFinite(order.remainingSeconds)
+                        ? `${formatExhaustionSeconds(order.remainingSeconds)} (game time remaining)`
+                        : 'Timing unavailable'}
+                    </div>
+                    <div>
+                      {order.stage === null
+                        ? 'Food-service stage unavailable'
+                        : `Food-service stage: ${FOOD_SERVICE_STAGE_LABELS[order.stage]}`}
+                    </div>
+                    {order.tableId != null && (
+                      <button
+                        type="button"
+                        aria-label={`Locate table for ${customerLabel} at table ${order.tableId}`}
+                        disabled={locateDisabledForOrder}
+                        onClick={() => {
+                          if (canLocateFoodOrder(order)) onLocateTable(order.tableId);
+                        }}
+                        style={{
+                          ...TYPOGRAPHY.control,
+                          marginTop: 8,
+                          padding: '6px 8px',
+                          maxWidth: '100%',
+                          whiteSpace: 'normal',
+                          overflowWrap: 'anywhere',
+                          cursor: locateDisabledForOrder ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        Locate {order.customerId == null ? 'table' : `guest ${order.customerId}`}
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            {foodTriage.omittedCount > 0 && (
+              <div style={statBox}>{foodTriage.omittedCount} pending food orders omitted.</div>
+            )}
+            <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+              Known deadlines are listed first; an unknown deadline is not a lower-urgency claim.
+              Food-service stages are food-only and are not a delivery ETA.
+            </p>
           </div>
         )}
         <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>

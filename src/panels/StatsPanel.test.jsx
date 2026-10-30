@@ -1392,6 +1392,163 @@ it('shows pending timer counts, the earliest known deadline and the unknown noti
   expect(within(section).getByText(PENDING_FOOD_CAVEAT)).toBeInTheDocument();
 });
 
+it('lists pending food orders with their own time, food stage and table action', () => {
+  const onLocateTable = vi.fn();
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: { ...baseState.restaurant, gameTime: 100 },
+    customers: [
+      { id: 'guest-near', dishId: 'toast', tableId: 'table-near', foodOutcome: 'pending',
+        foodDeadlineAt: 115, foodPatienceBudget: 30 },
+      { id: 'guest-later', dishId: 'soup', tableId: 'table-later', foodOutcome: 'pending',
+        foodDeadlineAt: 180, foodPatienceBudget: 30 },
+      { id: 'guest-unknown', dishId: 'stew', tableId: 'table-unknown', foodOutcome: 'pending',
+        foodDeadlineAt: null, foodPatienceBudget: null },
+    ],
+    tables: [
+      { id: 'table-near', x: 100, y: 100 },
+      { id: 'table-later', x: 200, y: 100 },
+      { id: 'table-unknown', x: 300, y: 100 },
+    ],
+    serviceItems: [
+      { id: 'near-item', customerId: 'guest-near', kind: 'dish', menuItemId: 'toast', state: 'ordered' },
+      { id: 'later-item', customerId: 'guest-later', kind: 'dish', menuItemId: 'soup', state: 'carried' },
+      { id: 'unknown-drink', customerId: 'guest-unknown', kind: 'drink', menuItemId: 'water', state: 'ready' },
+    ],
+  });
+  render(<StatsPanel onLocateTable={onLocateTable} />);
+
+  const list = screen.getByRole('list', { name: 'Pending food orders' });
+  const rows = within(list).getAllByRole('listitem');
+  expect(rows).toHaveLength(3);
+  expect(rows[0]).toHaveTextContent('Guest guest-near · Dish toast · Table table-near');
+  expect(rows[0]).toHaveTextContent('15s (game time remaining)');
+  expect(rows[0]).toHaveTextContent('Food-service stage: Awaiting preparation');
+  expect(rows[1]).toHaveTextContent('Guest guest-later · Dish soup · Table table-later');
+  expect(rows[1]).toHaveTextContent('1m 20s (game time remaining)');
+  expect(rows[1]).toHaveTextContent('Food-service stage: Being carried');
+  expect(rows[2]).toHaveTextContent('Timing unavailable');
+  expect(rows[2]).toHaveTextContent('Food-service stage unavailable');
+  expect(within(rows[2]).queryByText(/Ready for collection/)).not.toBeInTheDocument();
+
+  const laterLocate = within(rows[1]).getByRole('button', {
+    name: 'Locate table for guest guest-later at table table-later',
+  });
+  expect(laterLocate).toHaveStyle({
+    maxWidth: '100%', whiteSpace: 'normal', overflowWrap: 'anywhere',
+  });
+  fireEvent.click(laterLocate);
+  expect(onLocateTable).toHaveBeenCalledTimes(1);
+  expect(onLocateTable).toHaveBeenLastCalledWith('table-later');
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+  expect(within(screen.getByRole('region', { name: 'Pending-food timing' }))
+    .getByRole('button', { name: 'Locate table' })).toBeInTheDocument();
+});
+
+it('shows known-deadline-first ordering guidance and the omitted-order count', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: { ...baseState.restaurant, gameTime: 100 },
+    customers: [
+      ...Array.from({ length: 6 }, (_, index) => ({
+        id: `guest-${index + 1}`, foodOutcome: 'pending',
+        foodDeadlineAt: 110 + index, foodPatienceBudget: 30,
+      })),
+      { id: 'unknown', foodOutcome: 'pending', foodDeadlineAt: null, foodPatienceBudget: null },
+    ],
+  });
+  render(<StatsPanel />);
+
+  const section = screen.getByRole('region', { name: 'Pending-food timing' });
+  const list = within(section).getByRole('list', { name: 'Pending food orders' });
+  expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+  expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Guest guest-1');
+  expect(within(list).queryByText(/Guest unknown/)).not.toBeInTheDocument();
+  expect(within(section).getByText('2 pending food orders omitted.')).toBeInTheDocument();
+  expect(within(section).getByText(
+    'Known deadlines are listed first; an unknown deadline is not a lower-urgency claim. '
+      + 'Food-service stages are food-only and are not a delivery ETA.',
+  )).toBeInTheDocument();
+});
+
+it.each(['missing callback', 'placement disabled', 'career decision', 'missing table',
+  'duplicate table', 'invalid coordinates'])(
+  'does not allow pending-food row navigation with %s', reason => {
+    const onLocateTable = vi.fn();
+    const tables = reason === 'missing table' ? []
+      : reason === 'duplicate table'
+        ? [{ id: 'target', x: 100, y: 100 }, { id: 'target', x: 200, y: 200 }]
+        : [{ id: 'target', x: reason === 'invalid coordinates' ? Number.NaN : 100, y: 100 }];
+    mockUseGameState.mockReturnValue({
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      careerRun: reason === 'career decision' ? { needsDecision: true } : null,
+      customers: [{ id: 'guest', dishId: 'toast', tableId: 'target', foodOutcome: 'pending',
+        foodDeadlineAt: 120, foodPatienceBudget: 30 }],
+      tables,
+      serviceItems: [{ id: 'item', customerId: 'guest', kind: 'dish', menuItemId: 'toast', state: 'ready' }],
+    });
+    render(<StatsPanel
+      onLocateTable={reason === 'missing callback' ? undefined : onLocateTable}
+      locateDisabled={reason === 'placement disabled'}
+    />);
+
+    const list = screen.getByRole('list', { name: 'Pending food orders' });
+    const button = within(within(list).getByRole('listitem')).getByRole('button', {
+      name: 'Locate table for guest guest at table target',
+    });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onLocateTable).not.toHaveBeenCalled();
+  },
+);
+
+it('rechecks table coordinates on click and updates stages and delivered outcomes on rerender', () => {
+  const onLocateTable = vi.fn();
+  const table = { id: 'target', x: 100, y: 100 };
+  const initial = {
+    ...baseState,
+    restaurant: { ...baseState.restaurant, gameTime: 100 },
+    customers: [{ id: 'guest', dishId: 'toast', tableId: 'target', foodOutcome: 'pending',
+      foodDeadlineAt: 130, foodPatienceBudget: 30 }],
+    tables: [table],
+    serviceItems: [{ id: 'item', customerId: 'guest', kind: 'dish', menuItemId: 'toast', state: 'ordered' }],
+  };
+  mockUseGameState.mockReturnValue(initial);
+  const { rerender } = render(<StatsPanel onLocateTable={onLocateTable} />);
+
+  let list = screen.getByRole('list', { name: 'Pending food orders' });
+  let row = within(list).getByRole('listitem');
+  expect(row).toHaveTextContent('Food-service stage: Awaiting preparation');
+  const locate = within(row).getByRole('button', {
+    name: 'Locate table for guest guest at table target',
+  });
+  table.x = Number.NaN;
+  fireEvent.click(locate);
+  expect(onLocateTable).not.toHaveBeenCalled();
+
+  mockUseGameState.mockReturnValue({
+    ...initial,
+    tables: [{ id: 'target', x: 100, y: 100 }],
+    serviceItems: [{ ...initial.serviceItems[0], state: 'carried' }],
+  });
+  rerender(<StatsPanel onLocateTable={onLocateTable} />);
+  list = screen.getByRole('list', { name: 'Pending food orders' });
+  row = within(list).getByRole('listitem');
+  expect(row).toHaveTextContent('Food-service stage: Being carried');
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: { ...baseState.restaurant, gameTime: 100 },
+    customers: [{ ...initial.customers[0], foodOutcome: 'delivered' }],
+    tables: [{ id: 'target', x: 100, y: 100 }],
+    serviceItems: [{ ...initial.serviceItems[0], state: 'delivered' }],
+  });
+  rerender(<StatsPanel onLocateTable={onLocateTable} />);
+  expect(screen.queryByRole('list', { name: 'Pending food orders' })).not.toBeInTheDocument();
+  expect(screen.getByText('No recorded pending food orders.')).toBeInTheDocument();
+});
+
 it('shows and immutably updates the recorded identity of the earliest known food target', () => {
   const firstCustomers = Object.freeze([
     Object.freeze({
