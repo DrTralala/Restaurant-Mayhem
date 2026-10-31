@@ -7,7 +7,7 @@ import { acceptServiceContract, getNextServiceContractBoundary, hydrateServiceCo
 
 beforeEach(() => localStorage.clear());
 
-// Historical v1 save fixtures, built from literal old content rather than the
+// Historical v1–v3 save fixtures, built from literal old content rather than the
 // current catalogue/acceptance helper. No service-success claim is made here.
 function legacyState(templateId = 'office-lunch', rulesVersion = 1) {
   const state = createInitialState();
@@ -15,6 +15,7 @@ function legacyState(templateId = 'office-lunch', rulesVersion = 1) {
     'office-lunch': ['couple', 2, [0, 720, 1440], 'rusher', 'value', 24, 'Office guest', 3600, 4, 90],
     'family-service': ['family', 4, [0, 1200], 'regular', 'budget', 18, 'Family guest', 4500, 6, 120],
     'tasting-service': ['solo', 1, [0, 600, 1200, 1800], 'foodie', 'premium', 45, 'Tasting guest', 4200, 3, 100],
+    'party-rush': ['couple', 2, [0, 0, 120, 120, 240, 240], 'regular', 'value', 30, 'Party guest', 6000, 6, 180],
   }[templateId];
   const guests = [];
   const parties = offsets.map((arrivalOffset, partyIndex) => {
@@ -30,11 +31,14 @@ function legacyState(templateId = 'office-lunch', rulesVersion = 1) {
     return { partyId, partyType, size, arrivalOffset, arrivalAt: 36900 + arrivalOffset, guestIds,
       status: 'scheduled', admittedAt: null, missedReason: null };
   });
-  return { ...state, serviceContracts: { version: 1, nextInstanceSerial: 2,
+  const deposit = rulesVersion === 3 ? reward / 4 : 0;
+  return { ...state, restaurant: { ...state.restaurant, funds: 600 + deposit, dailyRevenue: deposit },
+    serviceContracts: { version: 1, nextInstanceSerial: 2,
     lastAcceptedDayByTemplate: { [templateId]: 1 }, results: [], active: {
       instanceId: 'sc-1', templateId, rulesVersion, acceptedDay: 1, acceptedAt: 36000,
       serviceStartAt: 36900, deadlineAt: 36900 + (rulesVersion === 1 ? duration
-        : templateId === 'family-service' ? 6000 : 4200), phase: 'preparing', target, reward, parties, guests,
+        : ['family-service', 'party-rush'].includes(templateId) ? 6000 : 4200), phase: 'preparing', target, reward, parties, guests,
+      ...(rulesVersion === 3 ? { depositPaid: deposit } : {}),
     } } };
 }
 
@@ -108,22 +112,22 @@ describe('service contract v1/v2 save compatibility', () => {
     expect(oldReloaded.restaurant.funds).toBe(690);
   });
 
-  it('keeps unversioned historical results frozen while accepting and saving a new v3 attempt', () => {
+  it('keeps unversioned historical results frozen while accepting and saving a new v4 attempt', () => {
     const raw = historicalResultState();
     const oldResult = JSON.stringify(raw.serviceContracts.results[0]);
     const loaded = roundTrip(raw);
     expect(JSON.stringify(loaded.serviceContracts.results[0])).toBe(oldResult);
     expect(loaded.serviceContracts.results[0]).not.toHaveProperty('rulesVersion');
     const accepted = acceptServiceContract(loaded, { templateId: 'family-service', rulesVersion: 1 });
-    expect(accepted.serviceContracts.active).toMatchObject({ instanceId: 'sc-2', rulesVersion: 3, deadlineAt: 47400, depositPaid: 30 });
+    expect(accepted.serviceContracts.active).toMatchObject({ instanceId: 'sc-2', rulesVersion: 4, deadlineAt: 48900, depositPaid: 30 });
     const withdrawn = withdrawServiceContract(accepted, { instanceId: 'sc-2' });
     const mixed = roundTrip(withdrawn);
     expect(JSON.stringify(mixed.serviceContracts.results[0])).toBe(oldResult);
-    expect(mixed.serviceContracts.results[1]).toMatchObject({ rulesVersion: 3, status: 'withdrawn' });
+    expect(mixed.serviceContracts.results[1]).toMatchObject({ rulesVersion: 4, status: 'withdrawn' });
     expect(mixed.restaurant.funds).toBe(540);
   });
 
-  it('pays a frozen v2 success in full once, then retains it beside v3 settlement evidence', () => {
+  it('pays a frozen v2 success in full once, then retains it beside v4 settlement evidence', () => {
     const raw = legacyState('office-lunch', 2);
     raw.restaurant.gameTime = 38000;
     raw.paidVisitSequence = 4;
@@ -146,7 +150,7 @@ describe('service contract v1/v2 save compatibility', () => {
     const current = acceptServiceContract(reloaded, { templateId: 'party-rush' });
     const mixed = roundTrip(withdrawServiceContract(current, { instanceId: 'sc-2' }));
     expect(mixed.serviceContracts.results[0]).toEqual(settled.serviceContracts.results[0]);
-    expect(mixed.serviceContracts.results[1]).toMatchObject({ rulesVersion: 3, compensationPaid: 90 });
+    expect(mixed.serviceContracts.results[1]).toMatchObject({ rulesVersion: 4, compensationPaid: 90 });
     expect(mixed.restaurant.funds).toBe(600);
   });
 
@@ -184,7 +188,7 @@ describe('service contract v1/v2 save compatibility', () => {
       expect(roundTrip(settled).serviceContracts).toEqual(settled.serviceContracts);
     });
 
-  it.each([0, 4, 999, null, '2', undefined])('strictly rejects an explicitly invalid rules revision %s', rulesVersion => {
+  it.each([0, 5, 999, null, '2', undefined])('strictly rejects an explicitly invalid rules revision %s', rulesVersion => {
     const active = legacyState();
     active.serviceContracts.active.rulesVersion = rulesVersion;
     expect(() => validateServiceContractsState(active.serviceContracts, active)).toThrow();
@@ -207,13 +211,79 @@ describe('service contract v1/v2 save compatibility', () => {
     old.serviceContracts.active.rulesVersion = 2;
     expect(() => validateServiceContractsState(old.serviceContracts, old)).toThrow();
   });
-  it('rejects missing active revisions and stripped v2 result revisions rather than guessing', () => {
+  it('rejects missing active revisions and stripped current result revisions rather than guessing', () => {
     const active = legacyState();
     delete active.serviceContracts.active.rulesVersion;
     expect(() => validateServiceContractsState(active.serviceContracts, active)).toThrow();
     const current = acceptServiceContract(createInitialState(), { templateId: 'office-lunch' });
-    const settled = settleServiceContracts({ ...current, restaurant: { ...current.restaurant, gameTime: 41100 } }, 41100, { entry: true });
+    const deadline = current.serviceContracts.active.deadlineAt;
+    const settled = settleServiceContracts({ ...current, restaurant: { ...current.restaurant, gameTime: deadline } }, deadline, { entry: true });
     delete settled.serviceContracts.results[0].rulesVersion;
     expect(() => validateServiceContractsState(settled.serviceContracts, settled)).toThrow();
+  });
+});
+
+describe('service contract v3/v4 save compatibility', () => {
+  const cases = [
+    ['office-lunch', 41100, 42150, 22.5, 45], ['family-service', 42900, 44400, 30, 60],
+    ['tasting-service', 41100, 42150, 25, 50], ['party-rush', 42900, 44400, 45, 90],
+  ];
+  it.each(cases)('keeps historical v3 %s deadlines and financial evidence through save/load',
+    (templateId, oldDeadline, newDeadline, deposit, compensation) => {
+      const raw = legacyState(templateId, 3);
+      const loaded = roundTrip(raw);
+      expect(loaded.serviceContracts).toEqual(raw.serviceContracts);
+      expect(loaded.serviceContracts.active).toMatchObject({ rulesVersion: 3, deadlineAt: oldDeadline, depositPaid: deposit });
+      loaded.restaurant.gameTime = oldDeadline;
+      const settled = settleServiceContracts(loaded, oldDeadline, { entry: true });
+      expect(settled.serviceContracts.active).toBeNull();
+      expect(settled.serviceContracts.results[0]).toMatchObject({ rulesVersion: 3, deadlineAt: oldDeadline,
+        settledAt: oldDeadline, status: 'failed', depositPaid: deposit, depositRefunded: deposit,
+        compensationPaid: compensation, reputationPenalty: 0.25 });
+      expect(settled.restaurant.funds).toBe(600 - compensation);
+      const reloaded = roundTrip(settled);
+      expect(reloaded.serviceContracts).toEqual(settled.serviceContracts);
+      expect(settleServiceContracts(reloaded, newDeadline)).toBe(reloaded);
+    });
+
+  it.each(cases)('settles new %s only at the extended v4 deadline after save/load',
+    (templateId, oldDeadline, newDeadline, deposit, compensation) => {
+      const accepted = acceptServiceContract(createInitialState(), { templateId });
+      expect(accepted.serviceContracts.active).toMatchObject({ rulesVersion: 4, serviceStartAt: 36900,
+        deadlineAt: newDeadline, depositPaid: deposit });
+      const loaded = roundTrip(accepted);
+      expect(loaded.serviceContracts).toEqual(accepted.serviceContracts);
+      loaded.restaurant.gameTime = oldDeadline;
+      const stillActive = settleServiceContracts(loaded, oldDeadline, { entry: true });
+      expect(stillActive.serviceContracts.active).not.toBeNull();
+      expect(stillActive.serviceContracts.results).toEqual([]);
+      expect(getNextServiceContractBoundary(stillActive, newDeadline - 1, newDeadline)).toBe(newDeadline);
+      expect(settleServiceContracts(stillActive, newDeadline - 0.001).serviceContracts.active).not.toBeNull();
+      stillActive.restaurant.gameTime = newDeadline;
+      const settled = settleServiceContracts(stillActive, newDeadline, { entry: true });
+      expect(settled.serviceContracts.results[0]).toMatchObject({ rulesVersion: 4, deadlineAt: newDeadline,
+        settledAt: newDeadline, status: 'failed', depositPaid: deposit, depositRefunded: deposit,
+        compensationPaid: compensation, reputationPenalty: 0.25 });
+      expect(settled.restaurant.funds).toBe(600 - compensation);
+      const reloaded = roundTrip(settled);
+      expect(reloaded.serviceContracts).toEqual(settled.serviceContracts);
+      expect(settleServiceContracts(reloaded, newDeadline + 1)).toBe(reloaded);
+    });
+
+  it('rejects relabelled v3/v4 deadlines and missing or altered financial evidence', () => {
+    const historical = legacyState('party-rush', 3);
+    historical.serviceContracts.active.rulesVersion = 4;
+    expect(() => validateSavedState(historical)).toThrow();
+    const current = acceptServiceContract(createInitialState(), { templateId: 'party-rush' });
+    current.serviceContracts.active.rulesVersion = 3;
+    expect(() => validateSavedState(current)).toThrow();
+    current.serviceContracts.active.rulesVersion = 4;
+    delete current.serviceContracts.active.depositPaid;
+    expect(() => validateSavedState(current)).toThrow();
+    current.serviceContracts.active.depositPaid = 45;
+    const withdrawn = withdrawServiceContract(current, { instanceId: 'sc-1' });
+    expect(() => validateSavedState(withdrawn)).not.toThrow();
+    withdrawn.serviceContracts.results[0].compensationPaid = 0;
+    expect(() => validateSavedState(withdrawn)).toThrow();
   });
 });

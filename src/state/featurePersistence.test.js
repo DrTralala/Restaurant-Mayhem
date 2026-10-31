@@ -289,9 +289,9 @@ describe('additive v10 feature persistence', () => {
   });
   it('drains money only and settles due persisted contracts before exact-deadline career evaluation even paused', () => {
     let raw = createCareerInitialState({ scenarioId: 'opening-week', runId: 'run' });
-    raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 635700, reputation: 2 };
+    raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 634650, reputation: 2 };
     raw = acceptServiceContract(raw, { templateId: 'office-lunch' });
-    // Office lasts 900 prep + 4200 service: its deadline coincides with Opening Week.
+    // Office lasts 900 prep + 5250 service: its deadline coincides with Opening Week.
     expect(raw.serviceContracts.active.deadlineAt).toBe(640800);
     raw.restaurant.gameTime = 640800;
     raw.paused = true;

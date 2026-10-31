@@ -131,7 +131,7 @@ function finishContract(state, active, status, now) {
     rulesVersion: active.rulesVersion,
     acceptedDay: active.acceptedDay, acceptedAt: active.acceptedAt, serviceStartAt: active.serviceStartAt,
     deadlineAt: active.deadlineAt, settledAt: now, status, target: active.target, reward: active.reward,
-    bonusPaid, fulfilledCount: count, ...(active.rulesVersion === 3 ? financialEvidence : {}),
+    bonusPaid, fulfilledCount: count, ...(active.rulesVersion >= 3 ? financialEvidence : {}),
     guestResults: active.guests.map(({ guestId, partyId, status: guestStatus, reason, paidVisitSequence, resolvedAt }) =>
       ({ guestId, partyId, status: guestStatus, reason, paidVisitSequence, resolvedAt })) };
   const title = getServiceContractTemplate(active.templateId, active.rulesVersion).title;
@@ -372,12 +372,12 @@ export function validateServiceContractsState(value, state) {
   function validateInstance(instance, isActive) {
     const hasRulesVersion = object(instance) && Object.hasOwn(instance, 'rulesVersion');
     const rulesVersion = isActive || hasRulesVersion ? instance?.rulesVersion : 1;
-    check([1, 2, 3].includes(rulesVersion), 'rules version');
+    check([1, 2, 3, 4].includes(rulesVersion), 'rules version');
     exactKeys(instance, [...commonKeys, ...(isActive
       ? ['rulesVersion', 'phase', 'parties', 'guests']
       : ['settledAt', 'status', 'bonusPaid', 'fulfilledCount', 'guestResults',
         ...(hasRulesVersion ? ['rulesVersion'] : [])]),
-      ...(rulesVersion === 3 ? (isActive ? ['depositPaid']
+      ...(rulesVersion >= 3 ? (isActive ? ['depositPaid']
         : ['depositPaid', 'depositRefunded', 'compensationPaid', 'reputationPenalty']) : [])], 'instance shape');
     // Only historical results may omit the revision, and absence always means
     // v1. Never infer current rules from a modified duration or default a present
@@ -402,7 +402,7 @@ export function validateServiceContractsState(value, state) {
       && instance.deadlineAt === instance.serviceStartAt + template.serviceDuration
       && instance.serviceStartAt > instance.acceptedAt && instance.deadlineAt > instance.serviceStartAt, 'schedule');
     check(instance.target === template.target && instance.reward === template.reward, 'target/reward');
-    if (rulesVersion === 3) {
+    if (rulesVersion >= 3) {
       const expectedFinance = isActive
         ? { depositPaid: getServiceContractTerms(instance.templateId, rulesVersion).deposit }
         : getServiceContractSettlement(instance, instance.status);

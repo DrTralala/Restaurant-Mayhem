@@ -1,4 +1,4 @@
-export const SERVICE_CONTRACT_RULES_VERSION = 3;
+export const SERVICE_CONTRACT_RULES_VERSION = 4;
 export const SERVICE_CONTRACT_PREP_SECONDS = 900;
 export const SERVICE_CONTRACT_RESULT_LIMIT = 10;
 
@@ -33,7 +33,7 @@ const SERVICE_CONTRACTS_V2 = Object.freeze(SERVICE_CONTRACTS_V1.map(template => 
 })));
 
 // V3 adds financial stakes and Party rush without rewriting accepted v1/v2 terms.
-export const SERVICE_CONTRACTS = Object.freeze([
+const SERVICE_CONTRACTS_V3 = Object.freeze([
   ...SERVICE_CONTRACTS_V2,
   freezeTemplate({ id: 'party-rush', title: 'Party rush', guestLabel: 'Party guest',
     profile: { archetype: 'regular', spendingTier: 'value', spendingBudget: 30 },
@@ -41,8 +41,14 @@ export const SERVICE_CONTRACTS = Object.freeze([
     serviceDuration: 6000, target: 6, reward: 180 }),
 ]);
 
+// V4 extends new service windows by 25%; accepted v1–v3 terms stay frozen.
+export const SERVICE_CONTRACTS = Object.freeze(SERVICE_CONTRACTS_V3.map(template => freezeTemplate({
+  ...template, serviceDuration: template.serviceDuration * 1.25,
+})));
+
 export function getServiceContractTemplate(templateId, rulesVersion = SERVICE_CONTRACT_RULES_VERSION) {
   const catalogue = rulesVersion === 1 ? SERVICE_CONTRACTS_V1
-    : rulesVersion === 2 ? SERVICE_CONTRACTS_V2 : rulesVersion === 3 ? SERVICE_CONTRACTS : null;
+    : rulesVersion === 2 ? SERVICE_CONTRACTS_V2 : rulesVersion === 3 ? SERVICE_CONTRACTS_V3
+      : rulesVersion === 4 ? SERVICE_CONTRACTS : null;
   return catalogue?.find(template => template.id === templateId) || null;
 }

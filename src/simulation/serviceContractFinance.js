@@ -4,13 +4,13 @@ import { getServiceContractTemplate } from '../data/serviceContracts';
 const money = value => Math.round(value * 100) / 100;
 
 export function getServiceContractTerms(templateId, rulesVersion) {
-  if (![1, 2, 3].includes(rulesVersion)) return null;
+  if (![1, 2, 3, 4].includes(rulesVersion)) return null;
   const template = getServiceContractTemplate(templateId, rulesVersion);
   if (!template) return null;
-  const deposit = rulesVersion === 3 ? money(template.reward * 0.25) : 0;
+  const deposit = rulesVersion >= 3 ? money(template.reward * 0.25) : 0;
   return { deposit, balance: money(template.reward - deposit),
-    compensation: rulesVersion === 3 ? money(template.reward * 0.5) : 0,
-    reputationPenalty: rulesVersion === 3 ? 0.25 : 0 };
+    compensation: rulesVersion >= 3 ? money(template.reward * 0.5) : 0,
+    reputationPenalty: rulesVersion >= 3 ? 0.25 : 0 };
 }
 
 export function getServiceContractSettlement(instance, status) {

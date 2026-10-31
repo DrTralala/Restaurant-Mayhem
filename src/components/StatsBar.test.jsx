@@ -120,7 +120,7 @@ it('rerenders fractional funds without changing career or contract tracking', ()
   state.serviceContracts = createServiceContractsState();
   state.serviceContracts.active = {
     instanceId: 'sc-1', templateId: 'office-lunch', acceptedDay: 1, acceptedAt: 36000,
-    serviceStartAt: 36900, deadlineAt: 41100, target: 4, reward: 90,
+    serviceStartAt: 36900, deadlineAt: 42150, target: 4, reward: 90,
     rulesVersion: SERVICE_CONTRACT_RULES_VERSION, parties: [], guests: [],
   };
 

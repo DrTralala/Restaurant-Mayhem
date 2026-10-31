@@ -38,7 +38,7 @@ describe('real service release harness', () => {
     expect(state.drinkOverrides.water.price).toBe(100);
     expect(state.staff.map(worker => worker.morale)).toEqual([100, 100, 100, 100, 100]);
     expect(state.tables.map(table => state.chairs.filter(chair => chair.tableId === table.id).length)).toEqual([4, 4, 4, 4]);
-    expect(state.serviceContracts.active).toMatchObject({ rulesVersion: 3, acceptedAt: 36000, deadlineAt: 42900, target: 6, reward: 120, depositPaid: 30 });
+    expect(state.serviceContracts.active).toMatchObject({ rulesVersion: 4, acceptedAt: 36000, deadlineAt: 44400, target: 6, reward: 120, depositPaid: 30 });
     expect(state.serviceContracts.active.guests.every(guest => guest.status === 'scheduled')).toBe(true);
   });
   it('has repeatable independent random streams without changing production randomness', () => {
@@ -71,7 +71,7 @@ describe('real service release harness', () => {
         reports.push(report);
         console.info('PARTY_RUSH_BALANCE', JSON.stringify(compact(report)));
         expect(report.status).toBe('completed');
-        expect(report.rulesVersion).toBe(3);
+        expect(report.rulesVersion).toBe(4);
         expect(report.firstSnapshotMismatch).toBeNull();
         expect(report.ordinaryRevenue).toBeGreaterThanOrEqual(0);
         expect(report.contractCash).toBe(report.contractStatus === 'succeeded' ? 180 : -90);
@@ -160,7 +160,7 @@ describe('real service release harness', () => {
     console.info('REAL_DEADLINE_PAYMENT', JSON.stringify(report));
     expect(report.status).toBe('completed');
     expect(report.boundaryPaymentStep).not.toBe(null);
-    expect(report.paid).toContainEqual(expect.objectContaining({ id: report.boundaryPaymentStep.customerId, at: 41100,
+    expect(report.paid).toContainEqual(expect.objectContaining({ id: report.boundaryPaymentStep.customerId, at: 42150,
       contractId: 'sc-1', foodOutcome: 'delivered', snapshot: true }));
     expect(report.contractStatus).toBe('succeeded');
     expect(report.fulfilled).toBe(3);
@@ -174,14 +174,16 @@ describe('real service release harness', () => {
     expect(loaded.restaurant.funds).toBe(state.restaurant.funds);
     expect(runTick(loaded, { gameDt: 0, movementDt: 0 }).restaurant.funds).toBe(state.restaurant.funds);
   }, 40000);
-  it.skipIf(mode && mode !== 'office-success')('serves four real Office meals at native 1x and earns exactly the advertised bonus', async () => {
+  it.skipIf(mode && mode !== 'office-success')('serves six real Office meals at native 1x using the extended window and earns the same bonus', async () => {
     const { report } = await execute({ seed: 1, gameStep: 2, maxWallMs: 30000 });
     console.info('REAL_OFFICE_SUCCESS', JSON.stringify(compact(report)));
     expect(report.status).toBe('completed');
     expect(report.contractStatus).toBe('succeeded');
-    expect(report.fulfilled).toBe(4);
+    expect(report.fulfilled).toBe(6);
     expect(report.bonus).toBe(90);
-    expect(report.funds).toBeCloseTo(748.9);
-    expect(report.paid.filter(p => p.contractId === 'sc-1' && p.foodOutcome === 'delivered' && p.dishPrice === 12)).toHaveLength(4);
+    expect(report.funds).toBeCloseTo(792.9);
+    const bookedMeals = report.paid.filter(p => p.contractId === 'sc-1' && p.foodOutcome === 'delivered' && p.dishPrice === 12);
+    expect(bookedMeals).toHaveLength(6);
+    expect(bookedMeals.filter(p => p.at > 41100 && p.at <= 42150)).toHaveLength(2);
   }, 40000);
 });

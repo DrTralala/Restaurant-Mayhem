@@ -37,9 +37,9 @@ describe('ServiceContractsPanel', () => {
     fireEvent.click(within(card).getByText('Details'));
     expect(schedule).toBeVisible();
     expect(within(card).getByText(/rusher.*\$24/)).toBeVisible();
-    expect(within(card).getByText(/Day 1, 11:25 AM/)).toBeInTheDocument();
-    expect(within(card).getByText(/70 game minutes of service/)).toBeInTheDocument();
-    expect(screen.getAllByText(/100 game minutes of service/)).toHaveLength(2);
+    expect(within(card).getByText(/Day 1, 11:42 AM/)).toBeInTheDocument();
+    expect(within(card).getByText(/87.5 game minutes of service/)).toBeInTheDocument();
+    expect(screen.getAllByText(/125 game minutes of service/)).toHaveLength(2);
     unmount();
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -62,14 +62,14 @@ describe('ServiceContractsPanel', () => {
     fireEvent.click(within(card()).getByRole('button', { name: 'Review Office lunch' }));
     const confirmation = () => screen.getByRole('group', { name: 'Confirm Office lunch' });
     expect(within(confirmation()).getByText('Projected start: Day 1, 10:15 AM')).toBeVisible();
-    expect(within(confirmation()).getByText('Projected deadline: Day 1, 11:25 AM')).toBeVisible();
+    expect(within(confirmation()).getByText('Projected deadline: Day 1, 11:42 AM')).toBeVisible();
     expect(within(card()).getByText(/Arrival 3: couple, 2 guests/)).not.toBeVisible();
     state = { ...state, restaurant: { ...state.restaurant, gameTime: 11 * 3600 } };
     rerender(<ServiceContractsPanel />);
     expect(within(confirmation()).getByText('Projected start: Day 1, 11:15 AM')).toBeVisible();
-    expect(within(confirmation()).getByText('Projected deadline: Day 1, 12:25 PM')).toBeVisible();
+    expect(within(confirmation()).getByText('Projected deadline: Day 1, 12:42 PM')).toBeVisible();
     expect(within(confirmation()).queryByText('Projected start: Day 1, 10:15 AM')).not.toBeInTheDocument();
-    expect(within(confirmation()).queryByText('Projected deadline: Day 1, 11:25 AM')).not.toBeInTheDocument();
+    expect(within(confirmation()).queryByText('Projected deadline: Day 1, 11:42 AM')).not.toBeInTheDocument();
   });
   it('labels projected review times across a midnight day wrap', () => {
     state = { ...state, restaurant: { ...state.restaurant, day: 1, gameTime: 23 * 3600 + 50 * 60 } };
@@ -77,7 +77,7 @@ describe('ServiceContractsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review Office lunch' }));
     const confirmation = screen.getByRole('group', { name: 'Confirm Office lunch' });
     expect(within(confirmation).getByText('Projected start: Day 2, 12:05 AM')).toBeVisible();
-    expect(within(confirmation).getByText('Projected deadline: Day 2, 1:15 AM')).toBeVisible();
+    expect(within(confirmation).getByText('Projected deadline: Day 2, 1:32 AM')).toBeVisible();
   });
   it('replaces projected review times with unavailable and blocks acceptance after an invalid clock', () => {
     const { rerender } = render(<ServiceContractsPanel />);
@@ -237,7 +237,7 @@ describe('ServiceContractsPanel', () => {
     expect(confirmation).toHaveTextContent('Original terms: no deposit or contract penalty');
     expect(confirmation).not.toHaveTextContent('−0.25');
     expect(within(screen.getByRole('region', { name: 'Office lunch offer' }))
-      .getByText(/70 game minutes of service/)).toBeInTheDocument();
+      .getByText(/87.5 game minutes of service/)).toBeInTheDocument();
     expect(dispatch).not.toHaveBeenCalled();
   });
   it('confirms withdrawal costs and hides retained results while preserving the daily lock', () => {
@@ -326,7 +326,7 @@ describe('ServiceContractsPanel', () => {
   });
   it('leaves overdue loaded contracts to guarded settlement rather than exposing a withdrawal shortcut', () => {
     state = acceptServiceContract(state, { templateId: 'office-lunch' });
-    state = { ...state, paused: true, restaurant: { ...state.restaurant, gameTime: 42000 } };
+    state = { ...state, paused: true, restaurant: { ...state.restaurant, gameTime: 43050 } };
     render(<ServiceContractsPanel />);
     expect(screen.getByRole('button', { name: 'Withdraw contract' })).toBeDisabled();
     expect(screen.getByText('Deadline reached — resume the simulation to settle this contract.')).toBeInTheDocument();
@@ -349,7 +349,7 @@ describe('ServiceContractsPanel', () => {
       });
     }
     const { rerender } = render(<ServiceContractsPanel />);
-    expect(screen.getByText(/Target met — \$67.50 balance settles at Day 1, 11:25 AM/)).toBeVisible();
+    expect(screen.getByText(/Target met — \$67.50 balance settles at Day 1, 11:42 AM/)).toBeVisible();
     expect(screen.getByText('4/4 fulfilled meals')).toBeInTheDocument();
     const announcement = screen.getByRole('status').textContent;
     state = { ...state, restaurant: { ...state.restaurant, gameTime: 37680 } };
