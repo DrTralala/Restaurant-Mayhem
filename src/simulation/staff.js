@@ -72,6 +72,7 @@ import {
   settlePartyReview,
 } from './partyReviews';
 import { commitPaidVisit, getCheckoutBill } from './paidVisits';
+import { buildPaymentReceipt } from './paymentReceipt';
 import { getDishForServiceItem } from './cookbook';
 import { isCareerDecisionPending } from './careerRun';
 import { getDishwasherStats } from './dishwasherProgression';
@@ -1773,18 +1774,16 @@ function resolveTask({
       return { staff: clearNavigationGoal(progressedStaff), customers, queue, tables, serviceItems };
     }
     const { subtotal: price } = getCheckoutBill({ ...state, customers, serviceItems }, customer);
-    const tip = Math.round(price * getTipRate() * 100) / 100;
+    const tipRate = getTipRate();
     const reviewScore = getPaidReviewScore(customer);
-    const payment = {
-      customerId: customer.id,
-      day: state.restaurant.day || Math.floor(state.restaurant.gameTime / 86400) + 1,
-      dishId: customer.dishId,
-      drinkId: customer.drinkId,
-      revenue: price + tip,
-      tip,
-      totalPaid: price + tip,
+    const payment = buildPaymentReceipt({
+      customer,
+      subtotal: price,
+      day: state.restaurant.day,
+      gameTime: state.restaurant.gameTime,
+      tipRate,
       reviewScore,
-    };
+    });
     const committed = commitPaidVisit({ ...state, customers, serviceItems }, {
       customer, payment, paidAt: state.restaurant.gameTime,
     });

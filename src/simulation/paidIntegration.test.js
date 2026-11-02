@@ -197,6 +197,27 @@ describe('committed food snapshots through real consumers', () => {
 });
 
 describe('actual cashier integration', () => {
+  it('builds the receipt from committed fractional prices and falls back from a zero payment day', () => {
+    let state = committedFixture();
+    state.restaurant = { ...state.restaurant, day: 0, gameTime: 86400 };
+    state.customers[0] = {
+      ...state.customers[0], drinkId: 'water', drinkPriceAtOrder: 0.345,
+      orderSubtotal: 12.345, foodDeadlineAt: 86401,
+      orderedServiceItemIds: ['service-item-1', 'drink-item'],
+    };
+    state.serviceItems.push({ id: 'drink-item', kind: 'drink', menuItemId: 'water',
+      customerId: 'c1', state: 'delivered' });
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const paid = updateStaff(cashierReady(state), 0);
+
+    expect(paid.completedCustomers[0]).toMatchObject({
+      customerId: 'c1', day: 2, dishId: 'starter-toast', drinkId: 'water',
+      revenue: 12.345 + 2.47, tip: 2.47, totalPaid: 12.345 + 2.47, reviewScore: 80,
+    });
+    expect(random).toHaveBeenCalledTimes(1);
+  });
+
   it('records happiness64 at checkout without changing paid-visit consumer awards', () => {
     let state = committedFixture();
     state.restaurant = {
