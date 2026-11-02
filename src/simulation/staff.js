@@ -80,6 +80,7 @@ import { allocateStaffPositions } from './navigation/staffAllocation';
 import { positionAvailable, quarantineNavigation } from './navigation/occupancy';
 import { createGrid } from './navigation/grid';
 import { findRoute } from './navigation/router';
+import { getStaffCleaningFocusTaskType } from './cleaningFocus';
 
 function paidVisitFields(state) {
   return Object.fromEntries(['paidVisitSequence', 'cookbook', 'serviceContracts', 'careerRun', 'menuSales']
@@ -442,7 +443,9 @@ function janitorCleanupCandidates({ state, staff, allStaff, serviceItems, claime
     ) - 300);
   }
 
-  return candidates.sort((left, right) => left.age - right.age
+  const focusedType = getStaffCleaningFocusTaskType(staff.cleaningFocus);
+  return candidates.sort((left, right) => (left.age - (left.type === focusedType ? 300 : 0))
+    - (right.age - (right.type === focusedType ? 300 : 0))
     || String(left.id).localeCompare(String(right.id)));
 }
 

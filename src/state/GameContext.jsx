@@ -54,6 +54,7 @@ import { invalidateMovementRuntime, moveStaff } from './staffMoves';
 import { getFixtureSaleEligibility, sellFixtures } from './fixtureSales';
 import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
 import { prioritiseQueuedParty } from '../simulation/queuePriority';
+import { STAFF_CLEANING_FOCUS_VALUES } from '../simulation/cleaningFocus';
 
 const STARTING_DISH_QUALITY = 1;
 
@@ -746,6 +747,23 @@ function reduceGameAction(state, action) {
           : candidate),
       };
     }
+    case 'SET_STAFF_CLEANING_FOCUS': {
+      const validId = (typeof action.id === 'string' && action.id.length > 0)
+        || (Number.isSafeInteger(action.id) && action.id >= 0);
+      if (!validId || !STAFF_CLEANING_FOCUS_VALUES.has(action.focus)
+        || !Array.isArray(state.staff)) return state;
+      const matches = state.staff.filter(worker => sameId(worker?.id, action.id));
+      if (matches.length !== 1) return state;
+      const worker = matches[0];
+      if (worker.role !== 'janitor' && action.focus !== 'balanced') return state;
+      if ((worker.cleaningFocus ?? 'balanced') === action.focus) return state;
+      return {
+        ...state,
+        staff: state.staff.map(candidate => candidate === worker
+          ? { ...candidate, cleaningFocus: action.focus }
+          : candidate),
+      };
+    }
     case 'FIRE_STAFF': {
       const fired = state.staff.find(staff => staff.id === action.id);
       if (!fired) return state;
@@ -991,7 +1009,8 @@ export function gameReducer(state, action) {
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE'
     || action.type === 'PRIORITISE_QUEUE_PARTY'
     || action.type === 'SET_TABLE_ADMISSION_HOLD'
-    || action.type === 'SET_STAFF_REST_AMENITY_PREFERENCE') return candidate;
+    || action.type === 'SET_STAFF_REST_AMENITY_PREFERENCE'
+    || action.type === 'SET_STAFF_CLEANING_FOCUS') return candidate;
   if (candidate.dishes !== state.dishes) {
     candidate = {
       ...candidate,

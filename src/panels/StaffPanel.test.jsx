@@ -174,6 +174,38 @@ describe('StaffPanel', () => {
     expect(updated).toHaveFocus();
   });
 
+  it('offers cleaning focus only to janitors and dispatches the selected preference', () => {
+    useGameState.mockReturnValue(makeState({
+      staff: [
+        { id: 'cook', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 },
+        { id: 'janitor', name: 'Luca', role: 'janitor', skill: 2, morale: 80, salary: 120 },
+      ],
+    }));
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+
+    const janitorCard = getStaffCard('janitor');
+    const focus = within(janitorCard).getByRole('combobox', {
+      name: 'Cleaning focus for Luca',
+    });
+    expect(focus).toHaveValue('balanced');
+    expect(within(focus).getAllByRole('option').map(option => option.textContent))
+      .toEqual(['Balanced', 'Tables', 'Floors', 'Manual washing']);
+    expect(within(janitorCard).getByText(/affects new tasks/i)).toBeVisible();
+    expect(within(janitorCard).getByText(/other cleaning work remains eligible/i)).toBeVisible();
+    expect(within(janitorCard).getByText(/current task is not interrupted/i)).toBeVisible();
+    expect(within(getStaffCard('cook')).queryByRole('combobox', {
+      name: 'Cleaning focus for Marco',
+    })).not.toBeInTheDocument();
+
+    fireEvent.change(focus, { target: { value: 'washing' } });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_STAFF_CLEANING_FOCUS', id: 'janitor', focus: 'washing',
+    });
+  });
+
   it('shows cashier assignments only when cashier stations exist', () => {
     useGameState.mockReturnValue(makeState({
       cashierStations: [{ id: 'cashier-1', x: 800, y: 120, w: 40, h: 40 }],
@@ -2570,6 +2602,25 @@ describe('StaffPanel career decision controls', () => {
     expect(screen.getAllByTestId('staff-card')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'All' }));
     expect(screen.getAllByTestId('staff-card')).toHaveLength(2);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('disables janitor cleaning focus while a career decision is pending', () => {
+    const dispatch = vi.fn();
+    const janitor = { id: 's3', name: 'Luca', role: 'janitor', skill: 2, morale: 80, salary: 120 };
+    useGameState.mockReturnValue(careerState({
+      careerRun: { needsDecision: true },
+      staff: [...careerState().staff, janitor],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+
+    const focus = within(getStaffCard('s3')).getByRole('combobox', {
+      name: 'Cleaning focus for Luca',
+    });
+    expect(focus).toBeDisabled();
+    fireEvent.change(focus, { target: { value: 'floors' } });
     expect(dispatch).not.toHaveBeenCalled();
   });
 

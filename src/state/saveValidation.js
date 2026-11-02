@@ -15,6 +15,7 @@ import { validateHighTopCounters } from './highTopCounterValidation';
 import { validateCookbookState, validateDishOrderSnapshots } from '../simulation/cookbook';
 import { validateServiceContractsState } from '../simulation/serviceContracts';
 import { getOrderSnapshotSubtotal } from '../simulation/menuEconomy';
+import { STAFF_CLEANING_FOCUS_VALUES } from '../simulation/cleaningFocus';
 
 const STAFF_ROLES = new Set(['cook', 'waiter', 'janitor']);
 const STAFF_DUTIES = new Set(['work', 'rest', 'pto']);
@@ -451,6 +452,11 @@ function validateStaff(staff) {
       'dutyHandoffAccumulatedWork', 'dutyHandoffLastProgressAt',
     ]) validateOptionalFinite(worker, key, path, { minimum: 0, nullable: true });
     validateOptionalEnum(worker, 'lastRestActivityType', path, new Set(['couch', 'arcade']), { nullable: true });
+    validateOptionalEnum(worker, 'cleaningFocus', path, STAFF_CLEANING_FOCUS_VALUES);
+    if (has(worker, 'cleaningFocus') && worker.role !== 'janitor'
+      && worker.cleaningFocus !== 'balanced') {
+      fail(`${path}.cleaningFocus`, 'non-default cleaning focus is only allowed for janitors');
+    }
     validateTask(worker.task, `${path}.task`, worker.role);
     validateAmenityUse(worker, path);
     validatePtoSession(worker, path);

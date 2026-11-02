@@ -1049,6 +1049,64 @@ describe('staff rest amenity preferences', () => {
   });
 });
 
+describe('staff cleaning focus', () => {
+  it('changes a janitor focus without interrupting its active task', () => {
+    const initial = createInitialState();
+    const janitor = initial.staff.find(worker => worker.role === 'janitor');
+    const task = { type: 'clean_floor', dirtId: 'dirt-1', cleaningStartedAt: 10 };
+    const state = {
+      ...initial,
+      floorDirt: [{ id: 'dirt-1', x: 300, y: 200 }],
+      staff: initial.staff.map(worker => worker.id === janitor.id
+        ? { ...worker, task }
+        : worker),
+    };
+
+    const next = gameReducer(state, {
+      type: 'SET_STAFF_CLEANING_FOCUS', id: janitor.id, focus: 'washing',
+    });
+
+    const updated = next.staff.find(worker => worker.id === janitor.id);
+    expect(updated.cleaningFocus).toBe('washing');
+    expect(updated.task).toBe(task);
+    expect(next.staff.find(worker => worker.role === 'cook')).toBe(
+      state.staff.find(worker => worker.role === 'cook'),
+    );
+  });
+
+  it.each([
+    ['missing ID', { focus: 'tables' }],
+    ['unknown ID', { id: 'missing-janitor', focus: 'tables' }],
+    ['invalid ID', { id: -1, focus: 'tables' }],
+    ['missing focus', { id: 'starter-janitor' }],
+    ['invalid focus', { id: 'starter-janitor', focus: 'automatic' }],
+    ['non-janitor target', { id: 'starter-cook', focus: 'tables' }],
+  ])('does nothing for a %s', (_label, fields) => {
+    const state = createInitialState();
+
+    expect(gameReducer(state, {
+      type: 'SET_STAFF_CLEANING_FOCUS', ...fields,
+    })).toBe(state);
+  });
+
+  it('does nothing for an ambiguous ID or while a career decision is pending', () => {
+    const initial = createInitialState();
+    const janitor = initial.staff.find(worker => worker.role === 'janitor');
+    const duplicated = {
+      ...initial,
+      staff: [...initial.staff, { ...janitor }],
+    };
+    expect(gameReducer(duplicated, {
+      type: 'SET_STAFF_CLEANING_FOCUS', id: janitor.id, focus: 'floors',
+    })).toBe(duplicated);
+
+    const pending = { ...initial, careerRun: { needsDecision: true } };
+    expect(gameReducer(pending, {
+      type: 'SET_STAFF_CLEANING_FOCUS', id: janitor.id, focus: 'floors',
+    })).toBe(pending);
+  });
+});
+
 describe('GameProvider authoritative placement actions', () => {
   beforeEach(() => localStorage.clear());
 

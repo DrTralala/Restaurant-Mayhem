@@ -4984,3 +4984,106 @@ describe('updateStaff', () => {
     });
   });
 });
+
+describe('janitor cleaning focus', () => {
+  function cleaningState(focus = undefined) {
+    const janitor = {
+      id: 'janitor', role: 'janitor', x: 180, y: 220, task: null,
+      ...(focus === undefined ? {} : { cleaningFocus: focus }),
+    };
+    return {
+      ...baseState,
+      staff: [janitor],
+      tables: [{ id: 'z-table', status: 'dirty', x: 200, y: 200, createdAt: 0 }],
+      floorDirt: [{ id: 'a-floor', x: 300, y: 200, createdAt: 0 }],
+      washStations: [{ id: 'sink', type: 'manual', x: 400, y: 200, w: 40, h: 40 }],
+      serviceItems: [{ id: 'b-wash', kind: 'dish', state: 'queued_for_wash',
+        washStationId: 'sink', washQueuedAt: 0 }],
+    };
+  }
+
+  it.each([
+    ['absent', undefined, 'clean_table'],
+    ['balanced', 'balanced', 'clean_table'],
+    ['tables', 'tables', 'clean_table'],
+    ['floors', 'floors', 'clean_floor'],
+    ['manual washing', 'washing', 'wash_item'],
+  ])('selects %s focus from real cleanup candidates', (_label, focus, taskType) => {
+    const state = cleaningState(focus);
+
+    const result = updateStaff(state, { gameDt: 0, movementDt: 0 });
+
+    expect(result.staff[0].task.type).toBe(taskType);
+  });
+
+  it('keeps absent and explicit balanced focus task choices identical', () => {
+    const defaultResult = updateStaff(cleaningState(), { gameDt: 0, movementDt: 0 });
+    const balancedResult = updateStaff(cleaningState('balanced'), { gameDt: 0, movementDt: 0 });
+
+    expect(balancedResult.staff[0].task).toEqual(defaultResult.staff[0].task);
+  });
+
+  it('adds a table preference on top of the existing table score', () => {
+    const state = cleaningState();
+    state.tables[0].createdAt = 500;
+    state.floorDirt[0].createdAt = 0;
+
+    const balanced = updateStaff(state, { gameDt: 0, movementDt: 0 });
+    const focused = updateStaff({
+      ...state,
+      staff: state.staff.map(worker => ({ ...worker, cleaningFocus: 'tables' })),
+    }, { gameDt: 0, movementDt: 0 });
+
+    expect(balanced.staff[0].task).toMatchObject({ type: 'clean_floor', dirtId: 'a-floor' });
+    expect(focused.staff[0].task).toMatchObject({ type: 'clean_table', tableId: 'z-table' });
+  });
+
+  it('keeps an older candidate ahead when its score lead exceeds the bounded focus bias', () => {
+    const state = cleaningState('floors');
+    state.floorDirt = [{ id: 'a-floor', x: 300, y: 200, createdAt: 400 }];
+
+    const result = updateStaff(state, { gameDt: 0, movementDt: 0 });
+
+    expect(result.staff[0].task).toMatchObject({ type: 'clean_table', tableId: 'z-table' });
+  });
+
+  it('falls back when the focused work is absent or unreachable', () => {
+    const absent = {
+      ...cleaningState('washing'),
+      tables: [],
+      serviceItems: [],
+      floorDirt: [{ id: 'floor', x: 300, y: 200, createdAt: 0 }],
+    };
+    const absentResult = updateStaff(absent, { gameDt: 0, movementDt: 0 });
+    expect(absentResult.staff[0].task).toMatchObject({ type: 'clean_floor', dirtId: 'floor' });
+
+    const unreachable = {
+      ...cleaningState('floors'),
+      floorDirt: [{ id: 'unreachable-floor', x: -100, y: -100, createdAt: 0 }],
+      serviceItems: [],
+    };
+    const unreachableResult = updateStaff(unreachable, { gameDt: 0, movementDt: 0 });
+    expect(unreachableResult.staff[0].task).toMatchObject({ type: 'clean_table', tableId: 'z-table' });
+  });
+
+  it('falls back to other cleanup work when all focused targets are claimed', () => {
+    const state = {
+      ...baseState,
+      staff: [
+        {
+          id: 'first', role: 'janitor', x: 180, y: 220,
+          navigationGoal: cellToWorld({ x: 15, y: 10 }),
+          task: { type: 'clean_floor', dirtId: 'a-floor' },
+        },
+        { id: 'focused', role: 'janitor', x: 180, y: 260, task: null, cleaningFocus: 'floors' },
+      ],
+      tables: [{ id: 'z-table', status: 'dirty', x: 200, y: 200, createdAt: 0 }],
+      floorDirt: [{ id: 'a-floor', x: 300, y: 200, createdAt: 0 }],
+    };
+
+    const result = updateStaff(state, { gameDt: 0, movementDt: 0 });
+
+    expect(result.staff[0].task).toMatchObject({ type: 'clean_floor', dirtId: 'a-floor' });
+    expect(result.staff[1].task).toMatchObject({ type: 'clean_table', tableId: 'z-table' });
+  });
+});

@@ -635,6 +635,47 @@ describe('additive v10 feature persistence', () => {
     expect(() => hydrateState(raw, createInitialState())).toThrow();
   });
 
+  it('round-trips optional janitor cleaning focus without adding a fresh default', () => {
+    const fresh = createInitialState();
+    const janitorId = fresh.staff.find(worker => worker.role === 'janitor').id;
+    expect(fresh.staff.find(worker => worker.id === janitorId)).not.toHaveProperty('cleaningFocus');
+    expect(() => validateSavedState(fresh)).not.toThrow();
+    expect(hydrateState(fresh, createInitialState()).staff.find(worker => worker.id === janitorId))
+      .not.toHaveProperty('cleaningFocus');
+
+    for (const cleaningFocus of ['balanced', 'tables', 'floors', 'washing']) {
+      localStorage.clear();
+      const raw = createInitialState();
+      raw.staff = raw.staff.map(worker => worker.id === janitorId
+        ? { ...worker, cleaningFocus }
+        : worker);
+
+      expect(saveState(raw)).toBe(true);
+      expect(loadState().staff.find(worker => worker.id === janitorId).cleaningFocus)
+        .toBe(cleaningFocus);
+      expect(hydrateState(loadState(), createInitialState()).staff
+        .find(worker => worker.id === janitorId).cleaningFocus).toBe(cleaningFocus);
+    }
+  });
+
+  it.each(['automatic', 'invalid', 1, null])('rejects malformed persisted cleaning focus %s', cleaningFocus => {
+    const raw = createInitialState();
+    const janitorIndex = raw.staff.findIndex(worker => worker.role === 'janitor');
+    raw.staff[janitorIndex] = { ...raw.staff[janitorIndex], cleaningFocus };
+
+    expect(() => validateSavedState(raw)).toThrow();
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
+  });
+
+  it('rejects a non-default cleaning focus on non-janitor staff', () => {
+    const raw = createInitialState();
+    const cookIndex = raw.staff.findIndex(worker => worker.role === 'cook');
+    raw.staff[cookIndex] = { ...raw.staff[cookIndex], cleaningFocus: 'tables' };
+
+    expect(() => validateSavedState(raw)).toThrow();
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
+  });
+
   it.each(['yes', 1, 0, null])('rejects malformed table admission hold %s', admissionHeld => {
     const raw = createInitialState();
     raw.tables[0] = { ...raw.tables[0], admissionHeld };

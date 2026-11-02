@@ -16,6 +16,7 @@ import { getStaffHirePreview } from './staffHirePreview';
 import { getStaffTaskLabel } from './staffTaskLabel';
 import { getStaffTrainingPreview } from './staffTrainingPreview';
 import CashierAssignments from './CashierAssignments';
+import { STAFF_CLEANING_FOCUS_OPTIONS } from '../simulation/cleaningFocus';
 
 const ROLES = Object.keys(STAFF_SALARIES);
 const NAMES = ['Marco', 'Anna', 'Luca', 'Sofia', 'Giovanni', 'Isabella', 'Mario', 'Elena'];
@@ -391,8 +392,12 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
         const trainingDescriptionId = `${bonusExplanationId}-training-${index}`;
         const restPreferenceId = `${bonusExplanationId}-rest-amenity-${index}`;
         const restPreferenceDescriptionId = `${restPreferenceId}-description`;
+        const cleaningFocusId = `${bonusExplanationId}-cleaning-focus-${index}`;
+        const cleaningFocusDescriptionId = `${cleaningFocusId}-description`;
         const restPreference = ['automatic', 'couch', 'arcade'].includes(s.restAmenityPreference)
           ? s.restAmenityPreference : 'automatic';
+        const cleaningFocus = STAFF_CLEANING_FOCUS_OPTIONS.some(option => option.value === s.cleaningFocus)
+          ? s.cleaningFocus : 'balanced';
         const locateUnavailable = !locateHandler || locateDisabled || decisionPending
           || !Number.isFinite(s.x) || !Number.isFinite(s.y);
         const scheduleEditorOpen = editingScheduleId === s.id && !decisionPending;
@@ -453,6 +458,34 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
               Applies to the next rest-amenity selection only. The selector falls back if the preferred type is unavailable or unreachable. It is not a reservation and does not change an active reservation.
             </p>
           </div>
+          {s.role === 'janitor' && (
+            <div style={{ margin: '6px 0' }}>
+              <label htmlFor={cleaningFocusId} style={{ ...TYPOGRAPHY.secondary, display: 'block', marginBottom: 4 }}>
+                Cleaning focus
+              </label>
+              <select
+                id={cleaningFocusId}
+                value={cleaningFocus}
+                disabled={decisionPending}
+                aria-label={`Cleaning focus for ${s.name}`}
+                aria-describedby={cleaningFocusDescriptionId}
+                onChange={event => {
+                  if (decisionRef.current) return;
+                  dispatch({
+                    type: 'SET_STAFF_CLEANING_FOCUS', id: s.id, focus: event.target.value,
+                  });
+                }}
+                style={{ ...TYPOGRAPHY.control, background: '#111', color: '#ccc', border: '1px solid #555', borderRadius: 4, padding: '4px 6px' }}
+              >
+                {STAFF_CLEANING_FOCUS_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <p id={cleaningFocusDescriptionId} style={{ ...TYPOGRAPHY.secondary, color: '#8fa4c8', margin: '4px 0 0' }}>
+                A modest preference that affects new tasks only. Other cleaning work remains eligible if the focused work is absent, claimed or unreachable; a current task is not interrupted.
+              </p>
+            </div>
+          )}
           {trainingPreview && (
             <div style={{ ...TYPOGRAPHY.secondary, margin: '4px 0' }}>
               <div>{`After training: Skill ${trainingPreview.skill}/10 · Morale ${Math.round(trainingPreview.morale)}%`}</div>
