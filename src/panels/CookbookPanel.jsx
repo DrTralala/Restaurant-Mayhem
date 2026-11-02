@@ -10,12 +10,14 @@ const buttonStyle = { ...TYPOGRAPHY.control, background: '#333', color: '#ccc', 
 const detailStyle = { ...TYPOGRAPHY.secondary, margin: '4px 0' };
 const perkNames = { speed: 'Quick Service', appeal: 'House Favourite' };
 const equipmentName = id => EQUIPMENT.find(equipment => equipment.id === id)?.name || id;
+const cookbookEquipmentIds = [...new Set(COOKBOOK_RECIPES.map(recipe => recipe.requiredEquipmentId))];
 
 export default function CookbookPanel({ onClose, readOnly = false }) {
   const state = useGameState();
   const dispatch = useDispatch();
   const [confirmation, setConfirmation] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [equipmentFilter, setEquipmentFilter] = useState('all');
   const blocked = readOnly || state.careerRun?.needsDecision === true;
   // Legacy/partial callers can browse without mutating state; parent initialisation owns adoption.
   const viewState = state.cookbook ? state : { ...state, ...normaliseCookbookState(state, {
@@ -25,13 +27,18 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
     recipe,
     status: getCookbookEntryStatus(viewState, recipe.id),
   }));
-  const readyEntries = entries.filter(({ status }) => status.canAdd || status.canChoosePerk);
+  const equipmentEntries = equipmentFilter === 'all' ? entries
+    : entries.filter(({ recipe }) => recipe.requiredEquipmentId === equipmentFilter);
+  const readyEntries = equipmentEntries.filter(({ status }) => status.canAdd || status.canChoosePerk);
   const readyIds = new Set(readyEntries.map(({ recipe }) => recipe.id));
-  const pinnedId = filter === 'ready' && confirmation && !readyIds.has(confirmation.cookbookId)
+  const filteredEntries = filter === 'ready'
+    ? equipmentEntries.filter(({ recipe }) => readyIds.has(recipe.id))
+    : equipmentEntries;
+  const pinnedId = confirmation && !filteredEntries.some(({ recipe }) => recipe.id === confirmation.cookbookId)
     ? confirmation.cookbookId : null;
-  const visibleEntries = filter === 'ready'
-    ? entries.filter(({ recipe }) => readyIds.has(recipe.id) || recipe.id === pinnedId)
-    : entries;
+  const visibleIds = new Set(filteredEntries.map(({ recipe }) => recipe.id));
+  if (pinnedId) visibleIds.add(pinnedId);
+  const visibleEntries = entries.filter(({ recipe }) => visibleIds.has(recipe.id));
 
   return (
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
@@ -45,9 +52,15 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
       <div role="group" aria-label="Cookbook view" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', margin: '8px 0' }}>
         <button style={buttonStyle} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All</button>
         <button style={buttonStyle} aria-pressed={filter === 'ready'} onClick={() => setFilter('ready')}>Ready actions</button>
+        <select aria-label="Recipe equipment" value={equipmentFilter} onChange={event => setEquipmentFilter(event.target.value)} style={buttonStyle}>
+          <option value="all">All equipment</option>
+          {cookbookEquipmentIds.map(equipmentId => <option key={equipmentId} value={equipmentId}>{equipmentName(equipmentId)}</option>)}
+        </select>
         <p style={{ ...detailStyle, margin: 0 }}>{readyEntries.length} recipes have ready actions.</p>
       </div>
-      {filter === 'ready' && visibleEntries.length === 0 && <p style={detailStyle}>No recipes have ready actions.</p>}
+      {filteredEntries.length === 0 && <p style={detailStyle}>{filter === 'ready'
+        ? equipmentFilter === 'all' ? 'No recipes have ready actions.' : `No ${equipmentName(equipmentFilter)} recipes have ready actions.`
+        : `No ${equipmentName(equipmentFilter)} recipes found.`}</p>}
 
       {visibleEntries.map(({ recipe, status }) => {
         const settings = viewState.cookbook.entries[recipe.id].menuSettings;

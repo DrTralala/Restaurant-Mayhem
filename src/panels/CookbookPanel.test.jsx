@@ -307,4 +307,78 @@ describe('CookbookPanel', () => {
     expect(screen.queryByText('Shown while its signature choice is open.')).not.toBeInTheDocument();
     expect(screen.getAllByRole('article')).toHaveLength(1);
   });
+
+  it('filters by represented equipment in recipe order and intersects readiness without dispatch', () => {
+    state = paidToast(state, 3);
+    render(<CookbookPanel onClose={vi.fn()} readOnly />);
+
+    const equipment = screen.getByRole('combobox', { name: 'Recipe equipment' });
+    expect(equipment).toHaveValue('all');
+    expect(Array.from(equipment.options).map(option => option.textContent)).toEqual([
+      'All equipment', 'Toaster', 'Oven', 'Fryer', 'Blender',
+    ]);
+    expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
+      'Toasted Bread recipe', 'Cheese Toast recipe', 'Roast Vegetables recipe', 'Baked Potato recipe',
+      'Crispy Fries recipe', 'Fried Chicken recipe', 'Gazpacho recipe', 'Fish Bisque recipe',
+    ]);
+
+    fireEvent.change(equipment, { target: { value: 'eq1' } });
+    expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
+      'Toasted Bread recipe', 'Cheese Toast recipe',
+    ]);
+    fireEvent.change(equipment, { target: { value: 'eq2' } });
+    expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
+      'Roast Vegetables recipe', 'Baked Potato recipe',
+    ]);
+    fireEvent.change(equipment, { target: { value: 'eq4' } });
+    expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
+      'Gazpacho recipe', 'Fish Bisque recipe',
+    ]);
+    expect(within(screen.getByRole('article', { name: 'Gazpacho recipe' }))
+      .getByText('Locked — meet the discovery requirements below')).toBeInTheDocument();
+    expect(screen.getByText('0 recipes have ready actions.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
+    expect(screen.getByText('0 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.queryAllByRole('article')).toHaveLength(0);
+    expect(screen.getByText('No Blender recipes have ready actions.')).toBeInTheDocument();
+    fireEvent.change(equipment, { target: { value: 'eq1' } });
+    expect(screen.getByText('1 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
+      'Cheese Toast recipe',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
+      'Toasted Bread recipe', 'Cheese Toast recipe',
+    ]);
+    fireEvent.change(equipment, { target: { value: 'all' } });
+    expect(screen.getAllByRole('article')).toHaveLength(8);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('keeps an open signature confirmation pinned when equipment excludes its recipe', () => {
+    state = paidToast(state, 15);
+    render(<CookbookPanel onClose={vi.fn()} />);
+    const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
+    fireEvent.click(toast.getByRole('button', { name: 'Choose Quick Service' }));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Recipe equipment' }), { target: { value: 'eq2' } });
+    expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
+      'Toasted Bread recipe', 'Roast Vegetables recipe', 'Baked Potato recipe',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
+    expect(screen.getByText('0 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.getByText('No Oven recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
+      'Toasted Bread recipe',
+    ]);
+    const pinned = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
+    expect(pinned.getByText('Shown while its signature choice is open.')).toBeInTheDocument();
+    expect(pinned.getByRole('button', { name: 'Confirm Quick Service' })).toBeEnabled();
+    fireEvent.click(pinned.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('article', { name: 'Toasted Bread recipe' })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('article')).toHaveLength(0);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });
