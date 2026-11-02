@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { EQUIPMENT } from '../data/equipment';
+import { MASTERY_PORTION_THRESHOLD } from '../data/cookbook';
 import { DRINKS, getResolvedDrink } from '../data/drinks';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
 import { getMenuAnalysis, isMenuItemSuspended } from '../simulation/menuEconomy';
 import { getMenuSalesCount, getMenuSalesGross } from '../simulation/menuSales';
-import { getResolvedDish } from '../simulation/cookbook';
+import { getCookbookEntryStatus, getResolvedDish } from '../simulation/cookbook';
 import { isDishCompatibleWithStation } from '../simulation/cookingBatches';
 import { TYPOGRAPHY } from '../typography';
 import RecipeCreator from './RecipeCreator';
@@ -150,6 +151,9 @@ export default function MenuPanel({ readOnly = false }) {
           isDishCompatibleWithStation(state, dish, station));
         const equipmentName = EQUIPMENT.find(equipment =>
           equipment.id === dish.requiredEquipmentId)?.name || dish.requiredEquipmentId;
+        const mastery = dish.cookbookId
+          ? getCookbookEntryStatus(state, dish.cookbookId)
+          : null;
         const removalPending = pendingRemoval !== null && pendingRemoval.id === dish.id
           && pendingRemoval.dish === rawDish && !blocked;
         return (
@@ -178,6 +182,12 @@ export default function MenuPanel({ readOnly = false }) {
               ? `Signature: ${dish.masteryPerk === 'speed' ? 'Quick Service' : 'House Favourite'}`
               : 'No signature chosen'}` : 'Custom recipe'}
           </div>
+          {mastery && (
+            <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
+              Mastery progress: {mastery.paidPortions}/{MASTERY_PORTION_THRESHOLD} paid portions (cumulative)
+              {mastery.canChoosePerk && <span> · Signature choice available in Cookbook</span>}
+            </div>
+          )}
           <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
             <span>Quality: {'█'.repeat(dish.quality)}{'░'.repeat(10 - dish.quality)} Lv.{dish.quality}</span>
           </div>

@@ -332,6 +332,120 @@ describe('MenuPanel drinks', () => {
     expect(screen.getByText(/base cooking work, not the complete wait time/)).toBeInTheDocument();
   });
 
+  describe('cookbook mastery progress', () => {
+    const stateWithMastery = (paidPortions, perk = null) => {
+      const state = createInitialState();
+      state.cookbook.entries.toast = {
+        ...state.cookbook.entries.toast, paidPortions, perk,
+      };
+      return state;
+    };
+    const toastCard = () => screen.getByRole('article', {
+      name: 'Toasted Bread menu item',
+    });
+
+    it.each([
+      [0, false],
+      [14, false],
+      [15, true],
+    ])('shows cumulative progress and choice availability at %i paid portions', (paidPortions, canChoose) => {
+      const dispatch = vi.fn();
+      useGameState.mockReturnValue(stateWithMastery(paidPortions));
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel />);
+
+      expect(within(toastCard()).getByText(new RegExp(
+        `Mastery progress: ${paidPortions}/15 paid portions \\(cumulative\\)`,
+      ))).toBeVisible();
+      if (canChoose) {
+        expect(toastCard()).toHaveTextContent('Signature choice available in Cookbook');
+      } else {
+        expect(toastCard()).not.toHaveTextContent('Signature choice available in Cookbook');
+      }
+      expect(screen.queryByRole('button', { name: /Choose (Quick Service|House Favourite)/ }))
+        .not.toBeInTheDocument();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['speed', 'Quick Service'],
+      ['appeal', 'House Favourite'],
+    ])('retains the %s signature label without adding another signature action', (perk, label) => {
+      useGameState.mockReturnValue(stateWithMastery(15, perk));
+      render(<MenuPanel />);
+
+      expect(toastCard()).toHaveTextContent('Mastery progress: 15/15 paid portions (cumulative)');
+      expect(within(toastCard()).getByText(`Cookbook recipe · Signature: ${label}`)).toBeVisible();
+      expect(toastCard()).not.toHaveTextContent('Signature choice available in Cookbook');
+      expect(screen.queryByRole('button', { name: /Choose (Quick Service|House Favourite)/ }))
+        .not.toBeInTheDocument();
+    });
+
+    it('omits mastery progress from custom dishes', () => {
+      const state = stateWithMastery(14);
+      state.dishes.push({
+        ...state.dishes[0], id: 'custom-toast', cookbookId: null, name: 'Custom Toast',
+      });
+      useGameState.mockReturnValue(state);
+      render(<MenuPanel />);
+
+      expect(toastCard()).toHaveTextContent('Mastery progress: 14/15 paid portions (cumulative)');
+      expect(within(screen.getByRole('article', { name: 'Custom Toast menu item' }))
+        .queryByText(/Mastery progress:/)).not.toBeInTheDocument();
+    });
+
+    it('updates cumulative progress and choice availability on rerender without dispatch', () => {
+      const state = stateWithMastery(14);
+      const dispatch = vi.fn();
+      useGameState.mockReturnValue(state);
+      useDispatch.mockReturnValue(dispatch);
+      const view = render(<MenuPanel />);
+
+      expect(toastCard()).toHaveTextContent('Mastery progress: 14/15 paid portions (cumulative)');
+      expect(toastCard()).not.toHaveTextContent('Signature choice available in Cookbook');
+
+      useGameState.mockReturnValue({
+        ...state,
+        cookbook: {
+          ...state.cookbook,
+          entries: {
+            ...state.cookbook.entries,
+            toast: { ...state.cookbook.entries.toast, paidPortions: 15 },
+          },
+        },
+      });
+      view.rerender(<MenuPanel />);
+
+      expect(toastCard()).toHaveTextContent('Mastery progress: 15/15 paid portions (cumulative)');
+      expect(toastCard()).toHaveTextContent('Signature choice available in Cookbook');
+      expect(toastCard()).toHaveTextContent('Paid today: 0');
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['read-only', true, false],
+      ['career decision', false, true],
+    ])('keeps mastery progress and Cookbook browsing available during %s mode', (_label, readOnly, needsDecision) => {
+      const state = stateWithMastery(15);
+      useGameState.mockReturnValue(needsDecision
+        ? { ...state, careerRun: { needsDecision: true } }
+        : state);
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel readOnly={readOnly} />);
+
+      expect(toastCard()).toHaveTextContent('Mastery progress: 15/15 paid portions (cumulative)');
+      expect(toastCard()).toHaveTextContent('Signature choice available in Cookbook');
+      expect(screen.getByRole('button', { name: 'Cookbook' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
+
+      expect(screen.getByRole('heading', { name: 'Cookbook' })).toBeVisible();
+      expect(screen.getByText('Signature choice available')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Choose Quick Service' })).toBeDisabled();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+  });
+
   it('career decision blocks dish, drink and creator mutations while allowing cookbook browsing', () => {
     const state = useGameState();
     useGameState.mockReturnValue({ ...state, careerRun: { needsDecision: true } });
