@@ -5,6 +5,7 @@ import { getGlobalUpgradeDescription, getGlobalUpgradeQuote } from '../data/upgr
 import { PLACEABLES } from '../data/placeables';
 import { MAX_EXPANSION_LEVEL, getExpansionPreview } from '../simulation/expansion';
 import { getGlobalUpgradeEffectPreview } from '../simulation/globalUpgradePurchase';
+import { getResolvedDish } from '../simulation/cookbook';
 import { TYPOGRAPHY } from '../typography';
 
 function formatShortfallAmount(amount) {
@@ -25,6 +26,9 @@ function getCashShortfall(quote, funds) {
 export default function UpgradePanel({ onStartPlacement = () => {} }) {
   const state = useGameState();
   const dispatch = useDispatch();
+  const menuDishes = (state.dishes || [])
+    .map(dish => getResolvedDish(state, dish.id))
+    .filter(Boolean);
   const serviceTablePrice = PLACEABLES.serviceTable.price;
   const funds = state.restaurant.funds;
   const canBuyServiceTable = Number.isFinite(funds)
@@ -188,8 +192,13 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
       </div>
 
       <h4 style={{ ...TYPOGRAPHY.subheading, color: '#f0a500', marginTop: 20, marginBottom: 8 }}>Equipment</h4>
+      <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0 8px' }}>
+        Counts include suspended food dishes. Equipment requirements do not confirm station placement, access or service capacity.
+      </p>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
         {state.equipment.map((eq, index) => {
+          const requiredDishes = menuDishes.filter(dish => dish.requiredEquipmentId != null
+            && String(dish.requiredEquipmentId) === String(eq.id));
           const owned = eq.owned;
           const quote = owned ? getEquipmentUpgradeQuote(eq, state.restaurant.funds) : null;
           const maxed = owned && Number.isInteger(eq.level) && eq.level === 10;
@@ -234,6 +243,20 @@ export default function UpgradePanel({ onStartPlacement = () => {} }) {
               {!owned && (
                 <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0' }}>
                   Place the station to purchase. Charged only after valid placement; cancelling costs nothing.
+                </p>
+              )}
+              {requiredDishes.length > 0 ? (
+                <details style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0' }}>
+                  <summary style={{ cursor: 'pointer' }}>
+                    Menu dishes requiring this equipment ({requiredDishes.length})
+                  </summary>
+                  <ul style={{ margin: '4px 0 4px 20px', paddingLeft: 16 }}>
+                    {requiredDishes.map(dish => <li key={dish.id}>{dish.name}</li>)}
+                  </ul>
+                </details>
+              ) : (
+                <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '4px 0' }}>
+                  No current menu dishes require this equipment.
                 </p>
               )}
               <button

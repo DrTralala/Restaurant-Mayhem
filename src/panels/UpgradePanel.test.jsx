@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import UpgradePanel from './UpgradePanel';
 import { UPGRADES } from '../data/upgrades';
+import { createCookbookState } from '../simulation/cookbook';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
@@ -940,5 +941,158 @@ describe('UpgradePanel cash shortfalls', () => {
     const card = screen.getByText('Oven').closest('div');
     expect(within(card).getByRole('button', { name: 'Buy ($500)' })).toBeDisabled();
     expect(within(card).queryByText(/Needs \$|Funds unavailable|\$0 more/)).not.toBeInTheDocument();
+  });
+});
+
+describe('UpgradePanel equipment menu usage', () => {
+  const panelState = ({ equipment, dishes = [], drinks = [], suspendedDishIds = [], cookbook } = {}) => ({
+    upgrades: [],
+    restaurant: { funds: 1000, expansionLevel: 1, suspendedDishIds },
+    serviceTables: [],
+    equipment,
+    dishes,
+    drinks,
+    cookbook,
+  });
+
+  const equipmentItem = (id, name, owned) => ({
+    id, name, owned, level: 1, upgradeCosts: [100], purchaseCost: 200,
+  });
+
+  const customDish = (id, name, requiredEquipmentId) => ({
+    id, name, requiredEquipmentId, cookbookId: null,
+  });
+
+  it('shows matched dishes on owned and unowned cards without changing equipment actions', () => {
+    const dispatch = vi.fn();
+    const startPlacement = vi.fn();
+    useGameState.mockReturnValue(panelState({
+      equipment: [equipmentItem('eq1', 'Toaster', true), equipmentItem('eq2', 'Oven', false)],
+      dishes: [customDish('toast', 'House Toast', 'eq1'), customDish('roast', 'Sunday Roast', 'eq2')],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<UpgradePanel onStartPlacement={startPlacement} />);
+
+    const toasterCard = screen.getByText('Toaster').parentElement;
+    const ovenCard = screen.getByText('Oven').parentElement;
+    const toasterDetails = toasterCard.querySelector('details');
+    const ovenDetails = ovenCard.querySelector('details');
+    expect(toasterDetails).not.toBeNull();
+    expect(ovenDetails).not.toBeNull();
+    expect(toasterDetails).not.toHaveAttribute('open');
+    expect(ovenDetails).not.toHaveAttribute('open');
+    expect(within(toasterCard).getByText('Menu dishes requiring this equipment (1)')).toBeVisible();
+    expect(within(ovenCard).getByText('Menu dishes requiring this equipment (1)')).toBeVisible();
+
+    fireEvent.click(toasterDetails.querySelector('summary'));
+    fireEvent.click(ovenDetails.querySelector('summary'));
+    expect(toasterDetails).toHaveAttribute('open');
+    expect(ovenDetails).toHaveAttribute('open');
+    expect(within(toasterCard).getByText('House Toast')).toBeVisible();
+    expect(within(ovenCard).getByText('Sunday Roast')).toBeVisible();
+    expect(screen.getByText('Counts include suspended food dishes. Equipment requirements do not confirm station placement, access or service capacity.')).toBeVisible();
+
+    fireEvent.click(within(toasterCard).getByRole('button', { name: 'Upgrade ($100)' }));
+    fireEvent.click(within(ovenCard).getByRole('button', { name: 'Buy ($200)' }));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({ type: 'UPGRADE_EQUIPMENT', id: 'eq1', cost: 100 });
+    expect(startPlacement).toHaveBeenCalledTimes(1);
+    expect(startPlacement).toHaveBeenCalledWith({ itemType: 'equipmentStation', equipmentId: 'eq2' });
+  });
+
+  it('uses resolved cookbook fields instead of stale raw menu fields', () => {
+    const cookbook = createCookbookState();
+    cookbook.entries.toast.menuSettings = { ...cookbook.entries.toast.menuSettings, name: 'Canonical Toast' };
+    useGameState.mockReturnValue(panelState({
+      equipment: [equipmentItem('eq1', 'Toaster', true), equipmentItem('eq2', 'Oven', true)],
+      dishes: [{
+        id: 'cookbook:toast', cookbookId: 'toast', name: 'Stale Toast', requiredEquipmentId: 'eq2',
+      }],
+      cookbook,
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<UpgradePanel />);
+
+    const toasterCard = screen.getByText('Toaster').parentElement;
+    const ovenCard = screen.getByText('Oven').parentElement;
+    expect(within(toasterCard).getByText('Menu dishes requiring this equipment (1)')).toBeVisible();
+    expect(within(ovenCard).getByText('No current menu dishes require this equipment.')).toBeVisible();
+    fireEvent.click(toasterCard.querySelector('summary'));
+    expect(within(toasterCard).getByText('Canonical Toast')).toBeVisible();
+    expect(within(toasterCard).queryByText('Stale Toast')).not.toBeInTheDocument();
+  });
+
+  it('counts multiple custom dishes using string-equivalent equipment ids and reports cards with no matches', () => {
+    useGameState.mockReturnValue(panelState({
+      equipment: [equipmentItem(1, 'Toaster', false), equipmentItem('eq3', 'Fryer', true)],
+      dishes: [customDish('toast', 'House Toast', '1'), customDish('bagel', 'Sesame Bagel', 1)],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<UpgradePanel />);
+
+    const toasterCard = screen.getByText('Toaster').parentElement;
+    const fryerCard = screen.getByText('Fryer').parentElement;
+    expect(within(toasterCard).getByText('Menu dishes requiring this equipment (2)')).toBeVisible();
+    expect(within(fryerCard).getByText('No current menu dishes require this equipment.')).toBeVisible();
+    const details = toasterCard.querySelector('details');
+    fireEvent.click(details.querySelector('summary'));
+    expect(within(toasterCard).getByText('House Toast')).toBeVisible();
+    expect(within(toasterCard).getByText('Sesame Bagel')).toBeVisible();
+    expect(within(fryerCard).queryByRole('group')).not.toBeInTheDocument();
+  });
+
+  it('excludes unrestricted food, drinks and undiscovered cookbook entries', () => {
+    useGameState.mockReturnValue(panelState({
+      equipment: [equipmentItem('eq4', 'Blender', false)],
+      dishes: [customDish('salad', 'Garden Salad', null)],
+      drinks: [{ id: 'juice', name: 'Juice', requiredEquipmentId: 'eq4' }],
+      cookbook: createCookbookState(),
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<UpgradePanel />);
+
+    const blenderCard = screen.getByText('Blender').parentElement;
+    expect(within(blenderCard).getByText('No current menu dishes require this equipment.')).toBeVisible();
+    expect(within(blenderCard).queryByRole('group')).not.toBeInTheDocument();
+  });
+
+  it('includes suspended dishes and refreshes the count and names after menu edits', () => {
+    const equipment = [equipmentItem('eq1', 'Toaster', true)];
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(panelState({ equipment, dishes: [] }));
+    useDispatch.mockReturnValue(dispatch);
+
+    const { rerender } = render(<UpgradePanel />);
+    const card = screen.getByText('Toaster').parentElement;
+    expect(within(card).getByText('No current menu dishes require this equipment.')).toBeVisible();
+
+    useGameState.mockReturnValue(panelState({
+      equipment,
+      dishes: [customDish('toast', 'Walk-in Toast', 'eq1')],
+      suspendedDishIds: ['toast'],
+    }));
+    rerender(<UpgradePanel />);
+    expect(within(card).getByText('Menu dishes requiring this equipment (1)')).toBeVisible();
+    fireEvent.click(card.querySelector('summary'));
+    expect(within(card).getByText('Walk-in Toast')).toBeVisible();
+
+    useGameState.mockReturnValue(panelState({
+      equipment,
+      dishes: [customDish('toast', 'Renamed Walk-in Toast', 'eq1')],
+      suspendedDishIds: ['toast'],
+    }));
+    rerender(<UpgradePanel />);
+    expect(within(card).getByText('Renamed Walk-in Toast')).toBeVisible();
+    expect(within(card).queryByText('Walk-in Toast')).not.toBeInTheDocument();
+
+    useGameState.mockReturnValue(panelState({ equipment, dishes: [] }));
+    rerender(<UpgradePanel />);
+    expect(within(card).getByText('No current menu dishes require this equipment.')).toBeVisible();
+    expect(within(card).queryByText(/Menu dishes requiring this equipment/)).not.toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });
