@@ -649,6 +649,23 @@ function reduceGameAction(state, action) {
       if (!exists) return state;
       return setMenuItemSuspended(state, action.kind, action.id, action.suspended);
     }
+    case 'RESUME_ALL_MENU_ITEMS': {
+      const restaurant = state.restaurant;
+      if (!restaurant || typeof restaurant !== 'object' || Array.isArray(restaurant)) return state;
+      const hasSuspendedDishIds = Array.isArray(restaurant.suspendedDishIds)
+        && restaurant.suspendedDishIds.length > 0;
+      const hasSuspendedDrinkIds = Array.isArray(restaurant.suspendedDrinkIds)
+        && restaurant.suspendedDrinkIds.length > 0;
+      if (!hasSuspendedDishIds && !hasSuspendedDrinkIds) return state;
+      return {
+        ...state,
+        restaurant: {
+          ...restaurant,
+          ...(hasSuspendedDishIds ? { suspendedDishIds: [] } : {}),
+          ...(hasSuspendedDrinkIds ? { suspendedDrinkIds: [] } : {}),
+        },
+      };
+    }
     case 'SET_MENU_SALES_THRESHOLD':
       return setMenuItemSalesThreshold(state, action.kind, action.id, action.threshold);
     case 'ADD_DISH': {
@@ -1092,6 +1109,7 @@ export function gameReducer(state, action) {
     || action.type === 'PRIORITISE_QUEUE_PARTY'
     || action.type === 'SET_TABLE_ADMISSION_HOLD'
     || action.type === 'SET_MENU_SALES_THRESHOLD'
+    || action.type === 'RESUME_ALL_MENU_ITEMS'
     || action.type === 'SET_STAFF_REST_AMENITY_PREFERENCE'
     || action.type === 'SET_STAFF_CLEANING_FOCUS') return candidate;
   if (candidate.dishes !== state.dishes) {

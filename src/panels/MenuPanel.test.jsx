@@ -714,6 +714,124 @@ describe('MenuPanel drinks', () => {
   });
 
   describe('menu suspension controls', () => {
+    it('enables one bulk-resume action only when a manual suspension is present', () => {
+      const base = useGameState();
+      const empty = {
+        ...base,
+        restaurant: {
+          ...base.restaurant,
+          suspendedDishIds: [],
+          suspendedDrinkIds: [],
+        },
+      };
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      useGameState.mockReturnValue(empty);
+      const view = render(<MenuPanel />);
+
+      const resumeAll = screen.getByRole('button', {
+        name: 'Resume all manually suspended items',
+      });
+      expect(resumeAll).toBeDisabled();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      useGameState.mockReturnValue({
+        ...empty,
+        restaurant: {
+          ...empty.restaurant,
+          suspendedDishIds: ['toast'],
+          suspendedDrinkIds: ['water'],
+          walkInsPaused: true,
+        },
+      });
+      view.rerender(<MenuPanel />);
+
+      expect(screen.getByRole('button', {
+        name: 'Resume all manually suspended items',
+      })).toBeEnabled();
+      expect(screen.getByText(
+        'Resuming manually suspended items does not change daily paid-sales thresholds or the walk-in admission pause.',
+      )).toBeInTheDocument();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', {
+        name: 'Resume all manually suspended items',
+      }));
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith({ type: 'RESUME_ALL_MENU_ITEMS' });
+    });
+
+    it.each([
+      ['career decision', false, true],
+      ['read-only', true, false],
+    ])('blocks bulk resume while %s', (_label, readOnly, needsDecision) => {
+      const base = useGameState();
+      useGameState.mockReturnValue({
+        ...base,
+        ...(needsDecision ? { careerRun: { needsDecision: true } } : {}),
+        restaurant: {
+          ...base.restaurant,
+          suspendedDishIds: ['toast'],
+          suspendedDrinkIds: ['water'],
+        },
+      });
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel readOnly={readOnly} />);
+
+      const resumeAll = screen.getByRole('button', {
+        name: 'Resume all manually suspended items',
+      });
+      expect(resumeAll).toBeDisabled();
+      fireEvent.click(resumeAll);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('resumes manual holds without overriding a reached paid-sales threshold', () => {
+      const initial = createInitialState();
+      const state = {
+        ...initial,
+        restaurant: {
+          ...initial.restaurant,
+          suspendedDishIds: ['starter-toast'],
+          suspendedDrinkIds: ['water'],
+          menuSalesThresholds: [
+            { kind: 'dish', id: 'starter-toast', threshold: 1 },
+          ],
+        },
+        menuSales: {
+          day: 1,
+          dishes: [{ key: 'starter-toast', count: 1, gross: 12, grossComplete: true }],
+          drinks: [],
+        },
+      };
+      const actions = [];
+      useGameState.mockImplementation(() => statefulHarness.current.state);
+      useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+      render(<StatefulMenuPanel initial={state} actions={actions} />);
+
+      expect(getMenuAnalysis(state).hasAvailableMenu).toBe(false);
+      fireEvent.click(screen.getByRole('button', {
+        name: 'Resume all manually suspended items',
+      }));
+
+      const next = statefulHarness.current.state;
+      const dishCard = within(screen.getByRole('article', { name: 'Toasted Bread menu item' }));
+      const waterCard = within(screen.getByRole('article', { name: 'Water menu item' }));
+      expect(actions).toEqual([{ type: 'RESUME_ALL_MENU_ITEMS' }]);
+      expect(dishCard.queryByText('Suspended for walk-ins')).not.toBeInTheDocument();
+      expect(dishCard.getByText('Paid-sales threshold reached for walk-ins')).toBeInTheDocument();
+      expect(dishCard.getByText('Estimated demand: 0%')).toBeInTheDocument();
+      expect(waterCard.queryByText('Suspended for walk-ins')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', {
+        name: 'Resume all manually suspended items',
+      })).toBeDisabled();
+      expect(getMenuAnalysis(next).hasAvailableMenu).toBe(true);
+      expect(getMenuAnalysis(next).demand.drinks.get('water')).toBeGreaterThan(0);
+      expect(next.restaurant.menuSalesThresholds).toBe(state.restaurant.menuSalesThresholds);
+      expect(next.restaurant.walkInsPaused).toBe(state.restaurant.walkInsPaused);
+    });
+
     it('offers exact suspend actions with pressed state for dishes and unlocked drinks', () => {
       const dispatch = vi.fn();
       useDispatch.mockReturnValue(dispatch);

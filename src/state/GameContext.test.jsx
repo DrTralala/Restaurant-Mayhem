@@ -391,6 +391,120 @@ describe('GameProvider menu suspension action', () => {
   });
 });
 
+describe('GameProvider bulk menu resume action', () => {
+  it('clears both manual suspension lists atomically without changing menu policy or in-flight state', () => {
+    const initial = createInitialState();
+    const snapshot = createDishOrderSnapshot({
+      ...initial.dishes[0], cookbookId: 'toast', masteryPerk: null,
+    }, { serviceItemId: 'resume-order', orderedAt: 100 });
+    const customer = { id: 'committed-guest', dishId: 'starter-toast', dishOrderSnapshot: snapshot };
+    const customers = [customer];
+    const serviceItem = {
+      id: 'resume-order', kind: 'dish', dishOrderSnapshot: { ...snapshot },
+    };
+    const serviceItems = [serviceItem];
+    const menuSales = {
+      day: 1,
+      dishes: [{ key: 'stale-dish', count: 4 }],
+      drinks: [{ key: 'water', count: 2 }],
+    };
+    const menuSalesThresholds = [
+      { kind: 'dish', id: 'stale-dish', threshold: 9 },
+      { kind: 'drink', id: 'water', threshold: 3 },
+    ];
+    const navigationFault = { kind: 'existing-navigation-fault' };
+    const state = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant,
+        suspendedDishIds: ['stale-dish', 'starter-toast'],
+        suspendedDrinkIds: ['water', 'stale-drink'],
+        menuSalesThresholds,
+        walkInsPaused: true,
+      },
+      customers,
+      serviceItems,
+      menuSales,
+      navigationFault,
+    };
+
+    const next = gameReducer(state, { type: 'RESUME_ALL_MENU_ITEMS' });
+
+    expect(next).not.toBe(state);
+    expect(next.restaurant.suspendedDishIds).toEqual([]);
+    expect(next.restaurant.suspendedDrinkIds).toEqual([]);
+    expect(next.restaurant.menuSalesThresholds).toBe(menuSalesThresholds);
+    expect(next.restaurant.walkInsPaused).toBe(true);
+    expect(next.dishes).toBe(state.dishes);
+    expect(next.unlockedDrinkIds).toBe(state.unlockedDrinkIds);
+    expect(next.menuSales).toBe(menuSales);
+    expect(next.menuSales.dishes).toEqual([{ key: 'stale-dish', count: 4 }]);
+    expect(next.customers).toBe(customers);
+    expect(next.customers[0]).toBe(customer);
+    expect(next.customers[0].dishOrderSnapshot).toBe(snapshot);
+    expect(next.serviceItems).toBe(serviceItems);
+    expect(next.serviceItems[0]).toBe(serviceItem);
+    expect(next.navigationFault).toBe(navigationFault);
+  });
+
+  it('clears only the populated kind and preserves the empty counterpart', () => {
+    const initial = createInitialState();
+    const emptyDrinkIds = [];
+    const state = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant,
+        suspendedDishIds: ['stale-dish'],
+        suspendedDrinkIds: emptyDrinkIds,
+      },
+    };
+
+    const next = gameReducer(state, { type: 'RESUME_ALL_MENU_ITEMS' });
+
+    expect(next.restaurant.suspendedDishIds).toEqual([]);
+    expect(next.restaurant.suspendedDrinkIds).toBe(emptyDrinkIds);
+    expect(next.dishes).toBe(state.dishes);
+  });
+
+  it('returns the identical state when both suspension lists are absent or empty', () => {
+    const initial = createInitialState();
+    const absent = {
+      ...initial,
+      restaurant: { ...initial.restaurant },
+    };
+    const emptyDishIds = [];
+    const emptyDrinkIds = [];
+    const empty = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant,
+        suspendedDishIds: emptyDishIds,
+        suspendedDrinkIds: emptyDrinkIds,
+      },
+    };
+
+    expect(gameReducer(absent, { type: 'RESUME_ALL_MENU_ITEMS' })).toBe(absent);
+    expect(gameReducer(empty, { type: 'RESUME_ALL_MENU_ITEMS' })).toBe(empty);
+    expect(empty.restaurant.suspendedDishIds).toBe(emptyDishIds);
+    expect(empty.restaurant.suspendedDrinkIds).toBe(emptyDrinkIds);
+  });
+
+  it('is blocked while a career decision is pending', () => {
+    const initial = createInitialState();
+    const state = {
+      ...initial,
+      careerRun: { needsDecision: true },
+      restaurant: {
+        ...initial.restaurant,
+        suspendedDishIds: ['starter-toast'],
+        suspendedDrinkIds: ['water'],
+      },
+    };
+
+    expect(gameReducer(state, { type: 'RESUME_ALL_MENU_ITEMS' })).toBe(state);
+  });
+});
+
 describe('GameProvider menu sales threshold action', () => {
   beforeEach(() => localStorage.clear());
 

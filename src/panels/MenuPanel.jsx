@@ -51,7 +51,13 @@ export default function MenuPanel({ readOnly = false }) {
   const returnFocusRef = useRef(null);
   const unlockedDrinkIds = state.unlockedDrinkIds || [];
   const blocked = readOnly || state.careerRun?.needsDecision === true;
+  const hasManualSuspensions = ['suspendedDishIds', 'suspendedDrinkIds'].some(key =>
+    Array.isArray(state.restaurant?.[key]) && state.restaurant[key].length > 0);
   const mutate = action => { if (!blocked) dispatch(action); };
+  const resumeAllManuallySuspendedItems = () => {
+    if (blocked || !hasManualSuspensions) return;
+    dispatch({ type: 'RESUME_ALL_MENU_ITEMS' });
+  };
   const canPay = cost => Number.isFinite(state.restaurant.funds)
     && Number.isFinite(cost) && cost >= 0 && state.restaurant.funds >= cost;
 
@@ -126,6 +132,19 @@ export default function MenuPanel({ readOnly = false }) {
         }}>
           + New dish
         </button>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <button
+          type="button"
+          disabled={blocked || !hasManualSuspensions}
+          onClick={resumeAllManuallySuspendedItems}
+          style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555', padding: '6px 14px', borderRadius: 4, cursor: 'pointer' }}
+        >
+          Resume all manually suspended items
+        </button>
+        <span style={TYPOGRAPHY.secondary}>
+          Resuming manually suspended items does not change daily paid-sales thresholds or the walk-in admission pause.
+        </span>
       </div>
       {blocked && <p role="status" style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>Career decision pending — menu changes are unavailable. You can still browse.</p>}
       <p style={TYPOGRAPHY.secondary}>Cook seconds show base cooking work, not the complete wait time. Estimated demand is not a sales guarantee.</p>
