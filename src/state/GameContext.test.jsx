@@ -313,7 +313,14 @@ describe('GameProvider menu suspension action', () => {
     };
     const game = renderReducer({
       dishes: [...initial.dishes, dish],
-      restaurant: { suspendedDishIds: ['unrelated-dish', dish.id] },
+      restaurant: {
+        suspendedDishIds: ['unrelated-dish', dish.id],
+        menuSalesThresholds: [
+          { kind: 'dish', id: 'unrelated-dish', threshold: 8 },
+          { kind: 'dish', id: dish.id, threshold: 2 },
+          { kind: 'drink', id: 'water', threshold: 4 },
+        ],
+      },
       customers: [customer],
       serviceItems: [serviceItem],
       menuSales: {
@@ -331,6 +338,10 @@ describe('GameProvider menu suspension action', () => {
 
     expect(game.state.dishes.map(candidate => candidate.id)).toEqual(['starter-toast']);
     expect(game.state.restaurant.suspendedDishIds).toEqual(['unrelated-dish']);
+    expect(game.state.restaurant.menuSalesThresholds).toEqual([
+      { kind: 'dish', id: 'unrelated-dish', threshold: 8 },
+      { kind: 'drink', id: 'water', threshold: 4 },
+    ]);
     expect(game.state.customers).toBe(before.customers);
     expect(game.state.customers[0].dishOrderSnapshot).toBe(snapshot);
     expect(game.state.serviceItems).toBe(before.serviceItems);
@@ -377,6 +388,148 @@ describe('GameProvider menu suspension action', () => {
     game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
 
     expect(game.state).toBe(before);
+  });
+});
+
+describe('GameProvider menu sales threshold action', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('sets, clears and idempotently preserves policies without reconciling sales or committed orders', () => {
+    const initial = createInitialState();
+    const snapshot = createDishOrderSnapshot({
+      ...initial.dishes[0], cookbookId: 'toast', masteryPerk: null,
+    }, { serviceItemId: 'threshold-order', orderedAt: 100 });
+    const game = renderReducer({
+      restaurant: {
+        suspendedDishIds: ['starter-toast'],
+        menuSalesThresholds: [
+          { kind: 'dish', id: 'stale-dish', threshold: 9 },
+        ],
+      },
+      customers: [{ id: 'committed-guest', dishId: 'starter-toast', dishOrderSnapshot: snapshot }],
+      serviceItems: [{ id: 'threshold-order', kind: 'dish', dishOrderSnapshot: { ...snapshot } }],
+      menuSales: {
+        day: 1, dishes: [{ key: 'starter-toast', count: 2 }], drinks: [],
+      },
+    });
+    const before = game.state;
+
+    game.dispatch({ type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'starter-toast', threshold: 3 });
+
+    expect(game.state.restaurant.menuSalesThresholds).toEqual([
+      { kind: 'dish', id: 'stale-dish', threshold: 9 },
+      { kind: 'dish', id: 'starter-toast', threshold: 3 },
+    ]);
+    expect(game.state.restaurant.suspendedDishIds).toBe(before.restaurant.suspendedDishIds);
+    expect(game.state.dishes).toBe(before.dishes);
+    expect(game.state.menuSales).toBe(before.menuSales);
+    expect(game.state.customers).toBe(before.customers);
+    expect(game.state.customers[0].dishOrderSnapshot).toBe(snapshot);
+    expect(game.state.serviceItems).toBe(before.serviceItems);
+    expect(game.state.serviceItems[0].dishOrderSnapshot).toEqual(snapshot);
+    const setDish = game.state;
+
+    game.dispatch({ type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'starter-toast', threshold: 3 });
+    expect(game.state).toBe(setDish);
+
+    game.dispatch({ type: 'SET_MENU_SALES_THRESHOLD', kind: 'drink', id: 'water', threshold: 3 });
+    expect(game.state.restaurant.menuSalesThresholds).toEqual([
+      { kind: 'dish', id: 'stale-dish', threshold: 9 },
+      { kind: 'dish', id: 'starter-toast', threshold: 3 },
+      { kind: 'drink', id: 'water', threshold: 3 },
+    ]);
+    game.dispatch({ type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'starter-toast', threshold: null });
+    expect(game.state.restaurant.menuSalesThresholds).toEqual([
+      { kind: 'dish', id: 'stale-dish', threshold: 9 },
+      { kind: 'drink', id: 'water', threshold: 3 },
+    ]);
+    const cleared = game.state;
+    game.dispatch({ type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'starter-toast', threshold: null });
+    expect(game.state).toBe(cleared);
+    expect(game.state.restaurant.suspendedDishIds).toEqual(['starter-toast']);
+  });
+
+  it.each([undefined, 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1, '3', null].filter(value => value !== null))(
+    'rejects invalid non-clear threshold values %s unchanged', threshold => {
+      const state = createInitialState();
+      expect(gameReducer(state, {
+        type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'starter-toast', threshold,
+      })).toBe(state);
+    },
+  );
+
+  it('requires an exact active target and refuses malformed or duplicate existing policy data', () => {
+    const state = createInitialState();
+    const action = (kind, id) => ({
+      type: 'SET_MENU_SALES_THRESHOLD', kind, id, threshold: 2,
+    });
+    expect(gameReducer(state, action('dish', 'missing'))).toBe(state);
+    expect(gameReducer(state, action('side', 'starter-toast'))).toBe(state);
+    expect(gameReducer(state, action('drink', 'tea'))).toBe(state);
+    const duplicateWater = { ...state, unlockedDrinkIds: ['water', 'water'] };
+    expect(gameReducer(duplicateWater, action('drink', 'water'))).toBe(duplicateWater);
+    const nonCanonicalDrink = { ...state, unlockedDrinkIds: ['water', 'boba'] };
+    expect(gameReducer(nonCanonicalDrink, action('drink', 'boba'))).toBe(nonCanonicalDrink);
+
+    const duplicateDish = {
+      ...state,
+      dishes: [...state.dishes, { ...state.dishes[0], id: 'starter-toast' }],
+    };
+    expect(gameReducer(duplicateDish, action('dish', 'starter-toast'))).toBe(duplicateDish);
+    const duplicatePolicy = {
+      ...state,
+      restaurant: {
+        ...state.restaurant,
+        menuSalesThresholds: [
+          { kind: 'dish', id: 'starter-toast', threshold: 2 },
+          { kind: 'dish', id: 'starter-toast', threshold: 3 },
+        ],
+      },
+    };
+    expect(gameReducer(duplicatePolicy, action('dish', 'starter-toast'))).toBe(duplicatePolicy);
+  });
+
+  it('preserves arbitrary custom IDs and permits the same text ID in both kinds', () => {
+    const initial = createInitialState();
+    const state = {
+      ...initial,
+      dishes: [...initial.dishes, { ...makeCustomDish({ id: '__proto__' }) }],
+    };
+    const dish = gameReducer(state, {
+      type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: '__proto__', threshold: 2,
+    });
+    const both = gameReducer(dish, {
+      type: 'SET_MENU_SALES_THRESHOLD', kind: 'drink', id: 'water', threshold: 2,
+    });
+    expect(both.restaurant.menuSalesThresholds).toEqual([
+      { kind: 'dish', id: '__proto__', threshold: 2 },
+      { kind: 'drink', id: 'water', threshold: 2 },
+    ]);
+  });
+
+  it('keeps threshold mutations behind the career gate and out of unrelated navigation repair', () => {
+    const locked = {
+      ...createInitialState(), careerRun: { needsDecision: true },
+    };
+    expect(gameReducer(locked, {
+      type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'starter-toast', threshold: 2,
+    })).toBe(locked);
+
+    const initial = createInitialState();
+    const staff = initial.staff.map((worker, index) => index === 0
+      ? { ...worker, x: Number.NaN }
+      : worker);
+    const faulted = { ...initial, staff, navigationFault: { issues: ['existing'] } };
+    const next = gameReducer(faulted, {
+      type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'starter-toast', threshold: 2,
+    });
+    expect(next).not.toBe(faulted);
+    expect(next.restaurant.menuSalesThresholds).toEqual([
+      { kind: 'dish', id: 'starter-toast', threshold: 2 },
+    ]);
+    expect(next.staff).toBe(staff);
+    expect(Number.isNaN(next.staff[0].x)).toBe(true);
   });
 });
 

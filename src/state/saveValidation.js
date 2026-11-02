@@ -180,6 +180,36 @@ function validateSuspendedMenuIds(restaurant, key) {
   });
 }
 
+function validateMenuSalesThresholds(restaurant) {
+  if (!Object.hasOwn(restaurant, 'menuSalesThresholds')) return;
+  const policies = restaurant.menuSalesThresholds;
+  if (!Array.isArray(policies)) fail('restaurant.menuSalesThresholds', 'must be an array');
+  const seenByKind = new Map();
+  policies.forEach((policy, index) => {
+    const path = `restaurant.menuSalesThresholds[${index}]`;
+    if (!isRecord(policy)) fail(path, 'must be an object');
+    const keys = Object.keys(policy);
+    if (keys.length !== 3 || !['kind', 'id', 'threshold'].every(key => Object.hasOwn(policy, key))) {
+      fail(path, 'must contain exactly kind, id and threshold');
+    }
+    if (policy.kind !== 'dish' && policy.kind !== 'drink') {
+      fail(`${path}.kind`, 'must be dish or drink');
+    }
+    if (typeof policy.id !== 'string' || policy.id.length === 0) {
+      fail(`${path}.id`, 'must be a non-empty string ID');
+    }
+    if (!Number.isSafeInteger(policy.threshold) || policy.threshold <= 0) {
+      fail(`${path}.threshold`, 'must be a positive safe integer');
+    }
+    if (!seenByKind.has(policy.kind)) seenByKind.set(policy.kind, new Set());
+    const ids = seenByKind.get(policy.kind);
+    if (ids.has(policy.id)) {
+      fail('restaurant.menuSalesThresholds', `contains duplicate ${policy.kind} ID ${policy.id}`);
+    }
+    ids.add(policy.id);
+  });
+}
+
 function validateRecordCollection(state, key) {
   if (!has(state, key)) return [];
   validateArray(state[key], key);
@@ -337,6 +367,7 @@ function validateRestaurant(state) {
   validateOptionalEnum(restaurant, 'seatingPolicy', 'restaurant', SEATING_POLICIES);
   validateSuspendedMenuIds(restaurant, 'suspendedDishIds');
   validateSuspendedMenuIds(restaurant, 'suspendedDrinkIds');
+  validateMenuSalesThresholds(restaurant);
 }
 
 function validateNavigationFields(record, path) {

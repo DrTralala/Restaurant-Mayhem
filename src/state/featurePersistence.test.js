@@ -838,4 +838,90 @@ describe('additive v10 feature persistence', () => {
       expect(() => hydrateState(raw, createInitialState())).toThrow();
     }
   });
+
+  it('round-trips optional paid-sales thresholds without adding a default or coercing custom IDs', () => {
+    const fresh = createInitialState();
+    expect(fresh.restaurant).not.toHaveProperty('menuSalesThresholds');
+    expect(() => validateSavedState(fresh)).not.toThrow();
+    expect(hydrateState(fresh, createInitialState()).restaurant)
+      .not.toHaveProperty('menuSalesThresholds');
+
+    const empty = createInitialState();
+    empty.restaurant = { ...empty.restaurant, menuSalesThresholds: [] };
+    expect(saveState(empty)).toBe(true);
+    expect(loadState().restaurant.menuSalesThresholds).toEqual([]);
+    expect(hydrateState(loadState(), createInitialState()).restaurant.menuSalesThresholds).toEqual([]);
+
+    const raw = createInitialState();
+    const { cookbookId, masteryPerk, ...dish } = raw.dishes[0];
+    raw.dishes.push({ ...dish, id: '__proto__', name: 'Custom ID dish' });
+    raw.restaurant = {
+      ...raw.restaurant,
+      menuSalesThresholds: [
+        { kind: 'dish', id: '__proto__', threshold: 2 },
+        { kind: 'dish', id: 'stale:custom|id', threshold: 8 },
+        { kind: 'drink', id: '__proto__', threshold: 3 },
+        { kind: 'drink', id: 'water', threshold: Number.MAX_SAFE_INTEGER },
+      ],
+    };
+
+    expect(saveState(raw)).toBe(true);
+    expect(loadState().restaurant.menuSalesThresholds).toEqual(raw.restaurant.menuSalesThresholds);
+    expect(hydrateState(loadState(), createInitialState()).restaurant.menuSalesThresholds)
+      .toEqual(raw.restaurant.menuSalesThresholds);
+  });
+
+  it.each([
+    ['non-array', null],
+    ['non-array object', {}],
+    ['string', 'bad'],
+    ['undefined property', undefined],
+  ])('rejects a present %s paid-sales threshold branch', (_label, menuSalesThresholds) => {
+    const raw = createInitialState();
+    raw.restaurant = { ...raw.restaurant, menuSalesThresholds };
+
+    expect(() => validateSavedState(raw)).toThrow();
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
+  });
+
+  it.each([
+    ['null record', null],
+    ['invalid kind', { kind: 'side', id: 'starter-toast', threshold: 2 }],
+    ['empty ID', { kind: 'dish', id: '', threshold: 2 }],
+    ['non-string ID', { kind: 'dish', id: 1, threshold: 2 }],
+    ['missing ID', { kind: 'dish', threshold: 2 }],
+    ['missing threshold', { kind: 'dish', id: 'starter-toast' }],
+    ['null threshold', { kind: 'dish', id: 'starter-toast', threshold: null }],
+    ['zero threshold', { kind: 'dish', id: 'starter-toast', threshold: 0 }],
+    ['negative threshold', { kind: 'dish', id: 'starter-toast', threshold: -1 }],
+    ['decimal threshold', { kind: 'dish', id: 'starter-toast', threshold: 1.5 }],
+    ['unsafe threshold', { kind: 'dish', id: 'starter-toast', threshold: Number.MAX_SAFE_INTEGER + 1 }],
+    ['coerced threshold', { kind: 'dish', id: 'starter-toast', threshold: '2' }],
+    ['extra record field', { kind: 'dish', id: 'starter-toast', threshold: 2, extra: true }],
+  ])('rejects malformed paid-sales threshold record: %s', (_label, record) => {
+    const raw = createInitialState();
+    raw.restaurant = { ...raw.restaurant, menuSalesThresholds: [record] };
+
+    expect(() => validateSavedState(raw)).toThrow();
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
+  });
+
+  it('rejects duplicate kind/ID threshold policies but permits a same-text ID in the other kind', () => {
+    const raw = createInitialState();
+    raw.restaurant = {
+      ...raw.restaurant,
+      menuSalesThresholds: [
+        { kind: 'dish', id: 'same', threshold: 2 },
+        { kind: 'dish', id: 'same', threshold: 3 },
+      ],
+    };
+    expect(() => validateSavedState(raw)).toThrow(/duplicate/i);
+    expect(() => hydrateState(raw, createInitialState())).toThrow(/duplicate/i);
+
+    raw.restaurant.menuSalesThresholds = [
+      { kind: 'dish', id: 'same', threshold: 2 },
+      { kind: 'drink', id: 'same', threshold: 3 },
+    ];
+    expect(() => validateSavedState(raw)).not.toThrow();
+  });
 });

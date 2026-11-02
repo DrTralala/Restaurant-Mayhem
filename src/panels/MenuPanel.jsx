@@ -4,7 +4,12 @@ import { EQUIPMENT } from '../data/equipment';
 import { MASTERY_PORTION_THRESHOLD } from '../data/cookbook';
 import { DRINKS, getResolvedDrink } from '../data/drinks';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
-import { getMenuAnalysis, isMenuItemSuspended } from '../simulation/menuEconomy';
+import {
+  getMenuAnalysis,
+  getMenuItemSalesThreshold,
+  isMenuItemSalesThresholdReached,
+  isMenuItemSuspended,
+} from '../simulation/menuEconomy';
 import { getMenuSalesCount, getMenuSalesGross } from '../simulation/menuSales';
 import { getCookbookEntryStatus, getResolvedDish } from '../simulation/cookbook';
 import { isDishCompatibleWithStation } from '../simulation/cookingBatches';
@@ -12,6 +17,7 @@ import { TYPOGRAPHY } from '../typography';
 import RecipeCreator from './RecipeCreator';
 import CookbookPanel from './CookbookPanel';
 import MenuPriceInput from './MenuPriceInput';
+import MenuSalesThresholdInput from './MenuSalesThresholdInput';
 import { createMenuPricePreviewPresentation } from './MenuPricePreview';
 
 function formatCoverage(share) {
@@ -124,6 +130,7 @@ export default function MenuPanel({ readOnly = false }) {
       {blocked && <p role="status" style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>Career decision pending — menu changes are unavailable. You can still browse.</p>}
       <p style={TYPOGRAPHY.secondary}>Cook seconds show base cooking work, not the complete wait time. Estimated demand is not a sales guarantee.</p>
       <p style={TYPOGRAPHY.secondary}>Suspension affects new walk-in orders only. Booked contract guests can still order these items; orders already taken continue unchanged.</p>
+      <p style={TYPOGRAPHY.secondary}>Daily paid-sales thresholds stop offering an item to new walk-ins after that many paid checkout lines. Booked contract guests can still order thresholded items, and their paid lines count toward the threshold. Paid-sales counts reset automatically each new game day; thresholds remain in place and apply again. Orders already in progress are not cancelled, so paid sales can exceed the threshold. Threshold settings do not change manual suspension.</p>
       <p style={TYPOGRAPHY.secondary}>Paid today counts charged units from successful checkouts, including booked guests; free or cancelled lines do not count. It is not a demand percentage. Gross sales use recorded menu charges only, exclude tips and are not profit; legacy count-only data can show partial or unavailable gross. Sales from before this feature, including older saves, are not tracked, and removing a dish clears its paid count.</p>
       <p style={TYPOGRAPHY.secondary}>Equipment advice checks ownership and station compatibility, not access, workload or service completion.</p>
       {!hasWalkInMenu && (
@@ -196,6 +203,18 @@ export default function MenuPanel({ readOnly = false }) {
             {' · '}
             <span>Paid today: {getMenuSalesCount(state, 'dish', dish.id)}</span>
           </div>
+          <MenuSalesThresholdInput
+            name={dish.name}
+            threshold={getMenuItemSalesThreshold(state, 'dish', dish.id)}
+            reached={isMenuItemSalesThresholdReached(state, 'dish', dish.id)}
+            disabled={blocked}
+            onApply={threshold => mutate({
+              type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: dish.id, threshold,
+            })}
+            onClear={() => mutate({
+              type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: dish.id, threshold: null,
+            })}
+          />
           <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
             <span>{grossSalesLabel(state, 'dish', dish.id)}</span>
           </div>
@@ -313,6 +332,20 @@ export default function MenuPanel({ readOnly = false }) {
                   {' · '}
                   <span>Paid today: {getMenuSalesCount(state, 'drink', resolvedDrink.id)}</span>
                 </div>
+                <MenuSalesThresholdInput
+                  name={resolvedDrink.name}
+                  threshold={getMenuItemSalesThreshold(state, 'drink', resolvedDrink.id)}
+                  reached={isMenuItemSalesThresholdReached(state, 'drink', resolvedDrink.id)}
+                  disabled={blocked}
+                  onApply={threshold => mutate({
+                    type: 'SET_MENU_SALES_THRESHOLD', kind: 'drink',
+                    id: resolvedDrink.id, threshold,
+                  })}
+                  onClear={() => mutate({
+                    type: 'SET_MENU_SALES_THRESHOLD', kind: 'drink',
+                    id: resolvedDrink.id, threshold: null,
+                  })}
+                />
                 <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
                   <span>{grossSalesLabel(state, 'drink', resolvedDrink.id)}</span>
                 </div>

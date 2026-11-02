@@ -2,6 +2,7 @@ import { getResolvedDrink } from '../data/drinks';
 import { WALK_IN_ARCHETYPE_MIX } from '../data/customerArchetypes';
 import { clampReputation } from './balance';
 import { getResolvedDish } from './cookbook';
+import { getMenuSalesCount } from './menuSales';
 
 export const SPENDING_TIER_RANGES = Object.freeze({
   budget: Object.freeze([6, 18]),
@@ -143,10 +144,12 @@ function buildMenuBaskets(state, customer, priceOverride = null) {
     getResolvedDish(state, dish.id), 'dish', priceOverride,
   ))
     .filter(dish => Number.isFinite(dish?.price))
-    .filter(dish => contractBypass || !isMenuItemSuspended(state, 'dish', dish.id));
+    .filter(dish => contractBypass || (!isMenuItemSuspended(state, 'dish', dish.id)
+      && !isMenuItemSalesThresholdReached(state, 'dish', dish.id)));
   const drinks = (state?.unlockedDrinkIds || [])
     .map(id => applyPriceOverride(getResolvedDrink(state, id), 'drink', priceOverride)).filter(Boolean)
-    .filter(drink => contractBypass || !isMenuItemSuspended(state, 'drink', drink.id));
+    .filter(drink => contractBypass || (!isMenuItemSuspended(state, 'drink', drink.id)
+      && !isMenuItemSalesThresholdReached(state, 'drink', drink.id)));
   return [
     ...dishes.map(dish => toBasket('dish', dish)),
     ...drinks.map(drink => toBasket('drink', null, drink)),
@@ -159,6 +162,25 @@ export function isMenuItemSuspended(state, kind, id) {
     ? state?.restaurant?.suspendedDishIds
     : kind === 'drink' ? state?.restaurant?.suspendedDrinkIds : null;
   return Array.isArray(list) && list.includes(id);
+}
+
+export function getMenuItemSalesThreshold(state, kind, id) {
+  if ((kind !== 'dish' && kind !== 'drink') || typeof id !== 'string' || id.length === 0) {
+    return null;
+  }
+  const policies = state?.restaurant?.menuSalesThresholds;
+  if (!Array.isArray(policies)) return null;
+  const matching = policies.filter(policy => policy !== null
+    && typeof policy === 'object' && !Array.isArray(policy)
+    && policy.kind === kind && policy.id === id);
+  if (matching.length !== 1) return null;
+  const threshold = matching[0].threshold;
+  return Number.isSafeInteger(threshold) && threshold > 0 ? threshold : null;
+}
+
+export function isMenuItemSalesThresholdReached(state, kind, id) {
+  const threshold = getMenuItemSalesThreshold(state, kind, id);
+  return threshold !== null && getMenuSalesCount(state, kind, id) >= threshold;
 }
 
 export function hasAvailableWalkInMenu(state) {

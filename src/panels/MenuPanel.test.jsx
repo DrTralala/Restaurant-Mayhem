@@ -1694,6 +1694,185 @@ describe('paid today counters', () => {
     expect(within(screen.getByRole('article', { name: 'Water menu item' }))
       .getByText('Gross sales today: unavailable')).toBeInTheDocument();
   });
+
+  it('applies and clears dish and drink policies only on explicit button clicks', () => {
+    const base = useGameState();
+    useGameState.mockReturnValue({
+      ...base,
+      restaurant: {
+        ...base.restaurant,
+        day: 1,
+        menuSalesThresholds: [
+          { kind: 'dish', id: 'toast', threshold: 2 },
+          { kind: 'drink', id: 'water', threshold: 3 },
+        ],
+      },
+    });
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    render(<MenuPanel />);
+
+    const toast = within(screen.getByRole('article', { name: 'Toast menu item' }));
+    const water = within(screen.getByRole('article', { name: 'Water menu item' }));
+    const toastInput = toast.getByLabelText('Daily paid-sales threshold for Toast');
+    const waterInput = water.getByLabelText('Daily paid-sales threshold for Water');
+    expect(toastInput).toHaveValue('2');
+    expect(waterInput).toHaveValue('3');
+    expect(toast.getByText('Apply threshold')).toBeInTheDocument();
+    expect(water.getByText('Clear threshold')).toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    fireEvent.click(toast.getByRole('button', { name: 'Clear Toast daily paid-sales threshold' }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'toast', threshold: null,
+    });
+
+    dispatch.mockClear();
+    fireEvent.change(toastInput, { target: { value: '5' } });
+    expect(dispatch).not.toHaveBeenCalled();
+    fireEvent.click(toast.getByRole('button', { name: 'Apply Toast daily paid-sales threshold' }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'toast', threshold: 5,
+    });
+
+    dispatch.mockClear();
+    fireEvent.change(waterInput, { target: { value: '4' } });
+    expect(dispatch).not.toHaveBeenCalled();
+    fireEvent.click(water.getByRole('button', { name: 'Apply Water daily paid-sales threshold' }));
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_MENU_SALES_THRESHOLD', kind: 'drink', id: 'water', threshold: 4,
+    });
+
+    dispatch.mockClear();
+    fireEvent.click(water.getByRole('button', { name: 'Clear Water daily paid-sales threshold' }));
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_MENU_SALES_THRESHOLD', kind: 'drink', id: 'water', threshold: null,
+    });
+  });
+
+  it('keeps reached items excluded from the current and draft price preview', () => {
+    const base = useGameState();
+    const state = {
+      ...base,
+      restaurant: {
+        ...base.restaurant,
+        day: 1,
+        menuSalesThresholds: [{ kind: 'dish', id: 'toast', threshold: 1 }],
+      },
+      menuSales: { day: 1, dishes: [{ key: 'toast', count: 1 }], drinks: [] },
+    };
+    useGameState.mockReturnValue(state);
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    render(<MenuPanel />);
+
+    const card = within(screen.getByRole('article', { name: 'Toast menu item' }));
+    expect(card.getByText('Estimated demand: 0%')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Toast price'), { target: { value: '20' } });
+
+    const preview = screen.getByRole('group', { name: 'Price preview for Toast' });
+    expect(within(preview).getByLabelText(
+      'Current whole-menu gross per 100 hypothetical walk-in guests',
+    )).toHaveTextContent(`$${getMenuAnalysis(state).expectedGrossPer100.toFixed(2)}`);
+    expect(within(preview).getByLabelText(
+      'Draft whole-menu gross per 100 hypothetical walk-in guests',
+    )).toHaveTextContent(`$${getMenuAnalysis(state, {
+      kind: 'dish', id: 'toast', price: 20,
+    }).expectedGrossPer100.toFixed(2)}`);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each(['', '0', '-1', '1.5', '1e3', 'Infinity', '+2', ' 2 ', '9007199254740992'])(
+    'rejects invalid threshold draft %j without dispatching', draft => {
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel />);
+      const card = within(screen.getByRole('article', { name: 'Toast menu item' }));
+      const input = card.getByLabelText('Daily paid-sales threshold for Toast');
+
+      fireEvent.change(input, { target: { value: draft } });
+
+      const apply = card.getByRole('button', { name: 'Apply Toast daily paid-sales threshold' });
+      expect(apply).toBeDisabled();
+      expect(dispatch).not.toHaveBeenCalled();
+      if (draft !== '') {
+        expect(card.getByRole('alert')).toHaveTextContent('Enter a positive whole number of paid sales.');
+      }
+    },
+  );
+
+  it('reflects external policy changes and shows reached status separately from suspension', () => {
+    const base = useGameState();
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    useGameState.mockReturnValue({
+      ...base,
+      restaurant: {
+        ...base.restaurant,
+        day: 1,
+        suspendedDishIds: ['toast'],
+        menuSalesThresholds: [{ kind: 'dish', id: 'toast', threshold: 2 }],
+      },
+      menuSales: { day: 1, dishes: [{ key: 'toast', count: 2 }], drinks: [] },
+    });
+    const view = render(<MenuPanel />);
+    const card = () => within(screen.getByRole('article', { name: 'Toast menu item' }));
+    const input = () => card().getByLabelText('Daily paid-sales threshold for Toast');
+
+    expect(card().getByText('Suspended for walk-ins')).toBeInTheDocument();
+    expect(card().getByText('Paid-sales threshold reached for walk-ins')).toBeInTheDocument();
+    expect(card().getByRole('button', { name: 'Resume Toast for walk-ins' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    fireEvent.change(input(), { target: { value: '7' } });
+    expect(dispatch).not.toHaveBeenCalled();
+
+    useGameState.mockReturnValue({
+      ...base,
+      restaurant: {
+        ...base.restaurant,
+        day: 1,
+        suspendedDishIds: ['toast'],
+        menuSalesThresholds: [{ kind: 'dish', id: 'toast', threshold: 3 }],
+      },
+      menuSales: { day: 1, dishes: [{ key: 'toast', count: 3 }], drinks: [] },
+    });
+    view.rerender(<MenuPanel />);
+
+    expect(input()).toHaveValue('3');
+    expect(card().getByText('Paid-sales threshold reached for walk-ins')).toBeInTheDocument();
+    expect(screen.getByText(/Daily paid-sales thresholds stop offering/)).toHaveTextContent(
+      'Paid-sales counts reset automatically each new game day; thresholds remain in place and apply again.',
+    );
+    expect(screen.getByText(/Booked contract guests can still order thresholded items/))
+      .toHaveTextContent('exceed the threshold');
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['read-only', true, false],
+    ['career decision', false, true],
+  ])('disables and guards threshold controls during %s', (_label, readOnly, needsDecision) => {
+    const base = useGameState();
+    useGameState.mockReturnValue(needsDecision
+      ? { ...base, careerRun: { needsDecision: true } }
+      : base);
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    render(<MenuPanel readOnly={readOnly} />);
+    const card = within(screen.getByRole('article', { name: 'Toast menu item' }));
+    const input = card.getByLabelText('Daily paid-sales threshold for Toast');
+    const apply = card.getByRole('button', { name: 'Apply Toast daily paid-sales threshold' });
+    const clear = card.getByRole('button', { name: 'Clear Toast daily paid-sales threshold' });
+
+    expect(input).toBeDisabled();
+    expect(apply).toBeDisabled();
+    expect(clear).toBeDisabled();
+    fireEvent.change(input, { target: { value: '4' } });
+    fireEvent.click(apply);
+    fireEvent.click(clear);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });
 
 describe('MenuPanel kitchen equipment advice', () => {

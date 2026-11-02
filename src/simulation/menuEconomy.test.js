@@ -8,9 +8,11 @@ import {
   getMenuAnalysis,
   getBasketWeight,
   getMenuAffordabilitySummary,
+  getMenuItemSalesThreshold,
   getSpendingTierProbabilities,
   hasAvailableWalkInMenu,
   hasValidSpendingProfile,
+  isMenuItemSalesThresholdReached,
   isMenuItemSuspended,
   normaliseCustomerEconomy,
   SPENDING_TIER_RANGES,
@@ -886,5 +888,122 @@ describe('combined menu analysis', () => {
     });
     expect(Number.isFinite(expectedGrossPer100)).toBe(true);
     expect(expectedGrossPer100).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('paid-sales menu thresholds', () => {
+  const stateWithThresholds = () => ({
+    restaurant: {
+      day: 1,
+      reputation: 3,
+      menuSalesThresholds: [
+        { kind: 'dish', id: '__proto__', threshold: 2 },
+        { kind: 'drink', id: 'water', threshold: 2 },
+      ],
+    },
+    dishes: [
+      { id: '__proto__', name: 'Custom', price: 10, quality: 2, popularity: 50, prepTime: 60 },
+    ],
+    unlockedDrinkIds: ['water'],
+    drinkOverrides: {},
+    menuSales: {
+      day: 1,
+      dishes: [{ key: '__proto__', count: 1 }],
+      drinks: [{ key: 'water', count: 1 }],
+    },
+  });
+
+  it('reads array-backed policy IDs safely and treats missing or invalid policies as unlimited', () => {
+    const state = stateWithThresholds();
+    expect(getMenuItemSalesThreshold(state, 'dish', '__proto__')).toBe(2);
+    expect(getMenuItemSalesThreshold(state, 'drink', 'water')).toBe(2);
+    expect(getMenuItemSalesThreshold(state, 'dish', 'water')).toBeNull();
+    expect(getMenuItemSalesThreshold(state, 'side', '__proto__')).toBeNull();
+    expect(getMenuItemSalesThreshold({ restaurant: {} }, 'dish', 'anything')).toBeNull();
+    expect(isMenuItemSalesThresholdReached(state, 'dish', '__proto__')).toBe(false);
+    expect(isMenuItemSalesThresholdReached(state, 'drink', 'water')).toBe(false);
+  });
+
+  it('excludes dishes, drinks and combined baskets at the exact paid threshold across shared previews', () => {
+    const before = stateWithThresholds();
+    const customer = { spendingBudget: 100 };
+    expect(buildAffordableBaskets(before, customer).map(basketShape)).toEqual([
+      ['dish', '__proto__', undefined],
+      ['drink', undefined, 'water'],
+      ['dish_drink', '__proto__', 'water'],
+    ]);
+    expect(hasAvailableWalkInMenu(before)).toBe(true);
+
+    const reached = {
+      ...before,
+      menuSales: {
+        day: 1,
+        dishes: [{ key: '__proto__', count: 2 }],
+        drinks: [{ key: 'water', count: 2 }],
+      },
+    };
+    expect(isMenuItemSalesThresholdReached(reached, 'dish', '__proto__')).toBe(true);
+    expect(isMenuItemSalesThresholdReached(reached, 'drink', 'water')).toBe(true);
+    expect(buildAffordableBaskets(reached, customer)).toEqual([]);
+    expect(hasAvailableWalkInMenu(reached)).toBe(false);
+    expect(getMenuAnalysis(reached)).toMatchObject({
+      hasAvailableMenu: false,
+      demand: { dishes: new Map(), drinks: new Map() },
+      affordability: { dishShare: 0, anyOrderShare: 0 },
+    });
+  });
+
+  it('applies the same threshold filter to price previews while allowing below-threshold items', () => {
+    const state = stateWithThresholds();
+    const reachedDish = {
+      ...state,
+      menuSales: { ...state.menuSales, dishes: [{ key: '__proto__', count: 2 }] },
+    };
+    const analysis = getMenuAnalysis(reachedDish, {
+      kind: 'dish', id: '__proto__', price: 99,
+    });
+    expect(analysis.hasAvailableMenu).toBe(true);
+    expect(analysis.demand.dishes.has('__proto__')).toBe(false);
+    expect(analysis.demand.drinks.has('water')).toBe(true);
+    expect(buildAffordableBaskets(reachedDish, { spendingBudget: 100 }).map(basketShape))
+      .toEqual([['drink', undefined, 'water']]);
+  });
+
+  it('lets contracts bypass both manual suspension and reached thresholds without changing policy or ledger', () => {
+    const state = {
+      ...stateWithThresholds(),
+      restaurant: {
+        ...stateWithThresholds().restaurant,
+        suspendedDishIds: ['__proto__'],
+      },
+      menuSales: {
+        day: 1,
+        dishes: [{ key: '__proto__', count: 2 }],
+        drinks: [{ key: 'water', count: 2 }],
+      },
+    };
+    const before = structuredClone(state);
+    expect(buildAffordableBaskets(state, { spendingBudget: 100 }).map(basketShape)).toEqual([]);
+    expect(buildAffordableBaskets(state, {
+      spendingBudget: 100, serviceContractId: 'contract-1',
+    }).map(basketShape)).toEqual([
+      ['dish', '__proto__', undefined],
+      ['drink', undefined, 'water'],
+      ['dish_drink', '__proto__', 'water'],
+    ]);
+    expect(state).toEqual(before);
+  });
+
+  it('keeps policies across days while stale sales telemetry no longer reaches them', () => {
+    const yesterday = stateWithThresholds();
+    const today = {
+      ...yesterday,
+      restaurant: { ...yesterday.restaurant, day: 2 },
+    };
+    expect(getMenuItemSalesThreshold(today, 'dish', '__proto__')).toBe(2);
+    expect(isMenuItemSalesThresholdReached(today, 'dish', '__proto__')).toBe(false);
+    expect(buildAffordableBaskets(today, { spendingBudget: 100 })
+      .some(basket => basket.dish?.id === '__proto__')).toBe(true);
+    expect(today.restaurant.menuSalesThresholds).toBe(yesterday.restaurant.menuSalesThresholds);
   });
 });

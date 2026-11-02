@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCookbookState, createDishOrderSnapshot, getResolvedDish, reduceCookbookAction } from './cookbook';
 import { createCareerRun } from './careerRun';
 import { createCustomerOrder, normaliseServiceItemOwnership } from './serviceItems';
-import { buildAffordableBaskets } from './menuEconomy';
+import { buildAffordableBaskets, isMenuItemSalesThresholdReached } from './menuEconomy';
 import { createCookingBatch, getEligibleCookingItems, normaliseCookingBatches } from './cookingBatches';
 import { processKitchen } from './kitchen';
 import { getStaffTaskDuration } from './staffPerformance';
@@ -199,6 +199,10 @@ describe('committed food snapshots through real consumers', () => {
 describe('actual cashier integration', () => {
   it('records happiness64 at checkout without changing paid-visit consumer awards', () => {
     let state = committedFixture();
+    state.restaurant = {
+      ...state.restaurant,
+      menuSalesThresholds: [{ kind: 'dish', id: 'starter-toast', threshold: 1 }],
+    };
     const accepted = acceptServiceContract(createInitialState(), { templateId: 'office-lunch' });
     const active = accepted.serviceContracts.active;
     state.serviceContracts = { ...accepted.serviceContracts, active: { ...active,
@@ -227,6 +231,7 @@ describe('actual cashier integration', () => {
       .toEqual([['fulfilled_paid', 1], ['fulfilled_paid', 2]]);
     expect(paid.cookbook.entries.toast.paidPortions).toBe(2);
     expect(getMenuSalesCount(paid, 'dish', 'starter-toast')).toBe(2);
+    expect(isMenuItemSalesThresholdReached(paid, 'dish', 'starter-toast')).toBe(true);
   });
 
   it('does not replay an old pending receipt into features during duplicate cashier recovery', () => {
@@ -305,6 +310,13 @@ describe('actual cashier integration', () => {
 
   it('cancellation at the exact deadline followed by drink checkout never charges or credits food', () => {
     let state = committedFixture();
+    state.restaurant = {
+      ...state.restaurant,
+      menuSalesThresholds: [
+        { kind: 'dish', id: 'starter-toast', threshold: 1 },
+        { kind: 'drink', id: 'water', threshold: 1 },
+      ],
+    };
     state.unlockedDrinkIds = ['water'];
     state.customers[0] = { ...state.customers[0], drinkId: 'water', drinkPriceAtOrder: 5, orderSubtotal: 17,
       orderedServiceItemIds: ['service-item-1', 'drink-item'] };
@@ -321,10 +333,16 @@ describe('actual cashier integration', () => {
     expect(paid.paidVisitSequence).toBe(1);
     expect(getMenuSalesCount(paid, 'dish', 'starter-toast')).toBe(0);
     expect(getMenuSalesCount(paid, 'drink', 'water')).toBe(1);
+    expect(isMenuItemSalesThresholdReached(paid, 'dish', 'starter-toast')).toBe(false);
+    expect(isMenuItemSalesThresholdReached(paid, 'drink', 'water')).toBe(true);
   });
 
   it('does not count a zero-priced charged line while settling the visit normally', () => {
     const state = baseState();
+    state.restaurant = {
+      ...state.restaurant,
+      menuSalesThresholds: [{ kind: 'dish', id: 'starter-toast', threshold: 1 }],
+    };
     state.dishes = [{ ...state.dishes[0], cookbookId: null, price: 0 }];
     state.customers = [{
       id: 'free-guest', partyId: 'free-party', state: 'checkout_processing', tableId: null,
@@ -343,6 +361,7 @@ describe('actual cashier integration', () => {
     expect(paid.restaurant).toMatchObject({ funds: 600, totalServed: 1 });
     expect(paid.menuSales).toEqual({ day: 1, dishes: [], drinks: [] });
     expect(getMenuSalesCount(paid, 'dish', 'starter-toast')).toBe(0);
+    expect(isMenuItemSalesThresholdReached(paid, 'dish', 'starter-toast')).toBe(false);
   });
 
   it('diagnoses sequence exhaustion from the real payment branch before publishing a receipt or progress', () => {
@@ -359,6 +378,10 @@ describe('actual cashier integration', () => {
 describe('Iced Tea committed-price payment', () => {
   it('charges the committed Iced Tea price once after consumption despite a later menu override', () => {
     let state = { ...baseState(), unlockedDrinkIds: ['iced-tea'] };
+    state.restaurant = {
+      ...state.restaurant,
+      menuSalesThresholds: [{ kind: 'drink', id: 'iced-tea', threshold: 1 }],
+    };
     const rolls = [0.99, 0.99];
     const ordered = createCustomerOrder(state, diner('iced-guest'), () => rolls.shift() ?? 0);
     state = { ...state, customers: [ordered.customer], serviceItems: ordered.serviceItems };
@@ -394,6 +417,7 @@ describe('Iced Tea committed-price payment', () => {
     expect(state.completedCustomers).toEqual([]);
     expect(state.paidVisitSequence).toBe(0);
     expect(getMenuSalesCount(state, 'drink', 'iced-tea')).toBe(0);
+    expect(isMenuItemSalesThresholdReached(state, 'drink', 'iced-tea')).toBe(false);
 
     state = { ...state, drinkOverrides: { 'iced-tea': { price: 12 } } };
     expect(getResolvedDrink(state, 'iced-tea').price).toBe(12);
@@ -422,6 +446,7 @@ describe('Iced Tea committed-price payment', () => {
       drinks: [{ key: 'iced-tea', count: 1, gross: 4, grossComplete: true }],
     });
     expect(getMenuSalesCount(paid, 'drink', 'iced-tea')).toBe(1);
+    expect(isMenuItemSalesThresholdReached(paid, 'drink', 'iced-tea')).toBe(true);
 
     const replayed = updateStaff(cashierReady(paid), 0);
     expect(replayed.completedCustomers).toEqual(paid.completedCustomers);

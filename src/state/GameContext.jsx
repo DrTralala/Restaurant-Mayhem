@@ -103,18 +103,88 @@ function setMenuItemSuspended(state, kind, id, suspended) {
   };
 }
 
-function clearRemovedDishSuspension(state, candidate, dishId) {
+function isValidMenuSalesThresholdPolicy(policy) {
+  return policy !== null && typeof policy === 'object' && !Array.isArray(policy)
+    && Object.keys(policy).length === 3
+    && Object.hasOwn(policy, 'kind') && Object.hasOwn(policy, 'id')
+    && Object.hasOwn(policy, 'threshold')
+    && (policy.kind === 'dish' || policy.kind === 'drink')
+    && typeof policy.id === 'string' && policy.id.length > 0
+    && Number.isSafeInteger(policy.threshold) && policy.threshold > 0;
+}
+
+function hasUniqueMenuSalesThresholdPolicies(policies) {
+  const seenByKind = new Map();
+  for (const policy of policies) {
+    if (!isValidMenuSalesThresholdPolicy(policy)) return false;
+    if (!seenByKind.has(policy.kind)) seenByKind.set(policy.kind, new Set());
+    const ids = seenByKind.get(policy.kind);
+    if (ids.has(policy.id)) return false;
+    ids.add(policy.id);
+  }
+  return true;
+}
+
+function setMenuItemSalesThreshold(state, kind, id, threshold) {
+  if ((kind !== 'dish' && kind !== 'drink')
+    || typeof id !== 'string' || id.length === 0
+    || (threshold !== null && (!Number.isSafeInteger(threshold) || threshold <= 0))) {
+    return state;
+  }
+  const restaurant = state?.restaurant;
+  if (!restaurant || typeof restaurant !== 'object' || Array.isArray(restaurant)) return state;
+
+  const targetCount = kind === 'dish'
+    ? (Array.isArray(state.dishes) ? state.dishes : []).filter(dish => dish?.id === id).length
+    : Array.isArray(state.unlockedDrinkIds)
+      ? state.unlockedDrinkIds.filter(unlockedId => unlockedId === id).length
+      : 0;
+  const validTarget = kind === 'dish'
+    ? targetCount === 1
+    : targetCount === 1 && getDrink(id) !== null && getResolvedDrink(state, id) !== null;
+  if (!validTarget) return state;
+
+  const hasPolicies = Object.hasOwn(restaurant, 'menuSalesThresholds');
+  const current = hasPolicies ? restaurant.menuSalesThresholds : [];
+  if (!Array.isArray(current) || !hasUniqueMenuSalesThresholdPolicies(current)) return state;
+  const index = current.findIndex(policy => policy.kind === kind && policy.id === id);
+  if (threshold === null && index < 0) return state;
+  if (threshold !== null && index >= 0 && current[index].threshold === threshold) return state;
+
+  const menuSalesThresholds = threshold === null
+    ? current.filter(policy => !(policy.kind === kind && policy.id === id))
+    : index < 0
+      ? [...current, { kind, id, threshold }]
+      : current.map((policy, policyIndex) => policyIndex === index
+        ? { kind, id, threshold }
+        : policy);
+  return { ...state, restaurant: { ...restaurant, menuSalesThresholds } };
+}
+
+function clearRemovedDishPolicies(state, candidate, dishId) {
   const removed = (state.dishes || []).some(dish => dish.id === dishId)
     && !(candidate.dishes || []).some(dish => dish.id === dishId);
   const suspendedDishIds = candidate.restaurant?.suspendedDishIds;
-  if (!removed || !Array.isArray(suspendedDishIds) || !suspendedDishIds.includes(dishId)) {
-    return candidate;
-  }
+  const menuSalesThresholds = candidate.restaurant?.menuSalesThresholds;
+  if (!removed) return candidate;
+  const nextSuspendedDishIds = Array.isArray(suspendedDishIds)
+    && suspendedDishIds.includes(dishId)
+    ? suspendedDishIds.filter(id => id !== dishId)
+    : suspendedDishIds;
+  const nextMenuSalesThresholds = Array.isArray(menuSalesThresholds)
+    && menuSalesThresholds.some(policy => policy?.kind === 'dish' && policy.id === dishId)
+    ? menuSalesThresholds.filter(policy => !(policy?.kind === 'dish' && policy.id === dishId))
+    : menuSalesThresholds;
+  if (nextSuspendedDishIds === suspendedDishIds
+    && nextMenuSalesThresholds === menuSalesThresholds) return candidate;
   return {
     ...candidate,
     restaurant: {
       ...candidate.restaurant,
-      suspendedDishIds: suspendedDishIds.filter(id => id !== dishId),
+      ...(nextSuspendedDishIds !== suspendedDishIds
+        ? { suspendedDishIds: nextSuspendedDishIds } : {}),
+      ...(nextMenuSalesThresholds !== menuSalesThresholds
+        ? { menuSalesThresholds: nextMenuSalesThresholds } : {}),
     },
   };
 }
@@ -579,6 +649,8 @@ function reduceGameAction(state, action) {
       if (!exists) return state;
       return setMenuItemSuspended(state, action.kind, action.id, action.suspended);
     }
+    case 'SET_MENU_SALES_THRESHOLD':
+      return setMenuItemSalesThreshold(state, action.kind, action.id, action.threshold);
     case 'ADD_DISH': {
       const dish = action.dish;
       if (!dish || typeof dish.id !== 'string' || !dish.id
@@ -1014,11 +1086,12 @@ export function gameReducer(state, action) {
   if (state.navigationFault && action.type === 'TOGGLE_PAUSE') return state;
   let candidate = reduceGameAction(state, action);
   if (action.type === 'REMOVE_DISH' && candidate !== state) {
-    candidate = clearRemovedDishSuspension(state, candidate, action.id);
+    candidate = clearRemovedDishPolicies(state, candidate, action.id);
   }
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE'
     || action.type === 'PRIORITISE_QUEUE_PARTY'
     || action.type === 'SET_TABLE_ADMISSION_HOLD'
+    || action.type === 'SET_MENU_SALES_THRESHOLD'
     || action.type === 'SET_STAFF_REST_AMENITY_PREFERENCE'
     || action.type === 'SET_STAFF_CLEANING_FOCUS') return candidate;
   if (candidate.dishes !== state.dishes) {
