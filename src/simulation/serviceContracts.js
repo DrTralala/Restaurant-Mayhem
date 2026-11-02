@@ -5,6 +5,8 @@ import { getNormalisedStaffSchedule, getScheduledDuty } from './staffSchedules';
 import { normaliseCustomerQueue, QUEUE_PARTY_CAPACITY } from './customerQueue';
 import { clampReputation } from './balance';
 import { getServiceContractTerms, getServiceContractSettlement } from './serviceContractFinance';
+import { getResolvedDish } from './cookbook';
+import { isDishCompatibleWithStation } from './cookingBatches';
 
 const nonnegative = value => Number.isFinite(value) && value >= 0;
 const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
@@ -26,13 +28,21 @@ function previewFor(template, acceptedAt) {
     partyArrivals: template.parties.map(party => serviceStartAt + party.arrivalOffset) };
 }
 
-function readinessWarnings(state, template, preview) {
+function readinessAdvice(state, template, preview) {
   const warnings = [];
   if (preview.partyArrivals.some(gameTime => !isRestaurantOpen({ ...state,
     restaurant: { ...state.restaurant, gameTime } }))) warnings.push('closed_at_arrival');
   if (normaliseCustomerQueue(state.queue).length >= QUEUE_PARTY_CAPACITY) warnings.push('queue_full');
-  if (!(state.dishes || []).some(dish => nonnegative(dish.price)
-    && dish.price <= template.profile.spendingBudget)) warnings.push('no_affordable_dish');
+  // Contract diners bypass walk-in suspension and can order dishes even when
+  // the kitchen lacks their equipment. Use the same resolved menu and batch rule.
+  const affordableDishes = (state.dishes || []).map(dish => getResolvedDish(state, dish.id))
+    .filter(dish => dish && nonnegative(dish.price) && dish.price <= template.profile.spendingBudget);
+  const unpreparableDishes = affordableDishes.filter(dish =>
+    !(state.kitchenStations || []).some(station => isDishCompatibleWithStation(state, dish, station)))
+    .map(({ id, name, requiredEquipmentId }) => ({ id, name, requiredEquipmentId }));
+  if (!affordableDishes.length) warnings.push('no_affordable_dish');
+  else if (unpreparableDishes.length) warnings.push(unpreparableDishes.length === affordableDishes.length
+    ? 'no_preparable_affordable_dish' : 'some_unpreparable_affordable_dishes');
   const largestParty = Math.max(...template.parties.map(party => party.size));
   if (!(state.tables || []).some(table => Number.isFinite(table.x) && Number.isFinite(table.y)
     && (state.chairs || []).filter(chair => chair.tableId === table.id
@@ -59,7 +69,7 @@ function readinessWarnings(state, template, preview) {
   if (uncovered(staff.filter(person => person.role === 'cook'))) warnings.push('no_scheduled_cook');
   if (uncovered(staff.filter(person => person.role === 'waiter'))) warnings.push('no_scheduled_waiter');
   if (uncovered(assignedCheckout)) warnings.push('no_scheduled_checkout');
-  return warnings;
+  return { warnings, unpreparableDishes };
 }
 
 export function getServiceContractOffer(state, templateId) {
@@ -79,7 +89,7 @@ export function getServiceContractOffer(state, templateId) {
   else if (branch.lastAcceptedDayByTemplate[templateId] === day) blockedReason = 'used_today';
   return { template, terms: getServiceContractTerms(templateId, SERVICE_CONTRACT_RULES_VERSION),
     canAccept: blockedReason === null, blockedReason,
-    warnings: preview ? readinessWarnings(state, template, preview) : [], preview };
+    ...(preview ? readinessAdvice(state, template, preview) : { warnings: [], unpreparableDishes: [] }), preview };
 }
 
 function createRoster(template, instanceId, serviceStartAt) {

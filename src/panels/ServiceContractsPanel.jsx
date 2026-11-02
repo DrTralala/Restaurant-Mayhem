@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { SERVICE_CONTRACT_PREP_SECONDS, SERVICE_CONTRACT_RULES_VERSION } from '../data/serviceContracts';
+import { EQUIPMENT } from '../data/equipment';
 import { selectServiceContractView } from '../simulation/serviceContracts';
 import { secondsToGameTime } from '../simulation/clock';
 import { TYPOGRAPHY } from '../typography';
@@ -29,6 +30,8 @@ const blockedLabels = {
 const warningLabels = {
   closed_at_arrival: 'Your current opening hours are closed for one or more arrivals.',
   queue_full: 'The queue is already full.', no_affordable_dish: 'No current dish is affordable for these guests.',
+  no_preparable_affordable_dish: 'No affordable dish has a compatible kitchen station with owned equipment.',
+  some_unpreparable_affordable_dishes: 'Some affordable dishes lack a compatible kitchen station with owned equipment. Guests may still order them.',
   no_suitable_table: 'No placed table has enough associated chairs for the largest party.',
   no_cook: 'No cook is employed.', no_waiter: 'No waiter is employed.',
   no_staffed_checkout: 'No checkout has an assigned waiter.',
@@ -226,7 +229,7 @@ export default function ServiceContractsPanel() {
     </section>}
 
     <h4 ref={offersHeadingRef} tabIndex={-1} style={{ ...TYPOGRAPHY.control, color: '#bbb', margin: '16px 0 10px' }}>Contract offers</h4>
-    {offers.map(({ template, preview, terms, canAccept, blockedReason, warnings, tier, preparationExpectations }) => <section key={template.id}
+    {offers.map(({ template, preview, terms, canAccept, blockedReason, warnings, unpreparableDishes, tier, preparationExpectations }) => <section key={template.id}
       aria-label={`${template.title} offer`} style={cardStyle}>
       <h4 ref={node => {
         if (node) offerHeadingRefs.current.set(template.id, node);
@@ -260,6 +263,13 @@ export default function ServiceContractsPanel() {
       </details>
       {warnings.length > 0 && <div style={{ ...secondaryStyle, borderLeft: '2px solid #f0a500', paddingLeft: 10 }}><strong>Check before accepting:</strong>
         <ul style={{ paddingLeft: 20 }}>{warnings.map(warning => <li key={warning}>{warningLabels[warning]}</li>)}</ul>
+        {unpreparableDishes.length > 0 && <>
+          <ul style={{ paddingLeft: 20 }}>{unpreparableDishes.map(dish => <li key={dish.id}>
+            {dish.name} — {dish.requiredEquipmentId == null ? 'needs a kitchen station.'
+              : `needs owned equipment at a matching kitchen station: ${EQUIPMENT.find(equipment => equipment.id === dish.requiredEquipmentId)?.name || dish.requiredEquipmentId}.`}
+          </li>)}</ul>
+          <p>Equipment checks do not assess access, workload or service completion.</p>
+        </>}
         <p>Advisory only — acceptance is still allowed.</p>
       </div>}
       <p>Scheduled Work does not guarantee availability or coverage throughout service.</p>

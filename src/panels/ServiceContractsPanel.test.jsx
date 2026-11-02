@@ -20,6 +20,46 @@ function setGuestOutcomes(fulfilledCount, unresolvedCount, unresolvedStatus = 'p
 }
 
 describe('ServiceContractsPanel', () => {
+  it('shows missing kitchen equipment and keeps contract acceptance advisory', () => {
+    state.kitchenStations = [];
+    render(<ServiceContractsPanel />);
+    const card = screen.getByRole('region', { name: 'Office lunch offer' });
+    expect(within(card).getByText(/No affordable dish has a compatible kitchen station/)).toBeVisible();
+    expect(within(card).getByText(/Toasted Bread.*Toaster/)).toBeVisible();
+    expect(within(card).getByText(/Equipment checks do not assess access, workload or service completion/)).toBeVisible();
+    fireEvent.click(within(card).getByRole('button', { name: 'Review Office lunch' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Accept and start preparation' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'ACCEPT_SERVICE_CONTRACT', templateId: 'office-lunch' });
+  });
+
+  it('updates partial equipment advice during review after a compatible station is placed', () => {
+    state.dishes.push({ id: 'roast', name: 'Roast', price: 20, requiredEquipmentId: 'eq2' });
+    const { rerender } = render(<ServiceContractsPanel />);
+    const card = () => screen.getByRole('region', { name: 'Office lunch offer' });
+    expect(within(card()).getByText(/Some affordable dishes lack a compatible kitchen station/)).toBeVisible();
+    expect(within(card()).queryByText(/No affordable dish has a compatible kitchen station/)).not.toBeInTheDocument();
+    expect(within(card()).getByText(/Roast.*Oven/)).toBeVisible();
+    fireEvent.click(within(card()).getByRole('button', { name: 'Review Office lunch' }));
+    state = { ...state,
+      equipment: state.equipment.map(equipment => equipment.id === 'eq2' ? { ...equipment, owned: true } : equipment),
+      kitchenStations: [...state.kitchenStations, { id: 'oven', equipmentId: 'eq2', x: 200, y: 120 }],
+    };
+    rerender(<ServiceContractsPanel />);
+    expect(within(card()).queryByText(/Some affordable dishes lack a compatible kitchen station/)).not.toBeInTheDocument();
+    expect(within(card()).queryByText(/Roast.*Oven/)).not.toBeInTheDocument();
+    expect(within(card()).getByRole('button', { name: 'Accept and start preparation' })).toBeEnabled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('describes the station requirement for equipment-free dishes', () => {
+    state.dishes = [{ id: 'salad', name: 'Salad', price: 10, requiredEquipmentId: null }];
+    state.kitchenStations = [];
+    render(<ServiceContractsPanel />);
+    const card = screen.getByRole('region', { name: 'Office lunch offer' });
+    expect(within(card).getByText(/Salad.*needs a kitchen station/)).toBeVisible();
+    expect(within(card).queryByText(/undefined|null/)).not.toBeInTheDocument();
+  });
+
   it('shows all exact offers and readiness information without dispatching on inspection', () => {
     const { unmount } = render(<ServiceContractsPanel />);
     for (const title of ['Office lunch', 'Family service', 'Tasting service', 'Party rush']) {

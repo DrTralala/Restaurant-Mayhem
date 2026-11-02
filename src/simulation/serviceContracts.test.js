@@ -3,6 +3,7 @@ import { createInitialState } from '../state/initialState';
 import { validateSavedState } from '../state/saveValidation';
 import { advanceClock } from './clock';
 import * as staffSchedules from './staffSchedules';
+import { buildAffordableBaskets } from './menuEconomy';
 import { acceptServiceContract, advanceServiceContractArrivals, createServiceContractsState,
   getNextServiceContractBoundary, getServiceContractOffer, hydrateServiceContractsState,
   recordServiceContractPaidVisit, selectServiceContractView, settleServiceContracts,
@@ -128,6 +129,107 @@ describe('offers and immutable acceptance', () => {
       'no_affordable_dish', 'no_suitable_table', 'no_cook', 'no_waiter', 'no_staffed_checkout']));
     expect(accept(state, 'family-service').restaurant.funds).toBe(-470);
     expect(accept(state, 'family-service').serviceContracts.active).toMatchObject({ target: 4, reward: 120 });
+  });
+});
+
+describe('kitchen-aware readiness advice', () => {
+  const fullGap = 'no_preparable_affordable_dish';
+  const partialGap = 'some_unpreparable_affordable_dishes';
+  const roast = { id: 'roast', name: 'Roast', price: 20, requiredEquipmentId: 'eq2' };
+
+  it.each([
+    ['no stations', state => ({ ...state, kitchenStations: [] })],
+    ['no matching station', state => ({ ...state,
+      kitchenStations: state.kitchenStations.filter(station => station.equipmentId !== 'eq1') })],
+    ['unowned equipment', state => ({ ...state,
+      equipment: state.equipment.map(equipment => ({ ...equipment, owned: false })) })],
+    ['missing equipment', state => ({ ...state, equipment: [] })],
+  ])('warns about %s without blocking acceptance or mutating the state', (_, change) => {
+    const state = change(createInitialState());
+    const before = structuredClone(state);
+    const offer = getServiceContractOffer(state, 'office-lunch');
+    expect(offer.warnings).toContain(fullGap);
+    expect(offer.warnings).not.toContain(partialGap);
+    expect(offer.warnings).not.toContain('no_affordable_dish');
+    expect(offer.unpreparableDishes).toEqual([
+      { id: 'starter-toast', name: 'Toasted Bread', requiredEquipmentId: 'eq1' },
+    ]);
+    expect(offer.canAccept).toBe(true);
+    expect(accept(state).serviceContracts.active.templateId).toBe('office-lunch');
+    expect(state).toEqual(before);
+  });
+
+  it('identifies partial coverage even for suspended dishes that contract guests can order', () => {
+    const state = createInitialState();
+    state.dishes.push(roast);
+    state.restaurant.suspendedDishIds = ['roast'];
+    const customer = { serviceContractId: 'sc-1', spendingBudget: 24 };
+    expect(buildAffordableBaskets(state, customer).some(basket => basket.dish?.id === 'roast')).toBe(true);
+    const offer = getServiceContractOffer(state, 'office-lunch');
+    expect(offer.warnings).toContain(partialGap);
+    expect(offer.warnings).not.toContain(fullGap);
+    expect(offer.unpreparableDishes).toEqual([
+      { id: 'roast', name: 'Roast', requiredEquipmentId: 'eq2' },
+    ]);
+  });
+
+  it('clears equipment advice only after ownership and a matching station are both present', () => {
+    const state = createInitialState();
+    state.dishes = [roast];
+    expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain(fullGap);
+    state.equipment = state.equipment.map(equipment => equipment.id === 'eq2'
+      ? { ...equipment, owned: true } : equipment);
+    expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain(fullGap);
+    state.kitchenStations.push({ id: 'oven-station', equipmentId: 'eq2', x: 200, y: 120 });
+    expect(getServiceContractOffer(state, 'office-lunch')).toMatchObject({
+      warnings: [], unpreparableDishes: [], canAccept: true,
+    });
+  });
+
+  it.each([null, undefined])('requires a station even for an unrestricted dish (%s)', requiredEquipmentId => {
+    const state = createInitialState();
+    state.dishes = [{ ...roast, requiredEquipmentId }];
+    state.equipment = [];
+    expect(getServiceContractOffer(state, 'office-lunch').warnings).not.toContain(fullGap);
+    state.kitchenStations = [];
+    expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain(fullGap);
+  });
+
+  it.each([[], [{ ...roast, price: 25 }], [{ ...roast, price: NaN }], [{ ...roast, price: -1 }]].map(dishes => [dishes]))(
+    'does not duplicate affordability advice with equipment advice for %j', dishes => {
+      const offer = getServiceContractOffer({ ...createInitialState(), dishes }, 'office-lunch');
+      expect(offer.warnings).toContain('no_affordable_dish');
+      expect(offer.warnings).not.toContain(fullGap);
+      expect(offer.warnings).not.toContain(partialGap);
+      expect(offer.unpreparableDishes).toEqual([]);
+    },
+  );
+
+  it('uses resolved cookbook prices and requirements, including the exact guest budget', () => {
+    const state = createInitialState();
+    state.dishes[0] = { ...state.dishes[0], price: 100, requiredEquipmentId: null };
+    state.cookbook.entries.toast.menuSettings.price = 24;
+    state.kitchenStations = [{ id: 'bare', equipmentId: null }];
+    expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain(fullGap);
+    state.cookbook.entries.toast.menuSettings.price = 25;
+    const offer = getServiceContractOffer(state, 'office-lunch');
+    expect(offer.warnings).toContain('no_affordable_dish');
+    expect(offer.unpreparableDishes).toEqual([]);
+  });
+
+  it('excludes unresolved recipes just as the order menu does', () => {
+    const state = createInitialState();
+    state.dishes = [{ ...roast, cookbookId: 'missing-recipe' }];
+    expect(getServiceContractOffer(state, 'office-lunch')).toMatchObject({
+      warnings: expect.arrayContaining(['no_affordable_dish']), unpreparableDishes: [],
+    });
+  });
+
+  it('returns empty advice details when the preview is unavailable', () => {
+    expect(getServiceContractOffer(createInitialState(), 'unknown').unpreparableDishes).toEqual([]);
+    const state = createInitialState();
+    state.restaurant.gameTime = NaN;
+    expect(getServiceContractOffer(state, 'office-lunch').unpreparableDishes).toEqual([]);
   });
 });
 
