@@ -1,6 +1,7 @@
 import { useDispatch, useGameState } from '../state/GameContext';
 import { formatOperatingHour } from '../simulation/clock';
 import { getRushSchedulePreview } from './rushSchedulePreview';
+import { getScheduledRoleCounts } from './staffSchedulePreview';
 import { TYPOGRAPHY } from '../typography';
 
 const HOUR_OPTIONS = Array.from({ length: 48 }, (_, index) => index / 2);
@@ -123,6 +124,9 @@ export default function HoursPanel() {
         >
           {rushPreview.map(period => {
             const duration = period.endHour - period.startHour;
+            const roleCounts = period.peakOpen
+              ? getScheduledRoleCounts(state.staff, period.peakHour * 3600)
+              : null;
             const coverage = period.openHours === 0
               ? 'Closed throughout'
               : period.openHours === duration ? 'Open throughout' : 'Partly open';
@@ -147,6 +151,11 @@ export default function HoursPanel() {
                 <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#ddd', marginTop: 4 }}>
                   {period.peakOpen ? 'Open at peak time.' : 'Closed at peak time.'}
                 </span>
+                {roleCounts && (
+                  <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#ddd', marginTop: 4 }}>
+                    {`Scheduled Work at peak: Cooks ${roleCounts.cook} · Waiters ${roleCounts.waiter} · Janitors ${roleCounts.janitor}`}
+                  </span>
+                )}
                 <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#888', marginTop: 4 }}>
                   {`Open for ${period.openHours} of ${duration} hours.`}
                 </span>
@@ -159,6 +168,9 @@ export default function HoursPanel() {
         </ul>
         <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '10px 0 0' }}>
           These multipliers affect random walk-in arrival rates, not guaranteed guests or sales. Full-window peaks may fall outside your opening hours. Booked contract arrivals follow their own schedule.
+        </p>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '8px 0 0' }}>
+          Scheduled Work counts use saved schedules only, not unsaved editor drafts, actual availability, capacity or staffing requirements.
         </p>
         {paused && (
           <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '8px 0 0' }}>

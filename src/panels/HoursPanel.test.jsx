@@ -1,10 +1,12 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import HoursPanel from './HoursPanel';
+import { RUSH_PERIODS } from '../simulation/clock';
 
 const dispatch = vi.fn();
 const mockState = {
   restaurant: { openHour: 10, closeHour: 22 },
+  staff: [],
 };
 
 vi.mock('../state/GameContext', () => ({
@@ -12,12 +14,25 @@ vi.mock('../state/GameContext', () => ({
   useDispatch: () => dispatch,
 }));
 
+const scheduleForPeaks = modes => {
+  const schedule = Array(48).fill('rest');
+  RUSH_PERIODS.forEach((period, index) => {
+    if (modes[index]) schedule[period.peakHour * 2] = 'work';
+  });
+  return schedule;
+};
+
+const peakRoster = () => [
+  { role: 'cook', effectiveDuty: 'rest', schedule: scheduleForPeaks([true, true, true]) },
+  { role: 'waiter', effectiveDuty: 'work', schedule: scheduleForPeaks([true, false, true]) },
+  { role: 'janitor', effectiveDuty: 'pto', schedule: scheduleForPeaks([false, true, false]) },
+];
+
 describe('HoursPanel', () => {
   beforeEach(() => {
     dispatch.mockClear();
-    mockState.restaurant.openHour = 10;
-    mockState.restaurant.closeHour = 22;
-    delete mockState.restaurant.walkInsPaused;
+    mockState.restaurant = { openHour: 10, closeHour: 22 };
+    mockState.staff = [];
   });
 
   it('dispatches half-hour opening and closing values atomically', () => {
@@ -102,16 +117,81 @@ describe('HoursPanel', () => {
     screen.getByRole('list', { name: 'Rush-period coverage' }),
   ).getAllByRole('listitem');
 
+  it('shows saved Scheduled Work counts at all three canonical peaks without adding controls', () => {
+    mockState.restaurant = { openHour: 0, closeHour: 0 };
+    mockState.staff = peakRoster();
+
+    render(<HoursPanel />);
+
+    const rows = rushRows();
+    expect(rows).toHaveLength(RUSH_PERIODS.length);
+    expect(within(rows[0]).getByText(
+      'Scheduled Work at peak: Cooks 1 · Waiters 1 · Janitors 0',
+    )).toBeInTheDocument();
+    expect(within(rows[1]).getByText(
+      'Scheduled Work at peak: Cooks 1 · Waiters 0 · Janitors 1',
+    )).toBeInTheDocument();
+    expect(within(rows[2]).getByText(
+      'Scheduled Work at peak: Cooks 1 · Waiters 1 · Janitors 0',
+    )).toBeInTheDocument();
+    expect(screen.getAllByRole('combobox')).toHaveLength(2);
+    expect(screen.getAllByRole('option')).toHaveLength(96);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('shows zero counts for an empty roster when the peak is open', () => {
+    mockState.restaurant = { openHour: 0, closeHour: 0 };
+
+    render(<HoursPanel />);
+
+    expect(rushRows().every(row => within(row).getByText(
+      'Scheduled Work at peak: Cooks 0 · Waiters 0 · Janitors 0',
+    ))).toBe(true);
+  });
+
+  it('updates counts when a saved schedule changes at an exact half-hour peak', () => {
+    mockState.restaurant = { openHour: 12.5, closeHour: 14 };
+    const schedule = scheduleForPeaks([true, true, true]);
+    mockState.staff = [{ role: 'cook', effectiveDuty: 'rest', schedule }];
+    const { rerender } = render(<HoursPanel />);
+
+    expect(within(rushRows()[1]).getByText(
+      'Scheduled Work at peak: Cooks 1 · Waiters 0 · Janitors 0',
+    )).toBeInTheDocument();
+
+    const updatedSchedule = [...schedule];
+    updatedSchedule[RUSH_PERIODS[1].peakHour * 2] = 'rest';
+    mockState.staff = [{ role: 'cook', effectiveDuty: 'work', schedule: updatedSchedule }];
+    rerender(<HoursPanel />);
+
+    expect(within(rushRows()[1]).getByText(
+      'Scheduled Work at peak: Cooks 0 · Waiters 0 · Janitors 0',
+    )).toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it('updates peak-time coverage when opening or closing exactly at the lunch peak', () => {
+    mockState.staff = peakRoster();
     mockState.restaurant = { ...mockState.restaurant, openHour: 10, closeHour: 12.5 };
     const { rerender } = render(<HoursPanel />);
     expect(within(rushRows()[1]).getByText('Closed at peak time.')).toBeInTheDocument();
+    expect(within(rushRows()[1]).queryByText(/Scheduled Work at peak:/)).not.toBeInTheDocument();
 
     mockState.restaurant = { ...mockState.restaurant, openHour: 12.5, closeHour: 14 };
     rerender(<HoursPanel />);
     expect(within(rushRows()[1]).getByText('Open at peak time.')).toBeInTheDocument();
     expect(within(rushRows()[1]).queryByText('Closed at peak time.')).not.toBeInTheDocument();
+    expect(within(rushRows()[1]).getByText(
+      'Scheduled Work at peak: Cooks 1 · Waiters 0 · Janitors 1',
+    )).toBeInTheDocument();
     expect(within(rushRows()[0]).getByText('Closed at peak time.')).toBeInTheDocument();
+
+    mockState.restaurant = { ...mockState.restaurant, openHour: 19, closeHour: 7 };
+    rerender(<HoursPanel />);
+    expect(within(rushRows()[0]).getByText('Closed at peak time.')).toBeInTheDocument();
+    expect(within(rushRows()[0]).queryByText(/Scheduled Work at peak:/)).not.toBeInTheDocument();
+    expect(within(rushRows()[2]).getByText('Closed at peak time.')).toBeInTheDocument();
+    expect(within(rushRows()[2]).queryByText(/Scheduled Work at peak:/)).not.toBeInTheDocument();
   });
 
   it('renders rush-period coverage for a partial morning window', () => {
@@ -173,8 +253,9 @@ describe('HoursPanel', () => {
   });
 
   it('keeps rush coverage unchanged while paused and shows the pause notice', () => {
-    mockState.restaurant.openHour = 6;
-    mockState.restaurant.closeHour = 6.5;
+    mockState.restaurant.openHour = 6.5;
+    mockState.restaurant.closeHour = 7.5;
+    mockState.staff = peakRoster();
     const { rerender } = render(<HoursPanel />);
     const coverage = () => rushRows().map(row => row.textContent);
 
@@ -182,11 +263,17 @@ describe('HoursPanel', () => {
       'Walk-ins are paused; this opening-hours preview does not resume them.',
     )).not.toBeInTheDocument();
     const before = coverage();
+    expect(within(rushRows()[0]).getByText(
+      'Scheduled Work at peak: Cooks 1 · Waiters 1 · Janitors 0',
+    )).toBeInTheDocument();
 
     mockState.restaurant.walkInsPaused = true;
     rerender(<HoursPanel />);
 
     expect(coverage()).toEqual(before);
+    expect(within(rushRows()[0]).getByText(
+      'Scheduled Work at peak: Cooks 1 · Waiters 1 · Janitors 0',
+    )).toBeInTheDocument();
     expect(screen.getByText(
       'Walk-ins are paused; this opening-hours preview does not resume them.',
     )).toBeInTheDocument();
@@ -199,6 +286,9 @@ describe('HoursPanel', () => {
     const region = screen.getByRole('region', { name: 'Rush periods' });
     expect(within(region).getByText(
       'These multipliers affect random walk-in arrival rates, not guaranteed guests or sales. Full-window peaks may fall outside your opening hours. Booked contract arrivals follow their own schedule.',
+    )).toBeInTheDocument();
+    expect(within(region).getByText(
+      'Scheduled Work counts use saved schedules only, not unsaved editor drafts, actual availability, capacity or staffing requirements.',
     )).toBeInTheDocument();
     expect(within(region).queryByRole('button')).not.toBeInTheDocument();
     expect(within(region).queryByRole('combobox')).not.toBeInTheDocument();
