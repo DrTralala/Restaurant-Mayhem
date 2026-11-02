@@ -15,8 +15,10 @@ import StaffScheduleEditor, {
 import { getStaffHirePreview } from './staffHirePreview';
 import { getStaffTaskLabel } from './staffTaskLabel';
 import { getStaffTrainingPreview } from './staffTrainingPreview';
+import { getNextScheduledDutyChange } from './staffSchedulePreview';
 import CashierAssignments from './CashierAssignments';
 import { STAFF_CLEANING_FOCUS_OPTIONS } from '../simulation/cleaningFocus';
+import { STAFF_SCHEDULE_DAY_SECONDS } from '../simulation/staffSchedules';
 
 const ROLES = Object.keys(STAFF_SALARIES);
 const NAMES = ['Marco', 'Anna', 'Luca', 'Sofia', 'Giovanni', 'Isabella', 'Mario', 'Elena'];
@@ -77,7 +79,7 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
   const displayedStaff = roleFilter === 'all'
     ? sortedStaff
     : sortedStaff.filter(worker => worker.role === roleFilter);
-  const gameTime = state.restaurant?.gameTime ?? 0;
+  const gameTime = state.restaurant?.gameTime;
   const renameIdentityRef = useRef(null);
   const staffRef = useRef(staff);
   const roleFilterRef = useRef(roleFilter);
@@ -380,6 +382,18 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
         const trainingDisabled = Boolean(trainingReason);
         const trainingPreview = getStaffTrainingPreview(s);
         const duty = getStaffDutyPresentation(s, gameTime);
+        const nextDutyChange = getNextScheduledDutyChange(s, gameTime);
+        const nextDutyChangeDay = nextDutyChange
+          ? Math.floor(nextDutyChange.startsAt / STAFF_SCHEDULE_DAY_SECONDS)
+            - Math.floor(gameTime / STAFF_SCHEDULE_DAY_SECONDS)
+          : null;
+        const nextDutyChangeText = nextDutyChange
+          ? `Next scheduled change: ${formatDutyMode(nextDutyChange.nextMode)} at ${formatGameTime(
+            nextDutyChange.startsAt,
+          )} (${nextDutyChangeDay > 0 ? 'next day' : 'today'}).`
+          : Number.isFinite(gameTime)
+            ? 'No scheduled duty change in the repeating day.'
+            : 'Scheduled duty change unavailable.';
         const skill = Number.isFinite(Number(s.skill)) ? Number(s.skill) : 0;
         const scheduleDraft = scheduleDrafts[s.id];
         const bonus = getStaffBonusPreview(s);
@@ -525,6 +539,8 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
               Requested duty: <strong style={{ color: '#e8eef8' }}>{formatDutyMode(duty.requestedDuty)}</strong>
               {duty.requestedDuty !== duty.effectiveDuty && ` (currently ${formatDutyMode(duty.effectiveDuty)})`}
             </div>
+            <div>{nextDutyChangeText}</div>
+            <div>Task completion, handoffs and PTO minimums may delay effective changes.</div>
             {duty.reason && <div>Status: <strong style={{ color: '#f2d08a' }}>{duty.reason}</strong></div>}
             {Number.isFinite(Number(duty.minimumEndAt)) && (
               <div>PTO minimum ends at {formatGameTime(duty.minimumEndAt)} ({duty.minimumEndAt}s)</div>

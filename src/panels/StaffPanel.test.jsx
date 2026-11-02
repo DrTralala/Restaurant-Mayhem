@@ -889,6 +889,127 @@ describe('StaffPanel current task', () => {
   });
 });
 
+describe('StaffPanel scheduled duty preview', () => {
+  it('shows the next saved-schedule change and its effective-duty caveat without dispatching', () => {
+    const schedule = Array(48).fill('work');
+    schedule[20] = 'rest';
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      restaurant: { funds: 500, gameTime: 9 * 3600 },
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200, schedule }],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+
+    const status = within(getStaffCard('s1')).getByTestId('staff-status-s1');
+    expect(within(status).getByText('Next scheduled change: Rest at 10:00 (today).')).toBeVisible();
+    expect(within(status).getByText(
+      'Task completion, handoffs and PTO minimums may delay effective changes.',
+    )).toBeVisible();
+    expect(within(status).getByText(/Effective duty:/)).toBeVisible();
+    expect(within(status).getByText(/Requested duty:/)).toBeVisible();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('labels a wrapped schedule change as next day', () => {
+    const schedule = Array(48).fill('work');
+    schedule[0] = 'rest';
+    useGameState.mockReturnValue(makeState({
+      restaurant: { funds: 500, gameTime: 23 * 3600 },
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200, schedule }],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    render(<StaffPanel />);
+
+    expect(within(getStaffCard('s1')).getByText(
+      'Next scheduled change: Rest at 00:00 (next day).',
+    )).toBeVisible();
+  });
+
+  it('distinguishes a uniform schedule from an invalid clock', () => {
+    useGameState.mockReturnValue(makeState({
+      restaurant: { funds: 500, gameTime: 0 },
+      staff: [{
+        id: 'uniform', name: 'Uniform', role: 'cook', skill: 3, morale: 80, salary: 200,
+        schedule: Array(48).fill('work'),
+      }],
+    }));
+    useDispatch.mockReturnValue(vi.fn());
+
+    const { rerender } = render(<StaffPanel />);
+    const uniformStatus = within(getStaffCard('uniform')).getByTestId('staff-status-uniform');
+    expect(within(uniformStatus)
+      .getByText('No scheduled duty change in the repeating day.')).toBeVisible();
+    expect(within(uniformStatus)
+      .queryByText('Scheduled duty change unavailable.')).not.toBeInTheDocument();
+
+    useGameState.mockReturnValue(makeState({
+      restaurant: { funds: 500, gameTime: Number.NaN },
+      staff: [{
+        id: 'invalid-clock', name: 'Invalid Clock', role: 'cook', skill: 3, morale: 80, salary: 200,
+        schedule: Array(48).fill('work'),
+      }],
+    }));
+    rerender(<StaffPanel />);
+
+    const invalidStatus = within(getStaffCard('invalid-clock')).getByTestId('staff-status-invalid-clock');
+    expect(within(invalidStatus).getByText('Scheduled duty change unavailable.')).toBeVisible();
+    expect(within(invalidStatus)
+      .queryByText('No scheduled duty change in the repeating day.')).not.toBeInTheDocument();
+
+    useGameState.mockReturnValue(makeState({
+      restaurant: { funds: 500 },
+      staff: [{
+        id: 'missing-clock', name: 'Missing Clock', role: 'cook', skill: 3, morale: 80, salary: 200,
+        schedule: Array(48).fill('work'),
+      }],
+    }));
+    rerender(<StaffPanel />);
+
+    const missingStatus = within(getStaffCard('missing-clock')).getByTestId('staff-status-missing-clock');
+    expect(within(missingStatus).getByText('Scheduled duty change unavailable.')).toBeVisible();
+    expect(within(missingStatus)
+      .queryByText('No scheduled duty change in the repeating day.')).not.toBeInTheDocument();
+  });
+
+  it('updates with the saved schedule and clock while preserving pending-career display', () => {
+    const initialSchedule = Array(48).fill('work');
+    initialSchedule[20] = 'rest';
+    let state = makeState({
+      careerRun: { needsDecision: true },
+      restaurant: { funds: 500, gameTime: 9 * 3600 },
+      staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200, schedule: initialSchedule }],
+    });
+    const dispatch = vi.fn();
+    useGameState.mockImplementation(() => state);
+    useDispatch.mockReturnValue(dispatch);
+
+    const { rerender } = render(<StaffPanel />);
+
+    expect(screen.getByText('Resolve the career decision before changing staff.')).toBeVisible();
+    expect(within(getStaffCard('s1')).getByText(
+      'Next scheduled change: Rest at 10:00 (today).',
+    )).toBeVisible();
+
+    const updatedSchedule = Array(48).fill('work');
+    for (let index = 21; index < 35; index += 1) updatedSchedule[index] = 'pto';
+    state = {
+      ...state,
+      restaurant: { ...state.restaurant, gameTime: 10 * 3600 },
+      staff: [{ ...state.staff[0], schedule: updatedSchedule }],
+    };
+    rerender(<StaffPanel />);
+
+    expect(screen.getByText('Resolve the career decision before changing staff.')).toBeVisible();
+    expect(within(getStaffCard('s1')).getByText(
+      'Next scheduled change: PTO at 10:30 (today).',
+    )).toBeVisible();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});
+
 describe('StaffPanel hiring costs', () => {
   it('does not allocate staff positions during an ordinary render', () => {
     useGameState.mockReturnValue(makeState());
