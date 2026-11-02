@@ -21,13 +21,38 @@ export function formatSaveFilename(date = new Date()) {
   return `${year}-${month}-${day} ${hour}.${minutes}${period}.json`;
 }
 
+function parseCollisionFilename(filename) {
+  const match = filename.match(/^(.*) \((\d+)\)\.json$/);
+  if (!match) return { baseFilename: filename, suffix: 1 };
+
+  const suffix = Number(match[2]);
+  return Number.isSafeInteger(suffix)
+    ? { baseFilename: `${match[1]}.json`, suffix }
+    : { baseFilename: filename, suffix: 1 };
+}
+
 export function createSaveStore({ saveDirectory, fs = nodeFs, now = () => new Date() }) {
   return {
     async save(state) {
       await fs.mkdir(saveDirectory, { recursive: true });
-      const filename = formatSaveFilename(now());
-      await fs.writeFile(path.join(saveDirectory, filename), JSON.stringify(state, null, 2), 'utf8');
-      return { filename };
+      const baseFilename = formatSaveFilename(now());
+      const baseName = baseFilename.slice(0, -'.json'.length);
+      const contents = JSON.stringify(state, null, 2);
+      let suffix = 1;
+
+      while (true) {
+        const filename = suffix === 1 ? baseFilename : `${baseName} (${suffix}).json`;
+        try {
+          await fs.writeFile(path.join(saveDirectory, filename), contents, {
+            encoding: 'utf8',
+            flag: 'wx',
+          });
+          return { filename };
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          suffix += 1;
+        }
+      }
     },
 
     async loadLatest() {
@@ -40,7 +65,22 @@ export function createSaveStore({ saveDirectory, fs = nodeFs, now = () => new Da
         filename,
         modified: (await fs.stat(path.join(saveDirectory, filename))).mtimeMs,
       })));
-      candidates.sort((a, b) => b.modified - a.modified);
+      candidates.sort((a, b) => {
+        const mtimeDifference = b.modified - a.modified;
+        if (mtimeDifference !== 0) return mtimeDifference;
+
+        const aCollision = parseCollisionFilename(a.filename);
+        const bCollision = parseCollisionFilename(b.filename);
+        if (aCollision.baseFilename < bCollision.baseFilename) return -1;
+        if (aCollision.baseFilename > bCollision.baseFilename) return 1;
+
+        const suffixDifference = bCollision.suffix - aCollision.suffix;
+        if (suffixDifference !== 0) return suffixDifference;
+
+        if (a.filename < b.filename) return -1;
+        if (a.filename > b.filename) return 1;
+        return 0;
+      });
       const latest = candidates[0].filename;
       const state = JSON.parse(await fs.readFile(path.join(saveDirectory, latest), 'utf8'));
       return { filename: latest, state };
