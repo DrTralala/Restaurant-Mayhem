@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { createInitialState } from '../state/initialState';
 import { SERVICE_CONTRACT_RULES_VERSION, getServiceContractTemplate } from '../data/serviceContracts';
 import { acceptServiceContract, advanceServiceContractArrivals, recordServiceContractPaidVisit,
-  selectServiceContractView, withdrawServiceContract } from '../simulation/serviceContracts';
+  selectServiceContractView, settleServiceContracts, withdrawServiceContract } from '../simulation/serviceContracts';
 import ServiceContractsPanel, { ServiceContractTracker } from './ServiceContractsPanel';
 
 let state;
@@ -17,6 +17,46 @@ function setGuestOutcomes(fulfilledCount, unresolvedCount, unresolvedStatus = 'p
     guests: active.guests.map((guest, index) => ({ ...guest,
       status: index < fulfilledCount ? 'fulfilled_paid'
         : index < fulfilledCount + unresolvedCount ? unresolvedStatus : 'not_fulfilled' })) } } };
+}
+
+function completeHistoryContract(currentState, { day, status, templateId = 'office-lunch', rulesVersion = SERVICE_CONTRACT_RULES_VERSION }) {
+  const acceptedAt = 36000 + (day - 1) * 86400;
+  const dailyState = { ...currentState, restaurant: { ...currentState.restaurant, day, gameTime: acceptedAt } };
+  const accepted = acceptServiceContract(dailyState, { templateId });
+  const activeTemplate = getServiceContractTemplate(templateId, rulesVersion);
+  let active = { ...accepted.serviceContracts.active, rulesVersion,
+    target: activeTemplate.target, reward: activeTemplate.reward };
+  let completed = { ...accepted, serviceContracts: { ...accepted.serviceContracts, active } };
+  if (rulesVersion < 3) {
+    const { depositPaid = 0, ...legacyActive } = active;
+    active = { ...legacyActive, deadlineAt: active.serviceStartAt + activeTemplate.serviceDuration };
+    completed = { ...completed, restaurant: { ...completed.restaurant,
+      funds: completed.restaurant.funds - depositPaid, dailyRevenue: completed.restaurant.dailyRevenue - depositPaid } };
+  }
+  completed = { ...completed, serviceContracts: { ...completed.serviceContracts, active } };
+  if (status === 'withdrawn') return withdrawServiceContract(completed, { instanceId: active.instanceId });
+
+  if (status === 'succeeded') {
+    let fulfilled = 0;
+    const parties = active.parties.map(party => {
+      if (fulfilled >= active.target) return party;
+      fulfilled += party.size;
+      return { ...party, status: 'admitted', admittedAt: party.arrivalAt };
+    });
+    let sequence = 0;
+    const guests = active.guests.map(guest => {
+      if (sequence >= active.target) return guest;
+      sequence++;
+      const party = active.parties.find(row => row.partyId === guest.partyId);
+      return { ...guest, status: 'fulfilled_paid', paidVisitSequence: sequence, resolvedAt: party.arrivalAt + 1 };
+    });
+    active = { ...active, parties, guests };
+    completed = { ...completed, paidVisitSequence: sequence,
+      serviceContracts: { ...completed.serviceContracts, active } };
+  }
+
+  completed = { ...completed, restaurant: { ...completed.restaurant, gameTime: active.deadlineAt } };
+  return settleServiceContracts(completed, active.deadlineAt, { entry: true });
 }
 
 describe('ServiceContractsPanel', () => {
@@ -164,6 +204,109 @@ describe('ServiceContractsPanel', () => {
       'Latest result reasons: Drink-only visit × 2 · Closed at arrival × 1 · Payment not completed by the deadline × 1.',
     )).toBeVisible();
     expect(screen.queryByText(/cook capacity|bad layout|cause|root cause/i)).not.toBeInTheDocument();
+  });
+  it('shows an expandable empty recent-results section', () => {
+    render(<ServiceContractsPanel />);
+
+    const summary = screen.getByText('Recent contract results (0)');
+    expect(summary).toBeVisible();
+    expect(summary.closest('details')).not.toHaveAttribute('open');
+    expect(screen.queryByText('No completed contracts yet.')).not.toBeVisible();
+
+    fireEvent.click(summary);
+
+    expect(screen.getByText('No completed contracts yet.')).toBeVisible();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('shows recorded withdrawal status, counts, reason and finite financial evidence for one result', () => {
+    state = completeHistoryContract(state, { day: 1, status: 'withdrawn' });
+    render(<ServiceContractsPanel />);
+
+    const summary = screen.getByText('Recent contract results (1)');
+    expect(summary.closest('details')).not.toHaveAttribute('open');
+    fireEvent.click(summary);
+    const result = screen.getByRole('article', { name: 'Office lunch — Day 1 — Withdrawn' });
+
+    expect(within(result).getByText('Accepted day: 1')).toBeVisible();
+    expect(within(result).getByText('Status: Withdrawn')).toBeVisible();
+    expect(within(result).getByText('0/2 fulfilled meals')).toBeVisible();
+    expect(within(result).getByText('Reasons: Contract withdrawn × 6')).toBeVisible();
+    expect(within(result).getByText('Contract reward paid (including any retained deposit): $0')).toBeVisible();
+    expect(within(result).getByText('Deposit repaid: $22.50')).toBeVisible();
+    expect(within(result).getByText('Compensation paid: $0')).toBeVisible();
+    expect(within(result).getByText('Reputation penalty: 0')).toBeVisible();
+    expect(screen.getByText(
+      'Contract payments are separate from meal takings; the reward includes any retained deposit.',
+    )).toBeVisible();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('renders succeeded, failed and withdrawn outcomes newest-first using stored versioned counts', () => {
+    state = completeHistoryContract(state, { day: 1, status: 'succeeded', rulesVersion: 5 });
+    state = completeHistoryContract(state, { day: 2, status: 'failed' });
+    state = completeHistoryContract(state, { day: 3, status: 'withdrawn' });
+    const storedResults = state.serviceContracts.results;
+    const storedOrder = storedResults.map(result => result.instanceId);
+    render(<ServiceContractsPanel />);
+
+    fireEvent.click(screen.getByText('Recent contract results (3)'));
+
+    const results = screen.getAllByRole('article');
+    expect(results.map(result => result.getAttribute('aria-label'))).toEqual([
+      'Office lunch — Day 3 — Withdrawn',
+      'Office lunch — Day 2 — Failed',
+      'Office lunch — Day 1 — Succeeded',
+    ]);
+    expect(within(results[0]).getByText('0/2 fulfilled meals')).toBeVisible();
+    expect(within(results[1]).getByText('0/2 fulfilled meals')).toBeVisible();
+    expect(within(results[2]).getByText('4/4 fulfilled meals')).toBeVisible();
+    expect(within(results[2]).getByText('Contract reward paid (including any retained deposit): $90')).toBeVisible();
+    expect(state.serviceContracts.results).toBe(storedResults);
+    expect(state.serviceContracts.results.map(result => result.instanceId)).toEqual(storedOrder);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('shows no financial fields missing from a legacy result and falls back to its template ID without a stored revision', () => {
+    state = completeHistoryContract(state, { day: 1, status: 'failed', rulesVersion: 1 });
+    const legacyResult = { ...state.serviceContracts.results[0] };
+    delete legacyResult.rulesVersion;
+    state = { ...state, serviceContracts: { ...state.serviceContracts, results: [legacyResult] } };
+    render(<ServiceContractsPanel />);
+
+    fireEvent.click(screen.getByText('Recent contract results (1)'));
+
+    const result = screen.getByRole('article', { name: 'office-lunch — Day 1 — Failed' });
+    expect(within(result).getByText('0/4 fulfilled meals')).toBeVisible();
+    expect(within(result).getByText('Contract reward paid (including any retained deposit): $0')).toBeVisible();
+    expect(within(result).queryByText(/Deposit repaid:|Compensation paid:|Reputation penalty:/)).not.toBeInTheDocument();
+    expect(screen.getByText('6 guests · 2 paid meals needed')).toBeVisible();
+    expect(screen.getByText('$90 total reward · $22.50 deposit upfront')).toBeVisible();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('renders ten newest outcomes without mutating stored order or an active contract during a decision pause', () => {
+    for (let index = 0; index < 10; index++) {
+      const statuses = ['succeeded', 'failed', 'withdrawn'];
+      state = completeHistoryContract(state, { day: index + 1, status: statuses[index % statuses.length] });
+    }
+    const dayEleven = { ...state, restaurant: { ...state.restaurant, day: 11, gameTime: 900000 } };
+    state = acceptServiceContract(dayEleven, { templateId: 'family-service' });
+    state = { ...state, careerRun: { needsDecision: true } };
+    const activeContract = state.serviceContracts.active;
+    const storedResults = state.serviceContracts.results;
+    const storedOrder = storedResults.map(result => result.instanceId);
+    render(<ServiceContractsPanel />);
+
+    const summary = screen.getByText('Recent contract results (10)');
+    expect(summary.closest('details')).not.toHaveAttribute('open');
+    fireEvent.click(summary);
+
+    const results = screen.getAllByRole('article');
+    expect(results).toHaveLength(10);
+    expect(results[0]).toHaveAttribute('aria-label', expect.stringContaining('Day 10'));
+    expect(results[9]).toHaveAttribute('aria-label', expect.stringContaining('Day 1'));
+    expect(screen.getByText('Contract paused — choose Continue in Opening Week to resume')).toBeVisible();
+    expect(state.serviceContracts.active).toBe(activeContract);
+    expect(state.serviceContracts.results).toBe(storedResults);
+    expect(state.serviceContracts.results.map(result => result.instanceId)).toEqual(storedOrder);
+    expect(dispatch).not.toHaveBeenCalled();
   });
   it('shows exact Party stakes before acceptance and leaves cancelling inert', () => {
     render(<ServiceContractsPanel />);

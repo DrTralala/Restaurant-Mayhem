@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
-import { SERVICE_CONTRACT_PREP_SECONDS, SERVICE_CONTRACT_RULES_VERSION } from '../data/serviceContracts';
+import { SERVICE_CONTRACT_PREP_SECONDS, SERVICE_CONTRACT_RULES_VERSION, getServiceContractTemplate } from '../data/serviceContracts';
 import { EQUIPMENT } from '../data/equipment';
 import { selectServiceContractView } from '../simulation/serviceContracts';
 import { secondsToGameTime } from '../simulation/clock';
@@ -74,6 +74,25 @@ function latestReasonSummary(result) {
     || 'none recorded';
 }
 
+function ContractResult({ result }) {
+  const historicalTemplate = Object.hasOwn(result, 'rulesVersion') && result.rulesVersion != null
+    ? getServiceContractTemplate(result.templateId, result.rulesVersion) : null;
+  const title = historicalTemplate?.title || result.templateId;
+  const status = statusLabels[result.status] || result.status;
+  return <article aria-label={`${title} — Day ${result.acceptedDay} — ${status}`} style={cardStyle}>
+    <h5 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '0 0 8px' }}>{title}</h5>
+    <p>Accepted day: {result.acceptedDay}</p>
+    <p>Status: {status}</p>
+    <p>{result.fulfilledCount}/{result.target} fulfilled meals</p>
+    <p style={secondaryStyle}>Reasons: {latestReasonSummary(result)}</p>
+    {Number.isFinite(result.bonusPaid)
+      && <p>Contract reward paid (including any retained deposit): {money(result.bonusPaid)}</p>}
+    {Number.isFinite(result.depositRefunded) && <p>Deposit repaid: {money(result.depositRefunded)}</p>}
+    {Number.isFinite(result.compensationPaid) && <p>Compensation paid: {money(result.compensationPaid)}</p>}
+    {Number.isFinite(result.reputationPenalty) && <p>Reputation penalty: {result.reputationPenalty}</p>}
+  </article>;
+}
+
 function MealRule({ id }) {
   return <p id={id} style={secondaryStyle}>A fulfilled meal needs delivered food and completed checkout with a positive
     dish charge by the deadline. Drinks, cancelled food and unpaid meals do not count. Guests choose affordable
@@ -108,7 +127,7 @@ export default function ServiceContractsPanel() {
   const activeHeadingRef = useRef(null);
   const offersHeadingRef = useRef(null);
   const withdrawalConfirmationFocused = useRef(false);
-  const { active, latestResult, offers } = selectServiceContractView(state);
+  const { active, latestResult, results, offers } = selectServiceContractView(state);
   const activeInstanceId = active?.instanceId ?? null;
   const decisionPending = state.careerRun?.needsDecision === true;
   const deadlineReached = active && state.restaurant.gameTime >= active.deadlineAt;
@@ -167,6 +186,12 @@ export default function ServiceContractsPanel() {
     <p style={secondaryStyle}>Book extra guests for a reward. One contract at a time, one attempt per offer each day.
       Walk-ins follow opening hours and the walk-in pause setting; tables and staff are not reserved.</p>
     {latestResult && <p style={secondaryStyle}>Latest result reasons: {latestReasonSummary(latestResult)}.</p>}
+    <details style={{ marginBottom: 12 }}><summary style={summaryStyle}>Recent contract results ({results.length})</summary>
+      {results.length === 0 ? <p style={secondaryStyle}>No completed contracts yet.</p> : <>
+        {[...results].reverse().map(result => <ContractResult key={result.instanceId} result={result} />)}
+        <p style={secondaryStyle}>Contract payments are separate from meal takings; the reward includes any retained deposit.</p>
+      </>}
+    </details>
     {decisionPending && <p style={{ color: '#f0a500' }}>Contract paused — choose Continue in Opening Week to resume</p>}
     <div role="status" aria-live="polite" style={{ position: 'absolute', width: 1, height: 1,
       overflow: 'hidden', clipPath: 'inset(50%)' }}>{announcement}</div>
