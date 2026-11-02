@@ -741,7 +741,7 @@ describe('StaffPanel', () => {
     render(<StaffPanel />);
 
     expect(screen.getByText('Marco')).toBeInTheDocument();
-    expect(within(getStaffCard('s1')).getByText(/Cook/)).toBeInTheDocument();
+    expect(within(getStaffCard('s1')).getByText(/Cook · \$200\/day/)).toBeInTheDocument();
   });
 
   it('rounds morale to the nearest whole percentage', () => {
@@ -1089,6 +1089,62 @@ describe('StaffPanel training preview', () => {
     expect(within(janitorCard).getByText('Cleaning/washing rate: 1.95× → 2.80×')).toBeVisible();
   });
 
+  it('shows cook batch maximums separately from carried items and omits them for other roles', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      restaurant: { funds: 10 },
+      staff: [
+        { id: 'cook', name: 'Marco', role: 'cook', skill: 4, morale: 80, salary: 200 },
+        { id: 'waiter', name: 'Anna', role: 'waiter', skill: 4, morale: 80, salary: 150 },
+        { id: 'janitor', name: 'Luca', role: 'janitor', skill: 4, morale: 80, salary: 120 },
+      ],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+
+    const cook = getStaffCard('cook');
+    expect(within(cook).getByText('Carry capacity: 1 → 2 items')).toBeVisible();
+    expect(within(cook).getByText('Cooking batch capacity: 1 → 2 orders')).toBeVisible();
+    expect(within(cook).getByText('Milestone cooking batch capacity: 1 → 2 orders')).toBeVisible();
+    expect(within(cook).getByText(
+      'Maximum orders cooked per batch depend on eligible orders, compatible stations and service capacity; this is not guaranteed throughput.',
+    )).toBeVisible();
+
+    for (const id of ['waiter', 'janitor']) {
+      const card = getStaffCard(id);
+      expect(within(card).queryByText(/Cooking batch capacity:/)).not.toBeInTheDocument();
+      expect(within(card).queryByText(/Milestone cooking batch capacity:/)).not.toBeInTheDocument();
+      expect(within(card).queryByText(/Maximum orders cooked per batch/)).not.toBeInTheDocument();
+    }
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('matches cook milestone cost to sequential reducer purchases', () => {
+    const initial = createInitialState();
+    initial.restaurant.funds = 1700;
+    initial.staff = [{ ...initial.staff[0], id: 's1', role: 'cook', skill: 3, morale: 80 }];
+    useGameState.mockImplementation(() => panelHarness.current.state);
+    useDispatch.mockImplementation(() => panelHarness.current.dispatch);
+
+    render(<StatefulStaffPanel initial={initial} />);
+
+    const milestone = within(getStaffCard('s1')).getByRole('group', { name: 'Next capacity milestone' });
+    expect(milestone).toHaveTextContent('2 training purchases · $1,700 total at current prices');
+    expect(milestone).toHaveTextContent('Milestone cooking batch capacity: 1 → 2 orders');
+
+    fireEvent.click(within(getStaffCard('s1')).getByRole('button', { name: 'Train ($620)' }));
+    expect(panelHarness.current.state.restaurant.funds).toBe(1080);
+    expect(within(getStaffCard('s1')).getByRole('group', { name: 'Next capacity milestone' }))
+      .toHaveTextContent('1 training purchase · $1,080 total at current prices');
+
+    fireEvent.click(within(getStaffCard('s1')).getByRole('button', { name: 'Train ($1080)' }));
+    expect(panelHarness.current.state.restaurant.funds).toBe(0);
+    expect(panelHarness.current.state.staff[0]).toMatchObject({ skill: 5, morale: 100 });
+    expect(initial.restaurant.funds - panelHarness.current.state.restaurant.funds).toBe(1700);
+    expect(within(getStaffCard('s1')).getByText('Cooking batch capacity: 2 → 2 orders')).toBeVisible();
+  });
+
   it('omits the preview for maxed, unknown-role or invalid-skill workers', () => {
     useGameState.mockReturnValue(makeState({
       staff: [
@@ -1110,19 +1166,23 @@ describe('StaffPanel training preview', () => {
   });
 
   it('keeps the preview visible when training is unaffordable', () => {
+    const dispatch = vi.fn();
     useGameState.mockReturnValue(makeState({
       restaurant: { funds: 10 },
       staff: [{ id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200 }],
     }));
-    useDispatch.mockReturnValue(vi.fn());
+    useDispatch.mockReturnValue(dispatch);
 
     render(<StaffPanel />);
 
     const card = getStaffCard('s1');
     expect(within(card).getByText('After training: Skill 4/10 · Morale 90%')).toBeVisible();
     expect(within(card).getByText('Carry capacity: 1 → 1 items')).toBeVisible();
+    expect(within(card).getByText('Cooking batch capacity: 1 → 1 orders')).toBeVisible();
+    expect(within(card).getByText('Milestone cooking batch capacity: 1 → 2 orders')).toBeVisible();
     expect(within(card).getByText('Morale work multiplier: 1.30× → 1.40×')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Train ($620)' })).toBeDisabled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('updates the preview when a worker changes on rerender', () => {
@@ -1269,6 +1329,30 @@ describe('StaffPanel training blockers', () => {
     expect(within(card).queryByText('Maximum skill reached.')).not.toBeInTheDocument();
     expect(within(card).queryByText('Funds unavailable.')).not.toBeInTheDocument();
     expect(descriptionFor(button)).toHaveTextContent('Resolve the career decision before training.');
+
+    fireEvent.click(button);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('keeps cook batch preview visible while a career decision blocks training', () => {
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(makeState({
+      careerRun: { needsDecision: true },
+      restaurant: { funds: 100_000 },
+      staff: [trainingWorker({ skill: 4 })],
+    }));
+    useDispatch.mockReturnValue(dispatch);
+
+    render(<StaffPanel />);
+
+    const card = getStaffCard('s1');
+    const button = trainingButton();
+    expect(button).toBeDisabled();
+    expect(within(card).getByText('Cooking batch capacity: 1 → 2 orders')).toBeVisible();
+    expect(within(card).getByText('Milestone cooking batch capacity: 1 → 2 orders')).toBeVisible();
+    expect(within(card).getByText(
+      'Maximum orders cooked per batch depend on eligible orders, compatible stations and service capacity; this is not guaranteed throughput.',
+    )).toBeVisible();
 
     fireEvent.click(button);
     expect(dispatch).not.toHaveBeenCalled();

@@ -490,6 +490,12 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
             <div style={{ ...TYPOGRAPHY.secondary, margin: '4px 0' }}>
               <div>{`After training: Skill ${trainingPreview.skill}/10 · Morale ${Math.round(trainingPreview.morale)}%`}</div>
               <div>{`Carry capacity: ${trainingPreview.carryBefore} → ${trainingPreview.carryAfter} items`}</div>
+              {trainingPreview.batchBefore != null && (
+                <>
+                  <div>{`Cooking batch capacity: ${trainingPreview.batchBefore} → ${trainingPreview.batchAfter} orders`}</div>
+                  <div>Maximum orders cooked per batch depend on eligible orders, compatible stations and service capacity; this is not guaranteed throughput.</div>
+                </>
+              )}
               <div>{`${trainingPreview.rateLabel}: ${trainingPreview.rateBefore.toFixed(2)}× → ${trainingPreview.rateAfter.toFixed(2)}×`}</div>
               {trainingPreview.unlocks.length > 0 && (
                 <ul aria-label="Skill unlocks" style={{ margin: '4px 0 0', paddingLeft: 18 }}>
@@ -501,6 +507,9 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
                   <strong>Next capacity milestone</strong>
                   <div>{`Skill ${trainingPreview.capacityMilestone.threshold} threshold · ${trainingPreview.capacityMilestone.purchases} training purchase${trainingPreview.capacityMilestone.purchases === 1 ? '' : 's'} · $${trainingPreview.capacityMilestone.totalCost.toLocaleString('en-US')} total at current prices`}</div>
                   <div>{`Milestone carry capacity: ${trainingPreview.capacityMilestone.carryBefore} → ${trainingPreview.capacityMilestone.carryAfter} items`}</div>
+                  {trainingPreview.capacityMilestone.batchBefore != null && (
+                    <div>{`Milestone cooking batch capacity: ${trainingPreview.capacityMilestone.batchBefore} → ${trainingPreview.capacityMilestone.batchAfter} orders`}</div>
+                  )}
                   <div>Train buys one level at a time.</div>
                 </div>
               )}

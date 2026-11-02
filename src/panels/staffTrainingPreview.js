@@ -1,5 +1,6 @@
 import { getStaffTrainingCost } from '../simulation/staffProgression';
 import { getStaffCarryCapacity } from '../simulation/staffInventory';
+import { getCookingBatchCapacity } from '../simulation/cookingBatches';
 import { getStaffPerformanceMultiplier, getStaffTaskRate } from '../simulation/staffPerformance';
 
 function getCapacityMilestone(worker) {
@@ -21,6 +22,10 @@ function getCapacityMilestone(worker) {
     totalCost,
     carryBefore: getStaffCarryCapacity(worker),
     carryAfter: getStaffCarryCapacity({ ...worker, skill }),
+    ...(worker.role === 'cook' ? {
+      batchBefore: getCookingBatchCapacity(worker),
+      batchAfter: getCookingBatchCapacity({ ...worker, skill }),
+    } : {}),
   };
 }
 
@@ -57,6 +62,10 @@ export function getStaffTrainingPreview(worker) {
     morale: next.morale,
     carryBefore: getStaffCarryCapacity(worker),
     carryAfter: getStaffCarryCapacity(next),
+    ...(worker.role === 'cook' ? {
+      batchBefore: getCookingBatchCapacity(worker),
+      batchAfter: getCookingBatchCapacity(next),
+    } : {}),
     rateLabel,
     rateBefore: rate(worker),
     rateAfter: rate(next),

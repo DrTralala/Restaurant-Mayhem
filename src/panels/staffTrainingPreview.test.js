@@ -49,9 +49,42 @@ describe('getStaffTrainingPreview', () => {
       const snapshot = JSON.stringify(frozen);
       expect(getStaffTrainingPreview(frozen).capacityMilestone).toEqual({
         threshold, purchases, totalCost, carryBefore, carryAfter,
+        ...(role === 'cook' ? { batchBefore: carryBefore, batchAfter: carryAfter } : {}),
       });
       expect(JSON.stringify(frozen)).toBe(snapshot);
     });
+
+  it.each([
+    [3, 1, 1, 1, 2, 2, 1700],
+    [4, 1, 2, 1, 2, 1, 1080],
+    [4.5, 1, 2, 1, 2, 1, 1420],
+    [5, 2, 2, 2, 3, 5, 38580],
+    [9, 2, 3, 2, 3, 1, 17600],
+    [9.5, 2, 3, 2, 3, 1, 23280],
+  ])('previews cook batch capacity at skill %s using the actual milestone walk',
+    (skill, batchBefore, batchAfter, milestoneBefore, milestoneAfter, purchases, totalCost) => {
+      const preview = getStaffTrainingPreview(worker({ role: 'cook', skill }));
+
+      expect(preview).toMatchObject({
+        batchBefore,
+        batchAfter,
+        capacityMilestone: {
+          batchBefore: milestoneBefore,
+          batchAfter: milestoneAfter,
+          purchases,
+          totalCost,
+        },
+      });
+    });
+
+  it.each(['waiter', 'janitor'])('does not expose cooking batch capacity for a %s', role => {
+    const preview = getStaffTrainingPreview(worker({ role, skill: 4 }));
+
+    expect(preview).not.toHaveProperty('batchBefore');
+    expect(preview).not.toHaveProperty('batchAfter');
+    expect(preview.capacityMilestone).not.toHaveProperty('batchBefore');
+    expect(preview.capacityMilestone).not.toHaveProperty('batchAfter');
+  });
 
   it('previews the next skill, morale, carry capacity and morale multiplier for a cook', () => {
     const preview = getStaffTrainingPreview(worker({ role: 'cook', skill: 3, morale: 80 }));
