@@ -20,6 +20,7 @@ import { STAFF_CLEANING_FOCUS_VALUES } from '../simulation/cleaningFocus';
 const STAFF_ROLES = new Set(['cook', 'waiter', 'janitor']);
 const STAFF_DUTIES = new Set(['work', 'rest', 'pto']);
 const STAFF_REST_AMENITY_PREFERENCES = new Set(['automatic', 'couch', 'arcade']);
+const SEATING_POLICIES = new Set(['automatic', 'best-fit']);
 const STAFF_DUTY_PHASES = new Set([
   'available', 'finishing_task', 'blocked_handoff', 'seeking_amenity',
   'waiting_for_amenity', 'travelling', 'active', 'exiting',
@@ -333,6 +334,7 @@ function validateRestaurant(state) {
   validateOptionalFinite(restaurant, 'dailyRevenue', 'restaurant');
   validateOptionalFinite(restaurant, 'reputation', 'restaurant');
   validateOptionalBoolean(restaurant, 'walkInsPaused', 'restaurant');
+  validateOptionalEnum(restaurant, 'seatingPolicy', 'restaurant', SEATING_POLICIES);
   validateSuspendedMenuIds(restaurant, 'suspendedDishIds');
   validateSuspendedMenuIds(restaurant, 'suspendedDrinkIds');
 }

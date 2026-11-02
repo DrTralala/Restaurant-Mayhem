@@ -498,6 +498,7 @@ function placeItem(state, action) {
 const GameContext = createContext(null);
 const DispatchContext = createContext(null);
 const STAFF_REST_AMENITY_PREFERENCES = new Set(['automatic', 'couch', 'arcade']);
+const SEATING_POLICIES = new Set(['automatic', 'best-fit']);
 
 function reduceGameAction(state, action) {
   const cookbookResult = reduceCookbookAction(state, action);
@@ -537,6 +538,15 @@ function reduceGameAction(state, action) {
       return {
         ...state,
         restaurant: { ...state.restaurant, walkInsPaused: action.paused },
+      };
+    }
+    case 'SET_SEATING_POLICY': {
+      if (!SEATING_POLICIES.has(action.policy) || !state.restaurant
+        || typeof state.restaurant !== 'object' || Array.isArray(state.restaurant)) return state;
+      if ((state.restaurant.seatingPolicy ?? 'automatic') === action.policy) return state;
+      return {
+        ...state,
+        restaurant: { ...state.restaurant, seatingPolicy: action.policy },
       };
     }
     case 'TOGGLE_PAUSE':

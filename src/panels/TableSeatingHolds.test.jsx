@@ -143,3 +143,38 @@ it('shows a concise empty state when there are no tables', () => {
   expect(within(section).getByText('No tables available to control.')).toBeInTheDocument();
   expect(within(section).queryByRole('button')).not.toBeInTheDocument();
 });
+
+it('dispatches the seating policy and reflects the latest persisted selection', () => {
+  mockUseGameState.mockReturnValue({ restaurant: {}, tables: [] });
+  const { rerender } = render(<TableSeatingHolds />);
+  const selector = screen.getByRole('combobox', { name: 'Seating policy' });
+
+  expect(selector).toHaveValue('automatic');
+  expect(screen.getByText(/Automatic uses the existing table order/)).toBeInTheDocument();
+  expect(screen.getByText(/walk-in and contract guests/)).toBeInTheDocument();
+  fireEvent.change(selector, { target: { value: 'best-fit' } });
+  expect(mockUseDispatch).toHaveBeenCalledWith({
+    type: 'SET_SEATING_POLICY', policy: 'best-fit',
+  });
+
+  mockUseGameState.mockReturnValue({
+    restaurant: { seatingPolicy: 'best-fit' }, tables: [],
+  });
+  rerender(<TableSeatingHolds />);
+
+  expect(screen.getByRole('combobox', { name: 'Seating policy' })).toHaveValue('best-fit');
+});
+
+it('disables and guards seating policy changes during a pending career decision', () => {
+  mockUseGameState.mockReturnValue({
+    careerRun: { needsDecision: true }, restaurant: {}, tables: [],
+  });
+  render(<TableSeatingHolds />);
+
+  const selector = screen.getByRole('combobox', { name: 'Seating policy' });
+  expect(selector).toBeDisabled();
+  selector.disabled = false;
+  fireEvent.change(selector, { target: { value: 'best-fit' } });
+
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+});

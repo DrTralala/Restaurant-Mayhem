@@ -30,6 +30,31 @@ function queuedState(overrides = {}) {
   };
 }
 
+function bestFitState({
+  party = partyOf(1),
+  tableIds = ['t3', 't1'],
+  tableChanges = {},
+  staff = [],
+  customers = [],
+  serviceItems = [],
+  seatingPolicy = 'best-fit',
+} = {}) {
+  const fresh = createInitialState();
+  const tables = tableIds.map(id => ({
+    ...fresh.tables.find(table => table.id === id),
+    ...(tableChanges[id] || {}),
+  }));
+  return queuedState({
+    restaurant: { ...fresh.restaurant, seatingPolicy },
+    tables,
+    chairs: fresh.chairs.filter(chair => tableIds.includes(chair.tableId)),
+    staff,
+    customers,
+    serviceItems,
+    queue: [party],
+  });
+}
+
 function partyOf(size, id = 'p1') {
   return {
     partyId: id,
@@ -76,6 +101,100 @@ afterEach(() => {
 });
 
 describe('self seating admission', () => {
+  it('keeps the default and explicit automatic policy on the existing table traversal', () => {
+    const bestFit = bestFitState();
+    const { seatingPolicy: _seatingPolicy, ...restaurant } = bestFit.restaurant;
+    const implicit = prepareSelfSeating({ ...bestFit, restaurant });
+    const explicit = prepareSelfSeating({
+      ...bestFit,
+      restaurant: { ...restaurant, seatingPolicy: 'automatic' },
+    });
+
+    expect(implicit.customers[0].tableId).toBe('t3');
+    expect(explicit.customers[0].tableId).toBe(implicit.customers[0].tableId);
+  });
+
+  it('chooses a smaller fitting table by effective capacity without changing input order', () => {
+    const state = bestFitState({ tableChanges: { t1: { seats: undefined } } });
+    const originalTables = state.tables;
+    const originalRecords = [...state.tables];
+    const originalOrder = state.tables.map(table => table.id);
+
+    const next = prepareSelfSeating(state);
+
+    expect(next.customers[0].tableId).toBe('t1');
+    expect(next.tables.map(table => table.id)).toEqual(originalOrder);
+    expect(state.tables).toBe(originalTables);
+    expect(state.tables).toEqual(originalRecords);
+    expect(state.tables.every(table => table.status === 'empty')).toBe(true);
+    expect(next.tables[0]).toBe(originalRecords[0]);
+  });
+
+  it('keeps input order stable for equal best-fit capacities', () => {
+    const state = bestFitState({
+      tableIds: ['t2', 't1'],
+      tableChanges: { t2: { seats: 2 }, t1: { seats: 2 } },
+    });
+
+    const next = prepareSelfSeating(state);
+
+    expect(next.customers[0].tableId).toBe('t2');
+  });
+
+  it('keeps solo high-top priority while best-fitting within the counter group', () => {
+    const state = bestFitState({
+      tableIds: ['t1', 't2', 't3'],
+      tableChanges: {
+        t1: { seats: 4, highTopCounterId: 'counter-1' },
+        t2: { seats: undefined, highTopCounterId: 'counter-2' },
+        t3: { seats: 1 },
+      },
+    });
+
+    const next = prepareSelfSeating(state);
+
+    expect(next.customers[0].tableId).toBe('t2');
+  });
+
+  it.each([
+    ['held', { tableChanges: { t1: { seats: 2, admissionHeld: true } } }],
+    ['dirty service item', { serviceItems: [{ id: 'plate', tableId: 't1', state: 'dirty_at_table' }] }],
+    ['unavailable chairs', {
+      customers: [
+        { id: 'seated-1', partyId: 'old-party', state: 'seated', tableId: 't1', chairId: 'ch1' },
+        { id: 'seated-2', partyId: 'old-party', state: 'seated', tableId: 't1', chairId: 'ch2' },
+      ],
+    }],
+  ])('continues to a larger table when the smaller best-fit candidate is %s', (_label, options) => {
+    const state = bestFitState({
+      tableChanges: { t1: { seats: 2 } },
+      ...options,
+    });
+
+    const next = prepareSelfSeating(state);
+
+    expect(next.customers.find(customer => customer.partyId === 'p1').tableId).toBe('t3');
+    expect(next.queue).toEqual([]);
+  });
+
+  it('continues to a larger fitting table when the smaller table has no valid chair approach', () => {
+    const state = bestFitState({
+      tableChanges: { t1: { seats: 1 } },
+      staff: [
+        { id: 'west', x: 180, y: 180 },
+        { id: 'east', x: 220, y: 180 },
+        { id: 'north', x: 200, y: 160 },
+      ],
+    });
+    state.chairs = state.chairs.filter(chair => chair.tableId !== 't1' || chair.id === 'ch1');
+
+    const next = prepareSelfSeating(state);
+
+    expect(next.customers[0].tableId).toBe('t3');
+    expect(next.tables.find(table => table.id === 't1').status).toBe('empty');
+    expect(next.tables.find(table => table.id === 't3').status).toBe('reserved');
+  });
+
   it('does not create a reserved-approach grid when there are no eligible reservations', () => {
     const state = { ...createInitialState(), queue: [] };
     expect(state.tables.some(table => table.status === 'reserved')).toBe(false);

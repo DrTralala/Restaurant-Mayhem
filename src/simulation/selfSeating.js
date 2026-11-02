@@ -405,11 +405,25 @@ function* chairSelections(chairs, count, start = 0, selected = []) {
 function planForParty(state, party) {
   const partySize = party.members.length;
   const tables = state.tables || [];
-  const candidates = partySize === 1
-    ? [...tables.filter(table => table?.highTopCounterId != null),
-      ...tables.filter(table => table?.highTopCounterId == null)]
+  const highTopTables = partySize === 1
+    ? tables.filter(table => table?.highTopCounterId != null)
+    : [];
+  const regularTables = partySize === 1
+    ? tables.filter(table => table?.highTopCounterId == null)
     : tables;
-  for (const table of candidates) {
+  const candidates = partySize === 1
+    ? [...highTopTables, ...regularTables]
+    : tables;
+  const chairCountFor = table =>
+    (state.chairs || []).filter(chair => chair.tableId === table.id).length;
+  const capacityFor = table => table.seats || chairCountFor(table);
+  const orderedCandidates = state.restaurant?.seatingPolicy === 'best-fit'
+    ? partySize === 1
+      ? [highTopTables, regularTables].flatMap(group =>
+        [...group].sort((left, right) => capacityFor(left) - capacityFor(right)))
+      : [...candidates].sort((left, right) => capacityFor(left) - capacityFor(right))
+    : candidates;
+  for (const table of orderedCandidates) {
     if (table?.status !== 'empty' || table.admissionHeld === true) continue;
     // Wiping and dish collection can finish in either order; admission needs both.
     if ((state.serviceItems || []).some(item => item.tableId === table.id

@@ -7,6 +7,7 @@ import { runTick } from './gameLoop';
 import { advanceFixedStep } from './fixedStep';
 import { startFoodPatience } from './foodPatience';
 import { acceptServiceContract, advanceServiceContractArrivals, createServiceContractsState, validateServiceContractsState } from './serviceContracts';
+import { prepareSelfSeating } from './selfSeating';
 
 afterEach(() => vi.restoreAllMocks());
 // Real simulation without service resources: these are scheduling/failure
@@ -39,6 +40,36 @@ function waitingParties(count, patience = 9000) {
 }
 
 describe('real scheduled logical admission', () => {
+  it('uses best-fit seating for a scheduled contract party after it joins the shared queue', () => {
+    const fresh = createInitialState();
+    const acceptedState = accepted('office-lunch', fresh);
+    const booking = bookingFor(acceptedState);
+    const due = {
+      ...acceptedState,
+      restaurant: { ...acceptedState.restaurant, gameTime: booking.arrivalAt },
+    };
+    const scheduled = customers.admitScheduledServiceParty(due, booking);
+    expect(scheduled.admitted).toBe(true);
+
+    const seatingState = {
+      ...scheduled.state,
+      staff: [],
+      restaurant: { ...scheduled.state.restaurant, seatingPolicy: 'best-fit' },
+      tables: [
+        { ...fresh.tables.find(table => table.id === 't3'), seats: 4 },
+        { ...fresh.tables.find(table => table.id === 't1'), seats: 2 },
+      ],
+      chairs: fresh.chairs.filter(chair => ['t1', 't3'].includes(chair.tableId)),
+    };
+
+    const seated = prepareSelfSeating(seatingState);
+
+    expect(seated.queue).toEqual([]);
+    expect(seated.customers).toHaveLength(2);
+    expect(seated.customers.every(member => member.serviceContractId === booking.instanceId)).toBe(true);
+    expect(seated.customers.every(member => member.tableId === 't1')).toBe(true);
+  });
+
   it.each([
     ['office-lunch', 2, 1125], ['family-service', 4, 1575], ['tasting-service', 1, 1800],
   ])('initialises %s through ordinary logical defaults without RNG or coordinates', (templateId, size, patience) => {

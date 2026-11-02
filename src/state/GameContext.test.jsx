@@ -976,6 +976,65 @@ describe('table admission holds', () => {
   });
 });
 
+describe('restaurant seating policy', () => {
+  it('changes only the policy and preserves existing reservations', () => {
+    const initial = createInitialState();
+    const reservation = {
+      ...initial.tables[0],
+      status: 'reserved',
+      diningPartyId: 'existing-party',
+      diningCustomerIds: ['existing-guest'],
+    };
+    const tables = [reservation, ...initial.tables.slice(1)];
+    const customers = [{
+      id: 'existing-guest', partyId: 'existing-party', state: 'entering',
+      tableId: reservation.id, chairId: 'ch1',
+    }];
+    const state = { ...initial, tables, customers };
+
+    const next = gameReducer(state, { type: 'SET_SEATING_POLICY', policy: 'best-fit' });
+
+    expect(next.restaurant.seatingPolicy).toBe('best-fit');
+    expect(next.tables).toBe(tables);
+    expect(next.tables[0]).toBe(reservation);
+    expect(next.customers).toBe(customers);
+    expect(next.restaurant).not.toBe(state.restaurant);
+  });
+
+  it('accepts automatic as the default and as a return from best-fit', () => {
+    const initial = createInitialState();
+    expect(gameReducer(initial, {
+      type: 'SET_SEATING_POLICY', policy: 'automatic',
+    })).toBe(initial);
+
+    const bestFit = {
+      ...initial,
+      restaurant: { ...initial.restaurant, seatingPolicy: 'best-fit' },
+    };
+    const automatic = gameReducer(bestFit, {
+      type: 'SET_SEATING_POLICY', policy: 'automatic',
+    });
+
+    expect(automatic.restaurant.seatingPolicy).toBe('automatic');
+    expect(automatic.tables).toBe(bestFit.tables);
+  });
+
+  it.each([undefined, null, '', 'smallest', 1, {}])(
+    'ignores invalid seating policy action value %s', policy => {
+      const state = createInitialState();
+      expect(gameReducer(state, { type: 'SET_SEATING_POLICY', policy })).toBe(state);
+    },
+  );
+
+  it('blocks policy changes while a career decision is pending', () => {
+    const state = { ...createInitialState(), careerRun: { needsDecision: true } };
+
+    expect(gameReducer(state, {
+      type: 'SET_SEATING_POLICY', policy: 'best-fit',
+    })).toBe(state);
+  });
+});
+
 describe('staff rest amenity preferences', () => {
   it.each(['reserved', 'occupied'])('changes only preference during an active %s use', phase => {
     const initial = createInitialState();

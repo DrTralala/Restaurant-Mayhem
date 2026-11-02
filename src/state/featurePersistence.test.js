@@ -605,6 +605,39 @@ describe('additive v10 feature persistence', () => {
     }
   });
 
+  it('round-trips the optional seating policy in current-build saves without adding a default', () => {
+    const fresh = createInitialState();
+    expect(fresh.restaurant).not.toHaveProperty('seatingPolicy');
+    expect(() => validateSavedState(fresh)).not.toThrow();
+    expect(hydrateState(fresh, createInitialState()).restaurant)
+      .not.toHaveProperty('seatingPolicy');
+
+    for (const seatingPolicy of ['automatic', 'best-fit']) {
+      localStorage.clear();
+      const raw = createInitialState();
+      raw.restaurant = { ...raw.restaurant, seatingPolicy };
+
+      expect(saveState(raw)).toBe(true);
+      expect(loadState().restaurant.seatingPolicy).toBe(seatingPolicy);
+      const hydrated = hydrateState(loadState(), createInitialState());
+      expect(hydrated.restaurant.seatingPolicy).toBe(seatingPolicy);
+      expect(hydrated.version).toBe(raw.version);
+    }
+  });
+
+  it.each(['smallest', 'BEST-FIT', 1, null])(
+    'rejects malformed persisted seating policy %s', seatingPolicy => {
+      const raw = createInitialState();
+      raw.restaurant = { ...raw.restaurant, seatingPolicy };
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      expect(() => validateSavedState(raw)).toThrow();
+      expect(() => hydrateState(raw, createInitialState())).toThrow();
+      localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
+      expect(loadState()).toBeNull();
+    },
+  );
+
   it('round-trips optional rest amenity preferences without adding a default field', () => {
     const fresh = createInitialState();
     expect(fresh.staff[0]).not.toHaveProperty('restAmenityPreference');
