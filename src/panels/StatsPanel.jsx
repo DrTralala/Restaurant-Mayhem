@@ -12,6 +12,7 @@ import { DIRT_REPUTATION_THRESHOLD, getDirtReputationLossPerMinute } from '../si
 import { getQueuePartyCount, QUEUE_PARTY_CAPACITY } from '../simulation/customerQueue';
 import { getRevenueChart } from './revenueChart';
 import { getRecentFinanceSummary } from './recentFinanceSummary';
+import { getPartyReviewDayTrend } from './partyReviewTrend';
 import { isCareerDecisionPending } from '../simulation/careerRun';
 import TableSeatingHolds from './TableSeatingHolds';
 import { getTableLocatePoint } from '../canvas/tableLocatePoint';
@@ -95,6 +96,7 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
     ? Math.round(unaffordableReviewCount / partyReviewHistory.length * 100)
     : 0;
   const latestPartyReviews = partyReviewHistory.slice(-10).reverse();
+  const partyReviewDayTrend = getPartyReviewDayTrend(state.partyReviewHistory);
   const recentFinances = (Array.isArray(state.dailyHistory) ? state.dailyHistory : [])
     .slice(-7).reverse();
   const recentFinanceSummary = getRecentFinanceSummary(state.dailyHistory);
@@ -540,6 +542,41 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
           <div style={statBox}>
             Reviews with unaffordable members: {unaffordableReviewCount} ({unaffordableReviewPercentage}%)
           </div>
+          <section aria-label="Retained review day trend" style={{ marginTop: 8 }}>
+            <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>
+              Retained review day trend
+            </h4>
+            {partyReviewDayTrend.length === 0 && (
+              <p role="status" style={statBox}>No retained party reviews by day yet.</p>
+            )}
+            <ul
+              aria-label="Retained review days"
+              style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 8 }}
+            >
+              {partyReviewDayTrend.map(row => {
+                const averageScore = Number.isFinite(row.averageScore)
+                  ? row.averageScore.toFixed(1)
+                  : 'Unavailable';
+                const unaffordablePercentage = Number.isFinite(row.unaffordableShare)
+                  ? `${Math.round(row.unaffordableShare * 100)}%`
+                  : 'Unavailable';
+                return (
+                  <li
+                    key={row.day}
+                    data-testid="party-review-day-row"
+                    style={{ ...statBox, overflowWrap: 'anywhere', minWidth: 0 }}
+                  >
+                    Day {row.day} · {row.reviewCount} party reviews · Mean score {averageScore}
+                    {' · '}Parties with unaffordable members: {row.unaffordablePartyCount} of {row.reviewCount}
+                    {' '}({unaffordablePercentage})
+                  </li>
+                );
+              })}
+            </ul>
+            <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+              Each party contributes one score to the mean. This retained sample is capped at 30 reviews and may truncate even one day's reviews. The seven most recent represented days are shown (not necessarily consecutive); missing days are omitted, not zero-filled.
+            </p>
+          </section>
           {latestPartyReviews.map(review => {
             const formattedDelta = review.reputationDelta.toFixed(3);
             const signedDelta = review.reputationDelta > 0

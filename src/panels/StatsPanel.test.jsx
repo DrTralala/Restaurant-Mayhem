@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import StatsPanel from './StatsPanel';
 import { DIRT_REPUTATION_THRESHOLD } from '../simulation/dirt';
@@ -175,6 +175,92 @@ it('shows aggregates and only the latest ten reviews newest first', () => {
   expect(rows.at(-1)).toHaveTextContent('Day 3 · p3');
   expect(screen.queryByText(/p1$/)).not.toBeInTheDocument();
   expect(screen.queryByText(/p2$/)).not.toBeInTheDocument();
+  expect(screen.getAllByTestId('party-review-day-row')).toHaveLength(7);
+});
+
+describe('Retained review day trend', () => {
+  it('provides an accessible region, list, empty feedback, and sample caveat', () => {
+    render(<StatsPanel />);
+
+    const region = screen.getByRole('region', { name: 'Retained review day trend' });
+    expect(within(region).getByRole('heading', { name: 'Retained review day trend' }))
+      .toBeInTheDocument();
+    expect(within(region).getByRole('list', { name: 'Retained review days' }))
+      .toBeInTheDocument();
+    expect(within(region).getByRole('status'))
+      .toHaveTextContent('No retained party reviews by day yet.');
+    expect(within(region).getByText(/Each party contributes one score/)).toBeInTheDocument();
+    expect(within(region).getByText(/may truncate even one day's reviews/)).toBeInTheDocument();
+    expect(within(region).getByText(/not necessarily consecutive/)).toBeInTheDocument();
+    expect(within(region).getByText(/missing days are omitted, not zero-filled/i))
+      .toBeInTheDocument();
+  });
+
+  it('shows sparse day rows, equal-party means, unaffordable-party shares, and a seven-day cutoff', () => {
+    const partyReviewHistory = [
+      { partyId: 'day-3', day: 3, score: 30, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-25-small', day: 25, score: 80, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-9', day: 9, score: 9, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-5', day: 5, score: 5, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-20', day: 20, score: 20, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-8', day: 8, score: 8, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-15', day: 15, score: 15, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-12', day: 12, score: 12, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-21', day: 21, score: 21, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-24', day: 24, score: 24, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
+      { partyId: 'day-25-large', day: 25, score: 20, memberCount: 4, paidCount: 2, unaffordableCount: 2, reputationDelta: 0 },
+    ];
+    mockUseGameState.mockReturnValue({ ...baseState, partyReviewHistory });
+    render(<StatsPanel />);
+
+    const region = screen.getByRole('region', { name: 'Retained review day trend' });
+    const list = within(region).getByRole('list', { name: 'Retained review days' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(7);
+    expect(rows.map(row => row.textContent)).toEqual([
+      'Day 25 · 2 party reviews · Mean score 50.0 · Parties with unaffordable members: 1 of 2 (50%)',
+      'Day 24 · 1 party reviews · Mean score 24.0 · Parties with unaffordable members: 0 of 1 (0%)',
+      'Day 21 · 1 party reviews · Mean score 21.0 · Parties with unaffordable members: 0 of 1 (0%)',
+      'Day 20 · 1 party reviews · Mean score 20.0 · Parties with unaffordable members: 0 of 1 (0%)',
+      'Day 15 · 1 party reviews · Mean score 15.0 · Parties with unaffordable members: 0 of 1 (0%)',
+      'Day 12 · 1 party reviews · Mean score 12.0 · Parties with unaffordable members: 0 of 1 (0%)',
+      'Day 9 · 1 party reviews · Mean score 9.0 · Parties with unaffordable members: 0 of 1 (0%)',
+    ]);
+  });
+
+  it('shows unavailable for a non-finite aggregate and rerenders without dispatch while a career decision is pending', () => {
+    const firstHistory = [{
+      partyId: 'large-one', day: 1, score: Number.MAX_VALUE, memberCount: 1,
+      paidCount: 1, unaffordableCount: 0, reputationDelta: 0,
+    }, {
+      partyId: 'large-two', day: 1, score: Number.MAX_VALUE, memberCount: 1,
+      paidCount: 1, unaffordableCount: 0, reputationDelta: 0,
+    }];
+    mockUseGameState.mockReturnValue({
+      ...baseState,
+      careerRun: { needsDecision: true },
+      partyReviewHistory: firstHistory,
+    });
+    const { rerender } = render(<StatsPanel />);
+
+    let region = screen.getByRole('region', { name: 'Retained review day trend' });
+    expect(within(region).getByRole('listitem')).toHaveTextContent('Mean score Unavailable');
+    expect(mockUseDispatch).not.toHaveBeenCalled();
+
+    mockUseGameState.mockReturnValue({
+      ...baseState,
+      careerRun: { needsDecision: true },
+      partyReviewHistory: [{
+        partyId: 'new-day', day: 3, score: 30, memberCount: 1,
+        paidCount: 1, unaffordableCount: 0, reputationDelta: 0,
+      }],
+    });
+    rerender(<StatsPanel />);
+
+    region = screen.getByRole('region', { name: 'Retained review day trend' });
+    expect(within(region).getByRole('listitem')).toHaveTextContent('Day 3 · 1 party reviews');
+    expect(mockUseDispatch).not.toHaveBeenCalled();
+  });
 });
 
 it('shows an empty service snapshot with the pending stage labels', () => {
