@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
+import { EQUIPMENT } from '../data/equipment';
 import { DRINKS, getResolvedDrink } from '../data/drinks';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
 import { getMenuAnalysis, isMenuItemSuspended } from '../simulation/menuEconomy';
 import { getMenuSalesCount, getMenuSalesGross } from '../simulation/menuSales';
 import { getResolvedDish } from '../simulation/cookbook';
+import { isDishCompatibleWithStation } from '../simulation/cookingBatches';
 import { TYPOGRAPHY } from '../typography';
 import RecipeCreator from './RecipeCreator';
 import CookbookPanel from './CookbookPanel';
@@ -122,6 +124,7 @@ export default function MenuPanel({ readOnly = false }) {
       <p style={TYPOGRAPHY.secondary}>Cook seconds show base cooking work, not the complete wait time. Estimated demand is not a sales guarantee.</p>
       <p style={TYPOGRAPHY.secondary}>Suspension affects new walk-in orders only. Booked contract guests can still order these items; orders already taken continue unchanged.</p>
       <p style={TYPOGRAPHY.secondary}>Paid today counts charged units from successful checkouts, including booked guests; free or cancelled lines do not count. It is not a demand percentage. Gross sales use recorded menu charges only, exclude tips and are not profit; legacy count-only data can show partial or unavailable gross. Sales from before this feature, including older saves, are not tracked, and removing a dish clears its paid count.</p>
+      <p style={TYPOGRAPHY.secondary}>Equipment advice checks ownership and station compatibility, not access, workload or service completion.</p>
       {!hasWalkInMenu && (
         <p style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>
           No items are available for new walk-in orders. Guests without an order may leave unhappy.
@@ -143,6 +146,10 @@ export default function MenuPanel({ readOnly = false }) {
         .filter(entry => entry.dish)
         .map(({ rawDish, dish }) => {
         const suspended = isMenuItemSuspended(state, 'dish', dish.id);
+        const hasCompatibleStation = (state.kitchenStations || []).some(station =>
+          isDishCompatibleWithStation(state, dish, station));
+        const equipmentName = EQUIPMENT.find(equipment =>
+          equipment.id === dish.requiredEquipmentId)?.name || dish.requiredEquipmentId;
         const removalPending = pendingRemoval !== null && pendingRemoval.id === dish.id
           && pendingRemoval.dish === rawDish && !blocked;
         return (
@@ -157,6 +164,13 @@ export default function MenuPanel({ readOnly = false }) {
           {suspended && (
             <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4, color: '#f0a500' }}>
               Suspended for walk-ins
+            </div>
+          )}
+          {!hasCompatibleStation && (
+            <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4, color: '#f0a500' }}>
+              {dish.requiredEquipmentId == null
+                ? 'Kitchen equipment: this dish needs a kitchen station.'
+                : `Kitchen equipment: ${equipmentName} — no compatible kitchen station with owned equipment.`}
             </div>
           )}
           <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>

@@ -1581,3 +1581,90 @@ describe('paid today counters', () => {
       .getByText('Gross sales today: unavailable')).toBeInTheDocument();
   });
 });
+
+describe('MenuPanel kitchen equipment advice', () => {
+  const starterDish = () => within(screen.getByRole('article', {
+    name: 'Toasted Bread menu item',
+  }));
+
+  it('warns without a compatible station and clears the warning after a matching station is added', () => {
+    const state = { ...createInitialState(), kitchenStations: [] };
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(state);
+    useDispatch.mockReturnValue(dispatch);
+    const view = render(<MenuPanel />);
+
+    expect(starterDish().getByText(/Toaster.*no compatible kitchen station/)).toBeVisible();
+    expect(screen.getByText(
+      'Equipment advice checks ownership and station compatibility, not access, workload or service completion.',
+    )).toBeVisible();
+
+    useGameState.mockReturnValue({
+      ...state,
+      kitchenStations: [{ id: 'matching-station', equipmentId: 'eq1' }],
+    });
+    view.rerender(<MenuPanel />);
+
+    expect(starterDish().queryByText(/Toaster.*no compatible kitchen station/))
+      .not.toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unowned', state => ({
+      ...state,
+      kitchenStations: [{ id: 'unowned-station', equipmentId: 'eq1' }],
+      equipment: state.equipment.map(equipment => equipment.id === 'eq1'
+        ? { ...equipment, owned: false } : equipment),
+    })],
+    ['mismatched', state => ({
+      ...state,
+      kitchenStations: [{ id: 'mismatched-station', equipmentId: 'eq2' }],
+      equipment: state.equipment.map(equipment => equipment.id === 'eq2'
+        ? { ...equipment, owned: true } : equipment),
+    })],
+  ])('warns when the station equipment is %s', (_label, configure) => {
+    useGameState.mockReturnValue(configure(createInitialState()));
+    render(<MenuPanel />);
+
+    expect(starterDish().getByText(/Toaster.*no compatible kitchen station/)).toBeVisible();
+  });
+
+  it('requires any station for an unrestricted dish and clears that warning when one is added', () => {
+    const dish = {
+      id: 'unrestricted-dish', name: 'Garden Salad', price: 12, prepTime: 60,
+      quality: 1, popularity: 50, requiredEquipmentId: null,
+    };
+    const state = { ...createInitialState(), dishes: [dish], kitchenStations: [] };
+    useGameState.mockReturnValue(state);
+    const view = render(<MenuPanel />);
+    const card = () => within(screen.getByRole('article', { name: 'Garden Salad menu item' }));
+
+    expect(card().getByText('Kitchen equipment: this dish needs a kitchen station.')).toBeVisible();
+
+    useGameState.mockReturnValue({
+      ...state, kitchenStations: [{ id: 'bare-station', equipmentId: null }],
+    });
+    view.rerender(<MenuPanel />);
+
+    expect(card().queryByText('Kitchen equipment: this dish needs a kitchen station.'))
+      .not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['read-only', state => state, true],
+    ['career decision', state => ({ ...state, careerRun: { needsDecision: true } }), false],
+  ])('keeps advice visible for suspended dishes in %s mode', (_label, configure, readOnly) => {
+    const initial = createInitialState();
+    const state = configure({
+      ...initial,
+      kitchenStations: [],
+      restaurant: { ...initial.restaurant, suspendedDishIds: ['starter-toast'] },
+    });
+    useGameState.mockReturnValue(state);
+    render(<MenuPanel readOnly={readOnly} />);
+
+    expect(starterDish().getByText('Suspended for walk-ins')).toBeVisible();
+    expect(starterDish().getByText(/Toaster.*no compatible kitchen station/)).toBeVisible();
+  });
+});
