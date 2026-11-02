@@ -929,7 +929,13 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
       const requiredEquipmentOwned = !dish?.requiredEquipmentId
         || (state.equipment || []).some(candidate =>
           candidate.id === dish.requiredEquipmentId && candidate.owned);
-      for (const station of state.kitchenStations || []) {
+      const stations = state.kitchenStations || [];
+      const preferredStation = staff.preferredStationId == null ? null : stations.find(station =>
+        station?.id != null && String(station.id) === String(staff.preferredStationId));
+      const orderedStations = preferredStation
+        ? [preferredStation, ...stations.filter(station => station !== preferredStation)]
+        : stations;
+      for (const station of orderedStations) {
         if (!dish
           || !requiredEquipmentOwned
           || (dish.requiredEquipmentId && station.equipmentId !== dish.requiredEquipmentId)

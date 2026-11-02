@@ -92,7 +92,7 @@ describe('cooking batches', () => {
     expect(assigned.serviceItems.find(item => item.id === 'drink')).not.toHaveProperty('batchId');
   });
 
-  it('reserves separate stations for simultaneous cooks without sharing orders', () => {
+  it('reserves separate stations when simultaneous cooks prefer the same one without sharing orders', () => {
     const state = kitchenState({
       customers: [
         waitingCustomer('c1', 10), waitingCustomer('c2', 20),
@@ -106,8 +106,14 @@ describe('cooking batches', () => {
     const assigned = updateStaff({
       ...state,
       staff: [
-        { id: 'cook-a', role: 'cook', skill: 5, morale: 50, x: 80, y: 160, task: null },
-        { id: 'cook-b', role: 'cook', skill: 5, morale: 50, x: 280, y: 160, task: null },
+        {
+          id: 'cook-a', role: 'cook', skill: 5, morale: 50, x: 80, y: 160,
+          task: null, preferredStationId: 'k2',
+        },
+        {
+          id: 'cook-b', role: 'cook', skill: 5, morale: 50, x: 280, y: 160,
+          task: null, preferredStationId: 'k2',
+        },
       ],
       kitchenStations: [
         { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
@@ -116,6 +122,7 @@ describe('cooking batches', () => {
     });
 
     expect(assigned.cookingBatches).toHaveLength(2);
+    expect(assigned.cookingBatches.map(batch => batch.stationId)).toEqual(['k2', 'k1']);
     expect(new Set(assigned.cookingBatches.map(batch => batch.stationId))).toEqual(new Set(['k1', 'k2']));
     expect(new Set(assigned.cookingBatches.flatMap(batch => batch.serviceItemIds)))
       .toEqual(new Set(['i1', 'i2', 'i3', 'i4']));
@@ -171,6 +178,18 @@ describe('cooking batches', () => {
           serviceItemIds: ['i1', 'i2'], stationId: 'k1',
         },
       }),
+      staff: [{
+        id: 'cook', role: 'cook', skill: 5, morale: 50, x: 90, y: 130,
+        preferredStationId: 'k2',
+        task: {
+          type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
+          serviceItemIds: ['i1', 'i2'], stationId: 'k1',
+        },
+      }],
+      kitchenStations: [
+        { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
+        { id: 'k2', equipmentId: 'eq1', x: 300, y: 120 },
+      ],
       cookingBatches: [{
         id: 'batch-1', cookId: 'cook', stationId: 'k1', serviceItemIds: ['i1', 'i2'],
         status: 'ready', startedAt: 0, readyAt: 60,

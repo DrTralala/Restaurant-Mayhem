@@ -490,6 +490,11 @@ function validateStaff(staff) {
       && worker.cleaningFocus !== 'balanced') {
       fail(`${path}.cleaningFocus`, 'non-default cleaning focus is only allowed for janitors');
     }
+    validateOptionalId(worker, 'preferredStationId', path, { nullable: true });
+    if (has(worker, 'preferredStationId') && worker.role !== 'cook'
+      && worker.preferredStationId != null) {
+      fail(`${path}.preferredStationId`, 'non-null preferred station is only allowed for cooks');
+    }
     validateTask(worker.task, `${path}.task`, worker.role);
     validateAmenityUse(worker, path);
     validatePtoSession(worker, path);

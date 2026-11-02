@@ -206,6 +206,96 @@ describe('StaffPanel', () => {
     });
   });
 
+  it('offers a cook-only food station preference with disambiguated options and rerenders selection', () => {
+    let state = makeState({
+      staff: [
+        { id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200, preferredStationId: 'k2' },
+        { id: 's2', name: 'Anna', role: 'waiter', skill: 3, morale: 80, salary: 150 },
+      ],
+      kitchenStations: [
+        { id: 'k1', equipmentId: 'eq1' },
+        { id: 'k2', equipmentId: 'eq1' },
+      ],
+      equipment: [{ id: 'eq1', name: 'Toaster' }],
+    });
+    useGameState.mockImplementation(() => state);
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+
+    const { rerender } = render(<StaffPanel />);
+
+    const card = getStaffCard('s1');
+    const preference = within(card).getByRole('combobox', {
+      name: 'Preferred food station for Marco',
+    });
+    expect(preference).toHaveValue('k2');
+    expect(within(preference).getAllByRole('option').map(option => option.textContent))
+      .toEqual(['Automatic', 'Toaster · station k1', 'Toaster · station k2']);
+    expect(within(card).getByText(/new food batches only/i)).toBeVisible();
+    expect(within(getStaffCard('s2')).queryByRole('combobox', {
+      name: 'Preferred food station for Anna',
+    })).not.toBeInTheDocument();
+
+    preference.focus();
+    fireEvent.change(preference, { target: { value: 'k1' } });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_STAFF_PREFERRED_STATION', id: 's1', stationId: 'k1',
+    });
+
+    state = {
+      ...state,
+      staff: state.staff.map(worker => worker.id === 's1'
+        ? { ...worker, preferredStationId: 'k1' }
+        : worker),
+    };
+    rerender(<StaffPanel />);
+    const updated = within(getStaffCard('s1')).getByRole('combobox', {
+      name: 'Preferred food station for Marco',
+    });
+    expect(updated).toBe(preference);
+    expect(updated).toHaveValue('k1');
+    expect(updated).toHaveFocus();
+  });
+
+  it('shows and clears an unavailable cook station, and guards the selector during career decisions', () => {
+    let state = makeState({
+      staff: [{
+        id: 's1', name: 'Marco', role: 'cook', skill: 3, morale: 80, salary: 200,
+        preferredStationId: 'removed-station',
+      }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', name: 'Toaster' }],
+    });
+    useGameState.mockImplementation(() => state);
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+
+    const { rerender } = render(<StaffPanel />);
+    const card = getStaffCard('s1');
+    const preference = within(card).getByRole('combobox', {
+      name: 'Preferred food station for Marco',
+    });
+    expect(preference).toHaveValue('removed-station');
+    expect(within(preference).getByRole('option', {
+      name: 'Unavailable station · removed-station',
+    })).toBeDisabled();
+
+    fireEvent.change(preference, { target: { value: '' } });
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'SET_STAFF_PREFERRED_STATION', id: 's1', stationId: null,
+    });
+
+    dispatch.mockClear();
+    state = { ...state, careerRun: { needsDecision: true } };
+    rerender(<StaffPanel />);
+    const locked = within(getStaffCard('s1')).getByRole('combobox', {
+      name: 'Preferred food station for Marco',
+    });
+    expect(locked).toBeDisabled();
+    fireEvent.change(locked, { target: { value: 'k1' } });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it('shows cashier assignments only when cashier stations exist', () => {
     useGameState.mockReturnValue(makeState({
       cashierStations: [{ id: 'cashier-1', x: 800, y: 120, w: 40, h: 40 }],

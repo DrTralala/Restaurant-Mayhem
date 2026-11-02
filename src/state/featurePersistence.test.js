@@ -709,6 +709,58 @@ describe('additive v10 feature persistence', () => {
     expect(() => hydrateState(raw, createInitialState())).toThrow();
   });
 
+  it('round-trips an optional nullable cook station preference and tolerates stale IDs', () => {
+    const fresh = createInitialState();
+    const cookId = fresh.staff.find(worker => worker.role === 'cook').id;
+    expect(fresh.staff.find(worker => worker.id === cookId)).not.toHaveProperty('preferredStationId');
+    expect(() => validateSavedState(fresh)).not.toThrow();
+    expect(hydrateState(fresh, createInitialState()).staff.find(worker => worker.id === cookId))
+      .not.toHaveProperty('preferredStationId');
+
+    for (const preferredStationId of [null, fresh.kitchenStations[0].id, 'removed-station']) {
+      localStorage.clear();
+      const raw = createInitialState();
+      raw.staff = raw.staff.map(worker => worker.id === cookId
+        ? { ...worker, preferredStationId }
+        : worker);
+
+      expect(saveState(raw)).toBe(true);
+      expect(loadState().staff.find(worker => worker.id === cookId).preferredStationId)
+        .toBe(preferredStationId);
+      expect(hydrateState(loadState(), createInitialState()).staff
+        .find(worker => worker.id === cookId).preferredStationId).toBe(preferredStationId);
+    }
+
+    const partial = createInitialState();
+    partial.version = undefined;
+    partial.staff = partial.staff.map(worker => worker.id === cookId
+      ? { ...worker, preferredStationId: 7 }
+      : worker);
+    expect(() => validateSavedState(partial)).not.toThrow();
+  });
+
+  it.each(['', -1, 1.5, false, {}])('rejects malformed persisted preferred station ID %s', preferredStationId => {
+    const raw = createInitialState();
+    raw.version = undefined;
+    const cookIndex = raw.staff.findIndex(worker => worker.role === 'cook');
+    raw.staff[cookIndex] = { ...raw.staff[cookIndex], preferredStationId };
+
+    expect(() => validateSavedState(raw)).toThrow();
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
+  });
+
+  it('rejects a non-null preferred station on non-cook staff but accepts null', () => {
+    const raw = createInitialState();
+    const waiterIndex = raw.staff.findIndex(worker => worker.role === 'waiter');
+    raw.staff[waiterIndex] = { ...raw.staff[waiterIndex], preferredStationId: 'k1' };
+
+    expect(() => validateSavedState(raw)).toThrow();
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
+
+    raw.staff[waiterIndex] = { ...raw.staff[waiterIndex], preferredStationId: null };
+    expect(() => validateSavedState(raw)).not.toThrow();
+  });
+
   it.each(['yes', 1, 0, null])('rejects malformed table admission hold %s', admissionHeld => {
     const raw = createInitialState();
     raw.tables[0] = { ...raw.tables[0], admissionHeld };

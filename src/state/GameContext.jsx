@@ -863,6 +863,37 @@ function reduceGameAction(state, action) {
           : candidate),
       };
     }
+    case 'SET_STAFF_PREFERRED_STATION': {
+      const validId = (typeof action.id === 'string' && action.id.length > 0)
+        || (Number.isSafeInteger(action.id) && action.id >= 0);
+      const validStationId = action.stationId === null
+        || (typeof action.stationId === 'string' && action.stationId.length > 0)
+        || (Number.isSafeInteger(action.stationId) && action.stationId >= 0);
+      if (!validId || !validStationId || !Array.isArray(state.staff)) return state;
+      const matches = state.staff.filter(worker => sameId(worker?.id, action.id));
+      if (matches.length !== 1) return state;
+      const worker = matches[0];
+      if (action.stationId !== null && worker.role !== 'cook') return state;
+
+      let preferredStationId = null;
+      if (action.stationId !== null) {
+        if (!Array.isArray(state.kitchenStations)) return state;
+        const stations = state.kitchenStations.filter(station => sameId(station?.id, action.stationId));
+        if (stations.length !== 1) return state;
+        preferredStationId = stations[0].id;
+      }
+
+      const unchanged = preferredStationId === null
+        ? worker.preferredStationId == null
+        : sameId(worker.preferredStationId, preferredStationId);
+      if (unchanged) return state;
+      return {
+        ...state,
+        staff: state.staff.map(candidate => candidate === worker
+          ? { ...candidate, preferredStationId }
+          : candidate),
+      };
+    }
     case 'FIRE_STAFF': {
       const fired = state.staff.find(staff => staff.id === action.id);
       if (!fired) return state;
@@ -1111,7 +1142,8 @@ export function gameReducer(state, action) {
     || action.type === 'SET_MENU_SALES_THRESHOLD'
     || action.type === 'RESUME_ALL_MENU_ITEMS'
     || action.type === 'SET_STAFF_REST_AMENITY_PREFERENCE'
-    || action.type === 'SET_STAFF_CLEANING_FOCUS') return candidate;
+    || action.type === 'SET_STAFF_CLEANING_FOCUS'
+    || action.type === 'SET_STAFF_PREFERRED_STATION') return candidate;
   if (candidate.dishes !== state.dishes) {
     candidate = {
       ...candidate,

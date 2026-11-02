@@ -3954,6 +3954,72 @@ describe('updateStaff', () => {
 
   // --- Dish preparation ---
 
+  it('prefers a cook’s selected compatible station for a new food batch', () => {
+    const state = {
+      ...baseState,
+      staff: [{
+        id: 'c1', role: 'cook', morale: 80, x: 500, y: 600, preferredStationId: 'k2',
+      }],
+      kitchenStations: [
+        { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
+        { id: 'k2', equipmentId: 'eq1', x: 240, y: 120 },
+      ],
+      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true }],
+      customers: [{ id: 'guest', state: 'waiting_for_items', dishId: 'd1' }],
+      serviceItems: [{ id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'guest', state: 'ordered' }],
+    };
+
+    const result = updateStaff(state, 1);
+
+    expect(result.staff[0].task).toMatchObject({ type: 'prepare_dish', stationId: 'k2' });
+  });
+
+  function stationPreferenceState({
+    preferredStationId = 'k2',
+    noPreference = false,
+    station2 = { id: 'k2', equipmentId: 'eq1', x: 240, y: 120 },
+    preparationStationClaims = [],
+  } = {}) {
+    const cook = {
+      id: 'cook', role: 'cook', morale: 80, x: 500, y: 600,
+      ...(noPreference ? {} : { preferredStationId }),
+    };
+    return {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, gameTime: 100 },
+      staff: [cook],
+      kitchenStations: [
+        { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
+        station2,
+      ],
+      __preparationStationClaims: preparationStationClaims,
+      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true }, { id: 'eq2', owned: true }],
+      customers: [{ id: 'guest', state: 'waiting_for_items', dishId: 'd1' }],
+      serviceItems: [{ id: 'pending', kind: 'dish', menuItemId: 'd1', customerId: 'guest', state: 'ordered' }],
+    };
+  }
+
+  it.each([
+    ['stale', { preferredStationId: 'removed-station' }],
+    ['incompatible', { station2: { id: 'k2', equipmentId: 'eq2', x: 240, y: 120 } }],
+    ['busy', {
+      preparationStationClaims: ['k2'],
+    }],
+    ['unreachable', { station2: { id: 'k2', equipmentId: 'eq1', x: -100, y: -100 } }],
+  ])('falls back to original station order when the preferred station is %s', (_reason, overrides) => {
+    const result = updateStaff(stationPreferenceState(overrides), 1);
+
+    expect(result.staff[0].task).toMatchObject({ type: 'prepare_dish', stationId: 'k1' });
+  });
+
+  it('keeps the original station order when no preference is set', () => {
+    const result = updateStaff(stationPreferenceState({ noPreference: true }), 1);
+
+    expect(result.staff[0].task).toMatchObject({ type: 'prepare_dish', stationId: 'k1' });
+  });
+
   it('cook paths to a compatible station for the oldest ordered dish item', () => {
     const cook = { id: 'c1', name: 'Marco', role: 'cook', skill: 5, morale: 80, salary: 200, x: 500, y: 600 };
     const state = {
@@ -4018,7 +4084,9 @@ describe('updateStaff', () => {
   it('cook selects the oldest eligible food or drink preparation', () => {
     const state = {
       ...baseState,
-      staff: [{ id: 'cook', role: 'cook', morale: 80, x: 500, y: 600 }],
+      staff: [{
+        id: 'cook', role: 'cook', morale: 80, x: 500, y: 600, preferredStationId: 'k1',
+      }],
       kitchenStations: [
         { id: 'k1', equipmentId: 'eq1', x: 90, y: 70 },
         { id: 'dispenser', equipmentId: null, x: 360, y: 120 },
@@ -4086,9 +4154,13 @@ describe('updateStaff', () => {
   it('selects a contract dish ahead of an older walk-in drink when a cook becomes free', () => {
     const state = {
       ...baseState,
-      staff: [{ id: 'cook', role: 'cook', morale: 80, x: 500, y: 600, task: null }],
+      staff: [{
+        id: 'cook', role: 'cook', morale: 80, x: 500, y: 600, task: null,
+        preferredStationId: 'k2',
+      }],
       kitchenStations: [
         { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
+        { id: 'k2', equipmentId: 'eq1', x: 240, y: 120 },
         { id: 'dispenser', equipmentId: null, x: 360, y: 120 },
       ],
       dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
@@ -4109,7 +4181,7 @@ describe('updateStaff', () => {
     const result = updateStaff(state, 1);
 
     expect(result.staff[0].task).toMatchObject({
-      type: 'prepare_dish', serviceItemId: 'contract-dish', stationId: 'k1',
+      type: 'prepare_dish', serviceItemId: 'contract-dish', stationId: 'k2',
     });
   });
 
@@ -4117,13 +4189,14 @@ describe('updateStaff', () => {
     const station = { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 };
     const cook = {
       id: 'c1', name: 'Marco', role: 'cook', skill: 5, morale: 80, salary: 200,
+      preferredStationId: 'k2',
        x: 90, y: 130,
       task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
     };
     const state = {
       ...baseState,
       staff: [cook],
-      kitchenStations: [station],
+      kitchenStations: [station, { id: 'k2', equipmentId: 'eq1', x: 240, y: 120 }],
       dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       serviceItems: [

@@ -408,6 +408,14 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
         const restPreferenceDescriptionId = `${restPreferenceId}-description`;
         const cleaningFocusId = `${bonusExplanationId}-cleaning-focus-${index}`;
         const cleaningFocusDescriptionId = `${cleaningFocusId}-description`;
+        const preferredStationId = s.preferredStationId == null
+          ? '' : String(s.preferredStationId);
+        const kitchenStations = Array.isArray(state.kitchenStations) ? state.kitchenStations : [];
+        const hasPreferredStation = preferredStationId !== '' && kitchenStations.some(station =>
+          station?.id != null && String(station.id) === preferredStationId);
+        const unavailablePreferredStation = preferredStationId !== '' && !hasPreferredStation;
+        const preferredStationIdControl = `${bonusExplanationId}-preferred-station-${index}`;
+        const preferredStationDescriptionId = `${preferredStationIdControl}-description`;
         const restPreference = ['automatic', 'couch', 'arcade'].includes(s.restAmenityPreference)
           ? s.restAmenityPreference : 'automatic';
         const cleaningFocus = STAFF_CLEANING_FOCUS_OPTIONS.some(option => option.value === s.cleaningFocus)
@@ -497,6 +505,50 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
               </select>
               <p id={cleaningFocusDescriptionId} style={{ ...TYPOGRAPHY.secondary, color: '#8fa4c8', margin: '4px 0 0' }}>
                 A modest preference that affects new tasks only. Other cleaning work remains eligible if the focused work is absent, claimed or unreachable; a current task is not interrupted.
+              </p>
+            </div>
+          )}
+          {s.role === 'cook' && (
+            <div style={{ margin: '6px 0' }}>
+              <label htmlFor={preferredStationIdControl} style={{ ...TYPOGRAPHY.secondary, display: 'block', marginBottom: 4 }}>
+                Preferred food station
+              </label>
+              <select
+                id={preferredStationIdControl}
+                value={preferredStationId}
+                disabled={decisionPending}
+                aria-label={`Preferred food station for ${s.name}`}
+                aria-describedby={preferredStationDescriptionId}
+                onChange={event => {
+                  if (decisionRef.current) return;
+                  const stationId = event.target.value === '' ? null : event.target.value;
+                  if (stationId !== null && !kitchenStations.some(station =>
+                    station?.id != null && String(station.id) === stationId)) return;
+                  dispatch({ type: 'SET_STAFF_PREFERRED_STATION', id: s.id, stationId });
+                }}
+                style={{ ...TYPOGRAPHY.control, background: '#111', color: '#ccc', border: '1px solid #555', borderRadius: 4, padding: '4px 6px' }}
+              >
+                <option value="">Automatic</option>
+                {kitchenStations.map((station, stationIndex) => {
+                  const equipment = (state.equipment || []).find(candidate =>
+                    station.equipmentId != null && String(candidate.id) === String(station.equipmentId));
+                  const equipmentName = station.equipmentId == null
+                    ? 'Open station'
+                    : equipment?.name || humaniseIdentifier(station.equipmentId);
+                  return (
+                    <option key={`${String(station.id)}-${stationIndex}`} value={String(station.id)}>
+                      {`${equipmentName} · station ${String(station.id)}`}
+                    </option>
+                  );
+                })}
+                {unavailablePreferredStation && (
+                  <option value={preferredStationId} disabled>
+                    {`Unavailable station · ${preferredStationId}`}
+                  </option>
+                )}
+              </select>
+              <p id={preferredStationDescriptionId} style={{ ...TYPOGRAPHY.secondary, color: '#8fa4c8', margin: '4px 0 0' }}>
+                Applies to new food batches only, not drinks or active work. If this station is busy, incompatible or its route is blocked, another compatible station remains eligible; this is not a reservation.
               </p>
             </div>
           )}

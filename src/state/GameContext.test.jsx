@@ -1433,6 +1433,126 @@ describe('staff cleaning focus', () => {
   });
 });
 
+describe('staff preferred kitchen station', () => {
+  it('stores the current station ID without changing active work or unrelated references', () => {
+    const initial = createInitialState();
+    const cook = initial.staff.find(worker => worker.role === 'cook');
+    const task = { type: 'prepare_dish', serviceItemId: 'active-dish', stationId: 'k1' };
+    const state = {
+      ...initial,
+      kitchenStations: [{ ...initial.kitchenStations[0], id: 5 }],
+      staff: initial.staff.map(worker => worker.id === cook.id ? { ...worker, task } : worker),
+    };
+
+    const next = gameReducer(state, {
+      type: 'SET_STAFF_PREFERRED_STATION', id: cook.id, stationId: '5',
+    });
+
+    expect(next).not.toBe(state);
+    expect(next.staff.find(worker => worker.id === cook.id)).toMatchObject({ preferredStationId: 5 });
+    expect(next.staff.find(worker => worker.id === cook.id).task).toBe(task);
+    expect(next.staff.find(worker => worker.role === 'waiter'))
+      .toBe(state.staff.find(worker => worker.role === 'waiter'));
+    expect(next.kitchenStations).toBe(state.kitchenStations);
+    expect(next.serviceItems).toBe(state.serviceItems);
+    expect(next.cookingBatches).toBe(state.cookingBatches);
+
+    const numericCookState = {
+      ...state,
+      staff: state.staff.map(worker => worker.id === cook.id ? { ...worker, id: 7 } : worker),
+    };
+    const numericCookNext = gameReducer(numericCookState, {
+      type: 'SET_STAFF_PREFERRED_STATION', id: '7', stationId: '5',
+    });
+    expect(numericCookNext.staff.find(worker => worker.id === 7).preferredStationId).toBe(5);
+  });
+
+  it('clears a stale value, preserves an idempotent state, and honours the career lock', () => {
+    const initial = createInitialState();
+    const cook = initial.staff.find(worker => worker.role === 'cook');
+    const stationId = initial.kitchenStations[0].id;
+    const alreadyPreferred = {
+      ...initial,
+      staff: initial.staff.map(worker => worker.id === cook.id
+        ? { ...worker, preferredStationId: stationId }
+        : worker),
+    };
+
+    expect(gameReducer(alreadyPreferred, {
+      type: 'SET_STAFF_PREFERRED_STATION', id: cook.id, stationId,
+    })).toBe(alreadyPreferred);
+
+    const stale = {
+      ...initial,
+      staff: initial.staff.map(worker => worker.id === cook.id
+        ? { ...worker, preferredStationId: 'removed-station' }
+        : worker),
+    };
+    expect(gameReducer(stale, {
+      type: 'SET_STAFF_PREFERRED_STATION', id: cook.id, stationId: null,
+    }).staff.find(worker => worker.id === cook.id).preferredStationId).toBeNull();
+
+    const pending = { ...initial, careerRun: { needsDecision: true } };
+    expect(gameReducer(pending, {
+      type: 'SET_STAFF_PREFERRED_STATION', id: cook.id, stationId,
+    })).toBe(pending);
+  });
+
+  it.each([
+    ['missing worker ID', { stationId: 'k1' }],
+    ['unknown worker ID', { id: 'missing-cook', stationId: 'k1' }],
+    ['invalid worker ID', { id: -1, stationId: 'k1' }],
+    ['missing station ID', { id: 'starter-cook' }],
+    ['empty station ID', { id: 'starter-cook', stationId: '' }],
+    ['unknown station ID', { id: 'starter-cook', stationId: 'removed-station' }],
+    ['invalid station ID', { id: 'starter-cook', stationId: -1 }],
+    ['non-cook target', { id: 'starter-waiter', stationId: 'k1' }],
+  ])('ignores a %s', (_label, fields) => {
+    const state = createInitialState();
+
+    expect(gameReducer(state, { type: 'SET_STAFF_PREFERRED_STATION', ...fields })).toBe(state);
+  });
+
+  it('rejects ambiguous worker or station IDs but allows a non-cook to clear a stale value', () => {
+    const initial = createInitialState();
+    const cook = initial.staff.find(worker => worker.role === 'cook');
+    const station = initial.kitchenStations[0];
+    const duplicateWorker = {
+      ...initial,
+      staff: [
+        ...initial.staff.filter(worker => worker !== cook),
+        { ...cook, id: 7 },
+        { ...cook, id: '7' },
+      ],
+    };
+    expect(gameReducer(duplicateWorker, {
+      type: 'SET_STAFF_PREFERRED_STATION', id: 7, stationId: station.id,
+    })).toBe(duplicateWorker);
+
+    const duplicateStation = {
+      ...initial,
+      kitchenStations: [
+        { ...station, id: 5 },
+        { ...station, id: '5' },
+      ],
+    };
+    expect(gameReducer(duplicateStation, {
+      type: 'SET_STAFF_PREFERRED_STATION', id: cook.id, stationId: 5,
+    })).toBe(duplicateStation);
+
+    const waiter = initial.staff.find(worker => worker.role === 'waiter');
+    const staleWaiter = {
+      ...initial,
+      staff: initial.staff.map(worker => worker.id === waiter.id
+        ? { ...worker, preferredStationId: 'removed-station' }
+        : worker),
+    };
+    expect(gameReducer(staleWaiter, {
+      type: 'SET_STAFF_PREFERRED_STATION', id: waiter.id, stationId: null,
+    }).staff.find(worker => worker.id === waiter.id).preferredStationId).toBeNull();
+  });
+});
+
 describe('GameProvider authoritative placement actions', () => {
   beforeEach(() => localStorage.clear());
 
