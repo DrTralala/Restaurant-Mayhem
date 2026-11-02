@@ -8,6 +8,7 @@ import { SHOP_ITEMS, SHOP_ITEM_TYPES } from './itemCatalog';
 
 const EXPECTED_SHOP_ITEM_TYPES = [
   'table',
+  'highTopCounter',
   'chair',
   'door',
   'cashierTable',
@@ -49,6 +50,7 @@ describe('SHOP_ITEMS', () => {
     const bed = getPlaceable('bed');
     const expectedDescriptions = {
       table: 'A four-seat dining table. Add chairs separately before seating guests.',
+      highTopCounter: 'A 4×1 countertop with four built-in chairs for solo diners. Total footprint: 4×2 squares.',
       chair: 'Adds one movable chair next to a table with an available seat.',
       door: 'Adds a new entrance door. Change its role from the canvas when needed.',
       cashierTable: 'A cashier station assigned to an available waiter when placed.',

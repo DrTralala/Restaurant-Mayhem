@@ -1,4 +1,4 @@
-const TABLE_SIZE = 40;
+import { getDiningTableRect } from '../data/diningGeometry';
 const PLACE_SETTING_INSET = 8;
 
 export function getChairFacingRadians(rotation) {
@@ -8,7 +8,8 @@ export function getChairFacingRadians(rotation) {
 export function getPlaceSettingPositions(table, chair, kinds) {
   if (![table?.x, table?.y, chair?.x, chair?.y].every(Number.isFinite)) return {};
   const chairCentre = { x: chair.x + 10, y: chair.y + 10 };
-  const centre = { x: table.x + 20, y: table.y + 20 };
+  const rect = getDiningTableRect(table);
+  const centre = { x: table.x + rect.w / 2, y: table.y + rect.h / 2 };
   const dx = centre.x - chairCentre.x;
   const dy = centre.y - chairCentre.y;
   const distance = Math.hypot(dx, dy) || 1;
@@ -16,9 +17,9 @@ export function getPlaceSettingPositions(table, chair, kinds) {
   const uy = dy / distance;
   const candidates = [];
   if (chairCentre.x < table.x && ux > 0) candidates.push((table.x - chairCentre.x) / ux);
-  if (chairCentre.x > table.x + TABLE_SIZE && ux < 0) candidates.push((table.x + TABLE_SIZE - chairCentre.x) / ux);
+  if (chairCentre.x > table.x + rect.w && ux < 0) candidates.push((table.x + rect.w - chairCentre.x) / ux);
   if (chairCentre.y < table.y && uy > 0) candidates.push((table.y - chairCentre.y) / uy);
-  if (chairCentre.y > table.y + TABLE_SIZE && uy < 0) candidates.push((table.y + TABLE_SIZE - chairCentre.y) / uy);
+  if (chairCentre.y > table.y + rect.h && uy < 0) candidates.push((table.y + rect.h - chairCentre.y) / uy);
   const validCandidates = candidates.filter(value => Number.isFinite(value) && value >= 0);
   if (!validCandidates.length) return {};
   const distanceToEdge = Math.min(...validCandidates);
@@ -31,9 +32,13 @@ export function getPlaceSettingPositions(table, chair, kinds) {
   const result = {};
   const hasPair = requested.includes('dish') && requested.includes('drink');
   const left = { x: uy, y: -ux };
+  const pairOffset = table.highTopCounterId != null ? 5 : 6;
   for (const kind of requested) {
     const side = hasPair ? (kind === 'dish' ? 1 : kind === 'drink' ? -1 : 0) : 0;
-    result[kind] = { x: anchor.x + left.x * 6 * side, y: anchor.y + left.y * 6 * side };
+    result[kind] = {
+      x: anchor.x + left.x * pairOffset * side,
+      y: anchor.y + left.y * pairOffset * side,
+    };
   }
   return result;
 }

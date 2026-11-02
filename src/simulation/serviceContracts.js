@@ -126,7 +126,7 @@ function withActive(state, active) {
 
 function finishContract(state, active, status, now) {
   const count = fulfilledCount(active.guests);
-  const { cashDelta, bonusPaid, ...financialEvidence } = getServiceContractSettlement(active, status);
+  const { cashDelta, bonusPaid, ...financialEvidence } = getServiceContractSettlement(active, status, now);
   const result = { instanceId: active.instanceId, templateId: active.templateId,
     rulesVersion: active.rulesVersion,
     acceptedDay: active.acceptedDay, acceptedAt: active.acceptedAt, serviceStartAt: active.serviceStartAt,
@@ -135,9 +135,12 @@ function finishContract(state, active, status, now) {
     guestResults: active.guests.map(({ guestId, partyId, status: guestStatus, reason, paidVisitSequence, resolvedAt }) =>
       ({ guestId, partyId, status: guestStatus, reason, paidVisitSequence, resolvedAt })) };
   const title = getServiceContractTemplate(active.templateId, active.rulesVersion).title;
+  const preparationWithdrawal = active.rulesVersion >= 5 && status === 'withdrawn'
+    && now < active.serviceStartAt;
   const paymentMessage = active.rulesVersion < 3
     ? (bonusPaid ? `Bonus $${bonusPaid}.` : 'No contract bonus.')
-    : status === 'succeeded' ? `$${cashDelta} balance paid; $${bonusPaid} total reward.`
+    : preparationWithdrawal ? `$${financialEvidence.depositRefunded} deposit repaid; no compensation or reputation penalty before service.`
+      : status === 'succeeded' ? `$${cashDelta} balance paid; $${bonusPaid} total reward.`
       : `$${financialEvidence.depositRefunded} deposit repaid + $${financialEvidence.compensationPaid} compensation. Reputation -0.25 (minimum 1).`;
   return { ...state,
     restaurant: cashDelta || financialEvidence.reputationPenalty ? { ...state.restaurant,
@@ -200,6 +203,7 @@ export function advanceServiceContractArrivals(state, now, { admitParty } = {}) 
       members: active.guests.filter(guest => guest.partyId === party.partyId).map(guest => ({
         id: guest.guestId, serviceContractGuestId: guest.guestId, archetype: guest.archetype,
         gender: guest.gender, spendingTier: guest.spendingTier, spendingBudget: guest.spendingBudget,
+        ...(Number.isFinite(guest.patienceMultiplier) ? { patienceMultiplier: guest.patienceMultiplier } : {}),
       })) };
     const result = admitParty(withActive(next, active), booking);
     if (result.admitted) {
@@ -311,7 +315,13 @@ export function selectServiceContractView(state) {
   const branch = state.serviceContracts || createServiceContractsState();
   const source = branch.active;
   const now = state.restaurant?.gameTime || 0;
-  const active = source ? { ...source, title: getServiceContractTemplate(source.templateId, source.rulesVersion).title,
+  const activeTemplate = source ? getServiceContractTemplate(source.templateId, source.rulesVersion) : null;
+  const metadataFor = template => ({
+    ...(template?.tier !== undefined ? { tier: template.tier } : {}),
+    ...(template?.preparationExpectations !== undefined
+      ? { preparationExpectations: template.preparationExpectations } : {}),
+  });
+  const active = source ? { ...source, ...metadataFor(activeTemplate), title: activeTemplate.title,
     terms: getServiceContractTerms(source.templateId, source.rulesVersion),
     fulfilledCount: fulfilledCount(source.guests), targetMet: fulfilledCount(source.guests) >= source.target,
     admittedCount: source.parties.filter(party => party.status === 'admitted').reduce((n, party) => n + party.size, 0),
@@ -323,7 +333,11 @@ export function selectServiceContractView(state) {
     nextArrivalAt: source.parties.find(party => party.status === 'scheduled')?.arrivalAt ?? null,
     decisionPending: pendingDecision(state) } : null;
   return { active, latestResult: branch.results.at(-1) || null, results: branch.results,
-    offers: SERVICE_CONTRACTS.map(template => getServiceContractOffer(state, template.id)) };
+    offers: SERVICE_CONTRACTS.map(template => {
+      const offer = getServiceContractOffer(state, template.id);
+      const selectedTemplate = getServiceContractTemplate(template.id, SERVICE_CONTRACT_RULES_VERSION);
+      return { ...offer, ...metadataFor(selectedTemplate) };
+    }) };
 }
 
 function check(condition, detail) {
@@ -372,7 +386,7 @@ export function validateServiceContractsState(value, state) {
   function validateInstance(instance, isActive) {
     const hasRulesVersion = object(instance) && Object.hasOwn(instance, 'rulesVersion');
     const rulesVersion = isActive || hasRulesVersion ? instance?.rulesVersion : 1;
-    check([1, 2, 3, 4].includes(rulesVersion), 'rules version');
+    check([1, 2, 3, 4, 5, 6].includes(rulesVersion), 'rules version');
     exactKeys(instance, [...commonKeys, ...(isActive
       ? ['rulesVersion', 'phase', 'parties', 'guests']
       : ['settledAt', 'status', 'bonusPaid', 'fulfilledCount', 'guestResults',
@@ -405,7 +419,7 @@ export function validateServiceContractsState(value, state) {
     if (rulesVersion >= 3) {
       const expectedFinance = isActive
         ? { depositPaid: getServiceContractTerms(instance.templateId, rulesVersion).deposit }
-        : getServiceContractSettlement(instance, instance.status);
+        : getServiceContractSettlement(instance, instance.status, instance.settledAt);
       for (const key of isActive ? ['depositPaid']
         : ['depositPaid', 'depositRefunded', 'compensationPaid', 'reputationPenalty']) {
         check(instance[key] === expectedFinance[key], `financial ${key}`);
@@ -442,7 +456,7 @@ export function validateServiceContractsState(value, state) {
     rows.forEach((row, index) => {
       const original = expected.guests[index];
       exactKeys(row, isActive ? Object.keys(original) : ledgerKeys, 'guest shape');
-      for (const key of isActive ? ['guestId', 'partyId', 'label', 'archetype', 'gender', 'spendingTier', 'spendingBudget'] : ['guestId', 'partyId']) {
+      for (const key of isActive ? ['guestId', 'partyId', 'label', 'archetype', 'gender', 'spendingTier', 'spendingBudget', 'patienceMultiplier'] : ['guestId', 'partyId']) {
         check(row[key] === original[key], `guest ${key}`);
       }
       const party = expected.parties.find(p => p.partyId === row.partyId);

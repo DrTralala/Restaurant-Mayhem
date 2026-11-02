@@ -280,12 +280,14 @@ function settleWorkerProgress(state, worker, now) {
   }
 
   if (Array.isArray(nextState.serviceItems)) {
-    const itemIds = task.type === 'prepare_dish' && task.batchId != null
-      ? uniqueIds([
-        ...taskItemIds(task),
-        ...getBatchServiceItemIds(getCookingBatch(nextState, task.batchId)),
-      ])
-      : taskItemIds(task);
+    const itemIds = task.type === 'wash_item'
+      ? uniqueIds([task.serviceItemId])
+      : task.type === 'prepare_dish' && task.batchId != null
+        ? uniqueIds([
+          ...taskItemIds(task),
+          ...getBatchServiceItemIds(getCookingBatch(nextState, task.batchId)),
+        ])
+        : taskItemIds(task);
     if (itemIds.length > 0 && ['prepare_dish', 'prepare_drink', 'wash_item'].includes(task.type)) {
       const itemRate = getStaffTaskRate(nextState, worker, task);
       const nextItems = updateItemProgress(

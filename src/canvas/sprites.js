@@ -2,6 +2,7 @@ import cashierUrl from '../../images/cashier-station.png';
 import chairUrl from '../../images/chair.png';
 import dishwasherUrl from '../../images/dishwasher.png';
 import drinksDispenserUrl from '../../images/drinks-dispenser.png';
+import highTopCounterUrl from '../../images/high-top-counter.png';
 import ovenUrl from '../../images/oven.png';
 import ovenInUseUrl from '../../images/oven-in-use.png';
 import serviceCounterUrl from '../../images/service-counter.png';
@@ -16,6 +17,7 @@ const SPRITE_URLS = Object.freeze({
   chair: chairUrl,
   dishwasher: dishwasherUrl,
   drinksDispenser: drinksDispenserUrl,
+  highTopCounter: highTopCounterUrl,
   oven: ovenUrl,
   ovenInUse: ovenInUseUrl,
   serviceCounter: serviceCounterUrl,

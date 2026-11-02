@@ -1,5 +1,6 @@
 import { getDoors, getRestaurantWorld } from '../world';
 import { isPhysicallySeatedCustomerState } from '../customerSeating';
+import { getDiningChairAccessPoint } from '../../data/diningGeometry';
 import {
   cellKey, cellToWorld, createNavigationWorkspace, isSafeSegment, isTopInteriorWallCell,
   navigationFixtureRectangles, worldToCell,
@@ -39,6 +40,7 @@ function onlyOwnChair(state, chair, origin) {
 function seatRecord(actor, chair, table) {
   return Object.freeze({
     actorId: String(actor.id), chairId: chair.id, tableId: table.id,
+    highTopCounterId: chair.highTopCounterId,
     origin: Object.freeze({ x: chair.x + 10, y: chair.y + 10 }),
     geometry: JSON.stringify([chair.id, chair.tableId, chair.x, chair.y, chair.rotation ?? 0,
       table.id, table.x, table.y]),
@@ -61,13 +63,16 @@ function seatGeometry(state, actor, workspace) {
   return seatRecord(actor, chair, table);
 }
 
-// Eight fixed lattice neighbours of the ORIGINAL occupied source cell. No visibility search.
+// Counter diners leave along a straight centre-line, not diagonally past an
+// adjacent chair. Ordinary chairs retain their eight existing lattice ports.
 export function seatedDeparturePorts(authority) {
   if (!authority) return [];
   const cell = worldToCell(authority.origin);
   const ports = [];
   for (const y of [-1, 0, 1]) for (const x of [-1, 0, 1]) {
-    if (x || y) ports.push(cellToWorld({ x: cell.x + x, y: cell.y + y }));
+    if (authority.highTopCounterId != null && Math.abs(x) + Math.abs(y) !== 1) continue;
+    if (x || y) ports.push(getDiningChairAccessPoint(authority,
+      cellToWorld({ x: cell.x + x, y: cell.y + y })));
   }
   return ports;
 }

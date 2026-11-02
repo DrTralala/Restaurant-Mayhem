@@ -5,6 +5,7 @@ import * as clock from './clock';
 import * as movement from './movement';
 import { runTick } from './gameLoop';
 import { advanceFixedStep } from './fixedStep';
+import { startFoodPatience } from './foodPatience';
 import { acceptServiceContract, advanceServiceContractArrivals, createServiceContractsState, validateServiceContractsState } from './serviceContracts';
 
 afterEach(() => vi.restoreAllMocks());
@@ -27,6 +28,7 @@ function bookingFor(state, index = 0) {
     arrivalAt: party.arrivalAt, members: active.guests.filter(g => g.partyId === party.partyId).map(g => ({
       id: g.guestId, serviceContractGuestId: g.guestId, archetype: g.archetype,
       gender: g.gender, spendingTier: g.spendingTier, spendingBudget: g.spendingBudget,
+      ...(Number.isFinite(g.patienceMultiplier) ? { patienceMultiplier: g.patienceMultiplier } : {}),
     })) };
 }
 function waitingParties(count, patience = 9000) {
@@ -38,7 +40,7 @@ function waitingParties(count, patience = 9000) {
 
 describe('real scheduled logical admission', () => {
   it.each([
-    ['office-lunch', 2, 750], ['family-service', 4, 1575], ['tasting-service', 1, 1200],
+    ['office-lunch', 2, 1125], ['family-service', 4, 1575], ['tasting-service', 1, 1800],
   ])('initialises %s through ordinary logical defaults without RNG or coordinates', (templateId, size, patience) => {
     let state = accepted(templateId);
     const booking = bookingFor(state);
@@ -51,10 +53,15 @@ describe('real scheduled logical admission', () => {
     expect(result.state.queue[0]).toMatchObject({ partyId: 'sc-1-p1', serviceContractId: 'sc-1' });
     expect(result.state.queue[0].members).toHaveLength(size);
     for (const [index, member] of result.state.queue[0].members.entries()) {
-      expect(member).toMatchObject({ ...booking.members[index], partyId: booking.partyId, partySize: size,
+      const bookedProfile = { ...booking.members[index] };
+      delete bookedProfile.patienceMultiplier;
+      expect(member).toMatchObject({ ...bookedProfile, partyId: booking.partyId, partySize: size,
         partyType: booking.partyType, serviceContractId: 'sc-1', serviceContractArrivalAt: booking.arrivalAt,
         patience, patienceMax: patience, queuePatience: patience, queuePatienceMax: patience,
         happiness: 90, state: 'queued', dishId: null, drinkId: null, foodOutcome: null, tableId: null, chairId: null });
+      expect(member).not.toHaveProperty('patienceMultiplier');
+      expect(startFoodPatience(member, booking.arrivalAt)).toMatchObject({ foodPatienceBudget: patience,
+        foodDeadlineAt: booking.arrivalAt + patience });
       expect(member).not.toHaveProperty('x');
       expect(member).not.toHaveProperty('y');
       expect(member).not.toHaveProperty('navigationGoal');
@@ -104,44 +111,49 @@ describe('real scheduled logical admission', () => {
     state = { ...state, restaurant: { ...state.restaurant, gameTime: 36900 } };
     state = customers.admitScheduledServiceParty(state, booking).state;
     state = customers.prepareCustomersForMovement(state, 900);
-    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([750, 750]);
+    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([1125, 1125]);
     expect(state.queue[0].serviceContractId).toBe('sc-1');
     state = { ...state, serviceContracts: createServiceContractsState(),
       restaurant: { ...state.restaurant, gameTime: 36910 } };
     state = customers.prepareCustomersForMovement(state, 10);
-    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([740, 740]);
+    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([1115, 1115]);
     const ordinary = { ...schedulingState(36900), queue: waitingParties(1, 750) };
     expect(customers.prepareCustomersForMovement(ordinary, 100).queue[0].members[0].queuePatience).toBe(650);
   });
 });
 
 describe('real contract tick scheduling', () => {
-  it('admits all six Party rush groups once across clustered boundaries in a large tick', () => {
+  it('admits all six paced Party rush groups once across arrival boundaries in a large tick', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
-    const state = runTick(accepted('party-rush'), { gameDt: 1200, movementDt: 0 });
+    const state = runTick(accepted('party-rush'), { gameDt: 1500, movementDt: 0 });
     expect(state.serviceContracts.active.parties.map(p => [p.admittedAt, p.status]))
-      .toEqual([36900, 36900, 37020, 37020, 37140, 37140].map(time => [time, 'admitted']));
+      .toEqual([36900, 37020, 37140, 37260, 37380, 37500].map(time => [time, 'admitted']));
     expect(state.queue).toHaveLength(6);
     expect(state.queue.flatMap(p => p.members)).toHaveLength(12);
     const again = runTick(state, { gameDt: 0, movementDt: 0 });
     expect(again.queue).toHaveLength(6);
     expect(() => validateServiceContractsState(again.serviceContracts, again)).not.toThrow();
   });
-  it('processes simultaneous groups sequentially without overflowing seven waiting parties', () => {
+  it('processes paced bookings against current queue capacity without overflowing seven waiting parties', () => {
     let state = accepted('party-rush');
     state = { ...state, queue: waitingParties(7), restaurant: { ...state.restaurant, gameTime: 36900 } };
     const after = advanceServiceContractArrivals(state, 36900, { admitParty: customers.admitScheduledServiceParty });
     expect(after.queue).toHaveLength(8);
-    expect(after.serviceContracts.active.parties.slice(0, 2).map(p => [p.status, p.missedReason]))
+    expect(after.serviceContracts.active.parties[0]).toMatchObject({ status: 'admitted', admittedAt: 36900 });
+    const next = advanceServiceContractArrivals({ ...after, restaurant: { ...after.restaurant, gameTime: 37020 } },
+      37020, { admitParty: customers.admitScheduledServiceParty });
+    expect(next.serviceContracts.active.parties.slice(0, 2).map(p => [p.status, p.missedReason]))
       .toEqual([['admitted', null], ['missed', 'missed_queue_full']]);
-    expect(after.serviceContracts.active.guests.slice(2, 4).every(g => g.reason === 'missed_queue_full')).toBe(true);
+    expect(next.serviceContracts.active.guests.slice(2, 4).every(g => g.reason === 'missed_queue_full')).toBe(true);
   });
-  it('marks both simultaneous groups missed when closed', () => {
+  it('marks each paced Party rush group missed when closed', () => {
     let state = accepted('party-rush');
     state = { ...state, restaurant: { ...state.restaurant, gameTime: 36900, openHour: 12, closeHour: 13 } };
-    const after = advanceServiceContractArrivals(state, 36900, { admitParty: customers.admitScheduledServiceParty });
-    expect(after.queue).toHaveLength(0);
-    expect(after.serviceContracts.active.parties.slice(0, 2).map(p => p.missedReason))
+    state = advanceServiceContractArrivals(state, 36900, { admitParty: customers.admitScheduledServiceParty });
+    state = advanceServiceContractArrivals({ ...state, restaurant: { ...state.restaurant, gameTime: 37020 } },
+      37020, { admitParty: customers.admitScheduledServiceParty });
+    expect(state.queue).toHaveLength(0);
+    expect(state.serviceContracts.active.parties.slice(0, 2).map(p => p.missedReason))
       .toEqual(['missed_closed', 'missed_closed']);
   });
   it.each([1, 2, 4])('keeps the exact wave timestamp during fixed-step catch-up at speed %s', speed => {
@@ -192,7 +204,7 @@ describe('real contract tick scheduling', () => {
     expect(state.queue).toHaveLength(0);
     state = runTick(state, { gameDt: 1, movementDt: 0 });
     expect(state.queue).toHaveLength(1);
-    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([750, 750]);
+    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([1125, 1125]);
     expect(state.serviceContracts.active.parties[0]).toMatchObject({ status: 'admitted', admittedAt: 36900 });
     expect(state.queue[0].serviceContractId).toBe('sc-1');
     expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
@@ -206,7 +218,7 @@ describe('real contract tick scheduling', () => {
     state = { ...state, restaurant: { ...state.restaurant, gameTime: 36900 } };
     state = runTick(state, { gameDt: 10, movementDt: 0 });
     expect(state.serviceContracts.active.parties[0]).toMatchObject({ status: 'admitted', admittedAt: 36900 });
-    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([740, 740]);
+    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([1115, 1115]);
   });
   it('processes all waves and deadline in a single large tick without retroactive misses or false success', () => {
     vi.spyOn(Math, 'random').mockReturnValue(1);
@@ -217,7 +229,7 @@ describe('real contract tick scheduling', () => {
     expect(result).toMatchObject({ status: 'failed', fulfilledCount: 0, bonusPaid: 0, settledAt: 42150 });
     expect(result.guestResults).toHaveLength(6);
     expect(result.guestResults.every(g => g.status === 'failed' && ['abandoned', 'left_unpaid'].includes(g.reason))).toBe(true);
-    expect(state.restaurant.funds).toBe(555);
+    expect(state.restaurant.funds).toBe(577.5);
     expect(state.navigationFault).toBeUndefined();
     expect(() => validateServiceContractsState(state.serviceContracts, state)).not.toThrow();
   });

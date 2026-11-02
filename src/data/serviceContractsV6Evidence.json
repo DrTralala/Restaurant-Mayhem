@@ -1,0 +1,501 @@
+{
+  "schemaVersion": 1,
+  "sourceRulesVersion": 5,
+  "provenance": {
+    "developmentReport": "docs/superpowers/reports/2026-11-02-contract-balance-development.json",
+    "holdoutReport": "docs/superpowers/reports/2026-11-02-contract-balance-holdout.json",
+    "testSupportCases": "src/simulation/contractBalanceStudyCases.testSupport.json",
+    "holdoutReview": "docs/superpowers/reports/2026-11-02-contract-balance-review.md",
+    "developmentFinalizationFingerprint": "414a6064eb4b027c52ba565949ae5f8920334a3bc85e13855d604f939c81dbdb",
+    "holdoutStartFingerprint": "414a6064eb4b027c52ba565949ae5f8920334a3bc85e13855d604f939c81dbdb",
+    "holdoutEndFingerprint": "414a6064eb4b027c52ba565949ae5f8920334a3bc85e13855d604f939c81dbdb"
+  },
+  "seedSets": {
+    "screening": [1, 6, 9, 12, 16],
+    "development": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+    "holdout": [21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
+  },
+  "tierMinimums": {
+    "office-lunch": 16,
+    "family-service": 15,
+    "tasting-service": 15,
+    "party-rush": 14
+  },
+  "rowSchema": {
+    "rowColumns": ["seed", "candidate", "control"],
+    "resultColumns": ["success", "fulfilled", "target", "payments"],
+    "paymentColumns": ["paidVisitCount", "contractPaidVisitCount", "ordinaryRevenue", "contractCash", "bonus", "funds", "paidVisitSequence"]
+  },
+  "unavailableStages": ["seatedAt", "deliveredAt"],
+  "screeningRejections": [],
+  "screeningRejectionNote": "The development report records no rejected screening candidates; the rejection row/reason set is empty.",
+  "selectedOffers": [
+    {
+      "templateId": "office-lunch",
+      "candidateId": "office-lunch-candidate-1",
+      "patch": { "dimension": "meal-target", "value": 2 },
+      "rationale": "The honest office-starter v5 baseline fulfilled at least 3 meals on 13/20 seeds, below the 16/20 tier minimum; a target of 2 is supported on 17/20 seeds, while target 3 would not meet the declared minimum. Target 2 is the highest baseline-supported target that clears 16/20, not a claim of optimality. The existing $90 reward becomes $45 per required meal versus $22.50 at target 4; the full reward and all other terms remain unchanged. Office keeps its untouched starter setup.",
+      "tier": { "tier": "introductory", "minimum": 16 },
+      "preparation": {
+        "id": "office-starter",
+        "actions": [],
+        "cost": 0,
+        "startingFunds": 600,
+        "fundsBeforeAcceptance": 600,
+        "actionLog": [{ "at": 36000, "action": { "type": "SET_SPEED", "speed": 4 }, "applied": true, "fundsBefore": 600, "fundsAfter": 600 }]
+      },
+      "v6Offer": {
+        "id": "office-lunch",
+        "title": "Office lunch",
+        "guestLabel": "Office guest",
+        "profile": { "archetype": "rusher", "spendingTier": "value", "spendingBudget": 24, "patienceMultiplier": 1.5 },
+        "parties": [
+          { "partyType": "couple", "size": 2, "arrivalOffset": 0 },
+          { "partyType": "couple", "size": 2, "arrivalOffset": 720 },
+          { "partyType": "couple", "size": 2, "arrivalOffset": 1440 }
+        ],
+        "serviceDuration": 5250,
+        "target": 2,
+        "reward": 90,
+        "tier": "introductory",
+        "preparationExpectations": ["Reference preparation office-starter; actions []; cost 0; starting funds 600; funds before acceptance 600."]
+      },
+      "development": {
+        "gate": { "expectedCount": 20, "completedCount": 20, "successes": 17, "minimum": 16, "passed": true },
+        "aggregate": {
+          "candidate": {
+            "runs": 20, "successes": 17, "fulfilledTotal": 68,
+            "payments": { "totalBonus": 1530, "totalOrdinaryRevenue": 1338.2800000000002, "totalContractCash": 1462.5, "contractPaidVisitCount": 81, "paidVisitCount": 126 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 26, "deadline": 2, "drink_only": 4, "food_cancelled": 9, "left_unpaid": 11 } }
+          },
+          "control": {
+            "runs": 20, "successes": 9, "fulfilledTotal": 68,
+            "payments": { "totalBonus": 810, "totalOrdinaryRevenue": 1338.2800000000002, "totalContractCash": 562.5, "contractPaidVisitCount": 81, "paidVisitCount": 126 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 26, "deadline": 2, "drink_only": 4, "food_cancelled": 9, "left_unpaid": 11 } }
+          }
+        },
+        "rows": [
+          [1,[true,4,2,[7,4,89.60000000000002,90,90,779.6,7]],[true,4,4,[7,4,89.60000000000002,90,90,779.6,7]]],
+          [2,[true,2,2,[8,4,74.84,90,90,764.8399999999999,8]],[false,2,4,[8,4,74.84,-22.5,0,652.3399999999999,8]]],
+          [3,[true,3,2,[6,5,63.39999999999998,90,90,753.4,6]],[false,3,4,[6,5,63.39999999999999,-22.5,0,640.9,6]]],
+          [4,[true,6,2,[8,6,116.10000000000002,90,90,806.1,8]],[true,6,4,[8,6,116.10000000000002,90,90,806.1,8]]],
+          [5,[true,4,2,[7,4,87.32000000000002,90,90,777.3199999999999,7]],[true,4,4,[7,4,87.32000000000002,90,90,777.3199999999999,7]]],
+          [6,[true,4,2,[6,4,68.88,90,90,758.88,6]],[true,4,4,[6,4,68.88,90,90,758.88,6]]],
+          [7,[true,4,2,[6,4,70.18,90,90,760.1800000000001,6]],[true,4,4,[6,4,70.18,90,90,760.1800000000001,6]]],
+          [8,[true,3,2,[7,4,88.82,90,90,778.8199999999999,7]],[false,3,4,[7,4,88.81999999999998,-22.5,0,666.3199999999999,7]]],
+          [9,[true,5,2,[6,5,75.24000000000001,90,90,765.2399999999999,6]],[true,5,4,[6,5,75.24000000000001,90,90,765.2399999999999,6]]],
+          [10,[true,2,2,[2,2,30.840000000000003,90,90,720.84,2]],[false,2,4,[2,2,30.840000000000003,-22.5,0,608.34,2]]],
+          [11,[true,2,2,[5,2,59.18000000000001,90,90,749.18,5]],[false,2,4,[5,2,59.17999999999999,-22.5,0,636.68,5]]],
+          [12,[false,1,2,[6,3,35.300000000000004,-22.5,0,612.8000000000001,6]],[false,1,4,[6,3,35.300000000000004,-22.5,0,612.8000000000001,6]]],
+          [13,[true,6,2,[6,6,88.44,90,90,778.4399999999999,6]],[true,6,4,[6,6,88.44,90,90,778.4399999999999,6]]],
+          [14,[false,1,2,[6,1,22.020000000000003,-22.5,0,599.52,6]],[false,1,4,[6,1,22.020000000000003,-22.5,0,599.52,6]]],
+          [15,[true,2,2,[9,4,72.57999999999998,90,90,762.5799999999999,9]],[false,2,4,[9,4,72.58,-22.5,0,650.0799999999999,9]]],
+          [16,[true,6,2,[6,6,86.28,90,90,776.28,6]],[true,6,4,[6,6,86.28,90,90,776.28,6]]],
+          [17,[true,6,2,[6,6,89.66,90,90,779.6600000000001,6]],[true,6,4,[6,6,89.66,90,90,779.6600000000001,6]]],
+          [18,[true,3,2,[7,4,50.120000000000005,90,90,740.1199999999999,7]],[false,3,4,[7,4,50.120000000000005,-22.5,0,627.6199999999999,7]]],
+          [19,[false,1,2,[7,2,21.980000000000004,-22.5,0,599.48,7]],[false,1,4,[7,2,21.980000000000004,-22.5,0,599.48,7]]],
+          [20,[true,3,2,[5,5,47.5,90,90,737.5,5]],[false,3,4,[5,5,47.5,-22.5,0,625,5]]]
+        ]
+      },
+      "holdout": {
+        "gate": { "expectedCount": 20, "completedCount": 20, "successes": 19, "minimum": 16, "passed": true },
+        "aggregate": {
+          "candidate": {
+            "runs": 20, "successes": 19, "fulfilledTotal": 80,
+            "payments": { "totalBonus": 1710, "totalOrdinaryRevenue": 1388.3600000000001, "totalContractCash": 1687.5, "contractPaidVisitCount": 86, "paidVisitCount": 114 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 16, "deadline": 8, "drink_only": 3, "food_cancelled": 3, "left_unpaid": 10 } }
+          },
+          "control": {
+            "runs": 20, "successes": 13, "fulfilledTotal": 80,
+            "payments": { "totalBonus": 1170, "totalOrdinaryRevenue": 1388.3600000000001, "totalContractCash": 1012.5, "contractPaidVisitCount": 86, "paidVisitCount": 114 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 16, "deadline": 8, "drink_only": 3, "food_cancelled": 3, "left_unpaid": 10 } }
+          }
+        },
+        "rows": [
+          [21,[true,3,2,[6,3,62.31999999999999,90,90,752.32,6]],[false,3,4,[6,3,62.32000000000001,-22.5,0,639.82,6]]],
+          [22,[true,2,2,[4,2,46.72,90,90,736.72,4]],[false,2,4,[4,2,46.72,-22.5,0,624.22,4]]],
+          [23,[true,4,2,[6,6,61.25999999999999,90,90,751.2600000000001,6]],[true,4,4,[6,6,61.25999999999999,90,90,751.2600000000001,6]]],
+          [24,[false,0,2,[0,0,0,-22.5,0,577.5,0]],[false,0,4,[0,0,0,-22.5,0,577.5,0]]],
+          [25,[true,6,2,[6,6,89.56,90,90,779.56,6]],[true,6,4,[6,6,89.56,90,90,779.56,6]]],
+          [26,[true,6,2,[9,6,119.97999999999999,90,90,809.9799999999999,9]],[true,6,4,[9,6,119.97999999999999,90,90,809.9799999999999,9]]],
+          [27,[true,4,2,[7,4,62.920000000000016,90,90,752.9199999999998,7]],[true,4,4,[7,4,62.920000000000016,90,90,752.9199999999998,7]]],
+          [28,[true,4,2,[7,4,72.88,90,90,762.88,7]],[true,4,4,[7,4,72.88,90,90,762.88,7]]],
+          [29,[true,2,2,[3,2,32.400000000000006,90,90,722.4,3]],[false,2,4,[3,2,32.4,-22.5,0,609.9,3]]],
+          [30,[true,2,2,[6,3,77.16,90,90,767.1599999999999,6]],[false,2,4,[6,3,77.16,-22.5,0,654.6599999999999,6]]],
+          [31,[true,6,2,[6,6,90.19999999999999,90,90,780.1999999999999,6]],[true,6,4,[6,6,90.19999999999999,90,90,780.1999999999999,6]]],
+          [32,[true,2,2,[5,2,32.28,90,90,722.28,5]],[false,2,4,[5,2,32.279999999999994,-22.5,0,609.78,5]]],
+          [33,[true,6,2,[6,6,88.95999999999998,90,90,778.96,6]],[true,6,4,[6,6,88.95999999999998,90,90,778.96,6]]],
+          [34,[true,6,2,[6,6,87.60000000000002,90,90,777.5999999999999,6]],[true,6,4,[6,6,87.60000000000002,90,90,777.5999999999999,6]]],
+          [35,[true,5,2,[9,5,107.12,90,90,797.1199999999999,9]],[true,5,4,[9,5,107.12,90,90,797.1199999999999,9]]],
+          [36,[true,2,2,[3,3,31.879999999999995,90,90,721.88,3]],[false,2,4,[3,3,31.879999999999995,-22.5,0,609.38,3]]],
+          [37,[true,6,2,[6,6,87.68,90,90,777.6799999999998,6]],[true,6,4,[6,6,87.68,90,90,777.6799999999998,6]]],
+          [38,[true,4,2,[6,4,73.32,90,90,763.3199999999999,6]],[true,4,4,[6,4,73.32,90,90,763.3199999999999,6]]],
+          [39,[true,4,2,[7,6,77.83999999999997,90,90,767.8399999999999,7]],[true,4,4,[7,6,77.83999999999997,90,90,767.8399999999999,7]]],
+          [40,[true,6,2,[6,6,86.28000000000003,90,90,776.2799999999999,6]],[true,6,4,[6,6,86.28000000000003,90,90,776.2799999999999,6]]]
+        ]
+      }
+    },
+    {
+      "templateId": "family-service",
+      "candidateId": "baseline",
+      "patch": null,
+      "rationale": "The practical family-layout reference is the unchanged starter geometry with two existing four-chair tables and no setup cost. The recorded v5 baseline succeeded on 16/20 seeds against the fixed 15/20 standard-tier minimum, so retain target 4 and reward $120 rather than make an unnecessary numerical change. This selection still needs a complete paired gated development rerun.",
+      "tier": { "tier": "standard", "minimum": 15 },
+      "preparation": {
+        "id": "family-layout",
+        "actions": [],
+        "cost": 0,
+        "startingFunds": 600,
+        "fundsBeforeAcceptance": 600,
+        "actionLog": [{ "at": 36000, "action": { "type": "SET_SPEED", "speed": 4 }, "applied": true, "fundsBefore": 600, "fundsAfter": 600 }]
+      },
+      "v6Offer": {
+        "id": "family-service",
+        "title": "Family service",
+        "guestLabel": "Family guest",
+        "profile": { "archetype": "regular", "spendingTier": "budget", "spendingBudget": 18 },
+        "parties": [
+          { "partyType": "family", "size": 4, "arrivalOffset": 0 },
+          { "partyType": "family", "size": 4, "arrivalOffset": 1200 }
+        ],
+        "serviceDuration": 7500,
+        "target": 4,
+        "reward": 120,
+        "tier": "standard",
+        "preparationExpectations": ["Family-layout reference with two four-chair tables: actions []; cost 0; starting funds 600; funds before acceptance 600."]
+      },
+      "development": {
+        "gate": { "expectedCount": 20, "completedCount": 20, "successes": 16, "minimum": 15, "passed": true },
+        "aggregate": {
+          "candidate": {
+            "runs": 20, "successes": 16, "fulfilledTotal": 121,
+            "payments": { "totalBonus": 1920, "totalOrdinaryRevenue": 2528.8799999999997, "totalContractCash": 1800, "contractPaidVisitCount": 132, "paidVisitCount": 202 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 24, "deadline": 1, "drink_only": 7, "food_cancelled": 4, "left_unpaid": 3 } }
+          },
+          "control": {
+            "runs": 20, "successes": 16, "fulfilledTotal": 121,
+            "payments": { "totalBonus": 1920, "totalOrdinaryRevenue": 2528.8799999999997, "totalContractCash": 1800, "contractPaidVisitCount": 132, "paidVisitCount": 202 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 24, "deadline": 1, "drink_only": 7, "food_cancelled": 4, "left_unpaid": 3 } }
+          }
+        },
+        "rows": [
+          [1,[true,8,4,[12,8,177.5,120,120,947.5,12]],[true,8,4,[12,8,177.5,120,120,947.5,12]]],
+          [2,[false,3,4,[11,4,118.6,-30,0,738.6000000000001,11]],[false,3,4,[11,4,118.6,-30,0,738.6000000000001,11]]],
+          [3,[true,8,4,[10,8,135.7,120,120,905.7,10]],[true,8,4,[10,8,135.7,120,120,905.7,10]]],
+          [4,[true,6,4,[10,7,138.26,120,120,908.2599999999999,10]],[true,6,4,[10,7,138.26,120,120,908.2599999999999,10]]],
+          [5,[true,4,4,[9,4,106.57999999999998,120,120,826.5799999999999,9]],[true,4,4,[9,4,106.57999999999998,120,120,826.5799999999999,9]]],
+          [6,[true,6,4,[10,7,116.69999999999999,120,120,886.7,10]],[true,6,4,[10,7,116.69999999999999,120,120,886.7,10]]],
+          [7,[true,8,4,[10,8,135.70000000000002,120,120,905.6999999999999,10]],[true,8,4,[10,8,135.70000000000002,120,120,905.6999999999999,10]]],
+          [8,[true,7,4,[11,8,149.14,120,120,919.14,11]],[true,7,4,[11,8,149.14,120,120,919.14,11]]],
+          [9,[true,6,4,[9,7,92.51999999999998,120,120,812.5199999999999,9]],[true,6,4,[9,7,92.51999999999998,120,120,812.5199999999999,9]]],
+          [10,[true,6,4,[10,8,124.75999999999999,120,120,894.76,10]],[true,6,4,[10,8,124.75999999999999,120,120,894.76,10]]],
+          [11,[true,8,4,[12,8,153.51999999999998,120,120,923.5199999999999,12]],[true,8,4,[12,8,153.51999999999998,120,120,923.5199999999999,12]]],
+          [12,[true,4,4,[10,4,69.94,120,120,839.9399999999999,10]],[true,4,4,[10,4,69.94,120,120,839.9399999999999,10]]],
+          [13,[true,8,4,[8,8,123.47999999999996,120,120,843.48,8]],[true,8,4,[8,8,123.47999999999996,120,120,843.48,8]]],
+          [14,[false,3,4,[9,4,82.52,-30,0,652.52,9]],[false,3,4,[9,4,82.52,-30,0,652.52,9]]],
+          [15,[false,3,4,[11,4,124.45999999999998,-30,0,744.46,11]],[false,3,4,[11,4,124.45999999999998,-30,0,744.46,11]]],
+          [16,[true,8,4,[9,8,123.16000000000003,120,120,843.16,9]],[true,8,4,[9,8,123.16000000000003,120,120,843.16,9]]],
+          [17,[true,6,4,[8,7,104.71999999999997,120,120,824.7200000000001,8]],[true,6,4,[8,7,104.71999999999997,120,120,824.7200000000001,8]]],
+          [18,[true,8,4,[11,8,166.48000000000002,120,120,936.48,11]],[true,8,4,[11,8,166.48000000000002,120,120,936.48,11]]],
+          [19,[false,3,4,[11,4,120.06,-30,0,740.06,11]],[false,3,4,[11,4,120.06,-30,0,740.06,11]]],
+          [20,[true,8,4,[11,8,165.07999999999998,120,120,935.0799999999998,11]],[true,8,4,[11,8,165.07999999999998,120,120,935.0799999999998,11]]]
+        ]
+      },
+      "holdout": {
+        "gate": { "expectedCount": 20, "completedCount": 20, "successes": 18, "minimum": 15, "passed": true },
+        "aggregate": {
+          "candidate": {
+            "runs": 20, "successes": 18, "fulfilledTotal": 139,
+            "payments": { "totalBonus": 2160, "totalOrdinaryRevenue": 2357.4200000000005, "totalContractCash": 2100, "contractPaidVisitCount": 145, "paidVisitCount": 192 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 8, "drink_only": 5, "food_cancelled": 1, "left_unpaid": 7 } }
+          },
+          "control": {
+            "runs": 20, "successes": 18, "fulfilledTotal": 139,
+            "payments": { "totalBonus": 2160, "totalOrdinaryRevenue": 2357.4200000000005, "totalContractCash": 2100, "contractPaidVisitCount": 145, "paidVisitCount": 192 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 8, "drink_only": 5, "food_cancelled": 1, "left_unpaid": 7 } }
+          }
+        },
+        "rows": [
+          [21,[true,8,4,[11,8,138.77999999999997,120,120,908.7800000000002,11]],[true,8,4,[11,8,138.77999999999997,120,120,908.7800000000002,11]]],
+          [22,[true,8,4,[10,8,118.33999999999997,120,120,888.3399999999999,10]],[true,8,4,[10,8,118.33999999999997,120,120,888.3399999999999,10]]],
+          [23,[true,8,4,[10,8,133.7,120,120,903.6999999999999,10]],[true,8,4,[10,8,133.7,120,120,903.6999999999999,10]]],
+          [24,[true,8,4,[11,8,146,120,120,916.0000000000001,11]],[true,8,4,[11,8,146,120,120,916.0000000000001,11]]],
+          [25,[true,8,4,[9,8,117.72,120,120,837.7199999999998,9]],[true,8,4,[9,8,117.72,120,120,837.7199999999998,9]]],
+          [26,[false,2,4,[10,4,81.4,-30,0,701.3999999999999,10]],[false,2,4,[10,4,81.4,-30,0,701.3999999999999,10]]],
+          [27,[true,8,4,[11,8,139.94000000000005,120,120,909.9399999999999,11]],[true,8,4,[11,8,139.94000000000005,120,120,909.9399999999999,11]]],
+          [28,[true,8,4,[11,8,136.08000000000004,120,120,906.0799999999999,11]],[true,8,4,[11,8,136.08000000000004,120,120,906.0799999999999,11]]],
+          [29,[true,7,4,[10,7,124.92000000000002,120,120,894.9200000000001,10]],[true,7,4,[10,7,124.92000000000002,120,120,894.9200000000001,10]]],
+          [30,[true,8,4,[11,8,117.56,120,120,887.5600000000002,11]],[true,8,4,[11,8,117.56,120,120,887.5600000000002,11]]],
+          [31,[true,8,4,[8,8,123.12,120,120,843.1199999999999,8]],[true,8,4,[8,8,123.12,120,120,843.1199999999999,8]]],
+          [32,[true,6,4,[10,7,106.84,120,120,876.84,10]],[true,6,4,[10,7,106.84,120,120,876.84,10]]],
+          [33,[true,8,4,[8,8,115.68,120,120,835.6800000000001,8]],[true,8,4,[8,8,115.68,120,120,835.6800000000001,8]]],
+          [34,[true,7,4,[8,7,120.72,120,120,840.7199999999999,8]],[true,7,4,[8,7,120.72,120,120,840.7199999999999,8]]],
+          [35,[false,3,4,[8,4,63,-30,0,632.9999999999999,8]],[false,3,4,[8,4,63,-30,0,632.9999999999999,8]]],
+          [36,[true,8,4,[9,8,124.12,120,120,844.12,9]],[true,8,4,[9,8,124.12,120,120,844.12,9]]],
+          [37,[true,5,4,[11,7,80.6,120,120,850.5999999999999,11]],[true,5,4,[11,7,80.6,120,120,850.5999999999999,11]]],
+          [38,[true,7,4,[10,7,123.24000000000001,120,120,893.2399999999999,10]],[true,7,4,[10,7,123.24000000000001,120,120,893.2399999999999,10]]],
+          [39,[true,8,4,[10,8,151.88,120,120,921.8800000000001,10]],[true,8,4,[10,8,151.88,120,120,921.8800000000001,10]]],
+          [40,[true,6,4,[6,6,93.78,120,120,813.7799999999999,6]],[true,6,4,[6,6,93.78,120,120,813.7799999999999,6]]]
+        ]
+      }
+    },
+    {
+      "templateId": "tasting-service",
+      "candidateId": "tasting-service-candidate-1",
+      "patch": { "dimension": "meal-target", "value": 2 },
+      "rationale": "The selected legal preparation is the measured zero-cost tasting-layout reference. At the original target 3 it produced 10/20; its recorded fulfilled distribution supports target 2 on 16/20, above the 15/20 minimum, while target 3 does not qualify. Layout-only is not called useful: versus starter it had the same 10/20 successes and one fewer fulfilled meal in aggregate. Upgrade-only had no success or fulfilment gain over starter and cost $100; combined had no uplift over layout-only and also cost $100. Target 2 is the highest baseline-supported target for this preparation that meets the declared minimum, not a claim of optimality. The existing $100 reward becomes $50 per required meal versus $33.33 at target 3.",
+      "tier": { "tier": "advanced", "minimum": 15 },
+      "preparation": {
+        "id": "tasting-layout",
+        "actions": [{
+          "type": "MOVE_FIXTURES",
+          "items": [
+            { "type": "table", "id": "t3", "x": 200, "y": 300 },
+            { "type": "table", "id": "t4", "x": 360, "y": 300 },
+            { "type": "chair", "id": "ch5", "x": 210, "y": 280, "rotation": 2 },
+            { "type": "chair", "id": "ch6", "x": 210, "y": 340, "rotation": 0 },
+            { "type": "chair", "id": "ch7", "x": 180, "y": 310, "rotation": 1 },
+            { "type": "chair", "id": "ch8", "x": 240, "y": 310, "rotation": 3 },
+            { "type": "chair", "id": "ch9", "x": 370, "y": 280, "rotation": 2 },
+            { "type": "chair", "id": "ch10", "x": 370, "y": 340, "rotation": 0 },
+            { "type": "chair", "id": "ch11", "x": 340, "y": 310, "rotation": 1 },
+            { "type": "chair", "id": "ch12", "x": 400, "y": 310, "rotation": 3 }
+          ]
+        }],
+        "cost": 0,
+        "startingFunds": 600,
+        "fundsBeforeAcceptance": 600,
+        "actionLog": [
+          { "at": 36000, "action": { "type": "SET_SPEED", "speed": 4 }, "applied": true, "fundsBefore": 600, "fundsAfter": 600 },
+          { "at": 36000, "action": {
+            "type": "MOVE_FIXTURES",
+            "items": [
+              { "type": "table", "id": "t3", "x": 200, "y": 300 },
+              { "type": "table", "id": "t4", "x": 360, "y": 300 },
+              { "type": "chair", "id": "ch5", "x": 210, "y": 280, "rotation": 2 },
+              { "type": "chair", "id": "ch6", "x": 210, "y": 340, "rotation": 0 },
+              { "type": "chair", "id": "ch7", "x": 180, "y": 310, "rotation": 1 },
+              { "type": "chair", "id": "ch8", "x": 240, "y": 310, "rotation": 3 },
+              { "type": "chair", "id": "ch9", "x": 370, "y": 280, "rotation": 2 },
+              { "type": "chair", "id": "ch10", "x": 370, "y": 340, "rotation": 0 },
+              { "type": "chair", "id": "ch11", "x": 340, "y": 310, "rotation": 1 },
+              { "type": "chair", "id": "ch12", "x": 400, "y": 310, "rotation": 3 }
+            ]
+          }, "applied": true, "fundsBefore": 600, "fundsAfter": 600 }
+        ]
+      },
+      "v6Offer": {
+        "id": "tasting-service",
+        "title": "Tasting service",
+        "guestLabel": "Tasting guest",
+        "profile": { "archetype": "foodie", "spendingTier": "premium", "spendingBudget": 45, "patienceMultiplier": 1.5 },
+        "parties": [
+          { "partyType": "solo", "size": 1, "arrivalOffset": 0 },
+          { "partyType": "solo", "size": 1, "arrivalOffset": 600 },
+          { "partyType": "solo", "size": 1, "arrivalOffset": 1200 },
+          { "partyType": "solo", "size": 1, "arrivalOffset": 1800 }
+        ],
+        "serviceDuration": 5250,
+        "target": 2,
+        "reward": 100,
+        "tier": "advanced",
+        "preparationExpectations": ["Move t3 to (200,300), t4 to (360,300), ch5 to (210,280) rotation 2, ch6 to (210,340) rotation 0, ch7 to (180,310) rotation 1, ch8 to (240,310) rotation 3, ch9 to (370,280) rotation 2, ch10 to (370,340) rotation 0, ch11 to (340,310) rotation 1, and ch12 to (400,310) rotation 3; cost 0; starting funds 600; funds before acceptance 600."]
+      },
+      "development": {
+        "gate": { "expectedCount": 20, "completedCount": 20, "successes": 16, "minimum": 15, "passed": true },
+        "aggregate": {
+          "candidate": {
+            "runs": 20, "successes": 16, "fulfilledTotal": 50,
+            "payments": { "totalBonus": 1600, "totalOrdinaryRevenue": 1058.6799999999998, "totalContractCash": 1500, "contractPaidVisitCount": 53, "paidVisitCount": 87 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 14, "deadline": 12, "drink_only": 3, "left_unpaid": 1 } }
+          },
+          "control": {
+            "runs": 20, "successes": 10, "fulfilledTotal": 50,
+            "payments": { "totalBonus": 1000, "totalOrdinaryRevenue": 1058.6799999999998, "totalContractCash": 750, "contractPaidVisitCount": 53, "paidVisitCount": 87 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 14, "deadline": 12, "drink_only": 3, "left_unpaid": 1 } }
+          }
+        },
+        "rows": [
+          [1,[true,3,2,[6,3,72.42000000000002,100,100,772.4200000000001,6]],[true,3,3,[6,3,72.42000000000002,100,100,772.4200000000001,6]]],
+          [2,[true,2,2,[7,3,78.63999999999999,100,100,778.64,7]],[false,2,3,[7,3,78.64,-25,0,653.64,7]]],
+          [3,[true,4,2,[5,4,70.91999999999999,100,100,770.9199999999998,5]],[true,4,3,[5,4,70.91999999999999,100,100,770.9199999999998,5]]],
+          [4,[true,2,2,[3,2,44.75999999999999,100,100,744.76,3]],[false,2,3,[3,2,44.75999999999999,-25,0,619.76,3]]],
+          [5,[false,1,2,[1,1,13.560000000000002,-25,0,588.56,1]],[false,1,3,[1,1,13.560000000000002,-25,0,588.56,1]]],
+          [6,[true,3,2,[5,3,62.51999999999998,100,100,762.52,5]],[true,3,3,[5,3,62.51999999999998,100,100,762.52,5]]],
+          [7,[true,2,2,[5,3,46.45999999999998,100,100,746.4599999999999,5]],[false,2,3,[5,3,46.459999999999994,-25,0,621.4599999999999,5]]],
+          [8,[true,2,2,[3,3,31.159999999999997,100,100,731.16,3]],[false,2,3,[3,3,31.160000000000004,-25,0,606.16,3]]],
+          [9,[true,3,2,[3,3,41.16,100,100,741.16,3]],[true,3,3,[3,3,41.16,100,100,741.16,3]]],
+          [10,[true,3,2,[4,3,59.69999999999999,100,100,759.6999999999999,4]],[true,3,3,[4,3,59.69999999999999,100,100,759.6999999999999,4]]],
+          [11,[false,1,2,[4,1,59.2,-25,0,634.1999999999999,4]],[false,1,3,[4,1,59.2,-25,0,634.1999999999999,4]]],
+          [12,[true,2,2,[5,2,52.31999999999999,100,100,752.32,5]],[false,2,3,[5,2,52.32000000000001,-25,0,627.32,5]]],
+          [13,[true,4,2,[4,4,61.58000000000001,100,100,761.5799999999999,4]],[true,4,3,[4,4,61.58000000000001,100,100,761.5799999999999,4]]],
+          [14,[false,1,2,[2,1,16.700000000000003,-25,0,591.6999999999999,2]],[false,1,3,[2,1,16.700000000000003,-25,0,591.6999999999999,2]]],
+          [15,[true,2,2,[8,2,75.25999999999999,100,100,775.2599999999999,8]],[false,2,3,[8,2,75.26,-25,0,650.2599999999999,8]]],
+          [16,[true,4,2,[4,4,62.30000000000001,100,100,762.3000000000001,4]],[true,4,3,[4,4,62.30000000000001,100,100,762.3000000000001,4]]],
+          [17,[true,3,2,[3,3,49.339999999999975,100,100,749.34,3]],[true,3,3,[3,3,49.339999999999975,100,100,749.34,3]]],
+          [18,[true,3,2,[4,3,60.379999999999995,100,100,760.38,4]],[true,3,3,[4,3,60.379999999999995,100,100,760.38,4]]],
+          [19,[false,1,2,[7,1,40.42,-25,0,615.42,7]],[false,1,3,[7,1,40.42,-25,0,615.42,7]]],
+          [20,[true,4,2,[4,4,59.879999999999995,100,100,759.88,4]],[true,4,3,[4,4,59.879999999999995,100,100,759.88,4]]]
+        ]
+      },
+      "holdout": {
+        "gate": { "expectedCount": 20, "completedCount": 20, "successes": 18, "minimum": 15, "passed": true },
+        "aggregate": {
+          "candidate": {
+            "runs": 20, "successes": 18, "fulfilledTotal": 57,
+            "payments": { "totalBonus": 1800, "totalOrdinaryRevenue": 1058.44, "totalContractCash": 1750, "contractPaidVisitCount": 58, "paidVisitCount": 85 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 8, "deadline": 14, "drink_only": 1 } }
+          },
+          "control": {
+            "runs": 20, "successes": 13, "fulfilledTotal": 57,
+            "payments": { "totalBonus": 1300, "totalOrdinaryRevenue": 1058.44, "totalContractCash": 1125, "contractPaidVisitCount": 58, "paidVisitCount": 85 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 8, "deadline": 14, "drink_only": 1 } }
+          }
+        },
+        "rows": [
+          [21,[false,1,2,[2,1,17.139999999999993,-25,0,592.14,2]],[false,1,3,[2,1,17.139999999999993,-25,0,592.14,2]]],
+          [22,[true,2,2,[4,2,48.18000000000001,100,100,748.18,4]],[false,2,3,[4,2,48.18000000000001,-25,0,623.18,4]]],
+          [23,[true,3,2,[4,4,43.24000000000001,100,100,743.2400000000001,4]],[true,3,3,[4,4,43.24000000000001,100,100,743.2400000000001,4]]],
+          [24,[true,2,2,[4,2,50.06,100,100,750.0600000000001,4]],[false,2,3,[4,2,50.05999999999999,-25,0,625.0600000000001,4]]],
+          [25,[true,4,2,[4,4,59.81999999999999,100,100,759.8199999999999,4]],[true,4,3,[4,4,59.81999999999999,100,100,759.8199999999999,4]]],
+          [26,[true,3,2,[5,3,61.420000000000016,100,100,761.4200000000001,5]],[true,3,3,[5,3,61.420000000000016,100,100,761.4200000000001,5]]],
+          [27,[true,3,2,[4,3,45.34,100,100,745.3399999999999,4]],[true,3,3,[4,3,45.34,100,100,745.3399999999999,4]]],
+          [28,[true,2,2,[5,2,51.379999999999995,100,100,751.38,5]],[false,2,3,[5,2,51.379999999999995,-25,0,626.38,5]]],
+          [29,[false,1,2,[1,1,15,-25,0,590,1]],[false,1,3,[1,1,15,-25,0,590,1]]],
+          [30,[true,2,2,[5,2,46,100,100,746,5]],[false,2,3,[5,2,46,-25,0,621,5]]],
+          [31,[true,3,2,[4,3,48.639999999999986,100,100,748.64,4]],[true,3,3,[4,3,48.639999999999986,100,100,748.64,4]]],
+          [32,[true,2,2,[5,2,35.900000000000006,100,100,735.9,5]],[false,2,3,[5,2,35.900000000000006,-25,0,610.9,5]]],
+          [33,[true,4,2,[4,4,54.72,100,100,754.7199999999999,4]],[true,4,3,[4,4,54.72,100,100,754.7199999999999,4]]],
+          [34,[true,4,2,[4,4,58.420000000000016,100,100,758.4200000000001,4]],[true,4,3,[4,4,58.420000000000016,100,100,758.4200000000001,4]]],
+          [35,[true,3,2,[7,3,90.98000000000002,100,100,790.98,7]],[true,3,3,[7,3,90.98000000000002,100,100,790.98,7]]],
+          [36,[true,4,2,[4,4,58.19999999999999,100,100,758.1999999999999,4]],[true,4,3,[4,4,58.19999999999999,100,100,758.1999999999999,4]]],
+          [37,[true,3,2,[5,3,62.51999999999998,100,100,762.52,5]],[true,3,3,[5,3,62.51999999999998,100,100,762.52,5]]],
+          [38,[true,3,2,[5,3,75.47999999999999,100,100,775.48,5]],[true,3,3,[5,3,75.47999999999999,100,100,775.48,5]]],
+          [39,[true,4,2,[5,4,73.25999999999999,100,100,773.26,5]],[true,4,3,[5,4,73.25999999999999,100,100,773.26,5]]],
+          [40,[true,4,2,[4,4,62.74000000000001,100,100,762.74,4]],[true,4,3,[4,4,62.74000000000001,100,100,762.74,4]]]
+        ]
+      }
+    },
+    {
+      "templateId": "party-rush",
+      "candidateId": "party-rush-candidate-1",
+      "patch": { "dimension": "meal-target", "value": 3 },
+      "rationale": "Use the measured legal rush-combined reference: four accepted chairs plus the owned eq1 upgrade, $300 pre-acceptance cost, and a measured +3 wins versus rush-starter at the original target 6. In that same recorded setup, target 4 is supported on 13/20 seeds, below the 14/20 expert minimum, while target 3 is supported on 17/20; target 3 is the highest baseline-supported target expected to clear the minimum, not a claim of optimality. The existing $180 reward becomes $60 per required meal versus $30 at target 6. The full reward and other contract terms remain unchanged.",
+      "tier": { "tier": "expert", "minimum": 14 },
+      "preparation": {
+        "id": "rush-combined",
+        "actions": [
+          { "type": "PLACE_ITEM", "itemType": "chair", "x": 180, "y": 210, "rotation": 1 },
+          { "type": "PLACE_ITEM", "itemType": "chair", "x": 240, "y": 210, "rotation": 3 },
+          { "type": "PLACE_ITEM", "itemType": "chair", "x": 340, "y": 210, "rotation": 1 },
+          { "type": "PLACE_ITEM", "itemType": "chair", "x": 400, "y": 210, "rotation": 3 },
+          { "type": "UPGRADE_EQUIPMENT", "id": "eq1" }
+        ],
+        "cost": 300,
+        "startingFunds": 600,
+        "fundsBeforeAcceptance": 300,
+        "actionLog": [
+          { "at": 36000, "action": { "type": "SET_SPEED", "speed": 4 }, "applied": true, "fundsBefore": 600, "fundsAfter": 600 },
+          { "at": 36000, "action": { "type": "PLACE_ITEM", "itemType": "chair", "x": 180, "y": 210, "rotation": 1 }, "applied": true, "fundsBefore": 600, "fundsAfter": 550 },
+          { "at": 36000, "action": { "type": "PLACE_ITEM", "itemType": "chair", "x": 240, "y": 210, "rotation": 3 }, "applied": true, "fundsBefore": 550, "fundsAfter": 500 },
+          { "at": 36000, "action": { "type": "PLACE_ITEM", "itemType": "chair", "x": 340, "y": 210, "rotation": 1 }, "applied": true, "fundsBefore": 500, "fundsAfter": 450 },
+          { "at": 36000, "action": { "type": "PLACE_ITEM", "itemType": "chair", "x": 400, "y": 210, "rotation": 3 }, "applied": true, "fundsBefore": 450, "fundsAfter": 400 },
+          { "at": 36000, "action": { "type": "UPGRADE_EQUIPMENT", "id": "eq1" }, "applied": true, "fundsBefore": 400, "fundsAfter": 300 }
+        ]
+      },
+      "v6Offer": {
+        "id": "party-rush",
+        "title": "Party rush",
+        "guestLabel": "Party guest",
+        "profile": { "archetype": "regular", "spendingTier": "value", "spendingBudget": 30 },
+        "parties": [
+          { "partyType": "couple", "size": 2, "arrivalOffset": 0 },
+          { "partyType": "couple", "size": 2, "arrivalOffset": 120 },
+          { "partyType": "couple", "size": 2, "arrivalOffset": 240 },
+          { "partyType": "couple", "size": 2, "arrivalOffset": 360 },
+          { "partyType": "couple", "size": 2, "arrivalOffset": 480 },
+          { "partyType": "couple", "size": 2, "arrivalOffset": 600 }
+        ],
+        "serviceDuration": 7500,
+        "target": 3,
+        "reward": 180,
+        "tier": "expert",
+        "preparationExpectations": ["Place chairs at (180,210) rotation 1, (240,210) rotation 3, (340,210) rotation 1, and (400,210) rotation 3; upgrade equipment eq1; cost 300; starting funds 600; funds before acceptance 300."]
+      },
+      "development": {
+        "gate": { "expectedCount": 20, "completedCount": 20, "successes": 17, "minimum": 14, "passed": true },
+        "aggregate": {
+          "candidate": {
+            "runs": 20, "successes": 17, "fulfilledTotal": 98,
+            "payments": { "totalBonus": 3060, "totalOrdinaryRevenue": 1795.96, "totalContractCash": 2925, "contractPaidVisitCount": 113, "paidVisitCount": 150 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 116, "drink_only": 6, "food_cancelled": 9, "left_unpaid": 11 } }
+          },
+          "control": {
+            "runs": 20, "successes": 9, "fulfilledTotal": 98,
+            "payments": { "totalBonus": 1620, "totalOrdinaryRevenue": 1795.96, "totalContractCash": 1125, "contractPaidVisitCount": 113, "paidVisitCount": 150 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 116, "drink_only": 6, "food_cancelled": 9, "left_unpaid": 11 } }
+          }
+        },
+        "rows": [
+          [1,[false,2,3,[5,2,62.56,-45,0,317.56,5]],[false,2,6,[5,2,62.56,-45,0,317.56,5]]],
+          [2,[false,2,3,[10,6,80.1,-45,0,385.1000000000001,10]],[false,2,6,[10,6,80.1,-45,0,385.1000000000001,10]]],
+          [3,[true,3,3,[9,5,79.46000000000004,180,180,559.46,9]],[false,3,6,[9,5,79.46000000000001,-45,0,334.46000000000004,9]]],
+          [4,[true,5,3,[8,5,116.92000000000002,180,180,596.9200000000001,8]],[false,5,6,[8,5,116.92000000000002,-45,0,371.92,8]]],
+          [5,[true,8,3,[8,8,115.20000000000005,180,180,595.2,8]],[true,8,6,[8,8,115.20000000000005,180,180,595.2,8]]],
+          [6,[true,4,3,[8,6,79.45999999999998,180,180,559.46,8]],[false,4,6,[8,6,79.45999999999998,-45,0,334.46,8]]],
+          [7,[true,6,3,[7,6,88.33999999999997,180,180,568.3400000000001,7]],[true,6,6,[7,6,88.33999999999997,180,180,568.3400000000001,7]]],
+          [8,[true,4,3,[6,5,75.47999999999996,180,180,555.48,6]],[false,4,6,[6,5,75.47999999999998,-45,0,330.4800000000001,6]]],
+          [9,[true,3,3,[7,5,60.19999999999999,180,180,540.2,7]],[false,3,6,[7,5,60.2,-45,0,315.20000000000005,7]]],
+          [10,[false,2,3,[4,3,43.68000000000001,-45,0,298.68,4]],[false,2,6,[4,3,43.68000000000001,-45,0,298.68,4]]],
+          [11,[true,6,3,[8,6,118.32,180,180,598.32,8]],[true,6,6,[8,6,118.32,180,180,598.32,8]]],
+          [12,[true,4,3,[7,4,75.22000000000003,180,180,555.22,7]],[false,4,6,[7,4,75.22000000000003,-45,0,330.22,7]]],
+          [13,[true,6,3,[8,8,94.75999999999999,180,180,574.76,8]],[true,6,6,[8,8,94.75999999999999,180,180,574.76,8]]],
+          [14,[true,3,3,[7,3,50.16,180,180,530.1600000000001,7]],[false,3,6,[7,3,50.16,-45,0,305.16,7]]],
+          [15,[true,6,3,[10,6,133.86,180,180,663.86,10]],[true,6,6,[10,6,133.86,180,180,663.86,10]]],
+          [16,[true,8,3,[8,8,116.28000000000003,180,180,596.28,8]],[true,8,6,[8,8,116.28000000000003,180,180,596.28,8]]],
+          [17,[true,7,3,[8,8,111.30000000000001,180,180,591.3,8]],[true,7,6,[8,8,111.30000000000001,180,180,591.3,8]]],
+          [18,[true,8,3,[8,8,118,180,180,598,8]],[true,8,6,[8,8,118,180,180,598,8]]],
+          [19,[true,3,3,[6,3,63.06,180,180,543.06,6]],[false,3,6,[6,3,63.06,-45,0,318.05999999999995,6]]],
+          [20,[true,8,3,[8,8,113.60000000000002,180,180,593.6,8]],[true,8,6,[8,8,113.60000000000002,180,180,593.6,8]]]
+        ]
+      },
+      "holdout": {
+        "gate": { "expectedCount": 20, "completedCount": 20, "successes": 17, "minimum": 14, "passed": true },
+        "aggregate": {
+          "candidate": {
+            "runs": 20, "successes": 17, "fulfilledTotal": 98,
+            "payments": { "totalBonus": 3060, "totalOrdinaryRevenue": 1656.4399999999998, "totalContractCash": 2925, "contractPaidVisitCount": 120, "paidVisitCount": 138 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 100, "drink_only": 6, "food_cancelled": 16, "left_unpaid": 20 } }
+          },
+          "control": {
+            "runs": 20, "successes": 8, "fulfilledTotal": 98,
+            "payments": { "totalBonus": 1440, "totalOrdinaryRevenue": 1656.4399999999998, "totalContractCash": 900, "contractPaidVisitCount": 120, "paidVisitCount": 138 },
+            "outcomes": { "exactReasonCounts": { "abandoned": 100, "drink_only": 6, "food_cancelled": 16, "left_unpaid": 20 } }
+          }
+        },
+        "rows": [
+          [21,[true,3,3,[6,4,65.46000000000001,180,180,545.46,6]],[false,3,6,[6,4,65.46000000000001,-45,0,320.46000000000004,6]]],
+          [22,[true,5,3,[6,5,75.30000000000001,180,180,555.3,6]],[false,5,6,[6,5,75.30000000000001,-45,0,330.29999999999995,6]]],
+          [23,[true,6,3,[8,8,87.39999999999998,180,180,567.4,8]],[true,6,6,[8,8,87.39999999999998,180,180,567.4,8]]],
+          [24,[true,8,3,[8,8,115.91999999999996,180,180,595.9200000000001,8]],[true,8,6,[8,8,115.91999999999996,180,180,595.9200000000001,8]]],
+          [25,[true,8,3,[8,8,116.41999999999996,180,180,596.4200000000001,8]],[true,8,6,[8,8,116.41999999999996,180,180,596.4200000000001,8]]],
+          [26,[true,4,3,[10,6,91.30000000000001,180,180,621.3,10]],[false,4,6,[10,6,91.30000000000001,-45,0,396.3,10]]],
+          [27,[true,8,3,[8,8,122.69999999999999,180,180,602.7,8]],[true,8,6,[8,8,122.69999999999999,180,180,602.7,8]]],
+          [28,[true,5,3,[7,6,91.96000000000004,180,180,571.96,7]],[false,5,6,[7,6,91.96000000000001,-45,0,346.96,7]]],
+          [29,[true,3,3,[5,3,60.160000000000025,180,180,540.1600000000001,5]],[false,3,6,[5,3,60.16000000000001,-45,0,315.16,5]]],
+          [30,[false,2,3,[7,6,48.76000000000002,-45,0,303.76,7]],[false,2,6,[7,6,48.76000000000002,-45,0,303.76,7]]],
+          [31,[true,8,3,[8,8,122.32,180,180,602.32,8]],[true,8,6,[8,8,122.32,180,180,602.32,8]]],
+          [32,[true,3,3,[6,5,52.04000000000002,180,180,532.04,6]],[false,3,6,[6,5,52.040000000000006,-45,0,307.04,6]]],
+          [33,[true,4,3,[4,4,57.120000000000005,180,180,537.1200000000001,4]],[false,4,6,[4,4,57.11999999999999,-45,0,312.12000000000006,4]]],
+          [34,[true,3,3,[3,3,45.48000000000002,180,180,525.48,3]],[false,3,6,[3,3,45.480000000000004,-45,0,300.48,3]]],
+          [35,[false,2,3,[10,6,83.53999999999999,-45,0,388.54,10]],[false,2,6,[10,6,83.53999999999999,-45,0,388.54,10]]],
+          [36,[true,6,3,[6,6,91.10000000000002,180,180,571.1,6]],[true,6,6,[6,6,91.10000000000002,180,180,571.1,6]]],
+          [37,[true,7,3,[7,7,103.75999999999999,180,180,583.76,7]],[true,7,6,[7,7,103.75999999999999,180,180,583.76,7]]],
+          [38,[true,6,3,[7,6,101.32,180,180,581.32,7]],[true,6,6,[7,6,101.32,180,180,581.32,7]]],
+          [39,[true,5,3,[7,6,87.82,180,180,567.82,7]],[false,5,6,[7,6,87.82,-45,0,342.82000000000005,7]]],
+          [40,[false,2,3,[7,7,36.56,-45,0,291.56000000000006,7]],[false,2,6,[7,7,36.56,-45,0,291.56000000000006,7]]]
+        ]
+      }
+    }
+  ]
+}

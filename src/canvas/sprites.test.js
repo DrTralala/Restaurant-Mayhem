@@ -42,16 +42,17 @@ describe('loadSprites', () => {
       const sprites = loadSprites();
 
       expect(Object.keys(sprites)).toEqual([
-        'cashier', 'chair', 'dishwasher', 'drinksDispenser', 'oven', 'ovenInUse', 'serviceCounter',
+        'cashier', 'chair', 'dishwasher', 'drinksDispenser', 'highTopCounter', 'oven', 'ovenInUse', 'serviceCounter',
         'sinkWithDirtyDishes', 'sink', 'table', 'tableDirty', 'toaster',
       ]);
-      expect(ImageMock).toHaveBeenCalledTimes(12);
+      expect(ImageMock).toHaveBeenCalledTimes(13);
       expect(Object.values(sprites)).toEqual(images);
       const sourceFragments = {
         cashier: 'cashier-station',
         chair: 'chair',
         dishwasher: 'dishwasher',
         drinksDispenser: 'drinks-dispenser',
+        highTopCounter: 'high-top-counter',
         oven: 'oven',
         ovenInUse: 'oven-in-use',
         serviceCounter: 'service-counter',

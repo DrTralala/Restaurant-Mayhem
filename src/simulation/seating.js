@@ -1,5 +1,6 @@
 import { buildBlockedCells, cellKey, cellToWorld, findPath, worldToCell } from './pathfinding';
 import { getRestaurantWorld } from './world';
+import { getDiningChairAccessPoint } from '../data/diningGeometry';
 import { canClaimDestination } from './navigation/destinations';
 import { hasRoute } from './navigation/router';
 import {
@@ -106,6 +107,7 @@ export function buildChairApproachAssignments(state, customerIds, chairIds, { na
   const usedApproachCells = new Set();
 
   for (const { customerId, chairId, customer, chair } of selectedPairs) {
+    const accessPoint = cell => getDiningChairAccessPoint(chair, cellToWorld(cell));
     const customerCell = worldToCell(customer);
     const chairCell = worldToCell(chair);
     const candidates = APPROACH_DIRECTIONS
@@ -113,17 +115,17 @@ export function buildChairApproachAssignments(state, customerIds, chairIds, { na
       .filter(candidate => isRestaurantInteriorCell(currentState, candidate)
         && !blocked.has(cellKey(candidate))
         && !usedApproachCells.has(cellKey(candidate))
-        && canClaimDestination(currentState, customer, cellToWorld(candidate)))
+        && canClaimDestination(currentState, customer, accessPoint(candidate)))
       .sort((left, right) => compareApproachCells(left, right, customerCell));
 
     const routeGrid = routeGridForCustomer(navigationGrid, customer);
     const approachCell = candidates.find(candidate => sameCell(customerCell, candidate)
       || (navigationGrid != null
-        ? routeGrid && hasRoute(routeGrid, customer, cellToWorld(candidate))
+        ? routeGrid && hasRoute(routeGrid, customer, accessPoint(candidate))
         : findPath(currentState, customerCell, candidate).length > 0));
     if (!approachCell) return null;
 
-    const approachPoint = cellToWorld(approachCell);
+    const approachPoint = accessPoint(approachCell);
     usedApproachCells.add(cellKey(approachCell));
     assignments.push({
       customerId,
@@ -161,7 +163,7 @@ export function validateChairApproachAssignments(
       || !Number.isFinite(point?.x) || !Number.isFinite(point?.y)) return false;
     const key = cellKey(cell);
     const chairCell = worldToCell(chair);
-    const expectedPoint = cellToWorld(cell);
+    const expectedPoint = getDiningChairAccessPoint(chair, cellToWorld(cell));
     const customer = customersById.get(customerIds[index]);
     const routeGrid = customer ? routeGridForCustomer(navigationGrid, customer) : null;
     if (usedCells.has(key)

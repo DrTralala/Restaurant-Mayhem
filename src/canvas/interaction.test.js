@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { findClickedEntity } from './interaction';
+import { createCounterTestState } from '../state/highTopCounter.testSupport';
+import { selectFurnitureInRect } from './selection';
+
+it('selects the whole counter when clicking or dragging over a built-in chair', () => {
+  const state = createCounterTestState();
+  expect(findClickedEntity(state, { x: 0, y: 0, zoom: 1 }, 310, 330))
+    .toMatchObject({ type: 'highTopCounter', data: { id: 'htc1' }, text: 'High top counter' });
+  expect(selectFurnitureInRect(state, { x1: 300, y1: 320, x2: 320, y2: 340 }))
+    .toEqual([{ type: 'highTopCounter', id: 'htc1' }]);
+});
 
 const state = {
   restaurant: { expansionLevel: 1 },

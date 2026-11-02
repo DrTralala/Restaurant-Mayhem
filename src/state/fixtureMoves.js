@@ -1,4 +1,5 @@
 import { getFixture, getFixtureDescriptor } from '../data/fixtures';
+import { repositionHighTopCounterRecords } from '../data/highTopCounters';
 import { validateFixtureMoves } from '../simulation/placement';
 import {
   getOccupiedServiceSlotKeys,
@@ -183,6 +184,7 @@ export function moveFixtures(state, requestedMoves) {
   };
 
   let next = applyValidatedMoves(state, moves);
+  if (moves.some(move => move.type === 'highTopCounter')) next = repositionHighTopCounterRecords(next);
   const cancelledTasks = [];
   const cancelledPaymentCustomerIds = new Set();
   next.staff = (state.staff || []).map(worker => {

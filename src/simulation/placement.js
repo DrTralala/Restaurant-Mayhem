@@ -1,4 +1,5 @@
 import { getPlaceable, getPlaceableDimensions } from '../data/placeables';
+import { createHighTopCounterRecords, repositionHighTopCounterRecords, isHighTopCounterInUse } from '../data/highTopCounters';
 import { getPartyKey } from './partyReviews';
 import {
   createEmptyAmenitySlots,
@@ -239,6 +240,11 @@ function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
+function isOffCounterGrid(type, point) {
+  const grid = getPlaceable('highTopCounter').grid;
+  return type === 'highTopCounter' && (point.x % grid !== 0 || point.y % grid !== 0);
+}
+
 function isWithinFloor(world, rect, itemType) {
   const right = itemType === 'door' ? world.queueX : world.floorX + world.floorW;
   return rect.x >= world.floorX
@@ -302,6 +308,17 @@ export function snapPlacement(itemType, point, state = {}, rotation = 0) {
     };
   }
 
+  if (itemType === 'highTopCounter') {
+    // Floor edges can lie halfway through a grid cell. Keep built-in dining
+    // places aligned so their individual navigation cells never overlap.
+    return {
+      x: clamp(x, Math.ceil(world.floorX / item.grid) * item.grid,
+        Math.floor((world.floorX + world.floorW - dimensions.width) / item.grid) * item.grid),
+      y: clamp(y, Math.ceil(world.kitchenY / item.grid) * item.grid,
+        Math.floor((world.kitchenY + world.floorH - dimensions.height) / item.grid) * item.grid),
+    };
+  }
+
   return {
     x: clamp(x, world.floorX, world.floorX + world.floorW - dimensions.width),
     y: clamp(y, world.kitchenY, world.kitchenY + world.floorH - dimensions.height),
@@ -314,6 +331,7 @@ export function validatePlacement(state = {}, placement = {}) {
   const item = getPlaceable(requestedPlacement.itemType);
   if (!item) return invalid('unknown-item-type');
   if (!isFinitePoint(requestedPlacement)) return invalid('non-finite-coordinate');
+  if (isOffCounterGrid(requestedPlacement.itemType, requestedPlacement)) return invalid('off-grid');
   if (item.rotatable && Object.prototype.hasOwnProperty.call(requestedPlacement, 'rotation')
     && (!Number.isInteger(requestedPlacement.rotation)
       || requestedPlacement.rotation < 0 || requestedPlacement.rotation > 3)) {
@@ -386,6 +404,7 @@ export function validatePlacement(state = {}, placement = {}) {
     const tables = Array.isArray(currentState.tables) ? currentState.tables : [];
     const chairs = Array.isArray(currentState.chairs) ? currentState.chairs : [];
     const adjacentTables = tables.filter(table => {
+      if (table.highTopCounterId != null) return false;
       const tableRect = getRecordRect(table, 40, 40);
       if (!tableRect || !areAdjacent(rect, tableRect)) return false;
       const chairCount = chairs.filter(chair => chair.tableId === table.id).length;
@@ -482,7 +501,7 @@ export function validateFixtureMoves(state = {}, moves = []) {
 
   const world = getRestaurantWorld(currentState.restaurant || {});
   const seenByType = new Map();
-  const finalState = { ...currentState };
+  let finalState = { ...currentState };
   const clonedCollections = new Set();
   const normalisedMoves = [];
 
@@ -497,7 +516,10 @@ export function validateFixtureMoves(state = {}, moves = []) {
 
     const fixture = getFixture(currentState, move.type, move.id);
     if (!fixture) return invalid('missing-fixture');
+    if (fixture.data.highTopCounterId != null) return invalid('built-in-fixture');
+    if (move.type === 'highTopCounter' && isHighTopCounterInUse(currentState, move.id)) return invalid('counter-in-use');
     if (!isFinitePoint(move)) return invalid('non-finite-coordinate');
+    if (isOffCounterGrid(move.type, move)) return invalid('off-grid');
     if (Object.prototype.hasOwnProperty.call(move, 'rotation')
       && (!Number.isInteger(move.rotation) || move.rotation < 0 || move.rotation > 3)) {
       return invalid('malformed-rotation');
@@ -537,6 +559,9 @@ export function validateFixtureMoves(state = {}, moves = []) {
     ));
   }
 
+  if (normalisedMoves.some(move => move.type === 'highTopCounter')) {
+    finalState = repositionHighTopCounterRecords(finalState);
+  }
   const finalFixtures = listFixtures(finalState);
   const movedFixtures = normalisedMoves.map(move => getFixture(
     finalState,
@@ -767,7 +792,9 @@ export function validateFixtureCopies(state = {}, requestedCopies = []) {
 
     const source = getFixture(currentState, copy.type, copy.id);
     if (!source) return invalid('missing-fixture');
+    if (source.data.highTopCounterId != null) return invalid('built-in-fixture');
     if (!isFinitePoint(copy)) return invalid('non-finite-coordinate');
+    if (isOffCounterGrid(copy.type, copy)) return invalid('off-grid');
     if (copy.type === 'door' && copy.x !== world.doorX) return invalid('door-wall');
     if (Object.prototype.hasOwnProperty.call(copy, 'rotation')
       && (!Number.isInteger(copy.rotation) || copy.rotation < 0 || copy.rotation > 3)) {
@@ -815,6 +842,11 @@ export function validateFixtureCopies(state = {}, requestedCopies = []) {
   }
   for (const [collection, records] of copiedByCollection) {
     finalState[collection] = [...(currentState[collection] || []), ...records];
+  }
+  for (const fixture of candidateFixtures.filter(fixture => fixture.type === 'highTopCounter')) {
+    const records = createHighTopCounterRecords(fixture.data);
+    finalState.tables = [...(finalState.tables || []), ...records.tables];
+    finalState.chairs = [...(finalState.chairs || []), ...records.chairs];
   }
 
   const finalFixtures = listFixtures(finalState);

@@ -9,6 +9,16 @@ vi.mock('../state/GameContext', () => ({
 }));
 
 describe('ItemsPanel', () => {
+  it('offers the complete high top counter for $300', () => {
+    const startPlacement = vi.fn();
+    useGameState.mockReturnValue({ restaurant: { funds: 300 } });
+    useDispatch.mockReturnValue(vi.fn());
+    render(<ItemsPanel onStartPlacement={startPlacement} />);
+    expect(screen.getByText(/4×1 countertop with four built-in chairs.*4×2/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Buy High top counter ($300)' }));
+    expect(startPlacement).toHaveBeenCalledWith('highTopCounter');
+  });
+
   it('offers physical tables and chairs as items', () => {
     useGameState.mockReturnValue({ restaurant: { funds: 500 } });
     useDispatch.mockReturnValue(vi.fn());
@@ -274,7 +284,7 @@ describe('ItemsPanel', () => {
       useGameState.mockReturnValue({ restaurant });
       const { unmount } = render(<ItemsPanel onStartPlacement={startPlacement} />);
       const buttons = screen.getAllByRole('button', { name: /^Buy / });
-      expect(buttons).toHaveLength(8);
+      expect(buttons).toHaveLength(9);
       for (const button of buttons) {
         expect(button).toBeDisabled();
       }
@@ -346,7 +356,7 @@ describe('ItemsPanel', () => {
       const { unmount } = render(<ItemsPanel onStartPlacement={vi.fn()} />);
 
       const buttons = screen.getAllByRole('button', { name: /^Buy / });
-      expect(buttons).toHaveLength(8);
+      expect(buttons).toHaveLength(9);
       const unavailableIds = [];
       for (const button of buttons) {
         expect(button).toBeDisabled();
@@ -355,7 +365,7 @@ describe('ItemsPanel', () => {
         expect(unavailable.textContent).toBe('Funds unavailable.');
         unavailableIds.push(unavailable.id);
       }
-      expect(new Set(unavailableIds).size).toBe(8);
+      expect(new Set(unavailableIds).size).toBe(9);
 
       unmount();
     }
@@ -368,6 +378,7 @@ describe('ItemsPanel', () => {
 
     const expected = [
       ['Buy Dining table', 'Default footprint: 40 × 40 world units.', null],
+      ['Buy High top counter', 'Default footprint: 80 × 40 world units.', 'Quarter-turn footprint: 40 × 80 world units.'],
       ['Buy Dining chair', 'Default footprint: 20 × 20 world units.', 'Quarter-turn footprint: 20 × 20 world units.'],
       ['Buy Additional door', 'Default footprint: 6 × 40 world units.', null],
       ['Buy Cashier', 'Default footprint: 40 × 40 world units.', null],
@@ -407,12 +418,12 @@ describe('ItemsPanel', () => {
     expect(new Set(copyIds).size).toBe(2);
 
     const buttons = screen.getAllByRole('button', { name: /^Buy / });
-    expect(buttons).toHaveLength(16);
+    expect(buttons).toHaveLength(18);
     const describedby = buttons.map(button => button.getAttribute('aria-describedby'));
-    expect(new Set(describedby).size).toBe(16);
+    expect(new Set(describedby).size).toBe(18);
     for (const [index, value] of describedby.entries()) {
       const ids = value.split(/\s+/);
-      expect(ids).toContain(copyIds[index < 8 ? 0 : 1]);
+      expect(ids).toContain(copyIds[index < 9 ? 0 : 1]);
       const card = buttons[index].parentElement;
       const quarter = within(card).queryByText(/^Quarter-turn footprint: .* world units\.$/);
       expect(new Set(ids).size).toBe(quarter ? 4 : 3);

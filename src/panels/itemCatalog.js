@@ -6,6 +6,7 @@ import {
 
 export const SHOP_ITEM_TYPES = Object.freeze([
   'table',
+  'highTopCounter',
   'chair',
   'door',
   'cashierTable',
@@ -22,6 +23,9 @@ function countWord(value) {
 }
 
 function descriptionFor(type, placeable) {
+  if (type === 'highTopCounter') {
+    return 'A 4×1 countertop with four built-in chairs for solo diners. Total footprint: 4×2 squares.';
+  }
   if (type === 'table') {
     return 'A four-seat dining table. Add chairs separately before seating guests.';
   }

@@ -1,10 +1,12 @@
-export const SERVICE_CONTRACT_RULES_VERSION = 4;
+export const SERVICE_CONTRACT_RULES_VERSION = 6;
 export const SERVICE_CONTRACT_PREP_SECONDS = 900;
 export const SERVICE_CONTRACT_RESULT_LIMIT = 10;
 
 function freezeTemplate(template) {
   return Object.freeze({ ...template, profile: Object.freeze(template.profile),
-    parties: Object.freeze(template.parties.map(party => Object.freeze(party))) });
+    parties: Object.freeze(template.parties.map(party => Object.freeze(party))),
+    ...(template.preparationExpectations
+      ? { preparationExpectations: Object.freeze([...template.preparationExpectations]) } : {}) });
 }
 
 // These v1 snapshots are also the save-validation authority. Balance revisions
@@ -42,13 +44,73 @@ const SERVICE_CONTRACTS_V3 = Object.freeze([
 ]);
 
 // V4 extends new service windows by 25%; accepted v1–v3 terms stay frozen.
-export const SERVICE_CONTRACTS = Object.freeze(SERVICE_CONTRACTS_V3.map(template => freezeTemplate({
+const SERVICE_CONTRACTS_V4 = Object.freeze(SERVICE_CONTRACTS_V3.map(template => freezeTemplate({
   ...template, serviceDuration: template.serviceDuration * 1.25,
 })));
+
+// V5 keeps v4 pacing/windows intact, makes Family service attainable after one
+// whole family party is missed, spaces Party rush arrivals into a queueable
+// ten-minute stream, and lets booked Office/Tasting guests wait longer for service.
+// Never rewrite v1–v4 accepted terms or historical results.
+const SERVICE_CONTRACTS_V5 = Object.freeze(SERVICE_CONTRACTS_V4.map(template => freezeTemplate({
+  ...template,
+  ...(template.id === 'office-lunch' || template.id === 'tasting-service'
+    ? { profile: { ...template.profile, patienceMultiplier: 1.5 } } : {}),
+  ...(template.id === 'family-service' ? { target: 4 } : {}),
+  ...(template.id === 'party-rush' ? { parties: [0, 120, 240, 360, 480, 600]
+    .map(arrivalOffset => ({ partyType: 'couple', size: 2, arrivalOffset })) } : {}),
+})));
+
+// V6 selects only the evidence-frozen target patches and adds advisory tier/setup
+// metadata. The per-seed evidence remains test-only in serviceContractsV6Evidence.json.
+const SERVICE_CONTRACTS_V6_SELECTIONS = Object.freeze({
+  'office-lunch': {
+    patch: { target: 2 },
+    tier: 'introductory',
+    preparationExpectations: [
+      'Reference preparation office-starter; actions []; cost 0; starting funds 600; funds before acceptance 600.',
+    ],
+  },
+  'family-service': {
+    patch: null,
+    tier: 'standard',
+    preparationExpectations: [
+      'Family-layout reference with two four-chair tables: actions []; cost 0; starting funds 600; funds before acceptance 600.',
+    ],
+  },
+  'tasting-service': {
+    patch: { target: 2 },
+    tier: 'advanced',
+    preparationExpectations: [
+      'Move t3 to (200,300), t4 to (360,300), ch5 to (210,280) rotation 2, ch6 to (210,340) rotation 0, ch7 to (180,310) rotation 1, ch8 to (240,310) rotation 3, ch9 to (370,280) rotation 2, ch10 to (370,340) rotation 0, ch11 to (340,310) rotation 1, and ch12 to (400,310) rotation 3; cost 0; starting funds 600; funds before acceptance 600.',
+    ],
+  },
+  'party-rush': {
+    patch: { target: 3 },
+    tier: 'expert',
+    preparationExpectations: [
+      'Place chairs at (180,210) rotation 1, (240,210) rotation 3, (340,210) rotation 1, and (400,210) rotation 3; upgrade equipment eq1; cost 300; starting funds 600; funds before acceptance 300.',
+    ],
+  },
+});
+
+export const SERVICE_CONTRACTS_V6 = Object.freeze(SERVICE_CONTRACTS_V5.map(template => {
+  const selection = SERVICE_CONTRACTS_V6_SELECTIONS[template.id];
+  return freezeTemplate({
+    ...template,
+    ...(selection.patch || {}),
+    tier: selection.tier,
+    preparationExpectations: selection.preparationExpectations,
+  });
+}));
+
+export const SERVICE_CONTRACTS = SERVICE_CONTRACTS_V6;
 
 export function getServiceContractTemplate(templateId, rulesVersion = SERVICE_CONTRACT_RULES_VERSION) {
   const catalogue = rulesVersion === 1 ? SERVICE_CONTRACTS_V1
     : rulesVersion === 2 ? SERVICE_CONTRACTS_V2 : rulesVersion === 3 ? SERVICE_CONTRACTS_V3
-      : rulesVersion === 4 ? SERVICE_CONTRACTS : null;
+      : rulesVersion === 4 ? SERVICE_CONTRACTS_V4
+        : rulesVersion === 5 ? SERVICE_CONTRACTS_V5
+          : rulesVersion === 6 ? SERVICE_CONTRACTS_V6 : null;
   return catalogue?.find(template => template.id === templateId) || null;
 }

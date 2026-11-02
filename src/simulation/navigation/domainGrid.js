@@ -13,7 +13,7 @@ import {
   isDoorCrossing,
   isDoorRoleForFlow,
 } from '../world';
-import { recordSeatResidency } from '../movement/seatedDeparture';
+import { recordSeatResidency, seatedDeparturePorts } from '../movement/seatedDeparture';
 import { getAmenityGeometry } from '../../data/staffAmenities';
 import { isStaticStaffAmenityExit } from '../movement/staffAmenityExit';
 import { noteNavigation } from './telemetry';
@@ -369,13 +369,8 @@ function createActorGridWithFlowResolver(state, actor, base, doorFlow, resolveFl
     { doorFlow: flowWithCrossing },
   );
   if (!cleared.isOpen(origin) || !cleared.isOpen(actor)) return rejected;
-  const cell = worldToCell(origin);
-  let ports = [];
-  for (const dy of [-1, 0, 1]) for (const dx of [-1, 0, 1]) {
-    if (!dx && !dy) continue;
-    const port = cellToWorld({ x: cell.x + dx, y: cell.y + dy });
-    if (flowBase.isOpen(port) && cleared.segmentClear(origin, port)) ports.push(port);
-  }
+  let ports = seatedDeparturePorts({ origin, highTopCounterId: chair.highTopCounterId })
+    .filter(port => flowBase.isOpen(port) && cleared.segmentClear(origin, port));
   if (record.phase === 'departing' && record.connector) {
     const connector = record.connector;
     if (!same(connector.from, origin) || !ports.some(port => same(port, connector.to))

@@ -3,7 +3,6 @@ import { isRestaurantOpen, secondsToGameTime } from '../simulation/clock';
 import { TYPOGRAPHY } from '../typography';
 import AnalogClock from './AnalogClock';
 import { getCareerSummary } from '../simulation/careerRun';
-import { ServiceContractTracker } from '../panels/ServiceContractsPanel';
 
 function formatFunds(value) {
   return Number.isFinite(value) ? '$'+(Number.isInteger(value)?value:value.toFixed(2)) : 'Unavailable';
@@ -21,7 +20,7 @@ function careerCriterionText(criterion) {
     ? criterion.target.toFixed(2) : criterion.target} — ${criterion.passed ? 'met' : 'below target'}`;
 }
 
-export default function StatsBar({ onOpenCareer, onOpenContracts }) {
+export default function StatsBar({ onOpenCareer }) {
   const state = useGameState();
   const { restaurant } = state;
   const funds = formatFunds(restaurant.funds);
@@ -63,7 +62,6 @@ export default function StatsBar({ onOpenCareer, onOpenContracts }) {
           {' · '}{career.needsDecision ? 'Decision required' : `${countdown} remaining (provisional)`}
           {' · '}Deadline: Day 8, 10:00 AM
         </button>}
-        <ServiceContractTracker onOpen={onOpenContracts} />
       </div>
     </>
   );

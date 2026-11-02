@@ -1,4 +1,5 @@
 import { getRushHourMultiplier, isRestaurantOpen } from './clock';
+import { getDiningTableCentre } from '../data/diningGeometry';
 import { WALK_IN_ARCHETYPES } from '../data/customerArchetypes';
 import { advanceCharacterMovementBatch, getCharacterMovementStatus } from './movement';
 import {
@@ -262,7 +263,9 @@ function normaliseQueuedParties(queue) {
 // Logical members only. Queue leases, ingress and whole-party seating remain
 // responsible for any world position; neither arrival path reserves a chair.
 function createQueuedMember(state, { partyId, partyType, partySize }, member) {
-  const patienceMax = getCustomerPatience(member.archetype, partySize);
+  const patienceMultiplier = Number.isFinite(member.patienceMultiplier) && member.patienceMultiplier >= 1
+    ? member.patienceMultiplier : 1;
+  const patienceMax = getCustomerPatience(member.archetype, partySize) * patienceMultiplier;
   return {
     id: member.id, partyId, partyType, partySize,
     archetype: member.archetype, gender: member.gender,
@@ -899,9 +902,7 @@ export function prepareCustomersForMovement(state, gameDt) {
     let leaving = customer;
     if (!Number.isFinite(leaving.x) || !Number.isFinite(leaving.y)) {
       const table = (state.tables || []).find(candidate => candidate.id === leaving.tableId);
-      const fallback = table && Number.isFinite(table.x) && Number.isFinite(table.y)
-        ? { x: table.x + 20, y: table.y + 20 }
-        : getDoorPosition(state, getDoors(state)[0])?.inside;
+      const fallback = getDiningTableCentre(table) || getDoorPosition(state, getDoors(state)[0])?.inside;
       if (!fallback) return leaving;
       leaving = { ...leaving, ...fallback };
     }

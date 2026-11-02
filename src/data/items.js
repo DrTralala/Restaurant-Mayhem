@@ -1,5 +1,6 @@
 export const ITEM_PRICES = {
   table: 300,
+  highTopCounter: 300,
   chair: 50,
   door: 400,
   serviceTable: 300,

@@ -4,6 +4,138 @@ import { runTick } from './gameLoop';
 import { getCharacterMovementStatus } from './movement';
 import { hydrateState, saveState, loadState } from '../state/persistence';
 import { validateSavedState } from '../state/saveValidation';
+import { buildAffordableBaskets } from './menuEconomy';
+import { summariseContractDiagnostics } from './contractBalanceDiagnostics.testSupport';
+
+const allowedPreparationActionTypes = new Set([
+  'MOVE_STAFF', 'MOVE_FIXTURES', 'MOVE_ITEMS', 'MOVE_CHAIR', 'MOVE_TABLE',
+  'MOVE_WASH_STATION', 'MOVE_SERVICE_TABLE', 'PLACE_ITEM', 'UPGRADE_EQUIPMENT',
+]);
+
+const diagnosticTimestampFields = ['arrivalAt', 'admittedAt', 'orderedAt', 'foodOrderedAt',
+  'foodDeadlineAt', 'foodCancelledAt', 'preparationStartedAt', 'readyAt', 'paidAt'];
+
+const groupSeatingLayoutAction = Object.freeze({
+  type: 'MOVE_FIXTURES',
+  items: Object.freeze([
+    { type: 'table', id: 't3', x: 200, y: 300 },
+    { type: 'table', id: 't4', x: 360, y: 300 },
+    { type: 'chair', id: 'ch5', x: 210, y: 280, rotation: 2 },
+    { type: 'chair', id: 'ch6', x: 210, y: 340, rotation: 0 },
+    { type: 'chair', id: 'ch7', x: 180, y: 310, rotation: 1 },
+    { type: 'chair', id: 'ch8', x: 240, y: 310, rotation: 3 },
+    { type: 'chair', id: 'ch9', x: 370, y: 280, rotation: 2 },
+    { type: 'chair', id: 'ch10', x: 370, y: 340, rotation: 0 },
+    { type: 'chair', id: 'ch11', x: 340, y: 310, rotation: 1 },
+    { type: 'chair', id: 'ch12', x: 400, y: 310, rotation: 3 },
+  ].map(item => Object.freeze(item))),
+});
+const toasterUpgradeAction = Object.freeze({ type: 'UPGRADE_EQUIPMENT', id: 'eq1' });
+const rushSeatExpansionActions = Object.freeze([
+  { type: 'PLACE_ITEM', itemType: 'chair', x: 180, y: 210, rotation: 1 },
+  { type: 'PLACE_ITEM', itemType: 'chair', x: 240, y: 210, rotation: 3 },
+  { type: 'PLACE_ITEM', itemType: 'chair', x: 340, y: 210, rotation: 1 },
+  { type: 'PLACE_ITEM', itemType: 'chair', x: 400, y: 210, rotation: 3 },
+].map(action => Object.freeze(action)));
+const preparation = (id, actions) => Object.freeze({ id, actions: Object.freeze(actions) });
+
+// Named, test-only reference setups. They are deliberately made only from
+// ordinary accepted reducer actions and keep all starting staff in place.
+export const REFERENCE_SERVICE_PREPARATIONS = Object.freeze({
+  officeStarter: preparation('office-starter', []),
+  // The starter already has two clear four-chair tables for booked groups;
+  // keep this practical Family reference free of unnecessary staff/furniture moves.
+  familyLayout: preparation('family-layout', []),
+  tastingLayout: preparation('tasting-layout', [groupSeatingLayoutAction]),
+  tastingUpgrade: preparation('tasting-upgrade', [toasterUpgradeAction]),
+  tastingCombined: preparation('tasting-combined', [groupSeatingLayoutAction, toasterUpgradeAction]),
+  rushCombined: preparation('rush-combined', [...rushSeatExpansionActions, toasterUpgradeAction]),
+});
+
+function contractGuestIds(state) {
+  const ledger = state.serviceContracts?.active?.guests
+    || state.serviceContracts?.results?.at(-1)?.guestResults || [];
+  return new Set(ledger.map(guest => guest.guestId));
+}
+
+function contractActors(state) {
+  const queueMembers = (state.queue || []).flatMap(entry => Array.isArray(entry?.members) ? entry.members : [entry]);
+  return [...queueMembers, ...(state.customers || []), ...(state.queueDepartures || [])].filter(Boolean);
+}
+
+function guestIdFor(actor, guestIds) {
+  const guestId = actor?.serviceContractGuestId ?? actor?.id;
+  return guestIds.has(guestId) ? guestId : null;
+}
+
+function ensureStageFacts(stageFacts, guestId) {
+  if (!stageFacts.has(guestId)) {
+    stageFacts.set(guestId, Object.fromEntries(diagnosticTimestampFields.map(field => [field, null])));
+  }
+  return stageFacts.get(guestId);
+}
+
+function recordStageTime(stageFacts, guestId, field, value) {
+  if (!Number.isFinite(value)) return;
+  const row = ensureStageFacts(stageFacts, guestId);
+  if (!Number.isFinite(row[field])) row[field] = value;
+}
+
+function recordEarliestStageTime(stageFacts, guestId, field, value) {
+  if (!Number.isFinite(value)) return;
+  const row = ensureStageFacts(stageFacts, guestId);
+  row[field] = Number.isFinite(row[field]) ? Math.min(row[field], value) : value;
+}
+
+function observeContractStages(state, stageFacts) {
+  const guestIds = contractGuestIds(state);
+  const parties = state.serviceContracts?.active?.parties || [];
+  for (const guestId of guestIds) ensureStageFacts(stageFacts, guestId);
+  for (const party of parties) {
+    for (const guestId of party.guestIds || []) {
+      if (!guestIds.has(guestId)) continue;
+      recordStageTime(stageFacts, guestId, 'arrivalAt', party.arrivalAt);
+      recordStageTime(stageFacts, guestId, 'admittedAt', party.admittedAt);
+    }
+  }
+  for (const actor of contractActors(state)) {
+    const guestId = guestIdFor(actor, guestIds);
+    if (!guestId) continue;
+    for (const field of ['orderTime', 'foodOrderedAt', 'foodDeadlineAt', 'foodCancelledAt']) {
+      const stage = field === 'orderTime' ? 'orderedAt' : field;
+      recordStageTime(stageFacts, guestId, stage, actor[field]);
+    }
+  }
+  for (const item of state.serviceItems || []) {
+    const guestId = guestIdFor({ id: item.customerId }, guestIds);
+    if (!guestId) continue;
+    recordEarliestStageTime(stageFacts, guestId, 'preparationStartedAt', item.preparationStartedAt);
+    recordEarliestStageTime(stageFacts, guestId, 'readyAt', item.readyAt);
+  }
+}
+
+function observeOrderFacts(state, previousState, orderFacts) {
+  const guestIds = contractGuestIds(state);
+  const previousActors = new Map(contractActors(previousState || {}).map(actor => [
+    guestIdFor(actor, guestIds), actor,
+  ]).filter(([guestId]) => guestId));
+  for (const actor of contractActors(state)) {
+    const guestId = guestIdFor(actor, guestIds);
+    if (!guestId || orderFacts.has(guestId) || actor.menuOutcome == null) continue;
+    const previous = previousActors.get(guestId);
+    const observedTransition = Boolean(previous && previous.menuOutcome == null);
+    // A missed transition has unknown affordability; do not replay current prices against it.
+    orderFacts.set(guestId, {
+      guestId,
+      menuOutcome: actor.menuOutcome,
+      dishId: actor.dishId ?? null,
+      drinkId: actor.drinkId ?? null,
+      drinkOnly: actor.menuOutcome === 'ordered' && actor.dishId == null && actor.drinkId != null,
+      affordableFood: observedTransition
+        ? buildAffordableBaskets(state, actor).some(basket => basket.dish) : null,
+    });
+  }
+}
 
 // Test-local randomness only; no production seed, actor injection, direct
 // progress/reputation changes, movement shortcut or replacement service phase.
@@ -49,9 +181,29 @@ function applyAction(state, action, actions) {
   return after;
 }
 
-export function createServiceFixture({ mode = 'contract', templateId = 'office-lunch', seed = 1, strategy = 'starter', speed = 4 } = {}) {
+function validatePreparation(preparation, strategy) {
+  if (!preparation || typeof preparation !== 'object' || Array.isArray(preparation)
+    || typeof preparation.id !== 'string' || !preparation.id.trim() || !Array.isArray(preparation.actions)) {
+    throw new Error('Preparation must have a non-empty id and an actions array');
+  }
+  for (const action of preparation.actions) {
+    const actionType = typeof action?.type === 'string' ? action.type : null;
+    if (!actionType || !allowedPreparationActionTypes.has(actionType)
+      || (actionType === 'PLACE_ITEM' && action.itemType !== 'chair')) {
+      throw new Error(`Preparation action type not permitted: ${actionType || 'unknown'}`);
+    }
+  }
+  if (strategy !== 'starter' && (preparation.id !== 'starter' || preparation.actions.length > 0)) {
+    throw new Error(`Explicit preparation cannot be combined with legacy strategy "${strategy}"`);
+  }
+}
+
+export function createServiceFixture({ mode = 'contract', templateId = 'office-lunch', seed = 1, strategy = 'starter',
+  speed = 4, preparation = { id: 'starter', actions: [] } } = {}) {
+  validatePreparation(preparation, strategy);
   let state = mode === 'career'
     ? createCareerInitialState({ scenarioId: 'opening-week', runId: `real-week-${seed}` }) : createInitialState();
+  const startingFunds = state.restaurant.funds;
   const actions = [];
   state = applyAction(state, { type: 'SET_SPEED', speed }, actions);
   if (['compact-service', 'compact-capacity'].includes(strategy)) {
@@ -97,20 +249,35 @@ export function createServiceFixture({ mode = 'contract', templateId = 'office-l
       for (const worker of [...state.staff]) state = applyAction(state, { type: 'FIRE_STAFF', id: worker.id }, actions);
     }
   }
+  for (const action of preparation.actions) state = applyAction(state, action, actions);
+  const fundsBeforeAcceptance = state.restaurant.funds;
+  // Keep the complete accepted setup slice, excluding the contract advance.
+  const preparationReport = {
+    id: preparation.id,
+    startingFunds,
+    fundsBeforeAcceptance,
+    cost: startingFunds - fundsBeforeAcceptance,
+    actions: actions.slice(),
+  };
   if (mode === 'contract') state = applyAction(state, { type: 'ACCEPT_SERVICE_CONTRACT', templateId }, actions);
-  return { state, actions };
+  return { state, actions, preparation: preparationReport };
 }
 
 export function runRealService({ mode = 'contract', templateId = 'office-lunch', seed = 1,
   strategy = 'starter', gameStep = 8, duration = null, maxWallMs = 120000, reloadAt = null,
-  finishPaidAtDeadline = false, acceptAtCareerEnd = false } = {}) {
-  let { state, actions } = createServiceFixture({ mode, templateId, seed, strategy, speed: gameStep / 2 });
+  finishPaidAtDeadline = false, acceptAtCareerEnd = false, preparation = { id: 'starter', actions: [] } } = {}) {
+  let { state, actions, preparation: preparationReport } = createServiceFixture({ mode, templateId, seed,
+    strategy, preparation, speed: gameStep / 2 });
   const startedAt = state.restaurant.gameTime;
   const deadlineAt = mode === 'career' ? state.careerRun.deadlineAt : state.serviceContracts.active.deadlineAt;
   const endAt = duration === null ? deadlineAt : Math.min(deadlineAt, startedAt + duration);
   const startedWall = performance.now();
   const paid = [];
   const seenSequences = new Set();
+  const orderFacts = new Map();
+  const stageFacts = new Map();
+  observeOrderFacts(state, null, orderFacts);
+  observeContractStages(state, stageFacts);
   const samples = [];
   let ticks = 0;
   let queuePeak = 0;
@@ -153,6 +320,7 @@ export function runRealService({ mode = 'contract', templateId = 'office-lunch',
       const beforeTick = state;
       state = runTick(state, { gameDt, movementDt: gameDt / 60 });
       ticks++;
+      observeOrderFacts(state, beforeTick, orderFacts);
       if (!firstSnapshotMismatch) {
         const mismatch = state.customers.find(customer => customer.dishOrderSnapshot
           && customer.dishId !== customer.dishOrderSnapshot.menuItemId
@@ -164,14 +332,19 @@ export function runRealService({ mode = 'contract', templateId = 'office-lunch',
           afterItems: serviceTrace(state).serviceItems.filter(item => item.customerId === mismatch.id) };
       }
       queuePeak = Math.max(queuePeak, state.queue.length);
+      const diagnosticGuestIds = contractGuestIds(state);
       for (const customer of state.customers) {
         const sequence = customer.paidVisitSequence;
         if (!sequence || seenSequences.has(sequence)) continue;
         seenSequences.add(sequence);
-        paid.push({ sequence, at: state.restaurant.gameTime, id: customer.id, contractId: customer.serviceContractId ?? null,
+        const visit = { sequence, at: state.restaurant.gameTime, id: customer.id, contractId: customer.serviceContractId ?? null,
           foodOutcome: customer.foodOutcome, dishPrice: customer.dishPriceAtOrder,
-          snapshot: Boolean(customer.dishOrderSnapshot) });
+          snapshot: Boolean(customer.dishOrderSnapshot) };
+        paid.push(visit);
+        const guestId = guestIdFor(customer, diagnosticGuestIds);
+        if (guestId) recordStageTime(stageFacts, guestId, 'paidAt', visit.at);
       }
+      observeContractStages(state, stageFacts);
       if (state.restaurant.gameTime >= nextSample) {
         samples.push({ at: state.restaurant.gameTime, meals: state.careerRun?.paidMeals ?? null,
           reputation: state.restaurant.reputation, funds: state.restaurant.funds,
@@ -202,7 +375,12 @@ export function runRealService({ mode = 'contract', templateId = 'office-lunch',
     }
   }
   if (status === 'completed' && (state.paused || state.navigationFault)) status = 'navigation_stop';
+  observeOrderFacts(state, null, orderFacts);
+  observeContractStages(state, stageFacts);
   const result = state.serviceContracts.results.at(-1) || null;
+  const contractDiagnostics = summariseContractDiagnostics({ active: state.serviceContracts.active, result,
+    orderFacts: [...orderFacts.values()], stageFacts, paidVisits: paid,
+    parties: state.serviceContracts.active?.parties || [], serviceItems: state.serviceItems || [] });
   const breakdown = {};
   for (const guest of result?.guestResults || state.serviceContracts.active?.guests || []) {
     const key = guest.reason || guest.status;
@@ -219,9 +397,11 @@ export function runRealService({ mode = 'contract', templateId = 'office-lunch',
     contractStatus: result?.status ?? null, fulfilled: result?.fulfilledCount
       ?? state.serviceContracts.active?.guests.filter(g => g.status === 'fulfilled_paid').length ?? null,
     target: result?.target ?? state.serviceContracts.active?.target ?? null, bonus: result?.bonusPaid ?? 0, breakdown,
+    contractDiagnostics,
     careerStatus: state.careerRun?.status ?? null, careerMeals: state.careerRun?.paidMeals ?? null,
     reputation: state.restaurant.reputation, funds: state.restaurant.funds, sequence: state.paidVisitSequence,
-    ordinaryRevenue: revenue - contractCash, contractCash, queuePeak, reloaded, reloadFacts, boundaryPaymentStep, actions, samples, paid,
+    ordinaryRevenue: revenue - contractCash, contractCash, queuePeak, reloaded, reloadFacts, boundaryPaymentStep,
+    preparation: preparationReport, actions, samples, paid,
     firstSnapshotMismatch, diagnostic,
     finalTrace: mode === 'career' ? serviceTrace(state) : null,
   } };

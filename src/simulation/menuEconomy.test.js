@@ -161,6 +161,37 @@ describe('affordable weighted menu selection', () => {
     expect(result.basket.drink.id).toBe('water');
   });
 
+  it.each([
+    [0.5, 'dish'],
+    [0.85, 'dish_drink'],
+    [0.99, 'drink'],
+  ])('keeps normal order-kind weights for a booked guest at roll %s', (kindRoll, kind) => {
+    const rolls = [kindRoll, 0];
+    const choice = chooseAffordableBasket(menuState, {
+      id: 'booked-guest', archetype: 'regular', spendingTier: 'value', spendingBudget: 45,
+      serviceContractId: 'sc-1',
+    }, () => rolls.shift());
+
+    expect(choice.basket.kind).toBe(kind);
+    expect(rolls).toEqual([]);
+  });
+
+  it('renormalises only affordable kinds for a booked guest on a low budget', () => {
+    const customer = {
+      id: 'booked-guest', archetype: 'regular', spendingTier: 'budget', spendingBudget: 11,
+      serviceContractId: 'sc-1',
+    };
+    const availableKinds = new Set(buildAffordableBaskets(menuState, customer).map(basket => basket.kind));
+    const chooseAt = kindRoll => chooseAffordableBasket(menuState, customer, (() => {
+      const rolls = [kindRoll, 0];
+      return () => rolls.shift();
+    })()).basket.kind;
+
+    expect(availableKinds).toEqual(new Set(['dish', 'drink']));
+    expect(chooseAt(0.93749)).toBe('dish');
+    expect(chooseAt(0.9375)).toBe('drink');
+  });
+
   it('weights the equal-price Iced Tea trade-off by archetype', () => {
     const teaState = {
       restaurant: { reputation: 3 },

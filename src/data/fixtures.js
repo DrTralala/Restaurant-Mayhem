@@ -1,9 +1,12 @@
 import { getRestaurantWorld } from '../simulation/world';
 import { getPlaceable, getPlaceableDimensions } from './placeables';
+import { getDiningTableRect } from './diningGeometry';
+import { getHighTopCounterGeometry } from './highTopCounters';
 
 export const FIXTURE_TYPES = {
   table: { collection: 'tables', width: 40, height: 40, placementType: 'table', label: () => 'Dining table' },
   chair: { collection: 'chairs', width: 20, height: 20, placementType: 'chair', label: () => 'Chair' },
+  highTopCounter: { collection: 'highTopCounters', width: 80, height: 40, placementType: 'highTopCounter', label: () => 'High top counter' },
   door: {
     collection: 'doors', width: 6, height: 40, placementType: 'door',
     label: (_state, data) => data.role
@@ -39,7 +42,8 @@ export function listFixtures(state = {}) {
     const collection = currentState[descriptor.collection];
     if (!Array.isArray(collection)) return [];
 
-    return collection.map(data => ({ type, id: data.id, data }));
+    return collection.filter(data => !(['table', 'chair'].includes(type) && data.highTopCounterId != null))
+      .map(data => ({ type, id: data.id, data }));
   });
 }
 
@@ -58,6 +62,8 @@ export function getFixtureRect(state, fixture) {
   const data = fixture?.data;
   if (!descriptor || !data || !Number.isFinite(data.y)
     || (fixture.type !== 'door' && !Number.isFinite(data.x))) return null;
+  if (fixture.type === 'table') return getDiningTableRect(data);
+  if (fixture.type === 'highTopCounter') return getHighTopCounterGeometry(data)?.footprint || null;
 
   const dimensions = fixture.type === 'washStation'
     ? {

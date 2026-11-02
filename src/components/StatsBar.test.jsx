@@ -112,7 +112,7 @@ it.each([
   expect(fundsValue).toHaveStyle({ color: '#f0a500' });
 });
 
-it('rerenders fractional funds without changing career or contract tracking', () => {
+it('rerenders fractional funds without placing the contract tracker in the stats row', () => {
   state.careerRun = createCareerRun({ scenarioId: 'opening-week', runId: 'hud', startedAt: 36000 });
   state.restaurant.gameTime = 640799.9;
   state.restaurant.reputation = 1.999;
@@ -129,7 +129,7 @@ it('rerenders fractional funds without changing career or contract tracking', ()
   expect(initialFunds).toBe(screen.getByLabelText('Funds: $622.50'));
   expect(screen.getByRole('button', { name: 'Opening Week progress' }))
     .toHaveTextContent('Reputation: 1.999 / 2.00 — below target');
-  expect(screen.getByLabelText('Service contract tracker')).toHaveTextContent('Office lunch');
+  expect(screen.queryByLabelText('Service contract tracker')).not.toBeInTheDocument();
 
   state.restaurant.funds = 600;
   rerender(<StatsBar />);
@@ -141,5 +141,5 @@ it('rerenders fractional funds without changing career or contract tracking', ()
   expect(screen.queryByLabelText('Funds: $622.50')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Opening Week progress' }))
     .toHaveTextContent('Reputation: 1.999 / 2.00 — below target');
-  expect(screen.getByLabelText('Service contract tracker')).toHaveTextContent('Office lunch');
+  expect(screen.queryByLabelText('Service contract tracker')).not.toBeInTheDocument();
 });

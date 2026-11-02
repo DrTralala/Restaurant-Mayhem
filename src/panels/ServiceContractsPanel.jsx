@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
-import { SERVICE_CONTRACT_PREP_SECONDS } from '../data/serviceContracts';
+import { SERVICE_CONTRACT_PREP_SECONDS, SERVICE_CONTRACT_RULES_VERSION } from '../data/serviceContracts';
 import { selectServiceContractView } from '../simulation/serviceContracts';
 import { secondsToGameTime } from '../simulation/clock';
 import { TYPOGRAPHY } from '../typography';
@@ -16,7 +16,7 @@ const descriptions = {
   'office-lunch': 'A timed lunch for guests in a hurry.',
   'family-service': 'Two family groups looking for affordable meals.',
   'tasting-service': 'Individual visits from food-loving guests.',
-  'party-rush': 'Twelve guests arrive in a four-minute burst. Prepare for a busy queue.',
+  'party-rush': 'Twelve guests arrive in a paced ten-minute stream. Prepare for a busy queue.',
 };
 const money = value => `$${Number.isInteger(value) ? value : value.toFixed(2)}`;
 const blockedLabels = {
@@ -62,18 +62,33 @@ function GuestOutcome({ guest, label }) {
   </li>;
 }
 
+function latestReasonSummary(result) {
+  const counts = new Map();
+  for (const { reason } of result?.guestResults || []) {
+    if (reason) counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  return [...counts].map(([reason, count]) => `${reasonLabels[reason] || reason} × ${count}`).join(' · ')
+    || 'none recorded';
+}
+
 function MealRule({ id }) {
   return <p id={id} style={secondaryStyle}>A fulfilled meal needs delivered food and completed checkout with a positive
     dish charge by the deadline. Drinks, cancelled food and unpaid meals do not count. Guests choose affordable
     menu options and may order only drinks. Meal takings and normal guest reactions are separate from contract terms.</p>;
 }
 
-function ContractLiability({ terms }) {
+function ContractLiability({ terms, rulesVersion, serviceStartAt, now }) {
   return terms.deposit === 0
     ? <p style={secondaryStyle}>Original terms: no deposit or contract penalty. Failure or withdrawal forfeits the reward.</p>
-    : <p style={{ color: '#f3b1b6' }}>Failure or withdrawal: repay {money(terms.deposit)} + {money(terms.compensation)} compensation
-      {' = '}{money(terms.deposit + terms.compensation)} deducted, plus −{terms.reputationPenalty} reputation (minimum 1).
-      Applies including during preparation, even if funds go negative.</p>;
+    : rulesVersion >= 5 && serviceStartAt != null && now < serviceStartAt
+      ? <p style={{ color: '#f3b1b6' }}>Before service starts: repay only the {money(terms.deposit)} deposit; no compensation or reputation penalty.
+        {' '}After service starts: repay {money(terms.deposit)} + {money(terms.compensation)} compensation
+        {' = '}{money(terms.deposit + terms.compensation)} deducted, plus −{terms.reputationPenalty} reputation.
+        {' '}These deductions may make funds negative.</p>
+      : <p style={{ color: '#f3b1b6' }}>{rulesVersion >= 5 ? 'After service starts: ' : 'Failure or withdrawal: '}repay {money(terms.deposit)} + {money(terms.compensation)} compensation
+        {' = '}{money(terms.deposit + terms.compensation)} deducted, plus −{terms.reputationPenalty} reputation (minimum 1).
+        {rulesVersion >= 5 ? ' Applies to failure or withdrawal at/after service starts.'
+          : ' Applies including during preparation, even if funds go negative.'}</p>;
 }
 
 export default function ServiceContractsPanel() {
@@ -90,7 +105,7 @@ export default function ServiceContractsPanel() {
   const activeHeadingRef = useRef(null);
   const offersHeadingRef = useRef(null);
   const withdrawalConfirmationFocused = useRef(false);
-  const { active, offers } = selectServiceContractView(state);
+  const { active, latestResult, offers } = selectServiceContractView(state);
   const activeInstanceId = active?.instanceId ?? null;
   const decisionPending = state.careerRun?.needsDecision === true;
   const deadlineReached = active && state.restaurant.gameTime >= active.deadlineAt;
@@ -148,6 +163,7 @@ export default function ServiceContractsPanel() {
     <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '0 0 12px' }}>Service contracts</h3>
     <p style={secondaryStyle}>Book extra guests for a reward. One contract at a time, one attempt per offer each day.
       Walk-ins follow opening hours and the walk-in pause setting; tables and staff are not reserved.</p>
+    {latestResult && <p style={secondaryStyle}>Latest result reasons: {latestReasonSummary(latestResult)}.</p>}
     {decisionPending && <p style={{ color: '#f0a500' }}>Contract paused — choose Continue in Opening Week to resume</p>}
     <div role="status" aria-live="polite" style={{ position: 'absolute', width: 1, height: 1,
       overflow: 'hidden', clipPath: 'inset(50%)' }}>{announcement}</div>
@@ -186,7 +202,8 @@ export default function ServiceContractsPanel() {
         onBlurCapture={event => {
           if (!event.currentTarget.contains(event.relatedTarget)) withdrawalConfirmationFocused.current = false;
         }}>
-        <ContractLiability terms={active.terms} />
+        <ContractLiability terms={active.terms} rulesVersion={active.rulesVersion}
+          serviceStartAt={active.serviceStartAt} now={state.restaurant.gameTime} />
         <p>Withdraw this contract? Existing guests remain, and their service continues.
           This uses today’s attempt.</p>
         <div style={controlsStyle}>
@@ -209,19 +226,30 @@ export default function ServiceContractsPanel() {
     </section>}
 
     <h4 ref={offersHeadingRef} tabIndex={-1} style={{ ...TYPOGRAPHY.control, color: '#bbb', margin: '16px 0 10px' }}>Contract offers</h4>
-    {offers.map(({ template, preview, terms, canAccept, blockedReason, warnings }) => <section key={template.id}
+    {offers.map(({ template, preview, terms, canAccept, blockedReason, warnings, tier, preparationExpectations }) => <section key={template.id}
       aria-label={`${template.title} offer`} style={cardStyle}>
       <h4 ref={node => {
         if (node) offerHeadingRefs.current.set(template.id, node);
         else offerHeadingRefs.current.delete(template.id);
       }} tabIndex={-1} style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '0 0 8px' }}>{template.title}</h4>
       <p style={{ ...secondaryStyle, margin: '4px 0 8px' }}>{descriptions[template.id]}</p>
+      {tier && <p style={secondaryStyle}>Tier: {tier}</p>}
       <p style={{ margin: '8px 0' }}>{template.parties.reduce((n, party) => n + party.size, 0)} guests · {template.target} paid meals needed</p>
       <p style={{ ...secondaryStyle, margin: '8px 0' }}>{SERVICE_CONTRACT_PREP_SECONDS / 60} game minutes to prepare · {template.serviceDuration / 60} game minutes of service</p>
       <p style={{ color: '#f0a500', margin: '8px 0', fontWeight: 600 }}>{money(template.reward)} total reward · {money(terms.deposit)} deposit upfront</p>
-      <p style={{ ...secondaryStyle, color: '#f3b1b6', margin: '8px 0' }}>Failure / withdrawal: {money(terms.deposit + terms.compensation)} deducted · −{terms.reputationPenalty} reputation</p>
+      <ContractLiability terms={terms} rulesVersion={SERVICE_CONTRACT_RULES_VERSION}
+        serviceStartAt={preview?.serviceStartAt} now={state.restaurant.gameTime} />
       <details><summary style={summaryStyle}>Details</summary>
       <p style={secondaryStyle}>{template.profile.archetype} · {template.profile.spendingTier} · {money(template.profile.spendingBudget)} budget per guest</p>
+      {template.profile.patienceMultiplier > 1 && <p style={secondaryStyle}>
+        Booked diners have {template.profile.patienceMultiplier}× the usual patience for queue and food waits.
+      </p>}
+      {preparationExpectations?.length > 0 && <div>
+        <p style={secondaryStyle}><strong>Reference preparation expectations:</strong></p>
+        <ul style={{ paddingLeft: 20 }}>{preparationExpectations.map((expectation, index) =>
+          <li key={index} style={secondaryStyle}>{expectation}</li>)}</ul>
+        <p style={secondaryStyle}>Advisory reference preparation only — these expectations are not a guarantee.</p>
+      </div>}
       <ol style={{ paddingLeft: 20 }}>{template.parties.map((party, index) => <li key={index} style={{ marginBottom: 6 }}>
         Arrival {index + 1}: {party.partyType}, {party.size} {party.size === 1 ? 'guest' : 'guests'} · {party.arrivalOffset / 60} game minutes after service starts
         {preview && <span style={{ ...secondaryStyle, display: 'block' }}>{timeLabel(state, preview.partyArrivals[index])}</span>}
@@ -229,7 +257,6 @@ export default function ServiceContractsPanel() {
       {preview && <p style={secondaryStyle}>Projected start: {timeLabel(state, preview.serviceStartAt)}.
         {' '}Deadline: {timeLabel(state, preview.deadlineAt)}.</p>}
       <MealRule />
-      <ContractLiability terms={terms} />
       </details>
       {warnings.length > 0 && <div style={{ ...secondaryStyle, borderLeft: '2px solid #f0a500', paddingLeft: 10 }}><strong>Check before accepting:</strong>
         <ul style={{ paddingLeft: 20 }}>{warnings.map(warning => <li key={warning}>{warningLabels[warning]}</li>)}</ul>
@@ -240,7 +267,8 @@ export default function ServiceContractsPanel() {
       {reviewing === template.id ? <div ref={reviewConfirmationRef} tabIndex={-1}
         role="group" aria-label={`Confirm ${template.title}`}>
         <p>Receive {money(terms.deposit)} now and {money(terms.balance)} on success at the deadline.</p>
-        <ContractLiability terms={terms} />
+        <ContractLiability terms={terms} rulesVersion={SERVICE_CONTRACT_RULES_VERSION}
+          serviceStartAt={preview?.serviceStartAt} now={state.restaurant.gameTime} />
         <p>Start preparation now? Arrival and deadline times are calculated again when you accept.</p>
         {preview ? <><p>Projected start: {timeLabel(state, preview.serviceStartAt)}</p><p>Projected deadline: {timeLabel(state, preview.deadlineAt)}</p></>
           : <p>Projected times unavailable.</p>}
@@ -274,8 +302,10 @@ export function ServiceContractTracker({ onOpen }) {
   if (!active) return null;
   return <aside aria-label="Service contract tracker" style={{ ...TYPOGRAPHY.secondary, background: '#16213e',
     color: '#ddd', border: '1px solid #f0a500', borderRadius: 8, padding: 8,
+    position: 'absolute', left: 8, bottom: 8, zIndex: 90,
+    width: 'max-content', maxWidth: 'min(460px, calc(100% - 16px))', boxSizing: 'border-box',
     display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-    <span>{active.title} · {active.decisionPending ? 'Paused for Opening Week' : active.phase === 'preparing'
+    <span style={{ minWidth: 0, flex: '1 1 220px', overflowWrap: 'anywhere' }}>{active.title} · {active.decisionPending ? 'Paused for Opening Week' : active.phase === 'preparing'
       ? 'Preparing' : `${Math.ceil(active.remainingSeconds / 60)} game minutes remaining`}
       {' · '}{active.fulfilledCount}/{active.target} fulfilled</span>
     <ActionButton onClick={onOpen}>View contracts</ActionButton>

@@ -71,7 +71,8 @@ describe('real career and contract scheduling composition', () => {
     state = runTick(state, { gameDt: 0, movementDt: 0 });
     expect(state.restaurant.gameTime).toBe(DEADLINE);
     expect(state.queue).toHaveLength(1);
-    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([750, 750]);
+    // V5 Office bookings apply the documented 1.5× rusher patience multiplier.
+    expect(state.queue[0].members.map(m => m.queuePatience)).toEqual([1125, 1125]);
     expect(state.serviceContracts.active.parties[0]).toMatchObject({ status: 'admitted', admittedAt: DEADLINE });
     expect(runTick(state, { gameDt: 0, movementDt: 0 }).queue).toHaveLength(1);
   });
@@ -94,7 +95,7 @@ describe('real career and contract scheduling composition', () => {
     const settle = vi.spyOn(contracts, 'settleServiceContracts');
     const evaluate = vi.spyOn(career, 'evaluateCareerRun');
     const payments = vi.spyOn(revenue, 'calculateRevenue');
-    const state = runTick(contractAt(DEADLINE - 5100), { gameDt: 5600, movementDt: 0 });
+    const state = runTick(contractAt(DEADLINE - 6150), { gameDt: 6600, movementDt: 0 });
     expect(state.restaurant.gameTime).toBe(DEADLINE);
     expect(state.serviceContracts.active).toBe(null);
     expect(state.serviceContracts.results[0]).toMatchObject({ settledAt: DEADLINE, status: 'failed', bonusPaid: 0 });
@@ -105,12 +106,12 @@ describe('real career and contract scheduling composition', () => {
   it('exact-deadline load drains only existing receipts and due ledger results, without service or progression replay', () => {
     vi.spyOn(Math, 'random').mockImplementation(() => { throw new Error('No service on career load finalisation'); });
     const prepare = vi.spyOn(customers, 'prepareCustomersForMovement');
-    const initial = contractAt(DEADLINE - 5100);
+    const initial = contractAt(DEADLINE - 6150);
     const state = { ...initial, restaurant: { ...initial.restaurant, gameTime: DEADLINE },
       completedCustomers: [{ customerId: 'legacy-receipt', revenue: 17 }] };
     const after = runTick(state, { gameDt: 200, movementDt: 1 });
     expect(after.restaurant.gameTime).toBe(DEADLINE);
-    expect(after.restaurant.funds).toBe(572); // $600 + $22.50 advance + $17 receipt - $67.50 settlement
+    expect(after.restaurant.funds).toBe(594.5); // $600 + $22.50 advance + $17 receipt - $45 settlement
     expect(after.completedCustomers).toEqual([]);
     expect(after.serviceContracts.results[0].fulfilledCount).toBe(0);
     expect(after.careerRun).toMatchObject({ status: 'lost', needsDecision: true, paidMeals: 0, lastPaidVisitSequence: 0 });
@@ -120,7 +121,7 @@ describe('real career and contract scheduling composition', () => {
     expect(runTick(after, { gameDt: 1, movementDt: 0 })).toBe(after);
   });
   it('overdue career data becomes a non-scoring decision before contract repairs or receipt draining', () => {
-    const initial = contractAt(DEADLINE - 5100);
+    const initial = contractAt(DEADLINE - 6150);
     const state = { ...initial, restaurant: { ...initial.restaurant, gameTime: DEADLINE + 1 },
       completedCustomers: [{ customerId: 'legacy-receipt', revenue: 17 }] };
     const after = runTick(state, { gameDt: 100, movementDt: 0 });

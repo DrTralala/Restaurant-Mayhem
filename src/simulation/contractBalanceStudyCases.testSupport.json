@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "candidateHistory": [
+    {
+      "id": "office-lunch-candidate-1",
+      "templateId": "office-lunch",
+      "dimension": "meal-target",
+      "change": 2,
+      "preparationKey": "officeStarter",
+      "rationale": "The honest office-starter v5 baseline fulfilled at least 3 meals on 13/20 seeds, below the 16/20 tier minimum; a target of 2 is supported on 17/20 seeds, while target 3 would not meet the declared minimum. Target 2 is the highest baseline-supported target that clears 16/20, not a claim of optimality. The existing $90 reward becomes $45 per required meal versus $22.50 at target 4; the full reward and all other terms remain unchanged. Office keeps its untouched starter setup."
+    },
+    {
+      "id": "tasting-service-candidate-1",
+      "templateId": "tasting-service",
+      "dimension": "meal-target",
+      "change": 2,
+      "preparationKey": "tastingLayout",
+      "rationale": "The selected legal preparation is the measured zero-cost tasting-layout reference. At the original target 3 it produced 10/20; its recorded fulfilled distribution supports target 2 on 16/20, above the 15/20 minimum, while target 3 does not qualify. Layout-only is not called useful: versus starter it had the same 10/20 successes and one fewer fulfilled meal in aggregate. Upgrade-only had no success or fulfilment gain over starter and cost $100; combined had no uplift over layout-only and also cost $100. Target 2 is the highest baseline-supported target for this preparation that meets the declared minimum, not a claim of optimality. The existing $100 reward becomes $50 per required meal versus $33.33 at target 3."
+    },
+    {
+      "id": "party-rush-candidate-1",
+      "templateId": "party-rush",
+      "dimension": "meal-target",
+      "change": 3,
+      "preparationKey": "rushCombined",
+      "rationale": "Use the measured legal rush-combined reference: four accepted chairs plus the owned eq1 upgrade, $300 pre-acceptance cost, and a measured +3 wins versus rush-starter at the original target 6. In that same recorded setup, target 4 is supported on 13/20 seeds, below the 14/20 expert minimum, while target 3 is supported on 17/20; target 3 is the highest baseline-supported target expected to clear the minimum, not a claim of optimality. The existing $180 reward becomes $60 per required meal versus $30 at target 6. The full reward and other contract terms remain unchanged."
+    }
+  ],
+  "baselineCases": [
+    {
+      "templateId": "family-service",
+      "candidateId": "baseline",
+      "preparationKey": "familyLayout",
+      "rationale": "The practical family-layout reference is the unchanged starter geometry with two existing four-chair tables and no setup cost. The recorded v5 baseline succeeded on 16/20 seeds against the fixed 15/20 standard-tier minimum, so retain target 4 and reward $120 rather than make an unnecessary numerical change. This selection still needs a complete paired gated development rerun."
+    }
+  ]
+}

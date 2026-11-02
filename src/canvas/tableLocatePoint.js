@@ -1,3 +1,5 @@
+import { getDiningTableCentre } from '../data/diningGeometry';
+
 export function getTableLocatePoint(tables, id) {
   const validId = (typeof id === 'string' && id.trim().length > 0)
     || (Number.isSafeInteger(id) && id >= 0);
@@ -6,5 +8,5 @@ export function getTableLocatePoint(tables, id) {
   if (matches.length !== 1) return null;
   const table = matches[0];
   if (!Number.isFinite(table.x) || !Number.isFinite(table.y)) return null;
-  return { x: table.x + 20, y: table.y + 20 };
+  return getDiningTableCentre(table);
 }

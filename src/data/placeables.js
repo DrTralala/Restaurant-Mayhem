@@ -1,6 +1,10 @@
 import { ITEM_PRICES } from './items';
 
 export const PLACEABLES = {
+  highTopCounter: {
+    type: 'highTopCounter', label: 'High top counter', price: ITEM_PRICES.highTopCounter,
+    width: 80, height: 40, grid: 20, rotatable: true,
+  },
   table: {
     type: 'table',
     label: 'Dining table',

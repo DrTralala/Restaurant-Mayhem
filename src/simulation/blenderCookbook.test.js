@@ -165,17 +165,19 @@ describe('Blender recipe gameplay', () => {
     expect(getResolvedDish(appeal, 'cookbook:gazpacho')).toMatchObject({ prepTime: 75, popularity: 65 });
   });
 
-  it('inactiveNewRecipeFixedSeed: a dormant Gazpacho leaves the old-equivalent fixed-seed service run unchanged', () => {
+  it('inactiveNewRecipeFixedSeed: a dormant Gazpacho leaves the fixed-seed service run unchanged', () => {
     vi.spyOn(Math, 'random').mockImplementation(seededRandom(11));
     const { state, report } = runRealService({ mode: 'contract', seed: 1, strategy: 'compact-service',
       gameStep: 8, duration: 5400, maxWallMs: 90000 });
     const fingerprint = { status: report.status, ticks: report.ticks, sequence: report.sequence,
       funds: report.funds, reputation: report.reputation, queuePeak: report.queuePeak,
       served: state.restaurant.totalServed, customers: state.customers.length };
-    // Captured from the six-recipe implementation; the dormant Gazpacho entry
-    // must not perturb arrivals, service, payments or revenue.
-    expect(fingerprint).toEqual({ status: 'completed', ticks: 638, sequence: 7,
-      funds: 247.65999999999997, reputation: 1, queuePeak: 2, served: 7, customers: 4 });
+    // The current compact-service run completes its full 5,400-second horizon
+    // (675 native 8-second ticks) and the active staff scheduler serves one
+    // additional guest versus the committed scheduler. Gazpacho remains dormant.
+    expect(fingerprint).toEqual({ status: 'completed', ticks: 675, sequence: 8,
+      funds: 330.15999999999997, reputation: 1.0274999999999999,
+      queuePeak: 1, served: 8, customers: 3 });
     expect(state.cookbook.schemaVersion).toBe(2);
     expect(state.cookbook.entries.gazpacho).toMatchObject({ discovered: false, paidPortions: 0, perk: null });
     expect(state.dishes.some(dish => dish.cookbookId === 'gazpacho')).toBe(false);

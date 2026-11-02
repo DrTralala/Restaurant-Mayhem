@@ -4,6 +4,7 @@ import {
   listFixtures,
 } from '../data/fixtures';
 import { ITEM_PRICES } from '../data/items';
+import { createHighTopCounterRecords } from '../data/highTopCounters';
 import { createEmptyAmenitySlots } from '../data/staffAmenities';
 import { getPlaceable } from '../data/placeables';
 import {
@@ -81,6 +82,7 @@ function expandSelection(state, selectedItems) {
     const key = fixtureKey(item.type, item.id);
     if (selected.has(key)) return reasonResult(COPY_REASONS.DUPLICATE_COPY);
     if (!getFixture(state, item.type, item.id)) return reasonResult(COPY_REASONS.MISSING_FIXTURE);
+    if (getFixture(state, item.type, item.id).data.highTopCounterId != null) return reasonResult('built-in-fixture');
     selected.add(key);
   }
 
@@ -193,6 +195,9 @@ function normaliseRotation(value) {
 }
 
 function getCopyRecord(source, copy, id, copiedTableIds) {
+  if (source.type === 'highTopCounter') {
+    return { id, x: copy.x, y: copy.y, rotation: normaliseRotation(copy.rotation ?? source.data.rotation) };
+  }
   if (source.type === 'table') {
     return {
       id,
@@ -279,7 +284,7 @@ function allocateIds(state, copies) {
               ? 'cashier'
               : copy.type === 'staffAmenity'
                 ? 'amenity'
-              : 'wash');
+               : copy.type === 'highTopCounter' ? 'htc' : 'wash');
     records.push({ id });
     generated.set(collection, records);
     if (source.type === 'table') tableIds.set(fixtureKey('table', source.id), id);
@@ -328,6 +333,11 @@ export function copyFixtures(state, requestedCopies = []) {
   };
   for (const [collection, records] of recordsByCollection) {
     next[collection] = [...(state[collection] || []), ...records];
+  }
+  for (const counter of recordsByCollection.get('highTopCounters') || []) {
+    const records = createHighTopCounterRecords(counter);
+    next.tables = [...(next.tables || []), ...records.tables];
+    next.chairs = [...(next.chairs || []), ...records.chairs];
   }
   return invalidateCopyNavigation(next);
 }

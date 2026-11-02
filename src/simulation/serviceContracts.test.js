@@ -69,9 +69,9 @@ describe('offers and immutable acceptance', () => {
     const originalContracts = structuredClone(before.serviceContracts);
     const state = accept(before);
     const active = state.serviceContracts.active;
-    expect(active).toMatchObject({ instanceId: 'sc-1', templateId: 'office-lunch', rulesVersion: 4, depositPaid: 22.5,
+    expect(active).toMatchObject({ instanceId: 'sc-1', templateId: 'office-lunch', rulesVersion: 6, depositPaid: 22.5,
       acceptedDay: 1, acceptedAt: 36000, serviceStartAt: 36900, deadlineAt: 42150,
-      phase: 'preparing', target: 4, reward: 90 });
+      phase: 'preparing', target: 2, reward: 90 });
     expect(active.parties).toEqual([0, 720, 1440].map((arrivalOffset, i) => ({
       partyId: `sc-1-p${i + 1}`, partyType: 'couple', size: 2, arrivalOffset,
       arrivalAt: 36900 + arrivalOffset, guestIds: [`sc-1-g${i * 2 + 1}`, `sc-1-g${i * 2 + 2}`],
@@ -80,7 +80,7 @@ describe('offers and immutable acceptance', () => {
     expect(active.guests).toEqual(Array.from({ length: 6 }, (_, i) => ({
       guestId: `sc-1-g${i + 1}`, partyId: `sc-1-p${Math.floor(i / 2) + 1}`,
       label: `Office guest ${i + 1}`, archetype: 'rusher', gender: i % 2 ? 'male' : 'female',
-      spendingTier: 'value', spendingBudget: 24, status: 'scheduled', reason: null,
+      spendingTier: 'value', spendingBudget: 24, patienceMultiplier: 1.5, status: 'scheduled', reason: null,
       paidVisitSequence: null, resolvedAt: null,
     })));
     expect(state.restaurant).toEqual({ ...before.restaurant, funds: 622.5, dailyRevenue: 22.5 });
@@ -127,6 +127,7 @@ describe('offers and immutable acceptance', () => {
     expect(offer.warnings).toEqual(expect.arrayContaining(['closed_at_arrival', 'queue_full',
       'no_affordable_dish', 'no_suitable_table', 'no_cook', 'no_waiter', 'no_staffed_checkout']));
     expect(accept(state, 'family-service').restaurant.funds).toBe(-470);
+    expect(accept(state, 'family-service').serviceContracts.active).toMatchObject({ target: 4, reward: 120 });
   });
 });
 
@@ -291,7 +292,7 @@ describe('absolute boundaries and injected admissions', () => {
     expect(inject.mock.calls[0][1]).toEqual({ instanceId: 'sc-1', partyId: 'sc-1-p1', partyType: 'couple',
       arrivalAt: 36900, members: [0, 1].map(i => ({ id: `sc-1-g${i + 1}`,
         serviceContractGuestId: `sc-1-g${i + 1}`, archetype: 'rusher', gender: i ? 'male' : 'female',
-        spendingTier: 'value', spendingBudget: 24 })) });
+        spendingTier: 'value', spendingBudget: 24, patienceMultiplier: 1.5 })) });
     expect(state.serviceContracts.active.phase).toBe('service');
     expect(state.serviceContracts.active.guests.map(g => g.status)).toEqual(['pending', 'pending', 'scheduled', 'scheduled', 'scheduled', 'scheduled']);
     expect(advanceServiceContractArrivals(state, 36900, { admitParty: inject })).toBe(state);
@@ -351,6 +352,21 @@ describe('absolute boundaries and injected admissions', () => {
 });
 
 describe('canonical payments, reconciliation and settlement', () => {
+  it('allows four paid meals from one Family party to meet the v6 target after the other party misses', () => {
+    let state = arrive(accept(createInitialState(), 'family-service'));
+    for (let index = 0; index < 4; index++) state = paid(state, index);
+    const missedArrival = state.serviceContracts.active.parties[1].arrivalAt;
+    state = advanceServiceContractArrivals(at(state, missedArrival), missedArrival, {
+      admitParty: current => ({ state: current, admitted: false, reason: 'closed' }),
+    });
+    expect(state.serviceContracts.active.guests.slice(4).every(guest => guest.reason === 'missed_closed')).toBe(true);
+    const deadline = state.serviceContracts.active.deadlineAt;
+    state = settleServiceContracts(at(state, deadline), deadline);
+    expect(state.serviceContracts.results[0]).toMatchObject({ status: 'succeeded', target: 4,
+      fulfilledCount: 4, bonusPaid: 120, compensationPaid: 0, reputationPenalty: 0 });
+    expect(state.restaurant.funds).toBe(720);
+  });
+
   it.each([
     ['missing', null], ['cancelled', { foodOutcome: 'cancelled' }],
     ['departing', { state: 'leaving', departureReason: 'closed' }],
@@ -478,7 +494,7 @@ describe('canonical payments, reconciliation and settlement', () => {
       const active = state.serviceContracts.active;
       const before = state;
       state = withdrawServiceContract(state, { instanceId: active.instanceId });
-      expect(state.restaurant.funds).toBe(before.restaurant.funds - 67.5);
+      expect(state.restaurant.funds).toBe(before.restaurant.funds - 22.5);
       expect(state.queue).toBe(before.queue);
       expect(withdrawServiceContract(state, { instanceId: active.instanceId })).toBe(state);
     }
@@ -587,8 +603,9 @@ describe('strict save branch validation', () => {
   it.each([
     s => { s.version = 2; }, s => { s.nextInstanceSerial = 1; },
     s => { s.lastAcceptedDayByTemplate.fake = 1; }, s => { s.lastAcceptedDayByTemplate['office-lunch'] = 2; },
-    s => { s.active.templateId = 'fake'; }, s => { s.active.rulesVersion = 5; },
+    s => { s.active.templateId = 'fake'; }, s => { s.active.rulesVersion = 7; },
     s => { s.active.target = 1; }, s => { s.active.reward = 999; },
+    s => { s.active.guests[0].patienceMultiplier = 3; },
     s => { s.active.deadlineAt++; }, s => { s.active.serviceStartAt++; },
     s => { s.active.acceptedAt = Infinity; }, s => { s.active.acceptedDay = 2; },
     s => { s.active.phase = 'won'; }, s => { s.active.guests.push({ ...s.active.guests[0] }); },
@@ -603,8 +620,11 @@ describe('strict save branch validation', () => {
     corrupt(branch);
     expect(() => validateServiceContractsState(branch, state)).toThrow(/service contract/i);
   });
-  it('rejects contradictory paid sequences, live identities, result counts and bonuses', () => {
-    let state = paid(paid(arrive(accept()), 0), 1);
+  it('rejects contradictory paid sequences, live identities, result counts and bonuses in a saved v5 result', () => {
+    const accepted = accept();
+    const v5Active = { ...accepted.serviceContracts.active, rulesVersion: 5, target: 4 };
+    const historical = { ...accepted, serviceContracts: { ...accepted.serviceContracts, active: v5Active } };
+    let state = paid(paid(arrive(historical), 0), 1);
     const duplicate = structuredClone(state.serviceContracts);
     duplicate.active.guests[1].paidVisitSequence = 1;
     expect(() => validateServiceContractsState(duplicate, state)).toThrow();

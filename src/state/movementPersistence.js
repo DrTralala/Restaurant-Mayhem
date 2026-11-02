@@ -10,6 +10,7 @@ import { getDoors, getRestaurantWorld } from '../simulation/world';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { getAmenityGeometry } from '../data/staffAmenities';
 import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
+import { validateHighTopCounters } from './highTopCounterValidation';
 
 // Validate before any unit-step raster loop. Finite numbers alone need not advance by one.
 export function validateSavedNavigationGeometry(state) {
@@ -17,6 +18,7 @@ export function validateSavedNavigationGeometry(state) {
   const level = state.restaurant?.expansionLevel ?? 1;
   // The game's expansion purchase domain is levels 1–4; imported worlds must be bounded too.
   if (!Number.isInteger(level) || level < 1 || level > 4) invalid();
+  validateHighTopCounters(state);
   const world = getRestaurantWorld(state.restaurant || {});
   for (const key of ['tables', 'chairs', 'kitchenStations', 'serviceTables', 'cashierStations', 'washStations', 'doors']) {
     const fixtures = state[key];

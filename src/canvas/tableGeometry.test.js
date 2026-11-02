@@ -65,4 +65,23 @@ describe('table geometry', () => {
   ])('returns no positions for %s geometry', (_label, chair) => {
     expect(getPlaceSettingPositions({ x: 200, y: 200 }, chair, ['dish', 'drink'])).toEqual({});
   });
+
+  it.each([
+    [0, { x: 300, y: 300 }, { x: 300, y: 320 }, { dish: { x: 305, y: 312 }, drink: { x: 315, y: 312 } }],
+    [1, { x: 320, y: 300 }, { x: 300, y: 300 }, { dish: { x: 328, y: 305 }, drink: { x: 328, y: 315 } }],
+    [2, { x: 360, y: 320 }, { x: 360, y: 300 }, { dish: { x: 375, y: 328 }, drink: { x: 365, y: 328 } }],
+    [3, { x: 300, y: 360 }, { x: 320, y: 360 }, { dish: { x: 312, y: 375 }, drink: { x: 312, y: 365 } }],
+  ])('keeps paired counter place settings inside their 20px block at rotation %s', (_rotation, tablePoint, chairPoint, expected) => {
+    const table = { ...tablePoint, highTopCounterId: 'counter' };
+    const chair = { ...chairPoint, highTopCounterId: 'counter' };
+    const positions = getPlaceSettingPositions(table, chair, ['dish', 'drink']);
+
+    expect(positions).toEqual(expected);
+    for (const point of Object.values(positions)) {
+      expect(point.x - 5).toBeGreaterThanOrEqual(table.x);
+      expect(point.x + 5).toBeLessThanOrEqual(table.x + 20);
+      expect(point.y - 5).toBeGreaterThanOrEqual(table.y);
+      expect(point.y + 5).toBeLessThanOrEqual(table.y + 20);
+    }
+  });
 });

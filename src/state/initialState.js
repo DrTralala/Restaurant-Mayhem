@@ -29,6 +29,7 @@ export function createInitialState() {
       closeHour: DEFAULT_OPERATING_HOURS.closeHour,
       expansionLevel: 1,
     },
+    highTopCounters: [],
     tables: [
       { id: 't1', seats: 4, status: 'empty', x: 200, y: 200 },
       { id: 't2', seats: 4, status: 'empty', x: 360, y: 200 },

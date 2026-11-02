@@ -15,6 +15,7 @@ describe('fixture catalogue', () => {
     const expected = [
       'table',
       'chair',
+      'highTopCounter',
       'door',
       'serviceTable',
       'cashierTable',
@@ -24,6 +25,7 @@ describe('fixture catalogue', () => {
     ];
     const state = {
       ...createInitialState(),
+      highTopCounters: [{ id: 'htc1', x: 500, y: 400, rotation: 0 }],
       staffAmenities: [{ id: 'amenity-1', type: 'couch', x: 500, y: 300 }],
     };
     const fixtures = listFixtures(state);

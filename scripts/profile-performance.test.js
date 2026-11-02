@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import {
+  firstGameplayDifference,
   gameplayProjection,
   parsePerformanceArguments,
   profilePerformance,
@@ -162,6 +163,22 @@ describe('profile-performance comparison', () => {
     }, state)).not.toEqual(missing);
   });
 
+  it('equates an absent high-top collection with an empty one but compares placed counters', () => {
+    const snapshot = { restaurant: { funds: 600 }, notifications: [] };
+    const state = {};
+    const baseline = gameplayProjection(snapshot, state);
+    const emptyCandidate = gameplayProjection({ ...snapshot, highTopCounters: [] }, state);
+    const placedCandidate = gameplayProjection({
+      ...snapshot,
+      highTopCounters: [{ id: 'htc1', x: 300, y: 200, rotation: 0 }],
+    }, state);
+
+    expect(emptyCandidate).toEqual(baseline);
+    expect(firstGameplayDifference(baseline, placedCandidate)).toMatchObject({
+      path: '$.highTopCounters', baseline: '<missing>',
+    });
+  });
+
   it('ignores expansion counters but still compares invariant diagnostics', () => {
     const snapshot = { restaurant: { totalServed: 3 }, notifications: [] };
     const makeState = ({ expansionsThisTick, actorExpansions, invariantFailure = null }) => ({
@@ -203,7 +220,6 @@ describe('profile-performance comparison', () => {
     ]);
     const report = await profilePerformance(options);
     const workload = report.workloads[0];
-
     expect(workload.runs.map(run => run.order)).toEqual([
       ['baseline', 'candidate'], ['candidate', 'baseline'],
     ]);

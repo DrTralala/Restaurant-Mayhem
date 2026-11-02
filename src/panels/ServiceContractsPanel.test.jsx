@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { createInitialState } from '../state/initialState';
+import { SERVICE_CONTRACT_RULES_VERSION, getServiceContractTemplate } from '../data/serviceContracts';
 import { acceptServiceContract, advanceServiceContractArrivals, recordServiceContractPaidVisit,
-  withdrawServiceContract } from '../simulation/serviceContracts';
+  selectServiceContractView, withdrawServiceContract } from '../simulation/serviceContracts';
 import ServiceContractsPanel, { ServiceContractTracker } from './ServiceContractsPanel';
 
 let state;
@@ -24,33 +25,113 @@ describe('ServiceContractsPanel', () => {
     for (const title of ['Office lunch', 'Family service', 'Tasting service', 'Party rush']) {
       expect(screen.getByRole('heading', { name: title })).toBeInTheDocument();
     }
-    expect(screen.getByText('6 guests · 4 paid meals needed')).toBeVisible();
-    expect(screen.getByText('8 guests · 6 paid meals needed')).toBeVisible();
-    expect(screen.getByText('4 guests · 3 paid meals needed')).toBeVisible();
-    expect(screen.getByText('12 guests · 6 paid meals needed')).toBeVisible();
+    expect(screen.getByText('6 guests · 2 paid meals needed')).toBeVisible();
+    expect(screen.getByText('8 guests · 4 paid meals needed')).toBeVisible();
+    expect(screen.getByText('4 guests · 2 paid meals needed')).toBeVisible();
+    expect(screen.getByText('12 guests · 3 paid meals needed')).toBeVisible();
     expect(screen.getAllByText(/15 game minutes to prepare/)).toHaveLength(4);
     expect(screen.getByText('$180 total reward · $45 deposit upfront')).toBeVisible();
-    expect(screen.getByText('Failure / withdrawal: $135 deducted · −0.25 reputation')).toBeVisible();
+    const partyOffer = screen.getByRole('region', { name: 'Party rush offer' });
+    expect(partyOffer).toHaveTextContent(/Before service starts: repay only the \$45 deposit; no compensation or reputation penalty/);
+    expect(partyOffer).toHaveTextContent(/After service starts: repay \$45 \+ \$45 compensation = \$90 deducted, plus −0\.25 reputation/);
     const card = screen.getByRole('region', { name: 'Office lunch offer' });
     const schedule = within(card).getByText(/Arrival 3: couple, 2 guests/);
     expect(schedule).not.toBeVisible();
     fireEvent.click(within(card).getByText('Details'));
     expect(schedule).toBeVisible();
+    expect(within(card).getByText(/Guests choose affordable menu options and may order only drinks/)).toBeVisible();
     expect(within(card).getByText(/rusher.*\$24/)).toBeVisible();
+    expect(within(card).getByText('Booked diners have 1.5× the usual patience for queue and food waits.')).toBeVisible();
     expect(within(card).getByText(/Day 1, 11:42 AM/)).toBeInTheDocument();
     expect(within(card).getByText(/87.5 game minutes of service/)).toBeInTheDocument();
     expect(screen.getAllByText(/125 game minutes of service/)).toHaveLength(2);
     unmount();
     expect(dispatch).not.toHaveBeenCalled();
   });
+  it('renders tier and preparation facts from each versioned offer record as advisory only', () => {
+    const view = selectServiceContractView(state);
+    const { offers } = view;
+    render(<ServiceContractsPanel />);
+
+    for (const offer of offers) {
+      const template = getServiceContractTemplate(offer.template.id, SERVICE_CONTRACT_RULES_VERSION);
+      expect(offer.tier).toBe(template.tier);
+      expect(offer.preparationExpectations).toEqual(template.preparationExpectations);
+
+      const card = screen.getByRole('region', { name: `${template.title} offer` });
+      expect(within(card).getByText(`Tier: ${offer.tier}`)).toBeVisible();
+      fireEvent.click(within(card).getByText('Details'));
+      for (const expectation of offer.preparationExpectations) {
+        expect(within(card).getByText(expectation)).toBeVisible();
+      }
+      expect(within(card).getByText('Advisory reference preparation only — these expectations are not a guarantee.'))
+        .toBeVisible();
+      expect(card).not.toHaveTextContent(/success rate|success percentage|chance of success|\d+%|guarantees? success/i);
+    }
+    const activeView = selectServiceContractView(acceptServiceContract(state, { templateId: 'office-lunch' })).active;
+    expect(activeView).toMatchObject({ tier: 'introductory',
+      preparationExpectations: getServiceContractTemplate('office-lunch', SERVICE_CONTRACT_RULES_VERSION)
+        .preparationExpectations });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('keeps v5 active contract metadata version-correct while current offers retain v6 metadata', () => {
+    const accepted = acceptServiceContract(state, { templateId: 'office-lunch' });
+    const v5Template = getServiceContractTemplate('office-lunch', 5);
+    const active = { ...accepted.serviceContracts.active, rulesVersion: 5,
+      target: v5Template.target, reward: v5Template.reward };
+    state = { ...accepted, serviceContracts: { ...accepted.serviceContracts, active } };
+
+    const view = selectServiceContractView(state);
+    expect(view.active).toMatchObject({ title: v5Template.title, target: 4, reward: v5Template.reward });
+    expect(view.active).not.toHaveProperty('tier');
+    expect(view.active).not.toHaveProperty('preparationExpectations');
+    for (const rulesVersion of [1, 2, 3, 4, 5]) {
+      const historicalState = { ...accepted, serviceContracts: { ...accepted.serviceContracts,
+        active: { ...active, rulesVersion,
+          target: getServiceContractTemplate('office-lunch', rulesVersion).target } } };
+      const historicalActive = selectServiceContractView(historicalState).active;
+      expect(historicalActive).not.toHaveProperty('tier');
+      expect(historicalActive).not.toHaveProperty('preparationExpectations');
+    }
+    expect(view.offers.find(offer => offer.template.id === 'office-lunch')).toMatchObject({
+      tier: 'introductory', preparationExpectations: getServiceContractTemplate('office-lunch', 6).preparationExpectations,
+    });
+
+    render(<ServiceContractsPanel />);
+    const activeCard = screen.getByRole('region', { name: 'Active contract' });
+    expect(within(activeCard).getByText('0/4 fulfilled meals')).toBeInTheDocument();
+    expect(within(activeCard).queryByText(/Tier:|Reference preparation/)).not.toBeInTheDocument();
+    const currentOffer = screen.getByRole('region', { name: 'Office lunch offer' });
+    expect(within(currentOffer).getByText('6 guests · 2 paid meals needed')).toBeVisible();
+    expect(within(currentOffer).getByText('Tier: introductory')).toBeVisible();
+  });
+  it('summarises exact reason counts from the latest stored guest result ledger', () => {
+    const guestResults = [
+      { guestId: 'sc-3-g1', status: 'not_fulfilled', reason: 'drink_only' },
+      { guestId: 'sc-3-g2', status: 'not_fulfilled', reason: 'drink_only' },
+      { guestId: 'sc-3-g3', status: 'missed', reason: 'missed_closed' },
+      { guestId: 'sc-3-g4', status: 'unfinished', reason: 'deadline' },
+      { guestId: 'sc-3-g5', status: 'fulfilled_paid', reason: null },
+    ];
+    const latestResult = { instanceId: 'sc-3', templateId: 'office-lunch', rulesVersion: 6,
+      status: 'failed', guestResults };
+    state = { ...state, serviceContracts: { ...state.serviceContracts, results: [latestResult] } };
+
+    expect(selectServiceContractView(state).latestResult).toBe(latestResult);
+    render(<ServiceContractsPanel />);
+
+    expect(screen.getByText(
+      'Latest result reasons: Drink-only visit × 2 · Closed at arrival × 1 · Payment not completed by the deadline × 1.',
+    )).toBeVisible();
+    expect(screen.queryByText(/cook capacity|bad layout|cause|root cause/i)).not.toBeInTheDocument();
+  });
   it('shows exact Party stakes before acceptance and leaves cancelling inert', () => {
     render(<ServiceContractsPanel />);
     fireEvent.click(screen.getByRole('button', { name: 'Review Party rush' }));
     const confirmation = screen.getByRole('group', { name: 'Confirm Party rush' });
     expect(confirmation).toHaveTextContent('Receive $45 now and $135 on success');
-    expect(confirmation).toHaveTextContent('Failure or withdrawal: repay $45 + $90 compensation = $135 deducted');
-    expect(confirmation).toHaveTextContent('−0.25 reputation');
-    expect(confirmation).toHaveTextContent('including during preparation');
+    expect(confirmation).toHaveTextContent('Before service starts: repay only the $45 deposit; no compensation or reputation penalty.');
+    expect(confirmation).toHaveTextContent('After service starts: repay $45 + $45 compensation = $90 deducted, plus −0.25 reputation.');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel acceptance' }));
     expect(dispatch).not.toHaveBeenCalled();
     expect(state.restaurant.funds).toBe(600);
@@ -163,7 +244,7 @@ describe('ServiceContractsPanel', () => {
     state = acceptServiceContract(state, { templateId: 'office-lunch' });
     render(<ServiceContractsPanel />);
     expect(screen.getByRole('progressbar', { name: 'Fulfilled meals' })).toHaveAttribute('value', '0');
-    expect(screen.getByText('0/4 fulfilled meals')).toBeInTheDocument();
+    expect(screen.getByText('0/2 fulfilled meals')).toBeInTheDocument();
     expect(screen.getByText(/0\/6 admitted.*6 unresolved.*0 failed.*0 missed/)).toBeInTheDocument();
     expect(screen.getByText(/Next arrival: Day 1, 10:15 AM/)).toBeInTheDocument();
     expect(screen.getByText('Office guest 1 — Scheduled')).not.toBeVisible();
@@ -177,11 +258,11 @@ describe('ServiceContractsPanel', () => {
   });
   it('shows best-case further meals when scheduled guests can exactly meet the target', () => {
     state = acceptServiceContract(state, { templateId: 'office-lunch' });
-    setGuestOutcomes(2, 2, 'scheduled');
+    setGuestOutcomes(0, 2, 'scheduled');
     render(<ServiceContractsPanel />);
 
     const active = screen.getByRole('region', { name: 'Active contract' });
-    expect(within(active).getByText('0/6 admitted · 2 unresolved · 2 failed · 0 missed')).toBeInTheDocument();
+    expect(within(active).getByText('0/6 admitted · 2 unresolved · 4 failed · 0 missed')).toBeInTheDocument();
     expect(within(active).getByText(
       'Best case: 2 further meals from unresolved guests. This is a best-case count, not a guarantee.',
     )).toBeVisible();
@@ -191,12 +272,12 @@ describe('ServiceContractsPanel', () => {
   });
   it('says the target is no longer reachable when even all unresolved guests fall short', () => {
     state = acceptServiceContract(state, { templateId: 'office-lunch' });
-    setGuestOutcomes(1, 2);
+    setGuestOutcomes(1, 0);
     render(<ServiceContractsPanel />);
 
     const active = screen.getByRole('region', { name: 'Active contract' });
     expect(within(active).getByText(
-      'Target no longer reachable — best case 3/4. This is a best-case count, not a guarantee.',
+      'Target no longer reachable — best case 1/2. This is a best-case count, not a guarantee.',
     )).toBeVisible();
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -246,7 +327,7 @@ describe('ServiceContractsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Withdraw contract' }));
     expect(screen.getByText(/Existing guests remain/)).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Confirm contract withdrawal' }))
-      .toHaveTextContent('repay $22.50 + $45 compensation = $67.50 deducted');
+      .toHaveTextContent('Before service starts: repay only the $22.50 deposit; no compensation or reputation penalty.');
     fireEvent.click(screen.getByRole('button', { name: 'Keep contract' }));
     expect(dispatch).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Withdraw contract' }));
@@ -255,10 +336,20 @@ describe('ServiceContractsPanel', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'WITHDRAW_SERVICE_CONTRACT', instanceId: 'sc-1' });
     state = withdrawServiceContract(state, { instanceId: 'sc-1' });
     rerender(<ServiceContractsPanel />);
-    expect(screen.queryByText(/Latest result|Result history|Bonus \$0 earned/)).not.toBeInTheDocument();
+    expect(screen.getByText('Latest result reasons: Contract withdrawn × 6.')).toBeVisible();
     expect(screen.getByRole('status')).toBeEmptyDOMElement();
     expect(state.serviceContracts.results).toHaveLength(1);
     expect(screen.getByText('Available next day')).toBeInTheDocument();
+  });
+  it('previews full v5 cancellation liability when withdrawal is requested at service start', () => {
+    state = acceptServiceContract(state, { templateId: 'office-lunch' });
+    state = { ...state, restaurant: { ...state.restaurant,
+      gameTime: state.serviceContracts.active.serviceStartAt } };
+    render(<ServiceContractsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Withdraw contract' }));
+    const confirmation = screen.getByRole('group', { name: 'Confirm contract withdrawal' });
+    expect(confirmation).toHaveTextContent('After service starts: repay $22.50 + $22.50 compensation = $45 deducted, plus −0.25 reputation (minimum 1).');
+    expect(confirmation).not.toHaveTextContent('no compensation or reputation penalty');
   });
   it('focuses withdrawal context, restores Keep focus to its trigger, and focuses offers after success', () => {
     state = acceptServiceContract(state, { templateId: 'office-lunch' });
@@ -350,7 +441,7 @@ describe('ServiceContractsPanel', () => {
     }
     const { rerender } = render(<ServiceContractsPanel />);
     expect(screen.getByText(/Target met — \$67.50 balance settles at Day 1, 11:42 AM/)).toBeVisible();
-    expect(screen.getByText('4/4 fulfilled meals')).toBeInTheDocument();
+    expect(screen.getByText('4/2 fulfilled meals')).toBeInTheDocument();
     const announcement = screen.getByRole('status').textContent;
     state = { ...state, restaurant: { ...state.restaurant, gameTime: 37680 } };
     rerender(<ServiceContractsPanel />);
@@ -397,7 +488,10 @@ describe('ServiceContractTracker', () => {
     expect(container).toBeEmptyDOMElement();
     state = acceptServiceContract(state, { templateId: 'family-service' });
     rerender(<ServiceContractTracker onOpen={onOpen} />);
-    expect(screen.getByText(/Family service.*Preparing.*0\/6/)).toBeInTheDocument();
+    const tracker = screen.getByRole('complementary', { name: 'Service contract tracker' });
+    expect(tracker).toHaveStyle({ position: 'absolute', width: 'max-content',
+      maxWidth: 'min(460px, calc(100% - 16px))' });
+    expect(screen.getByText(/Family service.*Preparing.*0\/4/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'View contracts' }));
     expect(onOpen).toHaveBeenCalledTimes(1);
     expect(dispatch).not.toHaveBeenCalled();

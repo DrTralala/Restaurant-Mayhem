@@ -128,12 +128,12 @@ describe('simulation-owned synchronous navigation layout context', () => {
 
     expect(geometry(actual)).toEqual(expectedGeometry);
     expect(payloads.map(values => [values[0], values.length])).toEqual([
-      ['record:tables', 4], ['record:chairs', 6], ['record:kitchenStations', 4],
+      ['record:tables', 5], ['record:chairs', 6], ['record:kitchenStations', 4],
       ['record:serviceTables', 5], ['record:cashierStations', 4], ['record:washStations', 6],
       ['record:staffAmenities', 7], ['record:doors', 4],
     ]);
-    expect(payloads.reduce((total, values) => total + values.length, 0)).toBe(40);
-    expect(payloads[0]).toEqual(['record:tables', 'compact-table', 200, 200]);
+    expect(payloads.reduce((total, values) => total + values.length, 0)).toBe(41);
+    expect(payloads[0]).toEqual(['record:tables', 'compact-table', 200, 200, undefined]);
     expect(payloads[1]).toEqual(['record:chairs', 'compact-chair', 240, 200, 'compact-table', 0]);
     // The amenity's configuration token remains an independently validated,
     // immutable child rather than being dropped with redundant schema labels.

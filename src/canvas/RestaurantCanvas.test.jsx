@@ -25,6 +25,7 @@ import { loadSprites } from './sprites';
 import { createRenderIndexes } from './renderIndexes';
 import { validateFixtureCopies, validateFixtureMoves } from '../simulation/placement';
 import { validateStaffMove } from '../state/staffMoves';
+import { createCounterTestState } from '../state/highTopCounter.testSupport';
 
 vi.mock('../state/GameContext', async importOriginal => {
   const actual = await importOriginal();
@@ -236,6 +237,30 @@ const fixtureMovementCases = [
 ];
 
 describe('RestaurantCanvas object movement', () => {
+  it('shows four place statuses and previews all built-in geometry when moving a counter', () => {
+    const counterState = createCounterTestState();
+    useGameState.mockReturnValue(counterState);
+    findClickedEntity.mockReturnValue({ type: 'highTopCounter', data: counterState.highTopCounters[0] });
+    const { container } = render(<RestaurantCanvas managementOpen={false} />);
+    const canvas = container.querySelector('canvas');
+    Object.defineProperty(canvas, 'clientWidth', { value: 800 });
+    Object.defineProperty(canvas, 'clientHeight', { value: 600 });
+    canvas.getContext = vi.fn(() => drawingContext());
+    fireEvent.click(canvas, { clientX: 300, clientY: 300 });
+    expect(screen.getByText('Place 1: Empty')).toBeInTheDocument();
+    expect(screen.getByText('Place 4: Empty')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sell' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+    fireEvent.mouseMove(canvas, { clientX: 500, clientY: 300, buttons: 0 });
+    fireEvent.keyDown(canvas, { key: 'r' });
+    act(() => requestAnimationFrame.mock.calls.at(-1)[0](1000));
+    const preview = drawFurnitureLayer.mock.calls.at(-1)[1];
+    expect(preview.highTopCounters[0]).toMatchObject({ x: 500, y: 300, rotation: 1 });
+    expect(preview.tables[0]).toMatchObject({ x: 520, y: 300 });
+    expect(preview.chairs[0]).toMatchObject({ x: 500, y: 300, rotation: 1 });
+    expect(counterState.chairs[0]).toMatchObject({ x: 300, y: 320, rotation: 0 });
+  });
+
   beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
     vi.stubGlobal('cancelAnimationFrame', vi.fn());

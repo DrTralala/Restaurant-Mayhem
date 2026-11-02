@@ -7,6 +7,7 @@ import { prepareSelfSeating, reconcileSelfSeatingState, resolveSelfSeating } fro
 import { reconcileQueueSlots } from './customerQueue';
 import { prioritiseQueuedParty } from './queuePriority';
 import { captureNavigation } from './navigation/telemetry';
+import { getRestaurantWorld } from './world';
 
 function queuedState(overrides = {}) {
   const fresh = createInitialState();
@@ -173,6 +174,105 @@ describe('self seating admission', () => {
       .toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
   });
 
+  it('keeps the next party queued until the slowest admitted member clears the doorway', () => {
+    const fresh = createInitialState();
+    let state = prepareSelfSeating(queuedState({
+      tables: fresh.tables.filter(table => ['t1', 't2'].includes(table.id)),
+      chairs: fresh.chairs.filter(chair => ['t1', 't2'].includes(chair.tableId)),
+      queue: [partyOf(2, 'p1'), partyOf(1, 'p2')],
+    }));
+    const threshold = getRestaurantWorld(state.restaurant).doorX - 20;
+    state = {
+      ...state,
+      customers: state.customers.map((customer, index) => customer.partyId !== 'p1' ? customer : {
+        ...customer,
+        x: threshold + (index === 0 ? -1 : 1),
+      }),
+    };
+
+    for (let tick = 0; tick < 30; tick += 1) {
+      state = prepareSelfSeating(state);
+      expect(state.queue.map(party => party.partyId)).toEqual(['p2']);
+      expect(state.queueAdmissionGate).toMatchObject({ partyId: 'p1' });
+    }
+
+    const crossed = prepareSelfSeating({
+      ...state,
+      customers: state.customers.map(customer => customer.partyId !== 'p1'
+        ? customer : { ...customer, x: threshold }),
+    });
+    expect(crossed.queue).toEqual([]);
+    expect(crossed.queueAdmissionGate).toMatchObject({ partyId: 'p2' });
+  });
+
+  it('releases the actual reservation when a stale gate points at a missing table', () => {
+    const admitted = prepareSelfSeating(queuedState({ queue: [partyOf(1, 'p1'), partyOf(1, 'p2')] }));
+    const stale = {
+      ...admitted,
+      queueAdmissionGate: { ...admitted.queueAdmissionGate, tableId: 'missing-table' },
+    };
+
+    const next = prepareSelfSeating(stale);
+
+    expect(next.customers.find(customer => customer.partyId === 'p1'))
+      .toMatchObject({ state: 'leaving', tableId: null, chairId: null });
+    expect(next.tables.find(table => table.id === 't1'))
+      .toMatchObject({ status: 'reserved', diningPartyId: 'p2' });
+    expect(next.customers.find(customer => customer.partyId === 'p2'))
+      .toMatchObject({ state: 'entering', tableId: 't1' });
+    expect(next.queue).toEqual([]);
+  });
+
+  it('releases the actual reservation when a stale gate has the wrong party owner', () => {
+    const admitted = prepareSelfSeating(queuedState({ queue: [partyOf(1, 'p1'), partyOf(1, 'p2')] }));
+    const stale = {
+      ...admitted,
+      queueAdmissionGate: { ...admitted.queueAdmissionGate, partyId: 'foreign-party' },
+    };
+
+    const next = prepareSelfSeating(stale);
+
+    expect(next.customers.find(customer => customer.partyId === 'p1'))
+      .toMatchObject({ state: 'leaving', tableId: null, chairId: null });
+    expect(next.tables.find(table => table.id === 't1'))
+      .toMatchObject({ status: 'reserved', diningPartyId: 'p2' });
+    expect(next.customers.find(customer => customer.partyId === 'p2'))
+      .toMatchObject({ state: 'entering', tableId: 't1' });
+    expect(next.queue).toEqual([]);
+  });
+
+  it('does not release another party’s table when stale gate fields point at it', () => {
+    const admitted = prepareSelfSeating(queuedState({ queue: [partyOf(1, 'p1')] }));
+    const fresh = createInitialState();
+    const table = fresh.tables.find(candidate => candidate.id === 't2');
+    const chair = fresh.chairs.find(candidate => candidate.tableId === 't2');
+    const stale = {
+      ...admitted,
+      tables: [...admitted.tables, {
+        ...table, status: 'reserved', diningPartyId: 'p2', diningCustomerIds: ['p2-c1'],
+        seatingAssignments: [],
+      }],
+      chairs: [...admitted.chairs, chair],
+      customers: [...admitted.customers, {
+        id: 'p2-c1', partyId: 'p2', state: 'entering', tableId: 't2', chairId: chair.id,
+        x: 500, y: 400,
+      }],
+      queueAdmissionGate: {
+        ...admitted.queueAdmissionGate, partyId: 'p2', tableId: 't2',
+      },
+    };
+
+    const next = prepareSelfSeating(stale);
+
+    expect(next.tables.find(candidate => candidate.id === 't1')).toMatchObject({ status: 'empty' });
+    expect(next.tables.find(candidate => candidate.id === 't2'))
+      .toMatchObject({ status: 'reserved', diningPartyId: 'p2' });
+    expect(next.customers.find(customer => customer.id === 'p2-c1'))
+      .toMatchObject({ state: 'entering', tableId: 't2' });
+    expect(next.customers.find(customer => customer.id === 'p1-c1'))
+      .toMatchObject({ state: 'leaving', tableId: null });
+  });
+
   it('reconciles existing durable leases at their exact coordinates after reordering', () => {
     const older = partyOf(1, 'older');
     const selected = partyOf(1, 'selected');
@@ -303,6 +403,31 @@ describe('self seating admission', () => {
     const seated = resolveSelfSeating(placed, statuses);
     expect(seated.customers[0].state).toBe('seated');
     expect(seated.tables[0].status).toBe('occupied');
+  });
+
+  it('reassigns a reserved approach that becomes physically occupied by a stationary actor', () => {
+    const admitted = prepareSelfSeating(queuedState());
+    const assignment = admitted.tables[0].seatingAssignments[0];
+    const before = { x: admitted.customers[0].x, y: admitted.customers[0].y };
+    const blocked = {
+      ...admitted,
+      staff: [{ id: 'stationary-waiter', role: 'waiter', ...assignment.approachPoint }],
+    };
+
+    const retried = prepareSelfSeating(blocked);
+
+    expect(retried.tables[0]).toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
+    expect(retried.queueAdmissionGate).toEqual(admitted.queueAdmissionGate);
+    expect(retried.customers[0]).toMatchObject(before);
+    expect(retried.tables[0].seatingAssignments[0].approachPoint)
+      .not.toEqual(assignment.approachPoint);
+    const replacement = retried.tables[0].seatingAssignments[0].approachPoint;
+    expect(Math.hypot(
+      replacement.x - blocked.staff[0].x,
+      replacement.y - blocked.staff[0].y,
+    )).toBeGreaterThanOrEqual(16);
+    expect(retried.customers[0].navigationGoal)
+      .toEqual(replacement);
   });
 
   it('revalidates an active reservation without repeating route searches each tick', () => {

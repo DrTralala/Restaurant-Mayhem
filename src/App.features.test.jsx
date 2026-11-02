@@ -92,7 +92,25 @@ describe('shared feature UI routes', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Contracts', exact: true }));
     fireEvent.click(screen.getByRole('button', { name: 'Review Office lunch' }));
     fireEvent.click(screen.getByRole('button', { name: 'Accept and start preparation' }));
-    expect(screen.getByRole('button', { name: 'View contracts' })).toBeInTheDocument();
+    const tracker = screen.getByLabelText('Service contract tracker');
+    const viewport = screen.getByTestId('canvas').parentElement.parentElement;
+    expect(viewport).toContainElement(tracker);
+    expect(tracker.parentElement).toBe(viewport);
+    expect(viewport).toHaveStyle({ position: 'relative' });
+    expect(tracker).toHaveStyle({ position: 'absolute', left: '8px', bottom: '8px' });
+    expect(tracker).toHaveStyle({ maxWidth: 'min(460px, calc(100% - 16px))' });
+    expect(within(tracker).getByRole('button', { name: 'View contracts' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close management' }));
+    fireEvent.click(within(tracker).getByRole('button', { name: 'View contracts' }));
+    expect(screen.getByRole('dialog', { name: 'Restaurant management' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Contracts', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Complete synthetic career' }));
+    expect(tracker).toHaveTextContent('Paused for Opening Week');
+    expect(screen.getByRole('dialog', { name: 'Opening Week target missed' })).toBeInTheDocument();
+    fireEvent.click(within(tracker).getByRole('button', { name: 'View contracts' }));
+    expect(screen.queryByRole('dialog', { name: 'Restaurant management' })).not.toBeInTheDocument();
   });
   it.each(['Escape', 'Settings toggle'])('keeps one Settings focus owner and restores the pending result via %s', closeRoute => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);

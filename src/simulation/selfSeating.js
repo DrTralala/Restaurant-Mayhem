@@ -7,6 +7,7 @@ import {
   occupyTableForParty,
   reserveTableForParty,
 } from './tableLifecycle';
+import { canClaimDestination } from './navigation/destinations';
 import {
   buildChairApproachAssignments,
   getChairCentre,
@@ -207,14 +208,29 @@ function reconcileGate(state) {
   const gateMemberIds = new Set(Array.isArray(gate.customerIds) ? gate.customerIds : []);
   const gateMembers = status.gateMembers;
   if (status.stale) {
+    // A stale gate's tableId is only a reference, not reservation ownership.
+    // Recover the reservation from the canonical party/member links too, so a
+    // damaged gate cannot strand its real table as permanently reserved.
+    const staleReservations = (state.tables || []).filter(table => {
+      if (table?.status !== 'reserved') return false;
+      const tableMemberIds = Array.isArray(table.diningCustomerIds) ? table.diningCustomerIds : [];
+      return gateMembers.some(customer =>
+        (sameId(customer.partyId, table.diningPartyId) && sameId(customer.tableId, table.id))
+          || tableMemberIds.some(id => sameId(id, customer.id)));
+    });
+    const staleTableIds = new Set(staleReservations.map(table => String(table.id)));
+    const staleCustomerIds = new Set([
+      ...gateMemberIds,
+      ...staleReservations.flatMap(table => Array.isArray(table.diningCustomerIds)
+        ? table.diningCustomerIds : []),
+    ].map(String));
     return {
       ...state,
-      tables: (state.tables || []).map(table => table.id === gate.tableId
-        && table.status === 'reserved' && table.diningPartyId === gate.partyId
+      tables: (state.tables || []).map(table => staleTableIds.has(String(table.id))
         ? clearDiningOwnership(table, 'empty')
         : table),
       customers: (state.customers || []).map(customer => {
-        if (!gateMemberIds.has(customer.id)) return customer;
+        if (!staleCustomerIds.has(String(customer.id))) return customer;
         return customer.state === 'leaving'
           ? withoutEntryDoorId(customer)
           : safeLeavingFields(customer);
@@ -295,9 +311,10 @@ function releaseInvalidReservedParties(state, tables, partyIds) {
 }
 
 // Bounded per-tick retry for a reserved party whose current approach assignment
-// became invalid (for example a moved table). The reservation and the entering
-// customers' exact positions are preserved when a legal replacement is available;
-// otherwise the reservation is released and the affected party leaves safely.
+// became invalid (for example a moved table or a stationary actor claiming its
+// approach). The reservation and the entering customers' exact positions are
+// preserved when a legal replacement is available; otherwise only broken
+// geometry releases the reservation, while a temporary occupancy keeps waiting.
 function refreshBlockedReservedApproaches(state) {
   let changed = false;
   const releasedPartyIds = new Set();
@@ -317,10 +334,15 @@ function refreshBlockedReservedApproaches(state) {
     const memberIds = Array.isArray(table.diningCustomerIds) ? table.diningCustomerIds : null;
     if (!Array.isArray(assignments) || assignments.length === 0 || memberIds == null) return table;
     const chairIds = assignments.map(assignment => assignment.chairId);
+    const approachesClaimable = assignments.every(assignment => {
+      const customer = (state.customers || []).find(candidate =>
+        sameId(candidate?.id, assignment?.customerId));
+      return customer && canClaimDestination(state, customer, assignment.approachPoint);
+    });
     const geometryValid = validateChairApproachAssignments(
       state, memberIds, chairIds, assignments, table.id,
     );
-    if (geometryValid && (!hasIngressDoor() || validateChairApproachAssignments(
+    if (geometryValid && approachesClaimable && (!hasIngressDoor() || validateChairApproachAssignments(
       state, memberIds, chairIds, assignments, table.id, { navigationGrid: getNavigationGrid() },
     ))) {
       return table;
@@ -382,7 +404,12 @@ function* chairSelections(chairs, count, start = 0, selected = []) {
 
 function planForParty(state, party) {
   const partySize = party.members.length;
-  for (const table of state.tables || []) {
+  const tables = state.tables || [];
+  const candidates = partySize === 1
+    ? [...tables.filter(table => table?.highTopCounterId != null),
+      ...tables.filter(table => table?.highTopCounterId == null)]
+    : tables;
+  for (const table of candidates) {
     if (table?.status !== 'empty' || table.admissionHeld === true) continue;
     // Wiping and dish collection can finish in either order; admission needs both.
     if ((state.serviceItems || []).some(item => item.tableId === table.id

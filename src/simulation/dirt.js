@@ -1,6 +1,7 @@
 import { findAdjacentOpenCells, cellKey, cellToWorld, worldToCell } from './pathfinding';
 import { clampReputation } from './balance';
 import { getRestaurantWorld } from './world';
+import { getDiningTableCentre } from '../data/diningGeometry';
 
 const DIRT_PER_MINUTE = 0.10;
 const EATING_DIRT_PER_MINUTE = 0.20;
@@ -39,7 +40,7 @@ function customerDirtOrigin(state, customer) {
   const table = (state.tables || []).find(candidate => candidate.id === customer.tableId);
   if (SEATED_VISUAL_STATES.has(customer.state)
     && table && Number.isFinite(table.x) && Number.isFinite(table.y)) {
-    return { x: table.x + 20, y: table.y + 20 };
+    return getDiningTableCentre(table);
   }
   return !SEATED_VISUAL_STATES.has(customer.state)
     && Number.isFinite(customer.x) && Number.isFinite(customer.y)
@@ -57,7 +58,7 @@ function customerPosition(state, customer) {
   if (Number.isFinite(customer.x) && Number.isFinite(customer.y)) return { x: customer.x, y: customer.y };
   const table = (state.tables || []).find(candidate => candidate.id === customer.tableId);
   return table && Number.isFinite(table.x) && Number.isFinite(table.y)
-    ? { x: table.x + 20, y: table.y + 20 }
+    ? getDiningTableCentre(table)
     : null;
 }
 

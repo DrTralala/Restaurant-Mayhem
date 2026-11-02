@@ -11,6 +11,146 @@ import { createRenderIndexes } from './renderIndexes';
 import { getServiceCounterItemPosition } from './serviceCounterGeometry';
 import { getCustomerConsumptionRemainingFraction } from '../simulation/consumption';
 import { getRemainingFraction } from '../simulation/activity';
+import { createCounterTestState } from '../state/highTopCounter.testSupport';
+import { getHighTopCounterGeometry } from '../data/highTopCounters';
+
+describe('high top counter drawing', () => {
+  it.each([0, 1, 2, 3])('draws one continuous surface and four chairs at rotation %s', rotation => {
+    const state = createCounterTestState(rotation);
+    state.tables[1].status = 'dirty';
+    const ctx = recordCtx();
+    drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
+    const geometry = getHighTopCounterGeometry(state.highTopCounters[0]);
+    expect(ctx._calls.rects.filter(rect => rect.w === 40 && rect.h === 40)).toHaveLength(0);
+    expect(ctx._calls.rects.filter(rect => JSON.stringify(rect) === JSON.stringify(geometry.countertop))).toHaveLength(1);
+    for (const { chair } of geometry.places) {
+      expect(ctx._calls.rects).toContainEqual({ x: chair.x, y: chair.y, w: 20, h: 20 });
+    }
+    const dirty = ctx._calls.rectColours.filter(rect => rect.colour === '#663333');
+    expect(dirty).toEqual([{ ...geometry.places[1].table, colour: '#663333' }]);
+  });
+
+  it.each([0, 1, 2, 3])('shows the chair side in placement previews at rotation %s', rotation => {
+    const ctx = recordCtx();
+    drawPlacementPreview(ctx, {}, { x: 0, y: 0, zoom: 1 }, {
+      itemType: 'highTopCounter', x: 300, y: 300, rotation, valid: true,
+    });
+    const geometry = getHighTopCounterGeometry({ x: 300, y: 300, rotation });
+    expect(ctx._calls.rects).toContainEqual(geometry.countertop);
+    for (const { chair } of geometry.places) {
+      expect(ctx._calls.rects).toContainEqual({ x: chair.x, y: chair.y, w: 20, h: 20 });
+    }
+  });
+
+  it.each([0, 1, 2, 3])('renders paired clean and dirty food glyphs within the counter place at rotation %s', rotation => {
+    const state = createCounterTestState(rotation);
+    const table = state.tables[0];
+    const chair = state.chairs[0];
+    state.customers = [{ id: 'guest', tableId: table.id, chairId: chair.id }];
+    state.dishes = [{ id: 'bread', base: 'Bread' }];
+    state.serviceItems = [
+      { id: 'food', customerId: 'guest', kind: 'dish', menuItemId: 'bread', state: 'delivered', x: 0, y: 0 },
+      { id: 'drink', customerId: 'guest', kind: 'drink', menuItemId: 'water', state: 'dirty_at_table', x: 0, y: 0 },
+    ];
+    const ctx = recordCtx();
+
+    drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
+
+    const glyphs = ctx._calls.texts.filter(call => ['🍞', '🥛'].includes(call.text));
+    expect(glyphs).toHaveLength(2);
+    for (const glyph of glyphs) {
+      expect(glyph.font).toContain('10px');
+      expect(glyph.textAlign).toBe('center');
+      expect(glyph.textBaseline).toBe('middle');
+      expect(glyph.x - 5).toBeGreaterThanOrEqual(table.x);
+      expect(glyph.x + 5).toBeLessThanOrEqual(table.x + 20);
+      expect(glyph.y - 5).toBeGreaterThanOrEqual(table.y);
+      expect(glyph.y + 5).toBeLessThanOrEqual(table.y + 20);
+    }
+  });
+
+  it.each([0, 1, 2, 3])('fits the seated counter customer and patience indicator within the stool at rotation %s', rotation => {
+    const state = createCounterTestState(rotation);
+    const table = state.tables[0];
+    const chair = state.chairs[0];
+    state.restaurant = { ...state.restaurant, gameTime: 50 };
+    state.customers = [{
+      id: 'guest', state: 'waiting_for_items', tableId: table.id, chairId: chair.id,
+      foodOrderedAt: 0, foodPatienceBudget: 100, foodDeadlineAt: 100, foodOutcome: 'pending',
+    }];
+    const ctx = recordCtx();
+
+    drawCustomerLayer(ctx, state, { x: 0, y: 0, zoom: 1 }, { reducedMotion: true });
+
+    expect(ctx._calls.scales).toContainEqual({ x: 0.5, y: 0.5 });
+    const head = ctx._calls.arcs[0];
+    expect(head.x).toBe(chair.x + 10);
+    expect(head.x - 2).toBeGreaterThanOrEqual(chair.x);
+    expect(head.x + 2).toBeLessThanOrEqual(chair.x + 20);
+    expect(head.y - 2).toBeGreaterThanOrEqual(chair.y);
+    expect(head.y + 2).toBeLessThanOrEqual(chair.y + 20);
+    for (const point of [...ctx._calls.moves, ...ctx._calls.lines]) {
+      expect(point.x).toBeGreaterThanOrEqual(chair.x);
+      expect(point.x).toBeLessThanOrEqual(chair.x + 20);
+      expect(point.y).toBeGreaterThanOrEqual(chair.y);
+      expect(point.y).toBeLessThanOrEqual(chair.y + 20);
+    }
+    const patienceTrack = ctx._calls.rectColours.find(rect => rect.colour === '#5a2d20');
+    expect(patienceTrack).toEqual({ x: chair.x + 5, y: chair.y + 17, w: 10, h: 2, colour: '#5a2d20' });
+  });
+
+  it.each([0, 1, 2, 3])('places the compact counter ordering menu in the assigned 20px table block at rotation %s', rotation => {
+    const state = createCounterTestState(rotation);
+    const table = state.tables[0];
+    const chair = state.chairs[0];
+    state.customers = [{
+      id: 'guest', state: 'ordering', tableId: table.id, chairId: chair.id, dishId: 'meal',
+    }];
+    const ctx = recordCtx();
+
+    drawCustomerLayer(ctx, state, { x: 0, y: 0, zoom: 1 }, { reducedMotion: true });
+
+    expect(ctx._calls.rectColours).toContainEqual({
+      x: table.x + 1, y: table.y + 4, w: 18, h: 12, colour: '#f3e6bd',
+    });
+  });
+
+  it.each([0, 1, 2, 3])('keeps the counter eating progress indicator in its stool at rotation %s', rotation => {
+    const state = createCounterTestState(rotation);
+    const table = state.tables[0];
+    const chair = state.chairs[0];
+    state.restaurant = { ...state.restaurant, gameTime: 10 };
+    state.customers = [{
+      id: 'guest', state: 'eating', tableId: table.id, chairId: chair.id, foodOutcome: 'delivered',
+    }];
+    state.serviceItems = [{
+      id: 'food', customerId: 'guest', kind: 'dish', state: 'delivered', consumptionStartedAt: 0,
+    }];
+    const ctx = recordCtx();
+
+    drawCustomerLayer(ctx, state, { x: 0, y: 0, zoom: 1 }, { reducedMotion: true });
+
+    const progress = ctx._calls.strokeRects.find(rect => rect.w === 3 && rect.h === 8);
+    expect(progress).toEqual({ x: chair.x + 16, y: chair.y + 6, w: 3, h: 8, colour: '#8a6a00' });
+  });
+
+  it.each([0, 1, 2, 3])('keeps a seating-hold label inside its counter place at rotation %s', rotation => {
+    const state = createCounterTestState(rotation);
+    const table = state.tables[0];
+    table.admissionHeld = true;
+    const ctx = recordCtx();
+
+    drawFurnitureLayer(ctx, state, { x: 0, y: 0, zoom: 1 });
+
+    expect(ctx._calls.rectColours).toContainEqual({
+      x: table.x, y: table.y, w: 20, h: 20, colour: '#2b2116',
+    });
+    expect(ctx._calls.texts).toContainEqual(expect.objectContaining({
+      text: 'Hold', x: table.x + 10, y: table.y + 10, textAlign: 'center', textBaseline: 'middle',
+    }));
+    expect(ctx._calls.texts.find(call => call.text === 'Hold').font).toContain('7px');
+  });
+});
 
 function recordCtx(extraCanvas = {}) {
   const calls = {
@@ -66,6 +206,7 @@ function recordCtx(extraCanvas = {}) {
         text, x, y, alpha,
         textAlign: this.textAlign,
         textBaseline: this.textBaseline,
+        font: this.font,
       });
     },
     strokeRect(x, y, w, h) {

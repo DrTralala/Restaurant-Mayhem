@@ -10,6 +10,7 @@ import SpeedControls from './components/SpeedControls';
 import Toast from './components/Toast';
 import ManagementModal from './panels/ManagementModal';
 import MenuModal from './panels/MenuModal';
+import { ServiceContractTracker } from './panels/ServiceContractsPanel';
 import CareerResultDialog from './components/CareerResultDialog';
 import { getCareerSummary, isCareerDecisionPending } from './simulation/careerRun';
 
@@ -93,7 +94,7 @@ function AppSession() {
 
   return (
     <div className="app">
-      <StatsBar onOpenCareer={() => openManagement('career')} onOpenContracts={() => openManagement('contracts')} />
+      <StatsBar onOpenCareer={() => openManagement('career')} />
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden', transform: 'translateZ(0)' }}>
         <div inert={decisionPending ? '' : undefined}
           style={{ position: 'absolute', inset: 0, pointerEvents: decisionPending ? 'none' : 'auto' }}>
@@ -135,6 +136,7 @@ function AppSession() {
           }}
           onClose={closeTopLevelMenus}
         />
+        <ServiceContractTracker onOpen={() => openManagement('contracts')} />
       </div>
       <SpeedControls onFit={() => setFitRequest(request => request + 1)} />
       <ManagementModal

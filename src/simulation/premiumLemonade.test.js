@@ -761,7 +761,9 @@ describe('Premium Lemonade actual service comparison', () => {
       orderCount: 4, prepared: 4, delivered: 4, paidReceipts: 4, abandoned: 0, pending: 0,
       menuCharges: 28, receiptTotals: 34.3, tips: 6.3, prepOccupancy: 484,
       waitsToPreparation: [314, 672, 1030, 1388],
-      waitsToDelivery: [920, 1054, 1558, 2074], horizonReached: false,
+      // The dirty-table pickup-before-wipe rule changes route overlap at
+      // saturation; the same four drinks and receipts still complete.
+      waitsToDelivery: [920, 1054, 1524, 2080], horizonReached: false,
     });
     expect(busyLemonade).toMatchObject({
       orderCount: 4, prepared: 4, delivered: 4, paidReceipts: 4, abandoned: 0, pending: 0,

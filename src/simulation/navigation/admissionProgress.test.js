@@ -48,3 +48,41 @@ it('admits and seats a fresh queued customer before patience expires while a dis
   expect(seated).toBe(true);
   expect(state.customers.some(customer => customer.id === 'outgoing')).toBe(false);
 });
+
+it('reroutes an admitted customer around a newly occupied approach and seats the party', () => {
+  const initial = createInitialState();
+  const member = { id: 'reroute-customer', partyId: 'reroute-party', partyType: 'solo', partySize: 1,
+    state: 'queued', archetype: 'regular', gender: 'female', spendingTier: 'value', spendingBudget: 45,
+    patience: 900, patienceMax: 900, queuePatience: 900, queuePatienceMax: 900, happiness: 80 };
+  let state = prepareSelfSeating({
+    ...initial,
+    staff: [],
+    tables: initial.tables.filter(table => table.id === 't1'),
+    chairs: initial.chairs.filter(chair => chair.tableId === 't1'),
+    customers: [],
+    queue: [{ partyId: member.partyId, members: [member] }],
+  });
+  const assignedPoint = state.tables[0].seatingAssignments[0].approachPoint;
+  const originalPosition = { x: state.customers[0].x, y: state.customers[0].y };
+  state = {
+    ...state,
+    customers: [...state.customers, {
+      id: 'stationary-blocker', state: 'eating', x: assignedPoint.x, y: assignedPoint.y,
+    }],
+  };
+
+  for (let tick = 0; tick < 240; tick += 1) {
+    state = runTick(state, { gameDt: 0, movementDt: 0.1 });
+    expect(state.movementCoordinator.diagnostics.invariantFailure).toBeUndefined();
+    const customer = state.customers.find(actor => actor.id === member.id);
+    if (customer?.state === 'seated') break;
+  }
+
+  expect(state.customers.find(actor => actor.id === member.id)?.state).toBe('seated');
+  expect(state.tables.find(table => table.id === 't1').status).toBe('occupied');
+  expect(state.queueAdmissionGate).toBeNull();
+  expect(Math.hypot(
+    state.customers.find(actor => actor.id === member.id).x - originalPosition.x,
+    state.customers.find(actor => actor.id === member.id).y - originalPosition.y,
+  )).toBeGreaterThan(0);
+});

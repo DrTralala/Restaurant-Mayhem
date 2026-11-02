@@ -12,6 +12,7 @@ import { isMenuItemSuspended } from '../simulation/menuEconomy';
 import { acceptServiceContract, withdrawServiceContract } from '../simulation/serviceContracts';
 import { hydrateState, loadState, saveState } from './persistence';
 import { ITEM_PRICES } from '../data/items';
+import { createHighTopCounterRecords } from '../data/highTopCounters';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
 import { createEmptyAmenitySlots } from '../data/staffAmenities';
 import { getDrink, getResolvedDrink, normaliseDrinkOverrides } from '../data/drinks';
@@ -396,6 +397,16 @@ function placeItem(state, action) {
         y: placement.y,
       }],
     };
+  }
+
+  if (action.itemType === 'highTopCounter') {
+    const counters = state.highTopCounters || [];
+    const counter = { id: getNextNumericId(counters, 'htc'),
+      x: placement.x, y: placement.y, rotation: placement.rotation };
+    const records = createHighTopCounterRecords(counter);
+    return { ...nextState, highTopCounters: [...counters, counter],
+      tables: [...(state.tables || []), ...records.tables],
+      chairs: [...(state.chairs || []), ...records.chairs] };
   }
 
   if (action.itemType === 'table') {
@@ -898,6 +909,7 @@ function reduceGameAction(state, action) {
         chairs: state.chairs.filter(ch => ch.id !== action.id),
       };
     case 'ROTATE_CHAIR':
+      if (state.chairs.some(ch => ch.id === action.id && ch.highTopCounterId != null)) return state;
       return {
         ...state,
         chairs: state.chairs.map(ch =>
@@ -995,7 +1007,7 @@ export function gameReducer(state, action) {
     if (positioned) candidate = { ...candidate, staff: positioned };
   }
   const spatialKeys = ['staff', 'customers', 'queue', 'queueSlots', 'tables', 'chairs',
-    'doors', 'kitchenStations', 'serviceTables', 'cashierStations', 'washStations', 'staffAmenities'];
+    'doors', 'kitchenStations', 'serviceTables', 'cashierStations', 'washStations', 'staffAmenities', 'highTopCounters'];
   const changed = spatialKeys.some(key => candidate[key] !== state[key])
     || candidate.restaurant?.expansionLevel !== state.restaurant?.expansionLevel;
   if (!changed) return candidate;

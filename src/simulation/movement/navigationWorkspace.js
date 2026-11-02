@@ -2,6 +2,7 @@ import { GRID_SIZE, getDoors, getRestaurantWorld } from '../world';
 import { PLACEABLES, getPlaceableDimensions } from '../../data/placeables';
 import { getAmenityGeometry, getStaffAmenityDefinition } from '../../data/staffAmenities';
 import { noteNavigation } from '../navigation/telemetry';
+import { getDiningTableRect } from '../../data/diningGeometry';
 
 const WORKSPACE_GEOMETRY_CACHE_LIMIT = 32;
 const workspaceGeometryCache = new Map();
@@ -21,6 +22,7 @@ const LAYOUT_CONTEXT_ENTRY_LIMIT = 2048;
 const SIMULATION_LAYOUT_ACTIVATION_REQUESTS = 6;
 let simulationLayoutBusy = false;
 const FIXTURE_SOURCE_FIELDS = Object.freeze(['id', 'x', 'y']);
+const TABLE_SOURCE_FIELDS = Object.freeze(['id', 'x', 'y', 'highTopCounterId']);
 const CHAIR_SOURCE_FIELDS = Object.freeze(['id', 'x', 'y', 'tableId', 'rotation']);
 const SERVICE_TABLE_SOURCE_FIELDS = Object.freeze(['id', 'x', 'y', 'rotation']);
 const WASH_STATION_SOURCE_FIELDS = Object.freeze(['id', 'x', 'y', 'w', 'h']);
@@ -73,7 +75,11 @@ export function navigationFixtureRectangles(state) {
   const add = (kind, fixture, w, h) => rectangles.push({
     kind, id: fixture.id, x: fixture.x, y: fixture.y, w, h,
   });
-  for (const table of state.tables || []) add('table', table, 40, 40);
+  for (const table of state.tables || []) {
+    const { id, x, y, highTopCounterId } = table;
+    const size = getDiningTableRect({ x, y, highTopCounterId });
+    add('table', { id, x, y }, size?.w ?? 40, size?.h ?? 40);
+  }
   for (const chair of state.chairs || []) add('chair', chair, 20, 20);
   for (const station of state.kitchenStations || []) add('kitchen', station, 40, 40);
   for (const service of state.serviceTables || []) {
@@ -312,7 +318,7 @@ function visitWorkspaceSourceInputs(state, visit) {
   }
   if (!isFastlaneWorldLevel(expansionLevel)) return false;
 
-  if (!visitWorkspaceCollection(state, 'tables', FIXTURE_SOURCE_FIELDS, visit)
+  if (!visitWorkspaceCollection(state, 'tables', TABLE_SOURCE_FIELDS, visit)
     || !visitWorkspaceCollection(state, 'chairs', CHAIR_SOURCE_FIELDS, visit)
     || !visitWorkspaceCollection(state, 'kitchenStations', FIXTURE_SOURCE_FIELDS, visit)
     || !visitWorkspaceCollection(state, 'serviceTables', SERVICE_TABLE_SOURCE_FIELDS, visit)
@@ -550,7 +556,7 @@ function layoutContextKey(context, state) {
     if (worldToken === null) return null;
     const values = ['layout', worldToken];
     for (const [name, fields] of [
-      ['tables', FIXTURE_SOURCE_FIELDS], ['chairs', CHAIR_SOURCE_FIELDS],
+      ['tables', TABLE_SOURCE_FIELDS], ['chairs', CHAIR_SOURCE_FIELDS],
       ['kitchenStations', FIXTURE_SOURCE_FIELDS], ['serviceTables', SERVICE_TABLE_SOURCE_FIELDS],
       ['cashierStations', FIXTURE_SOURCE_FIELDS], ['washStations', WASH_STATION_SOURCE_FIELDS],
       ['staffAmenities', AMENITY_SOURCE_FIELDS], ['doors', DOOR_SOURCE_FIELDS],

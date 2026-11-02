@@ -21,12 +21,16 @@ import { getAmenityGeometry } from '../data/staffAmenities';
 import { getCanvasFont } from '../typography';
 import { drawSprite } from './sprites';
 import { createRenderIndexes } from './renderIndexes';
+import { drawHighTopCounter } from './highTopCounterDrawing';
 
 export { drawStickFigure };
 
 const CANVAS_LABEL_FONT = getCanvasFont('compact');
 // Counter items sit in two 14px rows, so keep the glyphs within that spacing.
 const SERVICE_COUNTER_ITEM_FONT = getCanvasFont('item', 12);
+const HIGH_TOP_PLACE_ITEM_FONT = getCanvasFont('item', 10);
+const HIGH_TOP_SEATED_FIGURE_SCALE = 0.5;
+const HIGH_TOP_MENU = Object.freeze({ width: 18, height: 12, insetX: 1, insetY: 4 });
 
 function labelRect(rect) {
   if (!rect || !Number.isFinite(rect.x) || !Number.isFinite(rect.y)) return null;
@@ -119,18 +123,17 @@ export function drawObjectLabel(ctx, label, rect, options = {}) {
 function drawVerticalProgress(ctx, x, y, remaining, {
   fill = '#ffd400',
   track = '#8a6a00',
+  height = 14,
 } = {}) {
   if (!Number.isFinite(remaining)) return;
-  const height = 14;
+  const width = 3;
   const filled = height * Math.min(1, Math.max(0, remaining));
-  ctx.save(); ctx.strokeStyle = track; ctx.strokeRect(x, y, 3, height);
+  ctx.save(); ctx.strokeStyle = track; ctx.strokeRect(x, y, width, height);
   ctx.fillStyle = fill; ctx.fillRect(x + 1, y + height - filled, 1, filled); ctx.restore();
 }
 
-function drawFoodPatienceMeter(ctx, x, y, remaining) {
+function drawFoodPatienceMeter(ctx, x, y, remaining, { width = 14, height = 3 } = {}) {
   if (!Number.isFinite(remaining)) return;
-  const width = 14;
-  const height = 3;
   const filled = width * Math.min(1, Math.max(0, remaining));
   ctx.save();
   ctx.fillStyle = '#5a2d20';
@@ -336,6 +339,7 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}, indexes = c
   ctx.scale(camera.zoom, camera.zoom);
 
   for (const table of state.tables) {
+    if (table.highTopCounterId != null) continue;
     const tx = table.x;
     const ty = table.y;
     const spriteKey = table.status === 'dirty' ? 'tableDirty' : 'table';
@@ -347,8 +351,13 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}, indexes = c
     }
   }
 
-  // Chairs (drawn from chairs array — independently movable, rotatable)
+  for (const counter of state.highTopCounters || []) {
+    drawHighTopCounter(ctx, counter, state.tables, sprites);
+  }
+
+  // Standalone chairs are independently movable and rotatable.
   for (const chair of state.chairs) {
+    if (chair.highTopCounterId != null) continue;
     const rot = Number.isInteger(chair.rotation)
       ? ((chair.rotation % 4) + 4) % 4
       : 0;
@@ -364,6 +373,19 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}, indexes = c
   // Keep the admission status visible above linked chairs that can overlap its label.
   for (const table of state.tables) {
     if (table.admissionHeld !== true) continue;
+    if (table.highTopCounterId != null) {
+      ctx.save();
+      ctx.fillStyle = '#2b2116';
+      ctx.fillRect(table.x, table.y, 20, 20);
+      drawObjectLabel(ctx, 'Hold', { x: table.x, y: table.y, w: 20, h: 20 }, {
+        font: getCanvasFont('compact', 7),
+        lineHeight: 8,
+        padding: 1,
+        color: '#ffd166',
+      });
+      ctx.restore();
+      continue;
+    }
     ctx.save();
     ctx.fillStyle = '#2b2116';
     ctx.fillRect(table.x - 12, table.y - 12, 64, 12);
@@ -531,6 +553,7 @@ export function drawFurnitureLayer(ctx, state, camera, sprites = {}, indexes = c
       const position = getPlaceSettingPositions(table, chair, kinds)[item.kind];
       if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
         ctx.save();
+        if (table.highTopCounterId != null) ctx.font = HIGH_TOP_PLACE_ITEM_FONT;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(getServiceItemEmoji(item, state.dishes || [], indexes.dishesById), position.x, position.y);
@@ -565,6 +588,7 @@ export function drawPlacementPreview(ctx, state, camera, placement) {
   ctx.scale(camera.zoom, camera.zoom);
 
   const valid = placement.valid;
+  if (placement.itemType === 'highTopCounter') drawHighTopCounter(ctx, placement);
   ctx.fillStyle = valid ? 'rgba(70,200,110,0.45)' : 'rgba(220,70,70,0.45)';
   ctx.strokeStyle = valid ? 'rgba(70,200,110,0.9)' : 'rgba(220,70,70,0.9)';
   ctx.lineWidth = 2 / camera.zoom;
@@ -723,6 +747,7 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       continue;
     }
 
+    const highTopSeated = Boolean(seated && table?.highTopCounterId != null && chair && seatedGeometry);
     const deciding = (c.state === 'seated' && !c.dishId
       && !c.menuOutcome && c.foodOutcome !== 'cancelled') || c.state === 'ordering';
     const activity = getCustomerVisualActivity(state, c, {
@@ -735,7 +760,7 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       : 1;
     drawStickFigure(ctx, cx, cy, getCharacterPalette(c).figure, {
       seated,
-      scale: seated ? 0.7 : 1,
+      scale: seated ? (highTopSeated ? HIGH_TOP_SEATED_FIGURE_SCALE : 0.7) : 1,
       rotation: 0,
       walking: activity === 'walking',
       activity,
@@ -743,19 +768,38 @@ export function drawCustomerLayer(ctx, state, camera, renderOptions = {}) {
       timeMs: renderOptions.timeMs,
       reducedMotion: renderOptions.reducedMotion,
     });
-    if (deciding && seatedGeometry) drawMenu(ctx, seatedGeometry.menu);
+    if (deciding && seatedGeometry) {
+      const menu = highTopSeated
+        ? {
+          x: table.x + HIGH_TOP_MENU.insetX,
+          y: table.y + HIGH_TOP_MENU.insetY,
+          width: HIGH_TOP_MENU.width,
+          height: HIGH_TOP_MENU.height,
+        }
+        : seatedGeometry.menu;
+      drawMenu(ctx, menu);
+    }
     // Head radius plus half its stroke, then a three-unit gap and meter height.
-    drawFoodPatienceMeter(ctx, cx - 7, cy - 5 * (seated ? 0.7 : 1) - 3 - 3,
-      getFoodPatienceFraction(c, state.restaurant?.gameTime));
+    const foodPatience = getFoodPatienceFraction(c, state.restaurant?.gameTime);
+    if (highTopSeated) {
+      drawFoodPatienceMeter(ctx, chair.x + 5, chair.y + 17, foodPatience, { width: 10, height: 2 });
+    } else {
+      drawFoodPatienceMeter(ctx, cx - 7, cy - 5 * (seated ? 0.7 : 1) - 3 - 3, foodPatience);
+    }
     const consuming = c.state === 'eating'
       && (!c.navigationGoal || movement.plan === 'arrived');
-    drawVerticalProgress(ctx, cx + 14, cy - 7, consuming
+    const consumptionRemaining = consuming
       ? getCustomerConsumptionRemainingFraction(
         c,
         indexes.serviceItemsByCustomerId.get(c.id) || [],
         state.restaurant?.gameTime,
       )
-      : null);
+      : null;
+    if (highTopSeated) {
+      drawVerticalProgress(ctx, chair.x + 16, chair.y + 6, consumptionRemaining, { height: 8 });
+    } else {
+      drawVerticalProgress(ctx, cx + 14, cy - 7, consumptionRemaining);
+    }
     ctx.restore();
   }
 

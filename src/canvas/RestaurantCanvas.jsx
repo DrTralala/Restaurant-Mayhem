@@ -17,6 +17,7 @@ import StaffDetailsPanel from '../components/StaffDetailsPanel';
 import { normaliseSelectionRect, selectFurnitureInRect } from './selection';
 import { getFixture, getFixtureDescriptor, getFixtureLabel } from '../data/fixtures';
 import { getPlaceable } from '../data/placeables';
+import { repositionHighTopCounterRecords } from '../data/highTopCounters';
 import { ITEM_PRICES } from '../data/items';
 import { snapPlacement, validateFixtureCopies, validateFixtureMoves } from '../simulation/placement';
 import { getServiceSlotPosition } from '../simulation/serviceItems';
@@ -113,7 +114,7 @@ export function drawCopyPreview(ctx, state, camera, copy) {
 
 function applyMovePreview(renderState, state, move) {
   if (!move) return renderState;
-  const preview = { ...renderState };
+  let preview = { ...renderState };
   const movesByCollection = new Map();
 
   for (const item of move.items || []) {
@@ -142,6 +143,7 @@ function applyMovePreview(renderState, state, move) {
     });
   }
 
+  if (movesByCollection.has('highTopCounters')) preview = repositionHighTopCounterRecords(preview);
   const projected = projectFixtureActors(state, preview, move.items || []);
   preview.customers = projected.customers;
 
@@ -185,6 +187,7 @@ function sameStaffMove(first, second) {
 
 const CANVAS_SELL_TYPES = new Set([
   'table',
+  'highTopCounter',
   'chair',
   'washStation',
   'staffAmenity',
@@ -1429,6 +1432,14 @@ export default function RestaurantCanvas({
             {getFixtureLabel(state, { type: menu.type, data: menuTable || menu.data }) || humaniseIdentifier(menu.type)}
           </div>
           <DishwasherControls state={state} station={selectedDishwasher} dispatch={dispatch} />
+          {menu.type === 'highTopCounter' && state.tables
+            .filter(table => table.highTopCounterId === menu.data.id)
+            .sort((a, b) => a.counterSeatIndex - b.counterSeatIndex)
+            .map(table => (
+              <div key={table.id} style={{ ...TYPOGRAPHY.secondary, color: '#ccc', padding: '2px 8px' }}>
+                Place {table.counterSeatIndex + 1}: {humaniseIdentifier(table.status)}
+              </div>
+            ))}
           {menu?.type === 'table' && menuTable && (
             <>
               <div style={{ ...TYPOGRAPHY.secondary, color: '#f1c66a', padding: '2px 8px' }}>

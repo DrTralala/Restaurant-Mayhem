@@ -1,4 +1,5 @@
 import { ITEM_PRICES, ITEM_SELL_RATIO } from '../data/items';
+import { isHighTopCounterInUse } from '../data/highTopCounters';
 import { getFixture, getFixtureDescriptor } from '../data/fixtures';
 import { isAmenityInUse } from '../data/staffAmenities';
 import { getPlaceable } from '../data/placeables';
@@ -67,6 +68,7 @@ function isDoorSaleSafe(state, door) {
 function isFixtureSaleSafe(state, fixture) {
   const data = fixture?.data;
   if (!data) return false;
+  if (fixture.type === 'highTopCounter') return !isHighTopCounterInUse(state, data.id);
 
   if (fixture.type === 'table') return data.status === 'empty';
   if (fixture.type === 'chair') {
@@ -98,6 +100,9 @@ export function getFixtureSaleEligibility(state, itemOrFixture) {
   }
 
   const price = getFixtureSalePrice(fixture);
+  if (fixture.data.highTopCounterId != null) {
+    return { valid: false, reason: 'built-in-fixture', fixture, price: null };
+  }
   if (price == null) {
     return {
       valid: false,
@@ -161,6 +166,14 @@ export function getSaleSelection(state, requestedItems) {
     }
   }
 
+  const counterIds = new Set(fixtures.filter(fixture => fixture.type === 'highTopCounter').map(fixture => fixture.id));
+  for (const table of state.tables || []) {
+    if (counterIds.has(table.highTopCounterId)) selectedTables.add(table.id);
+  }
+  for (const chair of state.chairs || []) {
+    if (counterIds.has(chair.highTopCounterId)) removedChairs.add(chair.id);
+  }
+
   return {
     fixtures,
     selectedTables,
@@ -188,6 +201,7 @@ export function getFixtureSaleExpectation(selection) {
   for (const chairId of selection.removedChairs || []) {
     add('chair', chairId);
   }
+  for (const tableId of selection.selectedTables || []) add('table', tableId);
 
   items.sort((left, right) => {
     if (left.type !== right.type) return left.type < right.type ? -1 : 1;
@@ -238,6 +252,7 @@ export function sellFixtures(state, requestedItems, expectedSale) {
       funds: state.restaurant.funds + selection.refund,
     },
     tables: (state.tables || []).filter(table => !selection.selectedTables.has(table.id)),
+    highTopCounters: (state.highTopCounters || []).filter(counter => !remove('highTopCounter', counter)),
     chairs: (state.chairs || []).filter(chair => !selection.removedChairs.has(chair.id)),
     doors: (state.doors || []).filter(door => !remove('door', door)),
     serviceTables: (state.serviceTables || []).filter(table => !remove('serviceTable', table)),

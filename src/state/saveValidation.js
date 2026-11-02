@@ -11,6 +11,7 @@ import { getCarriedServiceItemIds } from '../simulation/staffInventory';
 import { isStaffTaskRoleAllowed } from '../simulation/taskRoles';
 import { validateSavedNavigationGeometry } from './movementPersistence';
 import { SAVE_VERSION } from './saveVersion';
+import { validateHighTopCounters } from './highTopCounterValidation';
 import { validateCookbookState, validateDishOrderSnapshots } from '../simulation/cookbook';
 import { validateServiceContractsState } from '../simulation/serviceContracts';
 import { getOrderSnapshotSubtotal } from '../simulation/menuEconomy';
@@ -268,6 +269,7 @@ function validateRotation(record, path) {
 }
 
 function validateFixtureCollections(state) {
+  validateHighTopCounters(state);
   const tables = validateRecordCollection(state, 'tables');
   const chairs = validateRecordCollection(state, 'chairs');
   const kitchenStations = validateRecordCollection(state, 'kitchenStations');
