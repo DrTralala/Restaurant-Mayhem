@@ -883,8 +883,11 @@ it('shows an empty completed-day finances section below the revenue chart', () =
   const section = screen.getByRole('region', { name: 'Completed-day finances' });
   expect(within(section).getByRole('heading', { name: 'Completed-day finances' })).toBeInTheDocument();
   expect(within(section).getByText('No completed-day finances yet.')).toBeInTheDocument();
+  expect(within(section).queryByRole('region', { name: 'Recent finance summary' }))
+    .not.toBeInTheDocument();
   expect(within(section).getByText(
-    'Last seven recorded days. Profit is revenue minus payroll, not total cash movement; '
+    'Last seven recorded entries; day labels may be duplicated or non-consecutive. '
+    + 'Stored profit is revenue minus payroll, not total cash movement; '
     + 'other receipts and spending are excluded.',
   )).toBeInTheDocument();
   expect(within(section).queryByRole('list', { name: 'Recent daily finances' })).not.toBeInTheDocument();
@@ -1167,6 +1170,87 @@ it('gives simultaneously mounted revenue charts unique completed-finances descri
     .toHaveAttribute('id', firstId);
   expect(within(second).getByRole('region', { name: 'Completed-day finances' }))
     .toHaveAttribute('id', secondId);
+});
+
+it('shows a recent finance summary for the same seven completed records and rerenders without dispatching', () => {
+  const dailyHistory = [
+    { day: 1, revenue: 1000, payroll: 100, profit: 900 },
+    { day: 2, revenue: 100, payroll: 20, profit: 80 },
+    { day: 2, revenue: 0, payroll: 'missing', profit: 0 },
+    { day: 9, revenue: -5, payroll: 5, profit: -10 },
+    { day: 20, revenue: '25', payroll: 30 },
+    { day: 20, revenue: Number.NaN, payroll: 20, profit: 20 },
+    { day: 42, revenue: 25, payroll: Number.POSITIVE_INFINITY, profit: 25 },
+    { day: 42, payroll: 5, profit: -1 },
+  ];
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    restaurant: { ...baseState.restaurant, dailyRevenue: 777.25 },
+    dailyHistory,
+    staff: [{ id: 's1', salary: 150.25 }],
+  });
+  const { rerender } = render(<StatsPanel />);
+
+  const completed = screen.getByRole('region', { name: 'Completed-day finances' });
+  const summary = within(completed).getByRole('region', { name: 'Recent finance summary' });
+  expect(within(summary).getByText('Revenue total: $120 (4 of 7 records)')).toBeInTheDocument();
+  expect(within(summary).getByText('Payroll total: $80 (5 of 7 records)')).toBeInTheDocument();
+  expect(within(summary).getByText('Revenue minus payroll total: $114 (6 of 7 records)'))
+    .toBeInTheDocument();
+  expect(within(summary).getByText('Average recorded revenue minus payroll: $19 (6 of 7 records)'))
+    .toBeInTheDocument();
+  expect(within(summary).getByText('Positive revenue-minus-payroll records: 3 of 6'))
+    .toBeInTheDocument();
+  expect(summary).not.toHaveTextContent('777.25');
+  expect(summary).not.toHaveTextContent('$900');
+
+  const list = within(completed).getByRole('list', { name: 'Recent daily finances' });
+  expect(within(list).getAllByRole('listitem')).toHaveLength(7);
+  expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Day 42');
+  expect(within(list).queryByText('Day 1')).not.toBeInTheDocument();
+  expect(screen.getByRole('img', { name: 'Daily revenue for the last seven recorded days' }))
+    .toBeInTheDocument();
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [{ day: 43, revenue: 20, payroll: 5, profit: 15 }],
+  });
+  rerender(<StatsPanel />);
+
+  const updated = within(screen.getByRole('region', { name: 'Completed-day finances' }))
+    .getByRole('region', { name: 'Recent finance summary' });
+  expect(within(updated).getByText('Revenue total: $20 (1 of 1 records)')).toBeInTheDocument();
+  expect(within(updated).queryByText('Revenue total: $120 (4 of 7 records)'))
+    .not.toBeInTheDocument();
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+});
+
+it('does not infer missing stored profit and formats aggregate overflow as unavailable', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    dailyHistory: [
+      { day: 1, revenue: Number.MAX_VALUE, payroll: Number.MAX_VALUE },
+      { day: 2, revenue: Number.MAX_VALUE, payroll: Number.MAX_VALUE, profit: '0' },
+    ],
+  });
+  render(<StatsPanel />);
+
+  const summary = within(screen.getByRole('region', { name: 'Completed-day finances' }))
+    .getByRole('region', { name: 'Recent finance summary' });
+  expect(within(summary).getByText('Revenue total: Unavailable (2 of 2 records)'))
+    .toBeInTheDocument();
+  expect(within(summary).getByText('Payroll total: Unavailable (2 of 2 records)'))
+    .toBeInTheDocument();
+  expect(within(summary).getByText('Revenue minus payroll total: Unavailable (0 of 2 records)'))
+    .toBeInTheDocument();
+  expect(within(summary).getByText('Average recorded revenue minus payroll: Unavailable (0 of 2 records)'))
+    .toBeInTheDocument();
+  expect(within(summary).getByText(
+    'Positive revenue-minus-payroll records: Unavailable (0 of 0 recorded profit values)',
+  )).toBeInTheDocument();
+  expect(within(summary).queryByText(/Revenue minus payroll total: \$0/))
+    .not.toBeInTheDocument();
 });
 
 function dirtState(messCount, overrides = {}) {

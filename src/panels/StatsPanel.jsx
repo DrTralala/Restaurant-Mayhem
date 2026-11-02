@@ -11,6 +11,7 @@ import { getDailyPayroll, isRestaurantOpen } from '../simulation/clock';
 import { DIRT_REPUTATION_THRESHOLD, getDirtReputationLossPerMinute } from '../simulation/dirt';
 import { getQueuePartyCount, QUEUE_PARTY_CAPACITY } from '../simulation/customerQueue';
 import { getRevenueChart } from './revenueChart';
+import { getRecentFinanceSummary } from './recentFinanceSummary';
 import { isCareerDecisionPending } from '../simulation/careerRun';
 import TableSeatingHolds from './TableSeatingHolds';
 import { getTableLocatePoint } from '../canvas/tableLocatePoint';
@@ -96,6 +97,7 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
   const latestPartyReviews = partyReviewHistory.slice(-10).reverse();
   const recentFinances = (Array.isArray(state.dailyHistory) ? state.dailyHistory : [])
     .slice(-7).reverse();
+  const recentFinanceSummary = getRecentFinanceSummary(state.dailyHistory);
   const service = getServiceSummary(state);
   const cleanup = getCleanupSummary(state);
   const queuePartyCount = getQueuePartyCount(state.queue);
@@ -242,8 +244,42 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
             ))}
           </ol>
         )}
+        {recentFinanceSummary.recordCount > 0 && (
+          <section aria-label="Recent finance summary" style={{ marginTop: 12 }}>
+            <h5 style={{ ...TYPOGRAPHY.secondary, margin: '10px 0 8px' }}>
+              Recent finance summary
+            </h5>
+            <div style={{ ...TYPOGRAPHY.secondary, display: 'grid', gap: 8 }}>
+              <div style={statBox}>
+                Revenue total: {formatFunds(recentFinanceSummary.revenue.total)}
+                {' '}({recentFinanceSummary.revenue.count} of {recentFinanceSummary.recordCount} records)
+              </div>
+              <div style={statBox}>
+                Payroll total: {formatFunds(recentFinanceSummary.payroll.total)}
+                {' '}({recentFinanceSummary.payroll.count} of {recentFinanceSummary.recordCount} records)
+              </div>
+              <div style={statBox}>
+                Revenue minus payroll total: {formatFunds(recentFinanceSummary.profit.total)}
+                {' '}({recentFinanceSummary.profit.count} of {recentFinanceSummary.recordCount} records)
+              </div>
+              <div style={statBox}>
+                Average recorded revenue minus payroll: {formatFunds(recentFinanceSummary.profit.average)}
+                {' '}({recentFinanceSummary.profit.count} of {recentFinanceSummary.recordCount} records)
+              </div>
+              <div style={statBox}>
+                Positive revenue-minus-payroll records: {recentFinanceSummary.profit.count === 0
+                  ? 'Unavailable (0 of 0 recorded profit values)'
+                  : `${recentFinanceSummary.profit.positiveCount} of ${recentFinanceSummary.profit.count}`}
+              </div>
+            </div>
+            <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+              Only finite stored values are included; missing or invalid values are excluded,
+              not treated as zero. Profit and its average use stored profit values only.
+            </p>
+          </section>
+        )}
         <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
-          Last seven recorded days. Profit is revenue minus payroll, not total cash movement; other receipts and spending are excluded.
+          Last seven recorded entries; day labels may be duplicated or non-consecutive. Stored profit is revenue minus payroll, not total cash movement; other receipts and spending are excluded.
         </p>
       </section>
 
