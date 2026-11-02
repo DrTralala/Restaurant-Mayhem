@@ -86,9 +86,9 @@ describe('additive v10 feature persistence', () => {
     });
   });
 
-  it('rejects a pre-Fish Bisque seven-entry schema-2 save instead of auto-filling it', () => {
+  it('rejects a previous eight-entry schema-2 save instead of auto-filling Baked Eggs', () => {
     const old = createInitialState();
-    delete old.cookbook.entries['fish-bisque'];
+    delete old.cookbook.entries['baked-eggs'];
     expect(() => validateSavedState(old)).toThrow(/Invalid cookbook/);
     expect(() => hydrateState(old, createInitialState())).toThrow(/Invalid cookbook/);
 

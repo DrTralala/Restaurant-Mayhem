@@ -336,7 +336,9 @@ describe('Blender recipe gameplay', () => {
     expect(state.cookbook.schemaVersion).toBe(2);
     expect(state.cookbook.entries.gazpacho).toMatchObject({ discovered: false, paidPortions: 0, perk: null });
     expect(state.cookbook.entries['fish-bisque']).toMatchObject({ discovered: false, paidPortions: 0, perk: null });
+    expect(state.cookbook.entries['baked-eggs']).toMatchObject({ discovered: false, paidPortions: 0, perk: null });
     expect(state.dishes.some(dish => dish.cookbookId === 'gazpacho')).toBe(false);
     expect(state.dishes.some(dish => dish.cookbookId === 'fish-bisque')).toBe(false);
+    expect(state.dishes.some(dish => dish.cookbookId === 'baked-eggs')).toBe(false);
   });
 });

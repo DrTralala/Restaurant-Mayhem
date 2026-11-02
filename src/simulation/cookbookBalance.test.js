@@ -35,6 +35,18 @@ function blenderPair({ gazpachoPrice = 16, fishBisquePrice = 20,
   ] };
 }
 
+function ovenPair({ eggsPrice = 15, roastPrice = 18 } = {}) {
+  const cookbook = createCookbookState();
+  cookbook.entries['baked-eggs'] = { ...cookbook.entries['baked-eggs'], discovered: true,
+    menuSettings: { ...cookbook.entries['baked-eggs'].menuSettings, price: eggsPrice } };
+  cookbook.entries['roast-vegetables'] = { ...cookbook.entries['roast-vegetables'], discovered: true,
+    menuSettings: { ...cookbook.entries['roast-vegetables'].menuSettings, price: roastPrice } };
+  return { cookbook, unlockedDrinkIds: [], dishes: [
+    { id: 'baked-eggs-dish', cookbookId: 'baked-eggs' },
+    { id: 'roast-vegetables-dish', cookbookId: 'roast-vegetables' },
+  ] };
+}
+
 it('cheeseToastRusherChoice: speed has higher normalised probability than appeal', () => {
   const speed = comparison('rusher', 'speed');
   const appeal = comparison('rusher', 'appeal');
@@ -91,6 +103,46 @@ it.each([
     .toBeGreaterThan(getBasketWeight(fishBisque, customer('rusher')));
   expect(getBasketWeight(fishBisque, customer('influencer')))
     .toBeGreaterThan(getBasketWeight(gazpacho, customer('influencer')));
+});
+
+it('bakedEggsBudget: Baked Eggs alone is affordable among canonical Oven recipes at budgets $15-17', () => {
+  const cookbook = createCookbookState();
+  for (const id of ['baked-eggs', 'roast-vegetables', 'baked-potato']) {
+    cookbook.entries[id].discovered = true;
+  }
+  const state = { cookbook, unlockedDrinkIds: [], dishes: [
+    { id: 'baked-eggs-dish', cookbookId: 'baked-eggs' },
+    { id: 'roast-vegetables-dish', cookbookId: 'roast-vegetables' },
+    { id: 'baked-potato-dish', cookbookId: 'baked-potato' },
+  ] };
+  for (const spendingBudget of [15, 16, 17]) {
+    const baskets = buildAffordableBaskets(state, {
+      archetype: 'rusher', spendingTier: 'budget', spendingBudget,
+    });
+    expect(baskets.map(basket => [basket.dish.cookbookId, basket.price]))
+      .toEqual([['baked-eggs', 15]]);
+  }
+});
+
+it.each([
+  ['default prices', 15, 18],
+  ['equal $18 prices', 18, 18],
+])('bakedEggsTradeOff: %s favours rushers but not foodies or influencers', (_label, eggsPrice, roastPrice) => {
+  const state = ovenPair({ eggsPrice, roastPrice });
+  const weights = archetype => {
+    const customer = { archetype, spendingTier: 'value', spendingBudget: 45 };
+    const baskets = buildAffordableBaskets(state, customer);
+    expect(baskets.map(basket => [basket.dish.cookbookId, basket.price])).toEqual([
+      ['baked-eggs', eggsPrice], ['roast-vegetables', roastPrice],
+    ]);
+    return baskets.map(basket => getBasketWeight(basket, customer));
+  };
+  const [rusherEggs, rusherRoast] = weights('rusher');
+  const [foodieEggs, foodieRoast] = weights('foodie');
+  const [influencerEggs, influencerRoast] = weights('influencer');
+  expect(rusherEggs).toBeGreaterThan(rusherRoast);
+  expect(foodieEggs).toBeLessThan(foodieRoast);
+  expect(influencerEggs).toBeLessThan(influencerRoast);
 });
 
 it('blenderBudget: Fish Bisque is excluded below $20 and included at its $20 default price', () => {

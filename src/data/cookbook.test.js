@@ -3,12 +3,13 @@ import { COOKBOOK_RECIPES, getCookbookRecipe, MASTERY_PORTION_THRESHOLD } from '
 import { BASES, BASE_EQUIPMENT_MAP, METHODS } from './recipes';
 
 describe('authored catalogue', () => {
-  it('provides the eight deterministic equipment and discovery choices', () => {
+  it('provides the nine deterministic equipment and discovery choices', () => {
     expect(COOKBOOK_RECIPES.map(({ id, base, method, requiredEquipmentId, prepTime, popularity, price }) =>
       [id, base, method, requiredEquipmentId, prepTime, popularity, price])).toEqual([
       ['toast', 'Bread', 'Toasted', 'eq1', 60, 50, 12],
       ['cheese-toast', 'Cheese', 'Toasted', 'eq1', 90, 65, 14],
       ['roast-vegetables', 'Vegetables', 'Roasted', 'eq2', 150, 70, 18],
+      ['baked-eggs', 'Eggs', 'Baked', 'eq2', 120, 60, 15],
       ['baked-potato', 'Potato', 'Baked', 'eq2', 210, 82, 22],
       ['fries', 'Potato', 'Fried', 'eq3', 105, 55, 10],
       ['fried-chicken', 'Chicken', 'Fried', 'eq3', 165, 78, 20],
@@ -21,6 +22,12 @@ describe('authored catalogue', () => {
       price: 20, quality: 1, cuisine: 'generic', requirements: [
         { type: 'equipment', equipmentId: 'eq4' },
         { type: 'paidPortions', cookbookId: 'gazpacho', count: 5 },
+      ] });
+    expect(getCookbookRecipe('baked-eggs')).toMatchObject({ name: 'Baked Eggs', base: 'Eggs',
+      method: 'Baked', requiredEquipmentId: 'eq2', prepTime: 120, popularity: 60,
+      price: 15, quality: 1, cuisine: 'generic', requirements: [
+        { type: 'equipment', equipmentId: 'eq2' },
+        { type: 'paidPortions', cookbookId: 'roast-vegetables', count: 3 },
       ] });
     expect(MASTERY_PORTION_THRESHOLD).toBe(15);
     expect(getCookbookRecipe('missing')).toBeNull();

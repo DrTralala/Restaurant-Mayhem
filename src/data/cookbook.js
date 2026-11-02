@@ -10,6 +10,8 @@ export const COOKBOOK_RECIPES = Object.freeze([
     prepTime: 90, popularity: 65, price: 14, requirements: [portions('toast', 3)] },
   { id: 'roast-vegetables', name: 'Roast Vegetables', base: 'Vegetables', method: 'Roasted', requiredEquipmentId: 'eq2',
     prepTime: 150, popularity: 70, price: 18, requirements: [equipment('eq2')] },
+  { id: 'baked-eggs', name: 'Baked Eggs', base: 'Eggs', method: 'Baked', requiredEquipmentId: 'eq2',
+    prepTime: 120, popularity: 60, price: 15, requirements: [equipment('eq2'), portions('roast-vegetables', 3)] },
   { id: 'baked-potato', name: 'Baked Potato', base: 'Potato', method: 'Baked', requiredEquipmentId: 'eq2',
     prepTime: 210, popularity: 82, price: 22, requirements: [equipment('eq2'), portions('roast-vegetables', 5)] },
   { id: 'fries', name: 'Crispy Fries', base: 'Potato', method: 'Fried', requiredEquipmentId: 'eq3',

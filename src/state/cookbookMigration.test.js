@@ -88,6 +88,8 @@ describe('migrateLegacyCookbook', () => {
       menuSettings: { name: 'Gazpacho', price: 16, quality: 1 } });
     expect(migrated.cookbook.entries['fish-bisque']).toEqual({ discovered: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Fish Bisque', price: 20, quality: 1 } });
+    expect(migrated.cookbook.entries['baked-eggs']).toEqual({ discovered: false, paidPortions: 0, perk: null,
+      menuSettings: { name: 'Baked Eggs', price: 15, quality: 1 } });
     expect(raw.cookbook.schemaVersion).toBe(1);
     expect(raw.cookbook.entries).not.toHaveProperty('gazpacho');
     expect(migrated.other).toBe(raw.other);
@@ -145,6 +147,8 @@ describe('legacy v1 saves through persistence', () => {
     expect(loaded.cookbook.lastAppliedPaidVisitSequence).toBe(7);
     expect(loaded.cookbook.entries.gazpacho).toEqual({ discovered: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Gazpacho', price: 16, quality: 1 } });
+    expect(loaded.cookbook.entries['baked-eggs']).toEqual({ discovered: false, paidPortions: 0, perk: null,
+      menuSettings: { name: 'Baked Eggs', price: 15, quality: 1 } });
     expect(loaded.customers[0].dishOrderSnapshot).toEqual(originalSnapshot);
     // The source save is never mutated by migration.
     expect(raw.cookbook.schemaVersion).toBe(1);

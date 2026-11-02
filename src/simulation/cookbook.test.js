@@ -114,14 +114,16 @@ describe('Blender recipe', () => {
     return state;
   }
 
-  it('constructs schema 2 with undiscovered default Blender recipe entries', () => {
+  it('constructs schema 2 with undiscovered default Oven and Blender recipe entries', () => {
     const cookbook = createCookbookState(3);
     expect(cookbook).toMatchObject({ schemaVersion: 2, lastAppliedPaidVisitSequence: 3 });
-    expect(Object.keys(cookbook.entries)).toHaveLength(8);
+    expect(Object.keys(cookbook.entries)).toHaveLength(9);
     expect(cookbook.entries.gazpacho).toEqual({ discovered: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Gazpacho', price: 16, quality: 1 } });
     expect(cookbook.entries['fish-bisque']).toEqual({ discovered: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Fish Bisque', price: 20, quality: 1 } });
+    expect(cookbook.entries['baked-eggs']).toEqual({ discovered: false, paidPortions: 0, perk: null,
+      menuSettings: { name: 'Baked Eggs', price: 15, quality: 1 } });
     expect(() => validateCookbookState({ ...fixture(), cookbook, paidVisitSequence: 3 })).not.toThrow();
   });
 
