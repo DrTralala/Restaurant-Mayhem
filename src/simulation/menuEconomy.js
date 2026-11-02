@@ -306,6 +306,7 @@ function affordabilityFromBaskets(state, menuBaskets) {
   let dishTotal = 0;
   let anyOrderTotal = 0;
   let budgetTotal = 0;
+  const affordabilityByTier = {};
   for (const [tier, [min, max]] of Object.entries(SPENDING_TIER_RANGES)) {
     let dishCount = 0;
     let anyCount = 0;
@@ -315,6 +316,10 @@ function affordabilityFromBaskets(state, menuBaskets) {
       if (baskets.some(basket => basket.dish)) dishCount += 1;
     }
     const tierBudgetTotal = max - min + 1;
+    affordabilityByTier[tier] = {
+      dishShare: dishCount / tierBudgetTotal,
+      anyOrderShare: anyCount / tierBudgetTotal,
+    };
     dishShare += probabilities[tier] * dishCount / tierBudgetTotal;
     anyOrderShare += probabilities[tier] * anyCount / tierBudgetTotal;
     dishTotal += dishCount;
@@ -322,20 +327,24 @@ function affordabilityFromBaskets(state, menuBaskets) {
     budgetTotal += tierBudgetTotal;
   }
   return {
+    affordabilityByTier,
     dishShare: dishTotal === budgetTotal ? 1 : Math.min(1, Math.max(0, dishShare)),
     anyOrderShare: anyOrderTotal === budgetTotal ? 1 : Math.min(1, Math.max(0, anyOrderShare)),
   };
 }
 
 export function getMenuAffordabilitySummary(state) {
-  return affordabilityFromBaskets(state, buildMenuBaskets(state));
+  const { dishShare, anyOrderShare } = affordabilityFromBaskets(state, buildMenuBaskets(state));
+  return { dishShare, anyOrderShare };
 }
 
 export function getMenuAnalysis(state, priceOverride = null) {
   const baskets = buildMenuBaskets(state, undefined, priceOverride);
   const { demand, expectedGrossPer100 } = estimateDemandFromBaskets(state, baskets);
+  const { affordabilityByTier, dishShare, anyOrderShare } = affordabilityFromBaskets(state, baskets);
   return {
-    affordability: affordabilityFromBaskets(state, baskets),
+    affordability: { dishShare, anyOrderShare },
+    affordabilityByTier,
     demand,
     hasAvailableMenu: baskets.length > 0,
     expectedGrossPer100,

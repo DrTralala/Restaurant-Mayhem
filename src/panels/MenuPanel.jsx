@@ -248,6 +248,7 @@ export default function MenuPanel({ readOnly = false }) {
             getPreviewPresentation={price => createMenuPricePreviewPresentation({
               state, kind: 'dish', id: dish.id, name: dish.name, price,
               currentGrossPer100: analysis.expectedGrossPer100,
+              currentAffordabilityByTier: analysis.affordabilityByTier,
             })}
             renderControlRow={priceInput => (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -382,6 +383,7 @@ export default function MenuPanel({ readOnly = false }) {
                   getPreviewPresentation={price => createMenuPricePreviewPresentation({
                     state, kind: 'drink', id: resolvedDrink.id, name: resolvedDrink.name,
                     price, currentGrossPer100: analysis.expectedGrossPer100,
+                    currentAffordabilityByTier: analysis.affordabilityByTier,
                   })}
                   renderControlRow={priceInput => (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>

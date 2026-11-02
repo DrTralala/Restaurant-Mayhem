@@ -15,8 +15,10 @@ const menu = {
 describe('MenuPricePreview', () => {
   it('shows the item price and current-versus-draft whole-menu gross with caveats', () => {
     const currentGrossPer100 = 456.789;
+    const currentAffordabilityByTier = getMenuAnalysis(menu).affordabilityByTier;
     const presentation = createMenuPricePreviewPresentation({
-      state: menu, kind: 'dish', id: 'toast', name: 'Toast', price: 19, currentGrossPer100,
+      state: menu, kind: 'dish', id: 'toast', name: 'Toast', price: 19,
+      currentGrossPer100, currentAffordabilityByTier,
     });
     render(
       <MenuPricePreview presentation={presentation} />,
@@ -34,7 +36,46 @@ describe('MenuPricePreview', () => {
     expect(within(preview).getByText(
       'Not profit. Excludes service capacity and booked contracts; actual sales are not guaranteed.',
     )).toBeInTheDocument();
+    expect(within(preview).getByText(
+      'Affordable integer-budget-point shares by tier (current → draft).',
+    )).toBeInTheDocument();
+    expect(within(preview).getByText(
+      'These shares describe affordable integer budget points, not predicted purchases.',
+    )).toBeInTheDocument();
     expect(within(preview).queryByText(/optimal|recommended price/i)).not.toBeInTheDocument();
+  });
+
+  it('shows current-to-draft tier percentages for food and drink price overrides', () => {
+    const dishMenu = {
+      restaurant: { reputation: 1 },
+      dishes: [{ id: 'toast', name: 'Toast', price: 18, quality: 2, popularity: 45, prepTime: 60 }],
+      unlockedDrinkIds: [],
+    };
+    const drinkMenu = {
+      restaurant: { reputation: 1 },
+      dishes: [],
+      unlockedDrinkIds: ['water'],
+      drinkOverrides: { water: { price: 18 } },
+    };
+    const rowsFor = (state, kind, id) => {
+      const current = getMenuAnalysis(state);
+      return createMenuPricePreviewPresentation({
+        state, kind, id, name: kind === 'dish' ? 'Toast' : 'Water', price: 19,
+        currentGrossPer100: current.expectedGrossPer100,
+        currentAffordabilityByTier: current.affordabilityByTier,
+      }).affordabilityRows;
+    };
+
+    expect(rowsFor(dishMenu, 'dish', 'toast')).toEqual([
+      { tier: 'Budget', dishCurrent: '7.7%', dishDraft: '0%', anyOrderCurrent: '7.7%', anyOrderDraft: '0%' },
+      { tier: 'Value', dishCurrent: '90.3%', dishDraft: '87.1%', anyOrderCurrent: '90.3%', anyOrderDraft: '87.1%' },
+      { tier: 'Premium', dishCurrent: '100%', dishDraft: '100%', anyOrderCurrent: '100%', anyOrderDraft: '100%' },
+    ]);
+    expect(rowsFor(drinkMenu, 'drink', 'water')).toEqual([
+      { tier: 'Budget', dishCurrent: '0%', dishDraft: '0%', anyOrderCurrent: '7.7%', anyOrderDraft: '0%' },
+      { tier: 'Value', dishCurrent: '0%', dishDraft: '0%', anyOrderCurrent: '90.3%', anyOrderDraft: '87.1%' },
+      { tier: 'Premium', dishCurrent: '0%', dishDraft: '0%', anyOrderCurrent: '100%', anyOrderDraft: '100%' },
+    ]);
   });
 
   it('keeps a suspended item out of both current and draft whole-menu gross', () => {
@@ -59,6 +100,13 @@ describe('MenuPricePreview', () => {
       currentAmount: '$456.79',
       draftLabel: 'Draft whole-menu gross per 100 hypothetical walk-in guests',
       draftAmount: '$321.00',
+      affordabilityHeading: 'Affordable integer-budget-point shares by tier (current → draft).',
+      affordabilityRows: [
+        { tier: 'Budget', dishCurrent: '7.7%', dishDraft: '0%', anyOrderCurrent: '7.7%', anyOrderDraft: '0%' },
+        { tier: 'Value', dishCurrent: '90.3%', dishDraft: '87.1%', anyOrderCurrent: '90.3%', anyOrderDraft: '87.1%' },
+        { tier: 'Premium', dishCurrent: '100%', dishDraft: '100%', anyOrderCurrent: '100%', anyOrderDraft: '100%' },
+      ],
+      affordabilityCaveat: 'These shares describe affordable integer budget points, not predicted purchases.',
       caveat: 'Not profit. Excludes service capacity and booked contracts; actual sales are not guaranteed.',
     };
     const view = render(<MenuPricePreview presentation={presentation} inactive />);
@@ -69,6 +117,8 @@ describe('MenuPricePreview', () => {
     expect(retained).toHaveAttribute('inert');
     expect(retained).toHaveStyle({ visibility: 'hidden', pointerEvents: 'none' });
     expect(retained).toHaveTextContent('Toast · Draft price: $19');
+    expect(retained).toHaveTextContent('Budget: dish-containing orders 7.7% → 0%; any orders 7.7% → 0%');
+    expect(retained).toHaveTextContent('These shares describe affordable integer budget points, not predicted purchases.');
     expect(retained).toHaveTextContent('Not profit. Excludes service capacity and booked contracts; actual sales are not guaranteed.');
     expect(retained.querySelector('[aria-live], [role="status"], [role="alert"]')).toBeNull();
     expect(retained.querySelector('a[href], button, input, select, textarea, [tabindex]')).toBeNull();

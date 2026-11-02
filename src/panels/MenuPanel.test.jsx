@@ -1187,6 +1187,44 @@ describe('MenuPanel drinks', () => {
       expect(screen.queryByRole('group', { name: 'Price preview for Water' })).not.toBeInTheDocument();
     });
 
+    it('shows current-to-draft tier affordability for food and drink edits without dispatching', () => {
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      const state = {
+        dishes: [{ id: 'toast', name: 'Toast', price: 12, prepTime: 60, quality: 2, popularity: 45 }],
+        recipeSlots: 1, equipment: [], unlockedDrinkIds: ['water'],
+        drinkOverrides: { water: { price: 8, quality: 3 } }, upgrades: [],
+        restaurant: { funds: 200, reputation: 3 },
+      };
+      useGameState.mockReturnValue(state);
+      const view = render(<MenuPanel />);
+
+      fireEvent.change(screen.getByLabelText('Toast price'), { target: { value: '19' } });
+      const dishPreview = screen.getByRole('group', { name: 'Price preview for Toast' });
+      expect(within(dishPreview).getByLabelText('Budget tier affordability'))
+        .toHaveTextContent('Budget: dish-containing orders 53.8% → 0%; any orders 84.6% → 84.6%');
+      expect(within(dishPreview).getByLabelText('Value tier affordability'))
+        .toHaveTextContent('Value: dish-containing orders 100% → 87.1%; any orders 100% → 100%');
+      expect(dispatch).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(screen.getByLabelText('Toast price'), { key: 'Escape' });
+      const waterOnly = {
+        ...state,
+        dishes: [],
+        drinkOverrides: { water: { price: 8, quality: 3 } },
+      };
+      useGameState.mockReturnValue(waterOnly);
+      view.rerender(<MenuPanel />);
+
+      fireEvent.change(screen.getByLabelText('Water price'), { target: { value: '19' } });
+      const drinkPreview = screen.getByRole('group', { name: 'Price preview for Water' });
+      expect(within(drinkPreview).getByLabelText('Budget tier affordability'))
+        .toHaveTextContent('Budget: dish-containing orders 0% → 0%; any orders 84.6% → 0%');
+      expect(within(drinkPreview).getByLabelText('Value tier affordability'))
+        .toHaveTextContent('Value: dish-containing orders 0% → 0%; any orders 100% → 87.1%');
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
     it('keeps suspended-item price previews neutral for walk-in gross', () => {
       const state = pricedMenu();
       state.restaurant.suspendedDishIds = ['cookbook-toast'];

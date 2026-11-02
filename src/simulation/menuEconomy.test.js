@@ -873,21 +873,148 @@ describe('combined menu analysis', () => {
   };
 
   it.each(Object.entries(fixtures))('pins existing helper results for the %s menu', (_name, fixture) => {
-    const { expectedGrossPer100, ...existingAnalysis } = getMenuAnalysis(fixture.state);
+    const { expectedGrossPer100, affordabilityByTier, ...existingAnalysis } = getMenuAnalysis(fixture.state);
     expect(existingAnalysis).toEqual(fixture.expected);
+    expect(affordabilityByTier).toBeDefined();
     expect(Number.isFinite(expectedGrossPer100)).toBe(true);
     expect(expectedGrossPer100).toBeGreaterThanOrEqual(0);
   });
 
   it.each(Object.entries(fixtures))('matches the public wrappers for the %s menu', (_name, { state }) => {
-    const { expectedGrossPer100, ...existingAnalysis } = getMenuAnalysis(state);
+    const { expectedGrossPer100, affordabilityByTier, ...existingAnalysis } = getMenuAnalysis(state);
     expect(existingAnalysis).toEqual({
       affordability: getMenuAffordabilitySummary(state),
       demand: estimateMenuDemand(state),
       hasAvailableMenu: hasAvailableWalkInMenu(state),
     });
+    expect(affordabilityByTier).toEqual(getMenuAnalysis(state).affordabilityByTier);
     expect(Number.isFinite(expectedGrossPer100)).toBe(true);
     expect(expectedGrossPer100).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('tier affordability analysis', () => {
+  const expectedZeroCoverage = {
+    budget: { dishShare: 0, anyOrderShare: 0 },
+    value: { dishShare: 0, anyOrderShare: 0 },
+    premium: { dishShare: 0, anyOrderShare: 0 },
+  };
+
+  it('reports each tier while keeping the weighted aggregate and summary shape unchanged', () => {
+    const state = singleDishState(18);
+    const analysis = getMenuAnalysis(state);
+
+    expect(analysis.affordabilityByTier).toEqual({
+      budget: { dishShare: 1 / 13, anyOrderShare: 1 / 13 },
+      value: { dishShare: 28 / 31, anyOrderShare: 28 / 31 },
+      premium: { dishShare: 1, anyOrderShare: 1 },
+    });
+    expect(analysis.affordability).toEqual({
+      dishShare: 0.70 / 13 + 0.25 * 28 / 31 + 0.05,
+      anyOrderShare: 0.70 / 13 + 0.25 * 28 / 31 + 0.05,
+    });
+    expect(getMenuAffordabilitySummary(state)).toEqual({
+      dishShare: analysis.affordability.dishShare,
+      anyOrderShare: analysis.affordability.anyOrderShare,
+    });
+
+    const draft = getMenuAnalysis(state, { kind: 'dish', id: 'test', price: 19 });
+    expect(draft.affordabilityByTier).toEqual({
+      budget: { dishShare: 0, anyOrderShare: 0 },
+      value: { dishShare: 27 / 31, anyOrderShare: 27 / 31 },
+      premium: { dishShare: 1, anyOrderShare: 1 },
+    });
+    expect(state.dishes[0].price).toBe(18);
+  });
+
+  it.each([
+    [6, {
+      budget: { dishShare: 1, anyOrderShare: 1 },
+      value: { dishShare: 1, anyOrderShare: 1 },
+      premium: { dishShare: 1, anyOrderShare: 1 },
+    }],
+    [15, {
+      budget: { dishShare: 4 / 13, anyOrderShare: 4 / 13 },
+      value: { dishShare: 1, anyOrderShare: 1 },
+      premium: { dishShare: 1, anyOrderShare: 1 },
+    }],
+    [18, {
+      budget: { dishShare: 1 / 13, anyOrderShare: 1 / 13 },
+      value: { dishShare: 28 / 31, anyOrderShare: 28 / 31 },
+      premium: { dishShare: 1, anyOrderShare: 1 },
+    }],
+    [35, {
+      budget: { dishShare: 0, anyOrderShare: 0 },
+      value: { dishShare: 11 / 31, anyOrderShare: 11 / 31 },
+      premium: { dishShare: 1, anyOrderShare: 1 },
+    }],
+    [45, {
+      budget: { dishShare: 0, anyOrderShare: 0 },
+      value: { dishShare: 1 / 31, anyOrderShare: 1 / 31 },
+      premium: { dishShare: 76 / 86, anyOrderShare: 76 / 86 },
+    }],
+    [120, {
+      budget: { dishShare: 0, anyOrderShare: 0 },
+      value: { dishShare: 0, anyOrderShare: 0 },
+      premium: { dishShare: 1 / 86, anyOrderShare: 1 / 86 },
+    }],
+  ])('counts inclusive integer budget points at the $%s tier edges', (price, expected) => {
+    expect(getMenuAnalysis(singleDishState(price)).affordabilityByTier).toEqual(expected);
+  });
+
+  it('returns zero for empty menus and full any-order coverage for a drink-only menu', () => {
+    expect(getMenuAnalysis({
+      restaurant: { reputation: 3 }, dishes: [], unlockedDrinkIds: [],
+    }).affordabilityByTier).toEqual(expectedZeroCoverage);
+
+    const drinksOnly = {
+      restaurant: { reputation: 3 },
+      dishes: [],
+      unlockedDrinkIds: ['water'],
+      drinkOverrides: { water: { price: 1 } },
+    };
+    expect(getMenuAnalysis(drinksOnly).affordabilityByTier).toEqual({
+      budget: { dishShare: 0, anyOrderShare: 1 },
+      value: { dishShare: 0, anyOrderShare: 1 },
+      premium: { dishShare: 0, anyOrderShare: 1 },
+    });
+  });
+
+  it('keeps suspended and reached-threshold dishes excluded from current and draft tiers', () => {
+    const base = {
+      ...singleDishState(18),
+      restaurant: {
+        reputation: 3,
+        suspendedDishIds: ['test'],
+        menuSalesThresholds: [{ kind: 'dish', id: 'test', threshold: 1 }],
+        day: 1,
+      },
+      menuSales: { day: 1, dishes: [{ key: 'test', count: 1 }], drinks: [] },
+    };
+    for (const state of [base, {
+      ...base,
+      restaurant: { ...base.restaurant, suspendedDishIds: [] },
+    }]) {
+      expect(getMenuAnalysis(state).affordabilityByTier).toEqual(expectedZeroCoverage);
+      expect(getMenuAnalysis(state, { kind: 'dish', id: 'test', price: 6 }).affordabilityByTier)
+        .toEqual(expectedZeroCoverage);
+    }
+  });
+
+  it('keeps the source state unchanged while analysing a frozen price draft', () => {
+    const state = {
+      restaurant: Object.freeze({ reputation: 1 }),
+      dishes: Object.freeze([Object.freeze({
+        id: 'test', name: 'Test', price: 18, quality: 1, popularity: 50, prepTime: 60,
+      })]),
+      unlockedDrinkIds: Object.freeze([]),
+    };
+    const before = structuredClone(state);
+    const draft = getMenuAnalysis(state, { kind: 'dish', id: 'test', price: 19 });
+
+    expect(draft.affordabilityByTier.budget.dishShare).toBe(0);
+    expect(draft.affordabilityByTier.value.dishShare).toBe(27 / 31);
+    expect(state).toEqual(before);
   });
 });
 
