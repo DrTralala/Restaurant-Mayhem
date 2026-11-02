@@ -235,7 +235,7 @@ describe('MenuPanel drinks', () => {
     render(<MenuPanel />);
     fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
     expect(screen.getByRole('heading', { name: 'Cookbook' })).toBeInTheDocument();
-    expect(screen.getAllByRole('article')).toHaveLength(7);
+    expect(screen.getAllByRole('article')).toHaveLength(8);
     expect(screen.queryByRole('region', { name: 'Menu affordability' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
     expect(screen.getByRole('button', { name: '+ New dish' })).toBeEnabled();

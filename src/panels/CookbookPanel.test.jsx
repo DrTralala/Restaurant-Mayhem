@@ -39,9 +39,9 @@ describe('CookbookPanel', () => {
     useDispatch.mockReturnValue(dispatch);
   });
 
-  it('shows all seven named recipes, numeric locked requirements and starter progress', () => {
+  it('shows all eight named recipes, numeric locked requirements and starter progress', () => {
     render(<CookbookPanel onClose={vi.fn()} />);
-    expect(screen.getAllByRole('article')).toHaveLength(7);
+    expect(screen.getAllByRole('article')).toHaveLength(8);
     const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
     expect(toast.getByText('On menu')).toBeInTheDocument();
     expect(toast.getByText('Paid portions: 0/15')).toBeInTheDocument();
@@ -57,6 +57,10 @@ describe('CookbookPanel', () => {
     expect(gazpacho.getByText('Locked — meet the discovery requirements below')).toBeInTheDocument();
     expect(gazpacho.getByText('Own Blender: 0/1')).toBeInTheDocument();
     expect(gazpacho.getByRole('button', { name: 'Add Gazpacho to menu' })).toBeDisabled();
+    const fishBisque = within(screen.getByRole('article', { name: 'Fish Bisque recipe' }));
+    expect(fishBisque.getByText('Own Blender: 0/1')).toBeInTheDocument();
+    expect(fishBisque.getByText('Gazpacho paid portions: 0/5')).toBeInTheDocument();
+    expect(fishBisque.getByRole('button', { name: 'Add Fish Bisque to menu' })).toBeDisabled();
   });
 
   it('starterCookbookProgress: three real canonical outcomes expose free Cheese Toast addition', () => {
@@ -96,6 +100,22 @@ describe('CookbookPanel', () => {
     expect(gazpacho.getByText(/No matching kitchen station/)).toBeInTheDocument();
     fireEvent.click(gazpacho.getByRole('button', { name: 'Add Gazpacho to menu' }));
     expect(dispatch).toHaveBeenCalledWith({ type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
+  });
+
+  it('offers Fish Bisque after Blender ownership and five paid Gazpacho portions', () => {
+    state.equipment = state.equipment.map(item => item.id === 'eq4' ? { ...item, owned: true } : item);
+    state.cookbook.entries.gazpacho = { ...state.cookbook.entries.gazpacho,
+      discovered: true, paidPortions: 5 };
+    state.cookbook = reconcileCookbookDiscoveries(state);
+    render(<CookbookPanel onClose={vi.fn()} />);
+
+    const fishBisque = within(screen.getByRole('article', { name: 'Fish Bisque recipe' }));
+    expect(fishBisque.getByText('Discovered')).toBeInTheDocument();
+    expect(fishBisque.getByText('Gazpacho paid portions: 5/5')).toBeInTheDocument();
+    expect(fishBisque.getByText(/No matching kitchen station/)).toBeInTheDocument();
+    expect(fishBisque.getByRole('button', { name: 'Add Fish Bisque to menu' })).toBeEnabled();
+    fireEvent.click(fishBisque.getByRole('button', { name: 'Add Fish Bisque to menu' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'ADD_COOKBOOK_DISH', cookbookId: 'fish-bisque' });
   });
 
   it('offers the Gazpacho mastery preview once 15 paid portions are recorded', () => {
@@ -185,7 +205,7 @@ describe('CookbookPanel', () => {
     expect(all).toHaveAttribute('aria-pressed', 'true');
     expect(ready).toHaveAttribute('aria-pressed', 'false');
     expect(within(group).getByText('1 recipes have ready actions.')).toBeInTheDocument();
-    expect(screen.getAllByRole('article')).toHaveLength(7);
+    expect(screen.getAllByRole('article')).toHaveLength(8);
     fireEvent.click(ready);
     expect(all).toHaveAttribute('aria-pressed', 'false');
     expect(ready).toHaveAttribute('aria-pressed', 'true');
@@ -194,7 +214,7 @@ describe('CookbookPanel', () => {
     fireEvent.click(all);
     expect(all).toHaveAttribute('aria-pressed', 'true');
     expect(ready).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getAllByRole('article')).toHaveLength(7);
+    expect(screen.getAllByRole('article')).toHaveLength(8);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -205,13 +225,15 @@ describe('CookbookPanel', () => {
     state.cookbook = reconcileCookbookDiscoveries(state);
     state.cookbook = { ...state.cookbook, entries: { ...state.cookbook.entries,
       gazpacho: { ...state.cookbook.entries.gazpacho, paidPortions: 15 } } };
+    state.cookbook = reconcileCookbookDiscoveries(state);
     render(<CookbookPanel onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
-    expect(screen.getByText('3 recipes have ready actions.')).toBeInTheDocument();
-    expect(screen.getAllByRole('article')).toHaveLength(3);
+    expect(screen.getByText('4 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(4);
     expect(screen.getByRole('article', { name: 'Toasted Bread recipe' })).toBeInTheDocument();
     expect(screen.getByRole('article', { name: 'Cheese Toast recipe' })).toBeInTheDocument();
     expect(screen.getByRole('article', { name: 'Gazpacho recipe' })).toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Fish Bisque recipe' })).toBeInTheDocument();
     expect(screen.queryByRole('article', { name: 'Roast Vegetables recipe' })).not.toBeInTheDocument();
   });
 
@@ -246,8 +268,8 @@ describe('CookbookPanel', () => {
   it('computes each recipe status exactly once per render', () => {
     getCookbookEntryStatus.mockClear();
     render(<CookbookPanel onClose={vi.fn()} />);
-    expect(getCookbookEntryStatus).toHaveBeenCalledTimes(7);
-    expect(new Set(getCookbookEntryStatus.mock.calls.map(([, cookbookId]) => cookbookId)).size).toBe(7);
+    expect(getCookbookEntryStatus).toHaveBeenCalledTimes(8);
+    expect(new Set(getCookbookEntryStatus.mock.calls.map(([, cookbookId]) => cookbookId)).size).toBe(8);
   });
 
   it('shows the empty ready message when no recipe has a ready action', () => {

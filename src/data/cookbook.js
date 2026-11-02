@@ -18,6 +18,8 @@ export const COOKBOOK_RECIPES = Object.freeze([
     prepTime: 165, popularity: 78, price: 20, requirements: [equipment('eq3'), portions('fries', 5)] },
   { id: 'gazpacho', name: 'Gazpacho', base: 'Vegetables', method: 'Blended', requiredEquipmentId: 'eq4',
     prepTime: 75, popularity: 55, price: 16, requirements: [equipment('eq4')] },
+  { id: 'fish-bisque', name: 'Fish Bisque', base: 'Fish', method: 'Blended', requiredEquipmentId: 'eq4',
+    prepTime: 135, popularity: 68, price: 20, requirements: [equipment('eq4'), portions('gazpacho', 5)] },
 ].map(recipe => Object.freeze({
   ...recipe, quality: 1, cuisine: 'generic',
   requirements: Object.freeze(recipe.requirements.map(requirement => Object.freeze(requirement))),

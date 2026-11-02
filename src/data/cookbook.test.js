@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { COOKBOOK_RECIPES, getCookbookRecipe, MASTERY_PORTION_THRESHOLD } from './cookbook';
+import { BASES, BASE_EQUIPMENT_MAP, METHODS } from './recipes';
 
 describe('authored catalogue', () => {
-  it('provides the seven deterministic equipment and discovery choices', () => {
+  it('provides the eight deterministic equipment and discovery choices', () => {
     expect(COOKBOOK_RECIPES.map(({ id, base, method, requiredEquipmentId, prepTime, popularity, price }) =>
       [id, base, method, requiredEquipmentId, prepTime, popularity, price])).toEqual([
       ['toast', 'Bread', 'Toasted', 'eq1', 60, 50, 12],
@@ -12,14 +13,24 @@ describe('authored catalogue', () => {
       ['fries', 'Potato', 'Fried', 'eq3', 105, 55, 10],
       ['fried-chicken', 'Chicken', 'Fried', 'eq3', 165, 78, 20],
       ['gazpacho', 'Vegetables', 'Blended', 'eq4', 75, 55, 16],
+      ['fish-bisque', 'Fish', 'Blended', 'eq4', 135, 68, 20],
     ]);
     expect(getCookbookRecipe('gazpacho').requirements).toEqual([{ type: 'equipment', equipmentId: 'eq4' }]);
+    expect(getCookbookRecipe('fish-bisque')).toMatchObject({ name: 'Fish Bisque', base: 'Fish',
+      method: 'Blended', requiredEquipmentId: 'eq4', prepTime: 135, popularity: 68,
+      price: 20, quality: 1, cuisine: 'generic', requirements: [
+        { type: 'equipment', equipmentId: 'eq4' },
+        { type: 'paidPortions', cookbookId: 'gazpacho', count: 5 },
+      ] });
     expect(MASTERY_PORTION_THRESHOLD).toBe(15);
     expect(getCookbookRecipe('missing')).toBeNull();
     expect(getCookbookRecipe('toString')).toBeNull();
     expect(Object.isFrozen(COOKBOOK_RECIPES)).toBe(true);
     for (const recipe of COOKBOOK_RECIPES) {
       expect(recipe).toMatchObject({ quality: 1, cuisine: 'generic' });
+      expect(BASES).toContain(recipe.base);
+      expect(METHODS).toContain(recipe.method);
+      expect(BASE_EQUIPMENT_MAP[recipe.method]).toBe(recipe.requiredEquipmentId);
       expect(Object.isFrozen(recipe)).toBe(true);
       expect(Object.isFrozen(recipe.requirements)).toBe(true);
       recipe.requirements.forEach(requirement => expect(Object.isFrozen(requirement)).toBe(true));

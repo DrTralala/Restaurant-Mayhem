@@ -4,7 +4,7 @@ import { hydrateState, loadState } from './persistence';
 import { loadLatestRepositoryState } from './repositorySaves';
 import { migrateLegacyCookbook } from './cookbookMigration';
 import {
-  createDishOrderSnapshot, getCookbookEntryStatus, getResolvedDish, validateCookbookState,
+  createCookbookState, createDishOrderSnapshot, getCookbookEntryStatus, getResolvedDish, validateCookbookState,
 } from '../simulation/cookbook';
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
@@ -71,7 +71,7 @@ const malformedLegacyBuilders = [
 ];
 
 describe('migrateLegacyCookbook', () => {
-  it('copies a recognised v1 cookbook to schema 2 and initialises only Gazpacho', () => {
+  it('copies a recognised v1 cookbook to schema 2 and overlays current canonical defaults', () => {
     const raw = { cookbook: legacyCookbook(7), other: { keep: true } };
     const migrated = migrateLegacyCookbook(raw);
     expect(migrated).not.toBe(raw);
@@ -83,8 +83,11 @@ describe('migrateLegacyCookbook', () => {
     for (const id of LEGACY_RECIPE_IDS) {
       expect(migrated.cookbook.entries[id]).toBe(raw.cookbook.entries[id]);
     }
+    expect(Object.keys(migrated.cookbook.entries)).toEqual(Object.keys(createCookbookState().entries));
     expect(migrated.cookbook.entries.gazpacho).toEqual({ discovered: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Gazpacho', price: 16, quality: 1 } });
+    expect(migrated.cookbook.entries['fish-bisque']).toEqual({ discovered: false, paidPortions: 0, perk: null,
+      menuSettings: { name: 'Fish Bisque', price: 20, quality: 1 } });
     expect(raw.cookbook.schemaVersion).toBe(1);
     expect(raw.cookbook.entries).not.toHaveProperty('gazpacho');
     expect(migrated.other).toBe(raw.other);

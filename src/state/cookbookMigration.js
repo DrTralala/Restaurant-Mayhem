@@ -33,7 +33,7 @@ export function migrateLegacyCookbook(saved) {
     cookbook: {
       ...cookbook,
       schemaVersion: 2,
-      entries: { ...cookbook.entries, gazpacho: createCookbookState().entries.gazpacho },
+      entries: { ...createCookbookState().entries, ...cookbook.entries },
     },
   };
 }

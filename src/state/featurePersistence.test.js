@@ -56,6 +56,47 @@ describe('additive v10 feature persistence', () => {
     expect(hydrated.cashierStations[0]).not.toHaveProperty('staffPreference');
   });
 
+  it('round-trips current-build Fish Bisque progress, mastery, menu settings and active dish', () => {
+    const raw = createInitialState();
+    raw.paidVisitSequence = 20;
+    raw.cookbook.lastAppliedPaidVisitSequence = 20;
+    raw.equipment = raw.equipment.map(item => item.id === 'eq4' ? { ...item, owned: true } : item);
+    raw.cookbook.entries.gazpacho = { ...raw.cookbook.entries.gazpacho,
+      discovered: true, paidPortions: 5 };
+    raw.cookbook.entries['fish-bisque'] = { ...raw.cookbook.entries['fish-bisque'],
+      discovered: true, paidPortions: 15, perk: 'appeal',
+      menuSettings: { name: 'House Fish Bisque', price: 27, quality: 3 } };
+    raw.dishes.push({ id: 'cookbook:fish-bisque', cookbookId: 'fish-bisque',
+      name: 'House Fish Bisque', base: 'Fish', method: 'Blended', cuisine: 'generic',
+      requiredEquipmentId: 'eq4', price: 27, quality: 3, prepTime: 135, popularity: 68, unlocked: true });
+
+    expect(saveState(raw)).toBe(true);
+    const loaded = loadState();
+    expect(loaded.cookbook.entries.gazpacho.paidPortions).toBe(5);
+    expect(loaded.cookbook.entries['fish-bisque']).toMatchObject({
+      discovered: true, paidPortions: 15, perk: 'appeal',
+      menuSettings: { name: 'House Fish Bisque', price: 27, quality: 3 },
+    });
+    expect(loaded.dishes.find(dish => dish.cookbookId === 'fish-bisque'))
+      .toMatchObject({ id: 'cookbook:fish-bisque', name: 'House Fish Bisque', price: 27, quality: 3 });
+    const hydrated = hydrateState(loaded, createInitialState());
+    expect(getResolvedDish(hydrated, 'cookbook:fish-bisque')).toMatchObject({
+      cookbookId: 'fish-bisque', name: 'House Fish Bisque', base: 'Fish', method: 'Blended',
+      requiredEquipmentId: 'eq4', price: 27, quality: 3, prepTime: 135, popularity: 78, masteryPerk: 'appeal',
+    });
+  });
+
+  it('rejects a pre-Fish Bisque seven-entry schema-2 save instead of auto-filling it', () => {
+    const old = createInitialState();
+    delete old.cookbook.entries['fish-bisque'];
+    expect(() => validateSavedState(old)).toThrow(/Invalid cookbook/);
+    expect(() => hydrateState(old, createInitialState())).toThrow(/Invalid cookbook/);
+
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(old));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(loadState()).toBeNull();
+  });
+
   it('loads a truly old sandbox without changing cash/time or awarding historical credit', () => {
     const raw = legacy();
     raw.restaurant.totalServed = 1000;

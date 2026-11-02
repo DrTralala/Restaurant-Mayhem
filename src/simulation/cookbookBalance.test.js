@@ -18,6 +18,23 @@ function comparison(archetype, perk) {
   return { resolved, delta: weights[0] - weights[1], probability: weights[0] / (weights[0] + weights[1]) };
 }
 
+function blenderPair({ gazpachoPrice = 16, fishBisquePrice = 20,
+  gazpachoPerk = null, fishBisquePerk = null } = {}) {
+  const cookbook = createCookbookState();
+  for (const [id, price, perk] of [
+    ['gazpacho', gazpachoPrice, gazpachoPerk],
+    ['fish-bisque', fishBisquePrice, fishBisquePerk],
+  ]) {
+    cookbook.entries[id] = { ...cookbook.entries[id], discovered: true,
+      paidPortions: perk ? 15 : 0, perk,
+      menuSettings: { ...cookbook.entries[id].menuSettings, price } };
+  }
+  return { cookbook, unlockedDrinkIds: [], dishes: [
+    { id: 'gazpacho-dish', cookbookId: 'gazpacho' },
+    { id: 'fish-bisque-dish', cookbookId: 'fish-bisque' },
+  ] };
+}
+
 it('cheeseToastRusherChoice: speed has higher normalised probability than appeal', () => {
   const speed = comparison('rusher', 'speed');
   const appeal = comparison('rusher', 'appeal');
@@ -56,4 +73,49 @@ it('gazpachoTradeOff: rushers prefer Gazpacho while influencers prefer Roast Veg
   const [influencerGazpacho, influencerRoast] = weights('influencer');
   expect(rusherGazpacho).toBeGreaterThan(rusherRoast);
   expect(influencerGazpacho).toBeLessThan(influencerRoast);
+});
+
+it.each([
+  ['default prices', 16, 20],
+  ['equal $18 prices', 18, 18],
+])('blenderTradeOff: %s keeps Gazpacho attractive to rushers and Bisque to influencers', (_label, gazpachoPrice, fishBisquePrice) => {
+  const state = blenderPair({ gazpachoPrice, fishBisquePrice });
+  const customer = archetype => ({ archetype, spendingTier: 'value', spendingBudget: 45 });
+  const baskets = buildAffordableBaskets(state, customer('rusher'));
+  expect(baskets.map(basket => [basket.dish.cookbookId, basket.price])).toEqual([
+    ['gazpacho', gazpachoPrice], ['fish-bisque', fishBisquePrice],
+  ]);
+  const gazpacho = baskets.find(basket => basket.dish.cookbookId === 'gazpacho');
+  const fishBisque = baskets.find(basket => basket.dish.cookbookId === 'fish-bisque');
+  expect(getBasketWeight(gazpacho, customer('rusher')))
+    .toBeGreaterThan(getBasketWeight(fishBisque, customer('rusher')));
+  expect(getBasketWeight(fishBisque, customer('influencer')))
+    .toBeGreaterThan(getBasketWeight(gazpacho, customer('influencer')));
+});
+
+it('blenderBudget: Fish Bisque is excluded below $20 and included at its $20 default price', () => {
+  const state = blenderPair();
+  const basketsAt = spendingBudget => buildAffordableBaskets(state, {
+    archetype: 'regular', spendingTier: 'budget', spendingBudget,
+  });
+  for (const spendingBudget of [18, 19]) {
+    expect(basketsAt(spendingBudget).some(basket => basket.dish?.cookbookId === 'fish-bisque')).toBe(false);
+  }
+  expect(basketsAt(20).some(basket => basket.dish?.cookbookId === 'fish-bisque')).toBe(true);
+});
+
+it('blenderMasterySpeed: Gazpacho remains faster for every standard mastery pairing', () => {
+  for (const gazpachoPerk of [null, 'speed', 'appeal']) {
+    for (const fishBisquePerk of [null, 'speed', 'appeal']) {
+      const state = blenderPair({ gazpachoPerk, fishBisquePerk });
+      const gazpacho = buildAffordableBaskets(state, {
+        archetype: 'regular', spendingTier: 'value', spendingBudget: 45,
+      }).find(basket => basket.dish.cookbookId === 'gazpacho');
+      const fishBisque = buildAffordableBaskets(state, {
+        archetype: 'regular', spendingTier: 'value', spendingBudget: 45,
+      }).find(basket => basket.dish.cookbookId === 'fish-bisque');
+      expect(gazpacho.dish.prepTime).toBeLessThan(fishBisque.dish.prepTime);
+      expect(gazpacho.speed).toBeGreaterThan(fishBisque.speed);
+    }
+  }
 });
