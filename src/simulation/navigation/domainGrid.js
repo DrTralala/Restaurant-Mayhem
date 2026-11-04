@@ -14,7 +14,10 @@ import {
   isDoorRoleForFlow,
 } from '../world';
 import { recordSeatResidency, seatedDeparturePorts } from '../movement/seatedDeparture';
-import { getAmenityGeometry } from '../../data/staffAmenities';
+import {
+  getAmenityGeometry,
+  hasStaffAmenityAnchoredResidency,
+} from '../../data/staffAmenities';
 import { isStaticStaffAmenityExit } from '../movement/staffAmenityExit';
 import { noteNavigation } from './telemetry';
 
@@ -274,7 +277,7 @@ function staffAmenityExitGrid(state, actor, base) {
     ? amenity.slots.find(candidate => candidate?.index === use.slotIndex) : null;
   const origin = geometry?.slotAnchors?.[use.slotIndex];
   const goal = actor.navigationGoal;
-  if (!slot || !['couch', 'bed'].includes(amenity?.type)
+  if (!slot || !hasStaffAmenityAnchoredResidency(amenity?.type)
     || !sameId(slot.occupiedBy, actor.id) || slot.reservedBy != null
     || !origin || !finite(goal)
     || !isStaticStaffAmenityExit(state, amenity, use.slotIndex, goal, { grid: base })) return null;

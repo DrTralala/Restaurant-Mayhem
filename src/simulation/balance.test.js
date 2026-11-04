@@ -63,10 +63,39 @@ describe('balance helpers', () => {
     expect(1 / (getBaseArrivalRate(4.49) * 60)).toBeCloseTo(23.004, 3);
   });
 
-  it.each([[4.49, 1], [4.5, 2], [4.75, 2.5], [5, 3]])(
+  it.each([[4.49, 1], [4.5, 1], [4.75, 2], [5, 3]])(
     'applies the high-rating multiplier at %s stars', (stars, multiplier) => {
       const previousRate = 0.00055 + (stars - 1) * 0.00005;
       expect(getBaseArrivalRate(stars)).toBeCloseTo(previousRate * multiplier, 10);
+    },
+  );
+
+  it('keeps arrival rates continuous at the 4.5-star threshold', () => {
+    const atThreshold = getBaseArrivalRate(4.5);
+
+    expect(Math.abs(atThreshold - getBaseArrivalRate(4.5 - 1e-8))).toBeLessThan(1e-9);
+    expect(Math.abs(getBaseArrivalRate(4.5 + 1e-8) - atThreshold)).toBeLessThan(1e-9);
+  });
+
+  it('increases arrival rates monotonically throughout the clamped reputation range', () => {
+    let previousRate = getBaseArrivalRate(1);
+
+    for (let index = 1; index <= 400; index += 1) {
+      const rate = getBaseArrivalRate(1 + index / 100);
+      expect(rate).toBeGreaterThanOrEqual(previousRate);
+      previousRate = rate;
+    }
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'uses the one-star fallback for non-finite reputation %s', reputation => {
+      expect(getBaseArrivalRate(reputation)).toBe(getBaseArrivalRate(1));
+    },
+  );
+
+  it.each([[0, 1], [-2, 1], [6, 5]])(
+    'clamps finite reputation %s to %s before calculating arrivals', (reputation, clamped) => {
+      expect(getBaseArrivalRate(reputation)).toBe(getBaseArrivalRate(clamped));
     },
   );
 

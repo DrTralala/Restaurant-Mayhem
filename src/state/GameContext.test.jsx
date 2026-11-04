@@ -997,6 +997,11 @@ describe('GameProvider furniture actions', () => {
       { index: 0, reservedBy: null, occupiedBy: null },
       { index: 1, reservedBy: null, occupiedBy: null },
     ]],
+    ['breakBench', 500, [
+      { index: 0, reservedBy: null, occupiedBy: null },
+      { index: 1, reservedBy: null, occupiedBy: null },
+      { index: 2, reservedBy: null, occupiedBy: null },
+    ]],
     ['arcade', 800, [{ index: 0, reservedBy: null, occupiedBy: null }]],
     ['bed', 500, [{ index: 0, reservedBy: null, occupiedBy: null }]],
   ])('sells an idle %s at its canonical half-price refund', (type, price, slots) => {
@@ -1640,6 +1645,7 @@ describe('GameProvider authoritative placement actions', () => {
 
   it.each([
     ['couch', 400, 600, 300, 1],
+    ['breakBench', 500, 760, 300, 2],
     ['arcade', 800, 700, 300, 2],
     ['bed', 500, 600, 400, 3],
   ])('places a %s with canonical pricing, rotation and empty slots',
@@ -1653,14 +1659,20 @@ describe('GameProvider authoritative placement actions', () => {
       game.dispatch({ type: 'PLACE_ITEM', itemType, x, y, rotation, cost: 1 });
 
       expect(game.state.restaurant.funds).toBe(0);
-      expect(game.state.staffAmenities).toContainEqual({
-        id: 'amenity1', type: itemType, x, y, rotation,
-        slots: itemType === 'couch'
+      const slots = itemType === 'breakBench'
+        ? [
+          { index: 0, reservedBy: null, occupiedBy: null },
+          { index: 1, reservedBy: null, occupiedBy: null },
+          { index: 2, reservedBy: null, occupiedBy: null },
+        ]
+        : itemType === 'couch'
           ? [
             { index: 0, reservedBy: null, occupiedBy: null },
             { index: 1, reservedBy: null, occupiedBy: null },
           ]
-          : [{ index: 0, reservedBy: null, occupiedBy: null }],
+          : [{ index: 0, reservedBy: null, occupiedBy: null }];
+      expect(game.state.staffAmenities).toContainEqual({
+        id: 'amenity1', type: itemType, x, y, rotation, slots,
       });
     });
 

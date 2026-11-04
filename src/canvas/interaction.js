@@ -1,7 +1,10 @@
 import { screenToWorld } from './camera';
 import { getDefaultStaffPosition } from '../simulation/world';
 import { getFixtureLabel, getFixtureRect, listFixtures } from '../data/fixtures';
-import { getAmenityGeometry } from '../data/staffAmenities';
+import {
+  getAmenityGeometry,
+  hasStaffAmenityAnchoredResidency,
+} from '../data/staffAmenities';
 import { humaniseIdentifier } from '../typography';
 
 function getStaffDisplayPosition(state, staff, index) {
@@ -14,7 +17,7 @@ function getStaffDisplayPosition(state, staff, index) {
       String(candidate?.id) === String(residency.amenityId))
     : null;
   if (amenity && staff.amenityUse?.phase === 'occupied'
-    && ['couch', 'bed'].includes(amenity.type)) {
+    && hasStaffAmenityAnchoredResidency(amenity.type)) {
     const geometry = getAmenityGeometry(amenity);
     const anchor = geometry?.slotAnchors?.[residency.slotIndex] || geometry?.slotAnchors?.[0];
     if (anchor) return anchor;

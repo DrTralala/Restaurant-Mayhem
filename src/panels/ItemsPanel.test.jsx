@@ -51,7 +51,7 @@ describe('ItemsPanel', () => {
       .toBeInTheDocument();
   });
 
-  it('offers the couch, arcade, and bed with their staff wellbeing policies', () => {
+  it('offers the couch, break bench, arcade, and bed with their staff wellbeing policies', () => {
     useGameState.mockReturnValue({ restaurant: { funds: 3000 } });
     useDispatch.mockReturnValue(vi.fn());
 
@@ -59,6 +59,8 @@ describe('ItemsPanel', () => {
 
     expect(screen.getByText('Couch')).toBeInTheDocument();
     expect(screen.getByText(/Two staff seats.*15 minutes.*\+6 morale per hour/i)).toBeInTheDocument();
+    expect(screen.getByText('Break bench')).toBeInTheDocument();
+    expect(screen.getByText(/3 staff seats.*15 minutes.*\+4 morale per hour/i)).toBeInTheDocument();
     expect(screen.getByText('Arcade')).toBeInTheDocument();
     expect(screen.getByText(/One staff seat.*10 minutes.*\+8 morale per hour/i)).toBeInTheDocument();
     expect(screen.getByText('Bed')).toBeInTheDocument();
@@ -79,6 +81,7 @@ describe('ItemsPanel', () => {
       ['Cashier', 'cashierTable'],
       ['Automatic dishwasher', 'automaticDishwasher'],
       ['Couch', 'couch'],
+      ['Break bench', 'breakBench'],
       ['Arcade', 'arcade'],
       ['Bed', 'bed'],
     ]) {
@@ -92,6 +95,7 @@ describe('ItemsPanel', () => {
       ['cashierTable'],
       ['automaticDishwasher'],
       ['couch'],
+      ['breakBench'],
       ['arcade'],
       ['bed'],
     ]);
@@ -104,12 +108,14 @@ describe('ItemsPanel', () => {
     render(<ItemsPanel onStartPlacement={startPlacement} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Buy Couch ($400)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Buy Break bench ($500)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Buy Arcade ($800)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Buy Bed ($500)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Buy Automatic dishwasher ($2000)' }));
 
     expect(startPlacement.mock.calls).toEqual([
       ['couch'],
+      ['breakBench'],
       ['arcade'],
       ['bed'],
       ['automaticDishwasher'],
@@ -157,6 +163,14 @@ describe('ItemsPanel', () => {
           id: 'bed-1', type: 'bed', x: 300, y: 100, rotation: 0,
           slots: [{ index: 0, reservedBy: 'staff-3', occupiedBy: null }],
         },
+        {
+          id: 'bench-1', type: 'breakBench', x: 400, y: 100, rotation: 0,
+          slots: [
+            { index: 0, reservedBy: null, occupiedBy: null },
+            { index: 1, reservedBy: null, occupiedBy: null },
+            { index: 2, reservedBy: null, occupiedBy: null },
+          ],
+        },
       ],
     });
     useDispatch.mockReturnValue(vi.fn());
@@ -166,7 +180,7 @@ describe('ItemsPanel', () => {
     const rows = within(screen.getByRole('list', { name: 'Installed staff amenities' }))
       .getAllByRole('listitem');
 
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     expect(rows[0]).toHaveTextContent('Couch');
     expect(rows[0]).toHaveTextContent('couch-1');
     expect(rows[0]).toHaveTextContent('Occupied 1 · Reserved 1 · Unclaimed 0 · Capacity 2');
@@ -176,6 +190,9 @@ describe('ItemsPanel', () => {
     expect(rows[2]).toHaveTextContent('Bed');
     expect(rows[2]).toHaveTextContent('bed-1');
     expect(rows[2]).toHaveTextContent('Occupied 0 · Reserved 1 · Unclaimed 0 · Capacity 1');
+    expect(rows[3]).toHaveTextContent('Break bench');
+    expect(rows[3]).toHaveTextContent('bench-1');
+    expect(rows[3]).toHaveTextContent('Occupied 0 · Reserved 0 · Unclaimed 3 · Capacity 3');
     expect(screen.getByText(/Current slot ownership only\. Reserved slots are not yet occupied; unclaimed slots do not guarantee access or immediate use\./))
       .toBeInTheDocument();
     expect(screen.queryByText(/staff-[123]/)).not.toBeInTheDocument();
@@ -284,7 +301,7 @@ describe('ItemsPanel', () => {
       useGameState.mockReturnValue({ restaurant });
       const { unmount } = render(<ItemsPanel onStartPlacement={startPlacement} />);
       const buttons = screen.getAllByRole('button', { name: /^Buy / });
-      expect(buttons).toHaveLength(9);
+      expect(buttons).toHaveLength(10);
       for (const button of buttons) {
         expect(button).toBeDisabled();
       }
@@ -356,7 +373,7 @@ describe('ItemsPanel', () => {
       const { unmount } = render(<ItemsPanel onStartPlacement={vi.fn()} />);
 
       const buttons = screen.getAllByRole('button', { name: /^Buy / });
-      expect(buttons).toHaveLength(9);
+      expect(buttons).toHaveLength(10);
       const unavailableIds = [];
       for (const button of buttons) {
         expect(button).toBeDisabled();
@@ -365,7 +382,7 @@ describe('ItemsPanel', () => {
         expect(unavailable.textContent).toBe('Funds unavailable.');
         unavailableIds.push(unavailable.id);
       }
-      expect(new Set(unavailableIds).size).toBe(9);
+      expect(new Set(unavailableIds).size).toBe(10);
 
       unmount();
     }
@@ -418,12 +435,12 @@ describe('ItemsPanel', () => {
     expect(new Set(copyIds).size).toBe(2);
 
     const buttons = screen.getAllByRole('button', { name: /^Buy / });
-    expect(buttons).toHaveLength(18);
+    expect(buttons).toHaveLength(20);
     const describedby = buttons.map(button => button.getAttribute('aria-describedby'));
-    expect(new Set(describedby).size).toBe(18);
+    expect(new Set(describedby).size).toBe(20);
     for (const [index, value] of describedby.entries()) {
       const ids = value.split(/\s+/);
-      expect(ids).toContain(copyIds[index < 9 ? 0 : 1]);
+      expect(ids).toContain(copyIds[index < 10 ? 0 : 1]);
       const card = buttons[index].parentElement;
       const quarter = within(card).queryByText(/^Quarter-turn footprint: .* world units\.$/);
       expect(new Set(ids).size).toBe(quarter ? 4 : 3);
@@ -438,7 +455,7 @@ describe('ItemsPanel', () => {
     useDispatch.mockReturnValue(vi.fn());
     render(<ItemsPanel onStartPlacement={vi.fn()} />);
 
-    for (const buttonName of ['Buy Dining chair', 'Buy Couch', 'Buy Arcade', 'Buy Bed']) {
+    for (const buttonName of ['Buy Dining chair', 'Buy Couch', 'Buy Break bench', 'Buy Arcade', 'Buy Bed']) {
       const button = screen.getByRole('button', { name: new RegExp(`^${buttonName} \\(\\$`) });
       const quarter = within(button.parentElement).getByText(/^Quarter-turn footprint: .* world units\.$/);
       expect(quarter.id).toBeTruthy();

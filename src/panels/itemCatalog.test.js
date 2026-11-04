@@ -14,6 +14,7 @@ const EXPECTED_SHOP_ITEM_TYPES = [
   'cashierTable',
   'automaticDishwasher',
   'couch',
+  'breakBench',
   'arcade',
   'bed',
 ];
@@ -46,6 +47,7 @@ describe('SHOP_ITEMS', () => {
   it('uses exact descriptions with authoritative policy values', () => {
     const levelOne = getDishwasherStats(1);
     const couch = getPlaceable('couch');
+    const breakBench = getPlaceable('breakBench');
     const arcade = getPlaceable('arcade');
     const bed = getPlaceable('bed');
     const expectedDescriptions = {
@@ -59,6 +61,9 @@ describe('SHOP_ITEMS', () => {
       couch: `${countWord(couch.capacity)} staff seat${couch.capacity === 1 ? '' : 's'} `
         + `for ${couch.sessionSeconds / 60} minutes; restores `
         + `+${couch.moralePerHour} morale per hour while occupied.`,
+      breakBench: `${countWord(breakBench.capacity)} staff seat${breakBench.capacity === 1 ? '' : 's'} `
+        + `for ${breakBench.sessionSeconds / 60} minutes; restores `
+        + `+${breakBench.moralePerHour} morale per hour while occupied.`,
       arcade: `${countWord(arcade.capacity)} staff seat${arcade.capacity === 1 ? '' : 's'} `
         + `for ${arcade.sessionSeconds / 60} minutes; restores `
         + `+${arcade.moralePerHour} morale per hour while occupied.`,

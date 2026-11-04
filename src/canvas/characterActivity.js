@@ -2,6 +2,7 @@ import { getCharacterMovementStatus } from '../simulation/movement';
 import { getItemConsumptionDuration } from '../simulation/consumption';
 import { getFoodPatienceFraction } from '../simulation/foodPatience';
 import { getCarriedServiceItemIds } from '../simulation/staffInventory';
+import { getStaffAmenityDefinition } from '../data/staffAmenities';
 
 /**
  * Presentation-only activity resolution.
@@ -107,9 +108,8 @@ function staffResidency(state, staff, indexes, { seated, lying } = {}) {
     : use?.phase === 'occupied' ? use.amenityId : null;
   if (amenityId == null) return null;
   const amenity = findAmenity(state, indexes, amenityId);
-  if (amenity?.type === 'bed') return 'sleeping';
-  if (amenity?.type === 'couch') return 'resting';
-  if (amenity?.type === 'arcade') return 'gaming';
+  const activity = getStaffAmenityDefinition(amenity?.type)?.activity;
+  if (activity) return activity;
   return residency?.kind === 'staff_amenity' ? 'resting' : null;
 }
 

@@ -7,6 +7,7 @@ export const ITEM_PRICES = {
   cashierTable: 300,
   automaticDishwasher: 2000,
   couch: 400,
+  breakBench: 500,
   arcade: 800,
   bed: 500,
 };

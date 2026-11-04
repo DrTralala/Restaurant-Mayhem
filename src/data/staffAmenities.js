@@ -1,12 +1,16 @@
-import { getPlaceable, getPlaceableDimensions } from './placeables';
+import { PLACEABLES, getPlaceableDimensions } from './placeables';
 
-export const STAFF_AMENITY_TYPES = Object.freeze({
-  couch: getPlaceable('couch'),
-  arcade: getPlaceable('arcade'),
-  bed: getPlaceable('bed'),
-});
+export const STAFF_AMENITY_TYPES = Object.freeze(Object.fromEntries(
+  Object.entries(PLACEABLES).filter(([, definition]) => definition.staffAmenity === true),
+));
 
 export const AMENITY_TYPES = STAFF_AMENITY_TYPES;
+export const STAFF_REST_AMENITY_TYPES = Object.freeze(Object.entries(STAFF_AMENITY_TYPES)
+  .filter(([, definition]) => definition?.duty === 'rest')
+  .map(([type]) => type));
+export const STAFF_REST_AMENITY_PREFERENCES = Object.freeze([
+  'automatic', ...STAFF_REST_AMENITY_TYPES,
+]);
 
 const LOCAL_GEOMETRY = Object.freeze({
   couch: Object.freeze({
@@ -17,6 +21,16 @@ const LOCAL_GEOMETRY = Object.freeze({
       { x: -10, y: 10 }, { x: -10, y: 30 },
       { x: 50, y: 10 }, { x: 50, y: 30 },
       { x: 10, y: 30 }, { x: 30, y: 30 },
+    ]),
+  }),
+  breakBench: Object.freeze({
+    slotAnchors: Object.freeze([{ x: 10, y: 10 }, { x: 30, y: 10 }, { x: 50, y: 10 }]),
+    approachPoints: Object.freeze([{ x: 10, y: 30 }, { x: 30, y: 30 }, { x: 50, y: 30 }]),
+    exitCandidates: Object.freeze([
+      { x: 10, y: 30 }, { x: 30, y: 30 }, { x: 50, y: 30 },
+      { x: 10, y: -10 }, { x: 30, y: -10 }, { x: 50, y: -10 },
+      { x: -10, y: 10 }, { x: -10, y: 30 },
+      { x: 70, y: 10 }, { x: 70, y: 30 },
     ]),
   }),
   arcade: Object.freeze({
@@ -71,6 +85,15 @@ export function getStaffAmenityDefinition(type) {
 
 export function isStaffAmenityType(type) {
   return Boolean(getStaffAmenityDefinition(type));
+}
+
+export function isStaffAmenityEligibleForDuty(type, duty) {
+  return getStaffAmenityDefinition(type)?.duty === duty;
+}
+
+export function hasStaffAmenityAnchoredResidency(type) {
+  const posture = getStaffAmenityDefinition(type)?.posture;
+  return posture === 'seated' || posture === 'lying';
 }
 
 /**

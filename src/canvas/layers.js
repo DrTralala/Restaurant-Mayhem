@@ -17,7 +17,12 @@ import { getStaffVisualActivity, getCustomerVisualActivity } from './characterAc
 import { drawStickFigure } from './characterFigure';
 import { getServiceItemProgress, getStaffTaskRemainingFraction } from '../simulation/staffPerformance';
 import { getFoodPatienceFraction } from '../simulation/foodPatience';
-import { getAmenityGeometry } from '../data/staffAmenities';
+import {
+  getAmenityGeometry,
+  getStaffAmenityDefinition,
+  hasStaffAmenityAnchoredResidency,
+  isStaffAmenityType,
+} from '../data/staffAmenities';
 import { getCanvasFont } from '../typography';
 import { drawSprite } from './sprites';
 import { createRenderIndexes } from './renderIndexes';
@@ -191,7 +196,7 @@ function getStaffAmenityAnchor(staff, indexes) {
 function getAmenityActivityRemaining(state, staff, amenity) {
   if (staff?.amenityUse?.phase !== 'occupied') return null;
   const startedAt = staff.amenityUse.activityStartedAt;
-  const endAt = amenity?.type === 'bed'
+  const endAt = getStaffAmenityDefinition(amenity?.type)?.duty === 'pto'
     ? staff.ptoSession?.minimumEndAt ?? staff.amenityUse.activityEndsAt
     : staff.amenityUse.activityEndsAt;
   if (![startedAt, endAt, state.restaurant?.gameTime].every(Number.isFinite)
@@ -205,6 +210,7 @@ function drawStaffAmenity(ctx, amenity) {
   const { x, y, w, h } = geometry.footprint;
   const colours = {
     couch: { fill: '#6d4e71', stroke: '#c18ac6' },
+    breakBench: { fill: '#596b45', stroke: '#a7c986' },
     arcade: { fill: '#365b70', stroke: '#74c7d9' },
     bed: { fill: '#8b604e', stroke: '#d6a07c' },
   };
@@ -229,8 +235,27 @@ function drawStaffAmenity(ctx, amenity) {
     ctx.restore();
   }
 
-  const labels = { couch: 'Couch', arcade: 'Arcade', bed: 'Bed' };
-  drawObjectLabel(ctx, labels[amenity.type] || amenity.type, geometry.footprint, {
+  if (amenity.type === 'breakBench') {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.beginPath();
+    if (w >= h) {
+      ctx.moveTo(x + w / 3, y + 2);
+      ctx.lineTo(x + w / 3, y + h - 2);
+      ctx.moveTo(x + (w * 2) / 3, y + 2);
+      ctx.lineTo(x + (w * 2) / 3, y + h - 2);
+    } else {
+      ctx.moveTo(x + 2, y + h / 3);
+      ctx.lineTo(x + w - 2, y + h / 3);
+      ctx.moveTo(x + 2, y + (h * 2) / 3);
+      ctx.lineTo(x + w - 2, y + (h * 2) / 3);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  const label = getStaffAmenityDefinition(amenity.type)?.label || amenity.type;
+  drawObjectLabel(ctx, label, geometry.footprint, {
     allowOverflow: true,
   });
 }
@@ -612,8 +637,10 @@ export function drawPlacementPreview(ctx, state, camera, placement) {
     drawObjectLabel(ctx, 'Dish\nwasher', rect);
   } else if (placement.itemType === 'manualSink') {
     drawObjectLabel(ctx, 'Sink', rect);
-  } else if (['couch', 'arcade', 'bed'].includes(placement.itemType)) {
-    drawObjectLabel(ctx, placement.itemType[0].toUpperCase() + placement.itemType.slice(1), rect, {
+  } else if (isStaffAmenityType(placement.itemType)) {
+    const label = getStaffAmenityDefinition(placement.itemType)?.label
+      || placement.itemType[0].toUpperCase() + placement.itemType.slice(1);
+    drawObjectLabel(ctx, label, rect, {
       allowOverflow: true,
     });
   }
@@ -636,15 +663,16 @@ export function drawStaffLayer(ctx, state, camera, renderOptions = {}) {
       : getDefaultStaffPosition(s.role, index, state, s.id);
     const residency = getStaffAmenityAnchor(s, indexes);
     const amenity = residency?.amenity || getStaffAmenityById(s.amenityUse?.amenityId, indexes);
+    const amenityDefinition = getStaffAmenityDefinition(residency?.amenity?.type);
     const leavingAmenity = s.dutyPhase === 'exiting' && movement.motion === 'traversing';
     const isResident = Boolean(residency
       && !leavingAmenity
       && s.amenityUse?.phase === 'occupied'
-      && ['couch', 'bed'].includes(residency.amenity.type));
+      && hasStaffAmenityAnchoredResidency(residency.amenity.type));
     const x = isResident ? residency.anchor.x : pos.x;
     const y = isResident ? residency.anchor.y : pos.y - 4;
-    const seated = isResident && residency.amenity.type === 'couch';
-    const lying = isResident && residency.amenity.type === 'bed';
+    const seated = isResident && amenityDefinition?.posture === 'seated';
+    const lying = isResident && amenityDefinition?.posture === 'lying';
     const amenityRotation = isResident
       ? (() => {
         const rotation = ((residency.amenity.rotation || 0) % 4 + 4) % 4;

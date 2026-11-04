@@ -1,7 +1,10 @@
 import {
   getAmenityGeometry,
   getStaffAmenityDefinition,
+  hasStaffAmenityAnchoredResidency,
   isStaffAmenityType,
+  STAFF_REST_AMENITY_PREFERENCES as STAFF_REST_AMENITY_PREFERENCE_VALUES,
+  STAFF_REST_AMENITY_TYPES,
 } from '../data/staffAmenities';
 import { getDishwasherStats } from '../simulation/dishwasherProgression';
 import { SERVICE_COUNTER_CAPACITY } from '../simulation/serviceCounter';
@@ -20,7 +23,8 @@ import { getDrink } from '../data/drinks';
 
 const STAFF_ROLES = new Set(['cook', 'waiter', 'janitor']);
 const STAFF_DUTIES = new Set(['work', 'rest', 'pto']);
-const STAFF_REST_AMENITY_PREFERENCES = new Set(['automatic', 'couch', 'arcade']);
+const STAFF_REST_AMENITY_PREFERENCES = new Set(STAFF_REST_AMENITY_PREFERENCE_VALUES);
+const REST_AMENITY_TYPES = new Set(STAFF_REST_AMENITY_TYPES);
 const SEATING_POLICIES = new Set(['automatic', 'best-fit']);
 const STAFF_DUTY_PHASES = new Set([
   'available', 'finishing_task', 'blocked_handoff', 'seeking_amenity',
@@ -30,7 +34,6 @@ const STAFF_ACTIVITY_PHASES = new Set([
   'idle_waiting', 'idle_roaming', 'task_assigned', 'working', 'stationed',
 ]);
 const AMENITY_USE_PHASES = new Set(['reserved', 'occupied']);
-const AMENITY_TYPES = new Set(['couch', 'arcade', 'bed']);
 const SERVICE_ITEM_KINDS = new Set(['dish', 'drink']);
 const SERVICE_ITEM_STATES = new Set([
   'ordered', 'preparing', 'ready', 'on_service', 'carried', 'delivered',
@@ -538,7 +541,7 @@ function validateStaff(staff) {
       'wellbeingWakeAt', 'amenityRetryAt', 'dutyHandoffProgressAt',
       'dutyHandoffAccumulatedWork', 'dutyHandoffLastProgressAt',
     ]) validateOptionalFinite(worker, key, path, { minimum: 0, nullable: true });
-    validateOptionalEnum(worker, 'lastRestActivityType', path, new Set(['couch', 'arcade']), { nullable: true });
+    validateOptionalEnum(worker, 'lastRestActivityType', path, REST_AMENITY_TYPES, { nullable: true });
     validateOptionalEnum(worker, 'cleaningFocus', path, STAFF_CLEANING_FOCUS_VALUES);
     if (has(worker, 'cleaningFocus') && worker.role !== 'janitor'
       && worker.cleaningFocus !== 'balanced') {
@@ -1280,7 +1283,9 @@ function validateAmenities(state, staff) {
     const amenityId = idKey(amenity.id);
     if (amenityIds.has(amenityId)) fail(path, `contains duplicate amenity ID ${amenityId}`);
     amenityIds.add(amenityId);
-    if (!isStaffAmenityType(amenity.type)) fail(`${path}.type`, 'must be couch, arcade or bed');
+    if (!isStaffAmenityType(amenity.type)) {
+      fail(`${path}.type`, 'must be a supported staff amenity type');
+    }
     validateFinite(amenity.x, `${path}.x`);
     validateFinite(amenity.y, `${path}.y`);
     validateFinite(amenity.rotation, `${path}.rotation`, { minimum: 0, maximum: 3, integer: true });
@@ -1320,6 +1325,7 @@ function validateAmenities(state, staff) {
     const use = worker.amenityUse;
     const amenity = records.find(candidate => sameId(candidate.id, use.amenityId));
     if (!amenity) fail(`${path}.amenityUse.amenityId`, 'must name an existing amenity');
+    const definition = getStaffAmenityDefinition(amenity.type);
     const slot = amenity.slots[use.slotIndex];
     if (!slot) fail(`${path}.amenityUse.slotIndex`, 'must name an existing amenity slot');
     const ownerKey = idKey(worker.id);
@@ -1328,16 +1334,19 @@ function validateAmenities(state, staff) {
     if (use.phase === 'reserved' && slot.occupiedBy != null) fail(`${path}.amenityUse`, 'reserved slot is occupied');
     if (use.phase === 'occupied' && slot.reservedBy != null) fail(`${path}.amenityUse`, 'occupied slot remains reserved');
       if (use.phase === 'occupied') {
-        if (amenity.type === 'bed') {
-          if (!worker.ptoSession) fail(`${path}.ptoSession`, 'is required for an occupied bed');
-          if (worker.ptoSession.minimumEndAt - worker.ptoSession.sleepStartedAt !== 25_200) {
+        if (definition.duty === 'pto') {
+          if (!worker.ptoSession) {
+            fail(`${path}.ptoSession`, 'is required for an occupied bed');
+          }
+          if (worker.ptoSession.minimumEndAt - worker.ptoSession.sleepStartedAt
+            !== definition.minimumSleepSeconds) {
             fail(`${path}.ptoSession`, 'bed sleep must preserve the exact 25200-second minimum');
           }
         } else if (worker.ptoSession != null) {
           fail(`${path}.ptoSession`, 'is only valid for bed occupancy');
         }
         const geometry = getAmenityGeometry(amenity);
-        if (['couch', 'bed'].includes(amenity.type)) {
+        if (hasStaffAmenityAnchoredResidency(amenity.type)) {
           if (worker.movementResidency == null) {
             fail(`${path}.movementResidency`, 'is required for an occupied amenity');
           }

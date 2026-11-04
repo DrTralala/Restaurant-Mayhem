@@ -13,7 +13,10 @@ import { hydrateState, loadStateResult, saveState } from './persistence';
 import { ITEM_PRICES } from '../data/items';
 import { createHighTopCounterRecords } from '../data/highTopCounters';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
-import { createEmptyAmenitySlots } from '../data/staffAmenities';
+import {
+  createEmptyAmenitySlots,
+  STAFF_REST_AMENITY_PREFERENCES as STAFF_REST_AMENITY_PREFERENCE_VALUES,
+} from '../data/staffAmenities';
 import { getDrink, getResolvedDrink, normaliseDrinkOverrides } from '../data/drinks';
 import { getPlaceable } from '../data/placeables';
 import { getEquipmentLevelMultipliers, getEquipmentUpgradeQuote } from '../data/equipment';
@@ -539,7 +542,7 @@ function placeItem(state, action) {
 
 const GameContext = createContext(null);
 const DispatchContext = createContext(null);
-const STAFF_REST_AMENITY_PREFERENCES = new Set(['automatic', 'couch', 'arcade']);
+const STAFF_REST_AMENITY_PREFERENCES = new Set(STAFF_REST_AMENITY_PREFERENCE_VALUES);
 const SEATING_POLICIES = new Set(['automatic', 'best-fit']);
 
 function reduceGameAction(state, action) {

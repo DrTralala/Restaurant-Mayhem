@@ -229,6 +229,60 @@ describe('canvas fixture presentation', () => {
     expect(ctx._calls.fills).toContainEqual(expect.objectContaining({ x: 197, y: 197, w: 46, h: 26 }));
   });
 
+  it('renders and previews the labelled break bench with all three seated resident poses', () => {
+    const amenity = {
+      id: 'bench', type: 'breakBench', x: 200, y: 300, rotation: 1,
+      slots: [
+        { index: 0, reservedBy: null, occupiedBy: 'bench-staff-0' },
+        { index: 1, reservedBy: null, occupiedBy: 'bench-staff-1' },
+        { index: 2, reservedBy: null, occupiedBy: 'bench-staff-2' },
+      ],
+    };
+    const geometry = getAmenityGeometry(amenity);
+    const state = baseState({
+      restaurant: { expansionLevel: 1, gameTime: 500 },
+      staffAmenities: [amenity],
+      staff: geometry.slotAnchors.map((anchor, slotIndex) => ({
+        id: `bench-staff-${slotIndex}`, name: `B${slotIndex}`, role: 'waiter',
+        x: anchor.x, y: anchor.y, effectiveDuty: 'rest', dutyPhase: 'active',
+        amenityUse: {
+          amenityId: 'bench', slotIndex, phase: 'occupied',
+          activityStartedAt: 100, activityEndsAt: 1000, lastRecoveryAt: 500,
+        },
+        movementResidency: { kind: 'staff_amenity', amenityId: 'bench', slotIndex },
+      })),
+    });
+    expect(findClickedEntity({ ...state, staff: [] }, camera,
+      geometry.footprint.x + geometry.footprint.w / 2,
+      geometry.footprint.y + geometry.footprint.h / 2))
+      .toMatchObject({ type: 'staffAmenity', data: amenity });
+    expect(selectFurnitureInRect(state, {
+      x1: geometry.footprint.x + 1,
+      y1: geometry.footprint.y + 1,
+      x2: geometry.footprint.x + geometry.footprint.w - 1,
+      y2: geometry.footprint.y + geometry.footprint.h - 1,
+    })).toEqual([{ type: 'staffAmenity', id: 'bench' }]);
+
+    const furniture = makeContext();
+    drawFurnitureLayer(furniture, state, camera);
+    expect(furniture._calls.rects).toContainEqual(expect.objectContaining({ x: 200, y: 300, w: 20, h: 60 }));
+    expect(furniture._calls.texts.map(call => call.text).join(' ')).toContain('Break bench');
+
+    const preview = makeContext();
+    drawPlacementPreview(preview, baseState(), camera, {
+      itemType: 'breakBench', x: 400, y: 200, rotation: 1, valid: true,
+    });
+    expect(preview._calls.rects).toContainEqual(expect.objectContaining({ x: 400, y: 200, w: 20, h: 60 }));
+    expect(preview._calls.texts.map(call => call.text).join(' ')).toContain('Break bench');
+
+    const actors = makeContext();
+    drawStaffLayer(actors, state, camera);
+    for (const anchor of geometry.slotAnchors) {
+      expect(actors._calls.arcs.some(arc => arc.x === anchor.x
+        && Math.abs(arc.y - anchor.y) < 1)).toBe(true);
+    }
+  });
+
   it('keeps amenity hit testing and selection aligned for every quarter turn', () => {
     const staffAmenities = [0, 1, 2, 3].map(rotation => ({
       id: `bed-${rotation}`, type: 'bed', x: 100 + rotation * 80, y: 100, rotation, slots: [],

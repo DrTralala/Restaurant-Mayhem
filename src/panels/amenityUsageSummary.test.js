@@ -38,6 +38,13 @@ describe('getAmenityUsageSummary', () => {
       .toEqual({ capacity: 1, occupied: 0, reserved: 0, unclaimed: 1 });
   });
 
+  it('reports all three independent break bench slots', () => {
+    expect(getAmenityUsageSummary({
+      type: 'breakBench',
+      slots: [slot(0, { occupiedBy: 'staff-1' }), slot(1, { reservedBy: 'staff-2' }), slot(2)],
+    })).toEqual({ capacity: 3, occupied: 1, reserved: 1, unclaimed: 1 });
+  });
+
   it('keeps occupied, reserved and unclaimed mutually exclusive and summing to capacity', () => {
     const summary = getAmenityUsageSummary({
       type: 'couch',

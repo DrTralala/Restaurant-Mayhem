@@ -12,6 +12,7 @@ export const SHOP_ITEM_TYPES = Object.freeze([
   'cashierTable',
   'automaticDishwasher',
   'couch',
+  'breakBench',
   'arcade',
   'bed',
 ]);
@@ -43,13 +44,13 @@ function descriptionFor(type, placeable) {
     return `${DISHWASHER_MAX_LEVEL} levels; level 1 washes items serially every `
       + `${levelOne.secondsPerDish} seconds and holds ${levelOne.capacity} items.`;
   }
-  if (type === 'couch' || type === 'arcade') {
+  if (placeable.duty === 'rest') {
     return `${countWord(placeable.capacity)} staff seat${placeable.capacity === 1 ? '' : 's'} `
       + `for ${placeable.sessionSeconds / 60} minutes; restores `
       + `+${placeable.moralePerHour} morale per hour while occupied.`;
   }
-  if (type === 'bed') {
-    return `${countWord(placeable.capacity)} staff bed: minimum `
+  if (placeable.duty === 'pto') {
+    return `${countWord(placeable.capacity)} staff ${placeable.label.toLowerCase()}: minimum `
       + `${placeable.minimumSleepSeconds / 3600} in-game hours, restores full morale, `
       + 'then reduces morale drain during recovery.';
   }

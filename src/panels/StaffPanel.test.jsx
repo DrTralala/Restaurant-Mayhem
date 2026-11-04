@@ -148,7 +148,7 @@ describe('StaffPanel', () => {
     });
     expect(preference).toHaveValue('automatic');
     expect(within(preference).getAllByRole('option').map(option => option.textContent))
-      .toEqual(['Automatic', 'Couch', 'Arcade']);
+      .toEqual(['Automatic', 'Couch', 'Break bench', 'Arcade']);
     expect(within(card).getByText(/applies to the next rest-amenity selection/i)).toBeVisible();
     expect(within(card).getByText(/falls back if.*unavailable|unreachable/i)).toBeVisible();
     expect(within(card).getByText(/does not change an active reservation/i)).toBeVisible();
@@ -156,6 +156,10 @@ describe('StaffPanel', () => {
     fireEvent.change(preference, { target: { value: 'arcade' } });
     expect(dispatch).toHaveBeenCalledWith({
       type: 'SET_STAFF_REST_AMENITY_PREFERENCE', id: 's1', preference: 'arcade',
+    });
+    fireEvent.change(preference, { target: { value: 'breakBench' } });
+    expect(dispatch).toHaveBeenLastCalledWith({
+      type: 'SET_STAFF_REST_AMENITY_PREFERENCE', id: 's1', preference: 'breakBench',
     });
 
     preference.focus();

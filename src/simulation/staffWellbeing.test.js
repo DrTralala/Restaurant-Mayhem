@@ -53,6 +53,10 @@ function couch(id = 'couch-1', x = 600, y = 500) {
   return { id, type: 'couch', x, y, rotation: 0, slots: createEmptyAmenitySlots('couch') };
 }
 
+function breakBench(id = 'bench-1', x = 600, y = 500) {
+  return { id, type: 'breakBench', x, y, rotation: 0, slots: createEmptyAmenitySlots('breakBench') };
+}
+
 function bed(id = 'bed-1', x = 600, y = 500) {
   return { id, type: 'bed', x, y, rotation: 0, slots: createEmptyAmenitySlots('bed') };
 }
@@ -333,6 +337,15 @@ describe('staff wellbeing controller', () => {
     expect(selectStaffWellbeingAmenity(preferCouch, 'staff-1', 0).amenity.type).toBe('couch');
   });
 
+  it('selects a reachable preferred break bench ahead of a closer arcade', () => {
+    const current = state({
+      staff: [restWorker({ restAmenityPreference: 'breakBench', lastRestActivityType: 'arcade' })],
+      staffAmenities: [breakBench('far-bench', 800, 500), arcade('near-arcade', 600, 500)],
+    });
+
+    expect(selectStaffWellbeingAmenity(current, 'staff-1', 0)?.amenity.type).toBe('breakBench');
+  });
+
   it.each([
     ['occupied', [couch('busy-couch', 600, 500)], slots => slots.map(slot => ({
       ...slot, reservedBy: 'another-worker',
@@ -362,6 +375,19 @@ describe('staff wellbeing controller', () => {
     });
 
     expect(selectStaffWellbeingAmenity(current, 'staff-1', 0)?.amenity.type).toBe('bed');
+  });
+
+  it('falls back from a fully reserved preferred bench to a reachable rest amenity', () => {
+    const bench = breakBench('preferred-bench');
+    const current = state({
+      staff: [restWorker({ restAmenityPreference: 'breakBench' })],
+      staffAmenities: [
+        { ...bench, slots: bench.slots.map(slot => ({ ...slot, reservedBy: 'another-worker' })) },
+        arcade('fallback-arcade', 700, 500),
+      ],
+    });
+
+    expect(selectStaffWellbeingAmenity(current, 'staff-1', 0)?.amenity.type).toBe('arcade');
   });
 
   it.each([
@@ -767,6 +793,59 @@ describe('staff wellbeing controller', () => {
     expect(result.staff.find(candidate => candidate.id === 'a').amenityUse.slotIndex).toBe(0);
     expect(result.staff.find(candidate => candidate.id === 'b').amenityUse.slotIndex).toBe(1);
     expect(result.staffAmenities[0].slots.map(slot => slot.reservedBy)).toEqual(['a', 'b']);
+  });
+
+  it('reserves three distinct break bench slots and leaves a fourth rest worker waiting', () => {
+    const amenity = breakBench();
+    const geometry = getAmenityGeometry(amenity);
+    const firstThree = geometry.approachPoints.map((position, index) => restWorker({
+      id: `bench-worker-${index}`,
+      ...position,
+    }));
+    const fourth = restWorker({ id: 'fourth-worker', x: 720, y: 530 });
+
+    const result = advanceStaffWellbeing(state({
+      staff: [...firstThree, fourth],
+      staffAmenities: [amenity],
+    }), 0, 0);
+
+    expect(result.staffAmenities[0].slots.map(slot => slot.reservedBy)
+      .filter(owner => owner != null)).toHaveLength(3);
+    expect(new Set(result.staffAmenities[0].slots.map(slot => slot.reservedBy).filter(Boolean)).size)
+      .toBe(3);
+    expect(result.staff.find(candidate => candidate.id === 'fourth-worker')).toMatchObject({
+      dutyPhase: 'waiting_for_amenity', amenityUse: null,
+    });
+  });
+
+  it('does not treat a break bench as a PTO amenity', () => {
+    const amenity = breakBench();
+    const waiting = advanceStaffWellbeing(state({
+      staff: [ptoWorker({ x: 610, y: 530 })],
+      staffAmenities: [amenity],
+    }), 0, 1);
+
+    expect(waiting.staff[0]).toMatchObject({
+      effectiveDuty: 'pto', dutyPhase: 'waiting_for_amenity', amenityUse: null,
+    });
+    expect(waiting.staffAmenities[0].slots.every(slot =>
+      slot.reservedBy == null && slot.occupiedBy == null)).toBe(true);
+  });
+
+  it('recovers break bench morale at four points per hour without PTO recovery', () => {
+    const amenity = breakBench();
+    const started = reserveAndArrive(state({
+      staff: [restWorker({ x: 610, y: 530, morale: 50 })],
+      staffAmenities: [amenity],
+    }), amenity);
+
+    const completed = advanceStaffWellbeing(started, 0, 900);
+
+    expect(completed.staff[0].morale).toBeCloseTo(51);
+    expect(completed.staff[0]).toMatchObject({
+      dutyPhase: 'exiting', amenityUse: { phase: 'occupied', activityEndsAt: 900 },
+      ptoSession: null, wellRestedUntil: 0,
+    });
   });
 
   it('gives a freed one-slot amenity to an older waiter before the prior occupant renews', () => {

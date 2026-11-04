@@ -19,6 +19,11 @@ import { getNextScheduledDutyChange } from './staffSchedulePreview';
 import CashierAssignments from './CashierAssignments';
 import { STAFF_CLEANING_FOCUS_OPTIONS } from '../simulation/cleaningFocus';
 import { STAFF_SCHEDULE_DAY_SECONDS } from '../simulation/staffSchedules';
+import {
+  getStaffAmenityDefinition,
+  STAFF_REST_AMENITY_PREFERENCES,
+  STAFF_REST_AMENITY_TYPES,
+} from '../data/staffAmenities';
 
 const ROLES = Object.keys(STAFF_SALARIES);
 const NAMES = ['Marco', 'Anna', 'Luca', 'Sofia', 'Giovanni', 'Isabella', 'Mario', 'Elena'];
@@ -416,7 +421,7 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
         const unavailablePreferredStation = preferredStationId !== '' && !hasPreferredStation;
         const preferredStationIdControl = `${bonusExplanationId}-preferred-station-${index}`;
         const preferredStationDescriptionId = `${preferredStationIdControl}-description`;
-        const restPreference = ['automatic', 'couch', 'arcade'].includes(s.restAmenityPreference)
+        const restPreference = STAFF_REST_AMENITY_PREFERENCES.includes(s.restAmenityPreference)
           ? s.restAmenityPreference : 'automatic';
         const cleaningFocus = STAFF_CLEANING_FOCUS_OPTIONS.some(option => option.value === s.cleaningFocus)
           ? s.cleaningFocus : 'balanced';
@@ -473,8 +478,9 @@ export default function StaffPanel({ onLocateStaff, locateDisabled = false, loca
               style={{ ...TYPOGRAPHY.control, background: '#111', color: '#ccc', border: '1px solid #555', borderRadius: 4, padding: '4px 6px' }}
             >
               <option value="automatic">Automatic</option>
-              <option value="couch">Couch</option>
-              <option value="arcade">Arcade</option>
+              {STAFF_REST_AMENITY_TYPES.map(type => (
+                <option key={type} value={type}>{getStaffAmenityDefinition(type).label}</option>
+              ))}
             </select>
             <p id={restPreferenceDescriptionId} style={{ ...TYPOGRAPHY.secondary, color: '#8fa4c8', margin: '4px 0 0' }}>
               Applies to the next rest-amenity selection only. The selector falls back if the preferred type is unavailable or unreachable. It is not a reservation and does not change an active reservation.

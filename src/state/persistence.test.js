@@ -2186,6 +2186,108 @@ describe('version eleven lifecycle save validation', () => {
     expect(restored.staff[0]).not.toHaveProperty('movementResidency');
   });
 
+  it('round-trips all three break bench slots with reserved, occupied and exiting owners', () => {
+    const fresh = createInitialState();
+    const bench = {
+      id: 'bench-1', type: 'breakBench', x: 700, y: 400, rotation: 0,
+      slots: [
+        { index: 0, reservedBy: 'bench-reserved', occupiedBy: null },
+        { index: 1, reservedBy: null, occupiedBy: 'bench-occupied' },
+        { index: 2, reservedBy: null, occupiedBy: 'bench-exiting' },
+      ],
+    };
+    const reserved = {
+      ...fresh.staff[0], id: 'bench-reserved', role: 'waiter', x: 650, y: 500,
+      effectiveDuty: 'rest', dutyPhase: 'travelling',
+      navigationGoal: { x: 710, y: 430 },
+      amenityUse: {
+        amenityId: 'bench-1', slotIndex: 0, phase: 'reserved',
+        activityStartedAt: null, activityEndsAt: null, lastRecoveryAt: null,
+      },
+      ptoSession: null,
+    };
+    const occupied = {
+      ...fresh.staff[1], id: 'bench-occupied', role: 'waiter', x: 730, y: 410,
+      effectiveDuty: 'rest', dutyPhase: 'active',
+      amenityUse: {
+        amenityId: 'bench-1', slotIndex: 1, phase: 'occupied',
+        activityStartedAt: 100, activityEndsAt: 1000, lastRecoveryAt: 200,
+      },
+      ptoSession: null,
+      movementResidency: { kind: 'staff_amenity', amenityId: 'bench-1', slotIndex: 1 },
+    };
+    const exiting = {
+      ...fresh.staff[2], id: 'bench-exiting', role: 'waiter', x: 750, y: 410,
+      effectiveDuty: 'work', dutyPhase: 'exiting',
+      amenityUse: {
+        amenityId: 'bench-1', slotIndex: 2, phase: 'occupied',
+        activityStartedAt: 100, activityEndsAt: 1000, lastRecoveryAt: 100,
+      },
+      navigationGoal: { x: 750, y: 390 },
+      ptoSession: null,
+      movementResidency: { kind: 'staff_amenity', amenityId: 'bench-1', slotIndex: 2 },
+    };
+    const state = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, gameTime: 500 },
+      staff: [reserved, occupied, exiting],
+      staffAmenities: [bench],
+      tables: [], chairs: [], doors: [], cashierStations: [], kitchenStations: [],
+      washStations: [], serviceTables: [], customers: [], queue: [], queueDepartures: [],
+      serviceItems: [], cookingBatches: [], floorDirt: [], queueSlots: [],
+    };
+
+    saveState(state);
+    const restored = hydrateState(loadState(), fresh);
+
+    expect(restored.staffAmenities[0].slots).toEqual(bench.slots);
+    expect(restored.staff.find(worker => worker.id === 'bench-reserved')).toMatchObject({
+      dutyPhase: 'travelling', amenityUse: { phase: 'reserved', slotIndex: 0 },
+    });
+    expect(restored.staff.find(worker => worker.id === 'bench-occupied')).toMatchObject({
+      dutyPhase: 'active', amenityUse: { phase: 'occupied', slotIndex: 1 },
+      movementResidency: { kind: 'staff_amenity', slotIndex: 1 },
+    });
+    expect(restored.staff.find(worker => worker.id === 'bench-exiting')).toMatchObject({
+      dutyPhase: 'exiting', amenityUse: { phase: 'occupied', slotIndex: 2 },
+      movementResidency: { kind: 'staff_amenity', slotIndex: 2 },
+    });
+  });
+
+  it.each([
+    ['wrong capacity', [
+      { index: 0, reservedBy: null, occupiedBy: null },
+      { index: 1, reservedBy: null, occupiedBy: null },
+    ]],
+    ['noncanonical slot index', [
+      { index: 0, reservedBy: null, occupiedBy: null },
+      { index: 1, reservedBy: null, occupiedBy: null },
+      { index: 3, reservedBy: null, occupiedBy: null },
+    ]],
+  ])('rejects a saved break bench with %s', (_name, slots) => {
+    const saved = currentSave({
+      staffAmenities: [{ id: 'bad-bench', type: 'breakBench', x: 700, y: 400, rotation: 0, slots }],
+    });
+
+    expect(() => hydrateState(saved, createInitialState())).toThrow(/slots|slot index/i);
+  });
+
+  it('keeps rejecting unknown saved amenity types with an accurate diagnostic', () => {
+    const saved = {
+      ...currentSave({
+      staffAmenities: [{
+        id: 'unknown-amenity', type: 'spa', x: 700, y: 400, rotation: 0,
+        slots: [],
+      }],
+      }),
+      version: SAVE_VERSION - 1,
+    };
+
+    expect(() => validateSavedState(saved)).toThrow(
+      'Invalid saved state: staffAmenities[0].type must be a supported staff amenity type',
+    );
+  });
+
   it('round-trips active automatic washing progress at an upgraded level', () => {
     const fresh = createInitialState();
     const state = {

@@ -230,6 +230,35 @@ describe('copyFixtures', () => {
     });
   });
 
+  it('copies a break bench at its canonical price with three new empty slots', () => {
+    const state = makeState({
+      restaurant: { expansionLevel: 1, funds: 500 },
+      staffAmenities: [{
+        id: 'bench1', type: 'breakBench', x: 500, y: 300, rotation: 1,
+        slots: [
+          { index: 0, reservedBy: 'worker', occupiedBy: null },
+          { index: 1, reservedBy: null, occupiedBy: 'worker-2' },
+          { index: 2, reservedBy: null, occupiedBy: null },
+        ],
+      }],
+    });
+
+    const result = copyFixtures(state, [
+      { type: 'staffAmenity', id: 'bench1', x: 700, y: 300, rotation: 3 },
+    ]);
+
+    expect(result).not.toBe(state);
+    expect(result.restaurant.funds).toBe(0);
+    expect(result.staffAmenities[1]).toEqual({
+      id: 'amenity1', type: 'breakBench', x: 700, y: 300, rotation: 3,
+      slots: [
+        { index: 0, reservedBy: null, occupiedBy: null },
+        { index: 1, reservedBy: null, occupiedBy: null },
+        { index: 2, reservedBy: null, occupiedBy: null },
+      ],
+    });
+  });
+
   it.each([
     ['insufficient funds', { restaurant: { expansionLevel: 1, funds: 299 }, tables: [{ id: 't1', seats: 2, status: 'empty', x: 200, y: 200 }], chairs: [] }, 'insufficient-funds'],
     ['stale source', { restaurant: { expansionLevel: 1, funds: 10000 }, tables: [], chairs: [] }, 'missing-fixture'],

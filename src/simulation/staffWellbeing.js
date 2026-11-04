@@ -1,7 +1,11 @@
 import {
   getAmenityGeometry,
   getStaffAmenityDefinition,
+  hasStaffAmenityAnchoredResidency,
+  isStaffAmenityEligibleForDuty,
   isStaffAmenityType,
+  STAFF_REST_AMENITY_PREFERENCES,
+  STAFF_REST_AMENITY_TYPES,
 } from '../data/staffAmenities';
 import {
   createStaffDutyDefaults,
@@ -38,8 +42,8 @@ export const STAFF_WELLBEING_RETRY_SECONDS = STAFF_WELLBEING_CONSTANTS.retrySeco
 export const STAFF_HANDOFF_TIMEOUT_SECONDS = STAFF_WELLBEING_CONSTANTS.handoffTimeoutSeconds;
 
 const DEFAULT_DUTY = 'work';
-const REST_TYPES = new Set(['couch', 'arcade']);
-const REST_AMENITY_PREFERENCES = new Set(['automatic', 'couch', 'arcade']);
+const REST_TYPES = new Set(STAFF_REST_AMENITY_TYPES);
+const REST_AMENITY_PREFERENCES = new Set(STAFF_REST_AMENITY_PREFERENCES);
 const VALID_DUTIES = new Set(['work', 'rest', 'pto']);
 const ACTIVE_PHASES = new Set(['active', 'exiting']);
 const WAITING_PHASES = new Set(['seeking_amenity', 'waiting_for_amenity']);
@@ -80,9 +84,7 @@ function validDuty(value) {
   return VALID_DUTIES.has(value) ? value : DEFAULT_DUTY;
 }
 
-function amenityForDuty(type, duty) {
-  return duty === 'pto' ? type === 'bed' : duty === 'rest' && REST_TYPES.has(type);
-}
+const amenityForDuty = isStaffAmenityEligibleForDuty;
 
 function activityPolicy(amenity) {
   const definition = getStaffAmenityDefinition(amenity?.type);
@@ -337,8 +339,7 @@ function routeToApproach(state, worker, approach) {
 function approachFor(amenity, slotIndex) {
   const geometry = getAmenityGeometry(amenity);
   if (!geometry) return null;
-  const index = amenity.type === 'couch' ? slotIndex : 0;
-  return geometry.approachPoints[index] || null;
+  return geometry.approachPoints[slotIndex] || null;
 }
 
 /**
@@ -599,7 +600,7 @@ function occupiedUseTransitionTime(state, worker, fromTime, toTime) {
   const limit = finite(activityEnd) ? Math.min(toTime, activityEnd) : toTime;
   const dutyAtFrom = scheduledDuty(worker, fromTime);
 
-  if (current.amenity.type !== 'bed') {
+  if (!policy?.fullMorale) {
     if (dutyAtFrom !== 'rest') return fromTime;
     if (finite(activityEnd) && activityEnd <= toTime + EPSILON) return activityEnd;
     for (let boundary = nextScheduleBoundary(fromTime); boundary <= limit + EPSILON; boundary += 1800) {
@@ -697,7 +698,7 @@ function transitionActiveUse(state, worker, desiredDuty, now, getFingerprint) {
   const policy = activityPolicy(current.amenity);
   const minimumEndAt = finite(worker.ptoSession?.minimumEndAt)
     ? worker.ptoSession.minimumEndAt : use.activityEndsAt;
-  if (current.amenity.type === 'bed' && desiredDuty !== 'pto'
+  if (policy?.fullMorale && desiredDuty !== 'pto'
     && finite(minimumEndAt) && now < minimumEndAt - EPSILON) {
     return { ...worker, effectiveDuty: 'pto', dutyPhase: 'active' };
   }
@@ -941,7 +942,7 @@ function startAmenityActivity(state, worker, now) {
     ? now + (policy.minimumSleepSeconds || STAFF_WELLBEING_CONSTANTS.minimumSleepSeconds)
     : now + (policy.sessionSeconds || 0);
   const anchor = geometry.slotAnchors[use.slotIndex] || geometry.slotAnchors[0];
-  const movedToAnchor = current.amenity.type === 'couch' || current.amenity.type === 'bed';
+  const movedToAnchor = hasStaffAmenityAnchoredResidency(current.amenity.type);
   const nextWorkerBase = clearNavigationGoal({
     ...worker,
     dutyPhase: 'active',

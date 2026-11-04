@@ -1,7 +1,10 @@
 import { createGrid } from './grid';
 import { createActorGrid } from './domainGrid';
 import { getQueueVisibleMembers } from '../customerQueue';
-import { getAmenityGeometry } from '../../data/staffAmenities';
+import {
+  getAmenityGeometry,
+  hasStaffAmenityAnchoredResidency,
+} from '../../data/staffAmenities';
 import { CHARACTER_CLEARANCE } from './destinations';
 import { createNavigationWorkspace, worldToCell } from '../movement/navigationWorkspace';
 import { hydrateSeatResidency } from '../movement/seatedDeparture';
@@ -100,6 +103,7 @@ function authorisedOrigin(state, actor) {
   const use = actor.amenityUse;
   if (actor.movementResidency?.kind !== 'staff_amenity' || use?.phase !== 'occupied') return false;
   const amenity = (state.staffAmenities || []).find(item => sameId(item.id, use.amenityId));
+  if (!hasStaffAmenityAnchoredResidency(amenity?.type)) return false;
   const slot = amenity?.slots?.find(item => item.index === use.slotIndex);
   const anchor = getAmenityGeometry(amenity)?.slotAnchors?.[use.slotIndex];
   return Boolean(amenity && sameId(slot?.occupiedBy, actor.id) && samePoint(actor, anchor)

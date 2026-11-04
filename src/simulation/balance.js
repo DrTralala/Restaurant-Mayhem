@@ -33,7 +33,7 @@ export function getUpgradeEffect(state, type) {
 export function getBaseArrivalRate(reputation) {
   const stars = clampReputation(reputation);
   const baseRate = 0.00055 + (stars - 1) * 0.00005;
-  return baseRate * (stars < 4.5 ? 1 : 2 + (stars - 4.5) * 2);
+  return baseRate * (1 + Math.max(0, stars - 4.5) * 4);
 }
 
 

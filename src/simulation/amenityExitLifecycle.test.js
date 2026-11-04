@@ -315,34 +315,35 @@ describe('canonical staff amenity exits', () => {
     expect(restored.staff[0].navigationGoal).toBeUndefined();
   });
 
-  it('keeps an occupied resident until an actor blocking its selected exit moves away', () => {
-    let state = makeState({ type: 'couch', gameTime: 899 });
-    state = step(state);
-    state = advanceToCouchEnd(state);
-    const exit = state.staff[0].navigationGoal;
-    const blocker = makeWorker('exit-blocker', exit, 'couch', {
-      schedule: allWork(), effectiveDuty: 'work', dutyPhase: 'available',
-    });
-    state = { ...state, staff: [...state.staff, blocker] };
+  it.each(['couch', 'breakBench'])(
+    'keeps an occupied %s resident until an actor blocking its selected exit moves away', type => {
+      let state = makeState({ type, gameTime: 899 });
+      state = step(state);
+      state = advanceToCouchEnd(state);
+      const exit = state.staff[0].navigationGoal;
+      const blocker = makeWorker('exit-blocker', exit, type, {
+        schedule: allWork(), effectiveDuty: 'work', dutyPhase: 'available',
+      });
+      state = { ...state, staff: [...state.staff, blocker] };
 
-    state = step(state);
-    const blocked = workerAtExit(state);
-    expect(blocked).toMatchObject({
-      x: state.staffAmenities[0].x + 10,
-      y: state.staffAmenities[0].y + 10,
-      amenityUse: { phase: 'occupied' },
-      movementResidency: { kind: 'staff_amenity' },
-    });
-    expect(state.movementCoordinator.statuses.get('resident')?.plan).not.toBe('arrived');
+      state = step(state);
+      const blocked = workerAtExit(state);
+      expect(blocked).toMatchObject({
+        x: state.staffAmenities[0].x + 10,
+        y: state.staffAmenities[0].y + 10,
+        amenityUse: { phase: 'occupied' },
+        movementResidency: { kind: 'staff_amenity' },
+      });
+      expect(state.movementCoordinator.statuses.get('resident')?.plan).not.toBe('arrived');
 
-    state = {
-      ...state,
-      staff: state.staff.map(worker => worker.id === 'exit-blocker'
-        ? { ...worker, x: 700, y: 600 } : worker),
-    };
-    state = step(state);
-    expectReleasedAtWork(state);
-  });
+      state = {
+        ...state,
+        staff: state.staff.map(worker => worker.id === 'exit-blocker'
+          ? { ...worker, x: 700, y: 600 } : worker),
+      };
+      state = step(state);
+      expectReleasedAtWork(state);
+    });
 
   it('does not authorise a stale exit through an unrelated solid fixture', () => {
     let state = makeState({ type: 'couch', gameTime: 899 });
@@ -460,6 +461,66 @@ describe('canonical staff amenity exits', () => {
     });
     expect(state.staff.filter(worker => worker.amenityUse?.phase === 'occupied')).toHaveLength(1);
     expect(state.staff.filter(worker => worker.amenityUse?.phase === 'reserved')).toHaveLength(1);
+  });
+
+  it('moves three break bench residents through distinct slots and exits them without overlap', () => {
+    const amenity = {
+      id: 'breakBench-1', type: 'breakBench', x: 500, y: 300, rotation: 0,
+      slots: createEmptyAmenitySlots('breakBench'),
+    };
+    const geometry = getAmenityGeometry(amenity);
+    const staff = geometry.approachPoints.map((point, index) =>
+      makeWorker(`bench-resident-${index}`, point, 'breakBench'));
+    let state = makeState({ type: 'breakBench', gameTime: 899, staff });
+
+    state = step(state);
+    expect(state.staff).toHaveLength(3);
+    expect(state.staff.every(worker => worker.amenityUse?.phase === 'occupied')).toBe(true);
+    expect(state.staffAmenities[0].slots.map(slot => slot.occupiedBy)).toEqual(
+      ['bench-resident-0', 'bench-resident-1', 'bench-resident-2'],
+    );
+
+    state = advanceToCouchEnd(state);
+    for (let index = 0; index < 65 && state.staff.some(worker => worker.amenityUse); index += 1) {
+      state = step(state);
+      for (let first = 0; first < state.staff.length; first += 1) {
+        for (let second = first + 1; second < state.staff.length; second += 1) {
+          expect(Math.hypot(
+            state.staff[first].x - state.staff[second].x,
+            state.staff[first].y - state.staff[second].y,
+          )).toBeGreaterThanOrEqual(16);
+        }
+      }
+    }
+
+    expect(state.staff.filter(worker => worker.amenityUse).map(worker => ({
+      id: worker.id,
+      phase: worker.amenityUse.phase,
+      position: { x: worker.x, y: worker.y },
+      goal: worker.navigationGoal,
+      blockReason: worker.dutyBlockReason,
+      status: state.movementCoordinator.statuses.get(worker.id),
+    }))).toEqual([]);
+    expect(state.staffAmenities[0].slots.every(slot =>
+      slot.reservedBy == null && slot.occupiedBy == null)).toBe(true);
+  });
+
+  it.each([0, 1, 2, 3])('runs a break bench rest-and-exit session at rotation %s', rotation => {
+    let state = makeState({ type: 'breakBench', rotation, gameTime: 899 });
+    validateSavedState(state);
+    state = step(state);
+    expect(state.staff[0].amenityUse?.phase).toBe('occupied');
+    expect(state.staffAmenities[0].slots.filter(slot => slot.occupiedBy === 'resident')).toHaveLength(1);
+
+    state = advanceToCouchEnd(state);
+    expect(state.staff[0]).toMatchObject({
+      dutyPhase: 'exiting', amenityUse: { phase: 'occupied' },
+    });
+    expect(state.staff[0].ptoSession).toBeNull();
+    expect(state.staff[0].wellRestedUntil ?? 0).toBe(0);
+
+    state = step(state);
+    expectReleasedAtWork(state);
   });
 
   it.each([

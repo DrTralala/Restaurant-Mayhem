@@ -8,6 +8,7 @@ import {
 } from '../simulation/staffSchedules';
 import { isRestaurantOpen } from '../simulation/clock';
 import { humaniseIdentifier, TYPOGRAPHY } from '../typography';
+import { isStaffAmenityEligibleForDuty } from '../data/staffAmenities';
 
 const MODE_LABELS = Object.freeze({ work: 'Work', rest: 'Rest', pto: 'PTO' });
 const DAY_SECONDS = 24 * 60 * 60;
@@ -113,7 +114,7 @@ function getDutyReason(staff, dutyPhase) {
     const amenityType = staff?.amenityUse?.amenityType
       || staff?.amenityUse?.type
       || staff?.requestedAmenityType;
-    return amenityType === 'bed' || staff?.effectiveDuty === 'pto'
+    return isStaffAmenityEligibleForDuty(amenityType, 'pto') || staff?.effectiveDuty === 'pto'
       ? 'waiting for bed'
       : 'waiting for amenity';
   }

@@ -404,6 +404,22 @@ describe('spawnCustomers', () => {
     expect(spawnCustomers(state, dt).queue).toHaveLength(0);
   });
 
+  it('composes the corrected reputation rate with marketing and dinner rush for admission', () => {
+    const state = {
+      ...baseState,
+      restaurant: { ...baseState.restaurant, reputation: 4.75, gameTime: 18.5 * 3600 },
+      upgrades: [{ level: 2, effects: { type: 'customerRate', value: 0.0001 } }],
+    };
+    const dt = 60;
+    const expectedProbability = 1 - Math.exp(-(0.001475 + 0.0002) * 3 * dt);
+    const random = vi.spyOn(Math, 'random').mockReturnValue(expectedProbability - 1e-9);
+
+    expect(spawnCustomers(state, dt).queue).toHaveLength(1);
+
+    random.mockReturnValue(expectedProbability + 1e-9);
+    expect(spawnCustomers(state, dt).queue).toHaveLength(0);
+  });
+
   it('raises five-star arrivals above the pre-change ordinary probability', () => {
     const state = { ...baseState, restaurant: { ...baseState.restaurant, reputation: 5 } };
     const dt = 60;

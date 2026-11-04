@@ -4,6 +4,7 @@ import { PLACEABLES } from './placeables';
 
 const AMENITY_PRICES = {
   couch: 400,
+  breakBench: 500,
   arcade: 800,
   bed: 500,
 };
@@ -37,7 +38,7 @@ describe('amenity price source wiring', () => {
   });
 
   it('propagates changed canonical prices to placeables and the shop', async () => {
-    const changedPrices = { couch: 401, arcade: 802, bed: 503 };
+    const changedPrices = { couch: 401, breakBench: 502, arcade: 802, bed: 503 };
     const { placeables, shopItems } = await loadWithAmenityPrices(changedPrices);
 
     for (const [type, price] of Object.entries(changedPrices)) {
