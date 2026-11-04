@@ -95,6 +95,11 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
   const unaffordableReviewPercentage = partyReviewHistory.length
     ? Math.round(unaffordableReviewCount / partyReviewHistory.length * 100)
     : 0;
+  const poorValueReviewCount = partyReviewHistory
+    .filter(review => review.poorValueCount > 0).length;
+  const poorValueReviewPercentage = partyReviewHistory.length
+    ? Math.round(poorValueReviewCount / partyReviewHistory.length * 100)
+    : 0;
   const latestPartyReviews = partyReviewHistory.slice(-10).reverse();
   const partyReviewDayTrend = getPartyReviewDayTrend(state.partyReviewHistory);
   const recentFinances = (Array.isArray(state.dailyHistory) ? state.dailyHistory : [])
@@ -542,6 +547,9 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
           <div style={statBox}>
             Reviews with unaffordable members: {unaffordableReviewCount} ({unaffordableReviewPercentage}%)
           </div>
+          <div style={statBox}>
+            Reviews with poor-value members: {poorValueReviewCount} ({poorValueReviewPercentage}%)
+          </div>
           <section aria-label="Retained review day trend" style={{ marginTop: 8 }}>
             <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>
               Retained review day trend
@@ -560,6 +568,9 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
                 const unaffordablePercentage = Number.isFinite(row.unaffordableShare)
                   ? `${Math.round(row.unaffordableShare * 100)}%`
                   : 'Unavailable';
+                const poorValuePercentage = Number.isFinite(row.poorValueShare)
+                  ? `${Math.round(row.poorValueShare * 100)}%`
+                  : 'Unavailable';
                 return (
                   <li
                     key={row.day}
@@ -568,7 +579,8 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
                   >
                     Day {row.day} · {row.reviewCount} party reviews · Mean score {averageScore}
                     {' · '}Parties with unaffordable members: {row.unaffordablePartyCount} of {row.reviewCount}
-                    {' '}({unaffordablePercentage})
+                    {' '}({unaffordablePercentage}) · Parties with poor-value members: {row.poorValuePartyCount} of {row.reviewCount}
+                    {' '}({poorValuePercentage})
                   </li>
                 );
               })}
@@ -593,7 +605,7 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
                 </div>
                 <div>Score: {review.score.toFixed(1)}</div>
                 <div>
-                  Party: {review.memberCount} · Paid: {review.paidCount} · Unaffordable: {review.unaffordableCount}
+                  Party: {review.memberCount} · Paid: {review.paidCount} · Unaffordable: {review.unaffordableCount} · Poor value: {review.poorValueCount}
                 </div>
                 <div>Reputation: {signedDelta}</div>
               </div>

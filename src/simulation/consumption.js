@@ -196,11 +196,12 @@ function completeServiceItem(item, gameTime) {
   };
 }
 
-function beginUnaffordableDeparture(customer) {
+function beginMenuRefusalDeparture(customer) {
   return {
     ...clearNavigationGoal(customer),
     state: 'leaving',
-    departureReason: 'menu_unaffordable',
+    departureReason: customer.menuOutcome === 'poor_value'
+      ? 'menu_poor_value' : 'menu_unaffordable',
     exitPhase: 'to_door',
     exitDoorId: null,
     exitFadeProgress: 0,
@@ -282,18 +283,19 @@ export function advanceConsumption(state) {
   const synchronisedPartyIds = new Set();
   const readyPartyIds = new Set();
   const hasExplicitOutcome = customer =>
-    customer.menuOutcome === 'ordered' || customer.menuOutcome === 'unaffordable';
+    customer.menuOutcome === 'ordered'
+      || customer.menuOutcome === 'unaffordable'
+      || customer.menuOutcome === 'poor_value';
   for (const [partyId, members] of partyMembers) {
     if (members.length < 2 || !members.some(hasExplicitOutcome)) continue;
     synchronisedPartyIds.add(partyId);
     if (!members.every(hasExplicitOutcome)) continue;
 
     const orderingMembers = members.filter(customer => customer.menuOutcome === 'ordered');
-    const allOrderingMembersComplete = orderingMembers.length > 0
-      && orderingMembers.every(customer =>
-        completeByCustomerId.get(customer.id) === true
-        || isCheckoutState(customer)
-        || customer.state === 'leaving');
+    const allOrderingMembersComplete = orderingMembers.every(customer =>
+      completeByCustomerId.get(customer.id) === true
+      || isCheckoutState(customer)
+      || customer.state === 'leaving');
     if (allOrderingMembersComplete) readyPartyIds.add(partyId);
   }
 
@@ -307,9 +309,9 @@ export function advanceConsumption(state) {
           ? { ...customer, state: 'seated' }
           : customer;
       }
-      if (customer.menuOutcome === 'unaffordable'
+      if (customer.menuOutcome !== 'ordered'
         && customer.state === 'waiting_for_party') {
-        return beginUnaffordableDeparture(customer);
+        return beginMenuRefusalDeparture(customer);
       }
       if (customer.menuOutcome === 'ordered' && complete
         && !isCheckoutState(customer) && customer.state !== 'leaving') {

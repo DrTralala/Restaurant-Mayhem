@@ -3,6 +3,20 @@ import { COOKBOOK_RECIPES, getCookbookRecipe, MASTERY_PORTION_THRESHOLD } from '
 import { BASES, BASE_EQUIPMENT_MAP, METHODS } from './recipes';
 
 describe('authored catalogue', () => {
+  it('keeps canonical purchase costs separate from menu prices', () => {
+    expect(COOKBOOK_RECIPES.map(({ id, purchaseCost, price }) => [id, purchaseCost, price])).toEqual([
+      ['toast', 0, 12],
+      ['cheese-toast', 75, 14],
+      ['roast-vegetables', 150, 18],
+      ['baked-eggs', 175, 15],
+      ['baked-potato', 250, 22],
+      ['fries', 100, 10],
+      ['fried-chicken', 250, 20],
+      ['gazpacho', 125, 16],
+      ['fish-bisque', 225, 20],
+    ]);
+  });
+
   it('provides the nine deterministic equipment and discovery choices', () => {
     expect(COOKBOOK_RECIPES.map(({ id, base, method, requiredEquipmentId, prepTime, popularity, price }) =>
       [id, base, method, requiredEquipmentId, prepTime, popularity, price])).toEqual([

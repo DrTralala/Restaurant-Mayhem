@@ -11,6 +11,7 @@ export function getPartyReviewDayTrend(history) {
         reviewCount: 0,
         scoreTotal: 0,
         unaffordablePartyCount: 0,
+        poorValuePartyCount: 0,
       };
       days.set(review.day, daySummary);
     }
@@ -18,16 +19,19 @@ export function getPartyReviewDayTrend(history) {
     daySummary.reviewCount += 1;
     daySummary.scoreTotal += review.score;
     if (review.unaffordableCount > 0) daySummary.unaffordablePartyCount += 1;
+    if (review.poorValueCount > 0) daySummary.poorValuePartyCount += 1;
   }
 
   return Array.from(days.values(), ({
-    day, reviewCount, scoreTotal, unaffordablePartyCount,
+    day, reviewCount, scoreTotal, unaffordablePartyCount, poorValuePartyCount,
   }) => ({
     day,
     reviewCount,
     averageScore: scoreTotal / reviewCount,
     unaffordablePartyCount,
     unaffordableShare: unaffordablePartyCount / reviewCount,
+    poorValuePartyCount,
+    poorValueShare: poorValuePartyCount / reviewCount,
   }))
     .sort((left, right) => right.day - left.day)
     .slice(0, 7);

@@ -4,8 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import MenuPanel from './MenuPanel';
 import { useDispatch, useGameState, gameReducer } from '../state/GameContext';
 import { createInitialState } from '../state/initialState';
-import { createCookbookState, normaliseCookbookState } from '../simulation/cookbook';
+import { getResolvedDish, normaliseCookbookState,
+  reconcileCookbookDiscoveries } from '../simulation/cookbook';
+import { getCookbookRecipe } from '../data/cookbook';
 import { estimateMenuDemand, getMenuAnalysis } from '../simulation/menuEconomy';
+import { withOwnedAuthoredDishes } from '../simulation/menuTestFixtures';
 import * as menuEconomy from '../simulation/menuEconomy';
 
 vi.mock('../state/GameContext', async importOriginal => {
@@ -17,7 +20,45 @@ vi.mock('../state/GameContext', async importOriginal => {
   };
 });
 
+function formatCoverageForTest(share) {
+  if (share === 0) return '0%';
+  if (share === 1) return '100%';
+  const rounded = (share * 100).toFixed(1);
+  if (rounded === '0.0') return '<0.1%';
+  if (rounded === '100.0') return '>99.9%';
+  return `${rounded}%`;
+}
+
 const statefulHarness = { current: null };
+
+function toastMenuState({ name = 'Toast', price = 12, quality = 2, funds = 200, reputation = 3 } = {}) {
+  const state = createInitialState();
+  const entry = state.cookbook.entries.toast;
+  const menuSettings = { ...entry.menuSettings, name, price, quality };
+  state.cookbook = { ...state.cookbook, entries: {
+    ...state.cookbook.entries, toast: { ...entry, menuSettings },
+  } };
+  state.dishes = [{ ...state.dishes[0], id: 'toast', ...menuSettings }];
+  state.restaurant = { ...state.restaurant, funds, reputation };
+  state.unlockedDrinkIds = ['water'];
+  state.drinkOverrides = { water: { price: 8, quality: 3 } };
+  return state;
+}
+
+function updateCookbookDishSettings(state, menuItemId, changes) {
+  const dish = state.dishes.find(candidate => candidate.id === menuItemId);
+  const entry = state.cookbook.entries[dish.cookbookId];
+  const menuSettings = { ...entry.menuSettings, ...changes };
+  return {
+    ...state,
+    cookbook: { ...state.cookbook, entries: {
+      ...state.cookbook.entries, [dish.cookbookId]: { ...entry, menuSettings },
+    } },
+    dishes: state.dishes.map(candidate => candidate.id === menuItemId
+      ? { ...candidate, ...menuSettings }
+      : candidate),
+  };
+}
 
 function StatefulMenuPanel({ initial, actions }) {
   const [state, dispatch] = useReducer(gameReducer, initial);
@@ -33,18 +74,7 @@ function StatefulMenuPanel({ initial, actions }) {
 
 describe('MenuPanel drinks', () => {
   beforeEach(() => {
-    useGameState.mockReturnValue({
-      dishes: [{
-        id: 'toast', name: 'Toast', price: 12, prepTime: 60,
-        quality: 2, popularity: 45,
-      }],
-      recipeSlots: 1,
-      equipment: [{ id: 'eq1', name: 'Toaster', owned: true }],
-      unlockedDrinkIds: ['water'],
-      drinkOverrides: { water: { price: 8, quality: 3 } },
-      upgrades: [],
-      restaurant: { funds: 200, reputation: 3 },
-    });
+    useGameState.mockReturnValue(toastMenuState());
     useDispatch.mockReturnValue(vi.fn());
   });
 
@@ -55,7 +85,7 @@ describe('MenuPanel drinks', () => {
 
     const waterCard = screen.getByRole('article', { name: 'Water menu item' });
     expect(within(waterCard).getByLabelText('Water price')).toHaveValue(8);
-    expect(within(waterCard).getByText(/Estimated demand: \d+%/)).toBeInTheDocument();
+    expect(within(waterCard).getByText(/Estimated walk-in demand: \d+%/)).toBeInTheDocument();
     expect(within(waterCard).getByText(/Quality: .* Lv\.3/)).toBeInTheDocument();
     expect(within(waterCard).getByText('Popularity: 50%')).toBeInTheDocument();
     expect(within(waterCard).getByText('$8 · 120s prep')).toBeInTheDocument();
@@ -81,7 +111,7 @@ describe('MenuPanel drinks', () => {
     render(<MenuPanel />);
 
     const dishCard = screen.getByRole('article', { name: 'Toast menu item' });
-    expect(within(dishCard).getByText(/Estimated demand: \d+%/)).toBeInTheDocument();
+    expect(within(dishCard).getByText(/Estimated walk-in demand: \d+%/)).toBeInTheDocument();
     const toastPrice = within(dishCard).getByLabelText('Toast price');
     fireEvent.change(toastPrice, { target: { value: '14' } });
     expect(dispatch).not.toHaveBeenCalled();
@@ -100,7 +130,7 @@ describe('MenuPanel drinks', () => {
     expect(within(teaCard).getByRole('button', { name: 'Unlock Tea ($150)' })).toBeInTheDocument();
     expect(within(teaCard).queryByLabelText('Tea price')).not.toBeInTheDocument();
     expect(within(teaCard).queryByRole('button', { name: 'Upgrade Tea quality ($50)' })).not.toBeInTheDocument();
-    expect(within(teaCard).queryByText(/Estimated demand:/)).not.toBeInTheDocument();
+      expect(within(teaCard).queryByText(/Estimated walk-in demand:/)).not.toBeInTheDocument();
   });
 
   it('shows a neutral canonical preview for every locked drink', () => {
@@ -122,14 +152,14 @@ describe('MenuPanel drinks', () => {
     const icedTeaCard = screen.getByRole('article', { name: 'Iced Tea menu item' });
     expect(within(icedTeaCard).getByRole('button', { name: 'Unlock Iced Tea ($150)' })).toBeInTheDocument();
     expect(within(icedTeaCard).queryByLabelText('Iced Tea price')).not.toBeInTheDocument();
-    expect(within(icedTeaCard).queryByText(/Estimated demand:/)).not.toBeInTheDocument();
+    expect(within(icedTeaCard).queryByText(/Estimated walk-in demand:/)).not.toBeInTheDocument();
 
     const lemonadeCard = screen.getByRole('article', { name: 'Premium Lemonade menu item' });
     expect(within(lemonadeCard).getByRole('button', {
       name: 'Unlock Premium Lemonade ($450)',
     })).toBeInTheDocument();
     expect(within(lemonadeCard).queryByLabelText('Premium Lemonade price')).not.toBeInTheDocument();
-    expect(within(lemonadeCard).queryByText(/Estimated demand:/)).not.toBeInTheDocument();
+    expect(within(lemonadeCard).queryByText(/Estimated walk-in demand:/)).not.toBeInTheDocument();
   });
 
   it('dispatches a canonical Iced Tea unlock and respects affordability and read-only guards', () => {
@@ -222,40 +252,66 @@ describe('MenuPanel drinks', () => {
     expect(screen.getByRole('button', { name: 'Unlock Tea ($150)' })).toBeDisabled();
   });
 
-  it('reserves room beside New dish for the modal close button', () => {
+  it('reserves room beside Cookbook for the modal close button', () => {
     render(<MenuPanel />);
 
     const headingRow = screen.getByRole('heading', { name: 'Menu' }).parentElement;
     expect(headingRow).toHaveStyle({ paddingRight: '40px' });
-    expect(within(headingRow).getByRole('button', { name: '+ New dish' }))
+    expect(within(headingRow).getByRole('button', { name: 'Cookbook' }))
       .toBeInTheDocument();
+    expect(within(headingRow).queryByRole('button', { name: /New dish/ })).not.toBeInTheDocument();
   });
 
-  it('browses the cookbook child and returns without losing creator or drink controls', () => {
+  it('browses the cookbook child and returns to menu controls without a custom creator route', () => {
+    useGameState.mockReturnValue(createInitialState());
     render(<MenuPanel />);
     fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
     expect(screen.getByRole('heading', { name: 'Cookbook' })).toBeInTheDocument();
     expect(screen.getAllByRole('article')).toHaveLength(9);
     expect(screen.queryByRole('region', { name: 'Menu affordability' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
-    expect(screen.getByRole('button', { name: '+ New dish' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Cookbook' })).toBeEnabled();
     expect(screen.getByLabelText('Water price')).toBeEnabled();
     expect(screen.getByRole('region', { name: 'Menu affordability' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
-    expect(screen.getByRole('heading', { name: 'Create new dish' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /New dish/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Create new dish/)).not.toBeInTheDocument();
   });
 
-  it('focuses the first available control on entry to Cookbook and New dish', () => {
+  it('uses the real resolver for canonical state and filters an otherwise identity-matching unowned dish', () => {
+    const state = createInitialState();
+    const entry = state.cookbook.entries['cheese-toast'];
+    state.cookbook = { ...state.cookbook, entries: {
+      ...state.cookbook.entries,
+      'cheese-toast': { ...entry, discovered: true, owned: false },
+    } };
+    state.dishes.push({ ...getCookbookRecipe('cheese-toast'), ...entry.menuSettings,
+      id: 'unowned-cheese-toast', cookbookId: 'cheese-toast' });
+    useGameState.mockReturnValue(state);
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+
+    expect(getResolvedDish(state, 'starter-toast')).toMatchObject({ cookbookId: 'toast' });
+    expect(getResolvedDish(state, 'unowned-cheese-toast')).toBeNull();
+    render(<MenuPanel />);
+
+    expect(screen.getByRole('article', { name: 'Toasted Bread menu item' })).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'Cheese Toast menu item' })).not.toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('focuses the first available control on entry to Cookbook and active name editing', () => {
+    useGameState.mockReturnValue(createInitialState());
     render(<MenuPanel />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
     expect(screen.getByRole('button', { name: 'Back to menu' })).toHaveFocus();
     fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
-    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
-    expect(screen.getByRole('combobox', { name: 'Base ingredient:' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Toasted Bread name' }));
+    expect(screen.getByRole('textbox', { name: 'Dish name' })).toHaveFocus();
   });
 
   it('returns focus to the Cookbook opener after Back', () => {
+    useGameState.mockReturnValue(createInitialState());
     render(<MenuPanel />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
@@ -264,7 +320,62 @@ describe('MenuPanel drinks', () => {
     expect(screen.getByRole('button', { name: 'Cookbook' })).toHaveFocus();
   });
 
+  it('recovers an empty menu through the owned Cookbook recipe path', () => {
+    const initial = createInitialState();
+    initial.dishes = [];
+    const actions = [];
+    useGameState.mockImplementation(() => statefulHarness.current.state);
+    useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+    render(<StatefulMenuPanel initial={initial} actions={actions} />);
+
+    expect(screen.getByText('No dishes yet. Visit the Cookbook to add an owned recipe.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Toasted Bread to menu' }));
+    expect(statefulHarness.current.state.dishes).toHaveLength(1);
+    expect(actions).toEqual([{ type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
+    expect(screen.getByRole('article', { name: 'Toasted Bread menu item' })).toBeInTheDocument();
+    expect(screen.queryByText('No dishes yet. Visit the Cookbook to add an owned recipe.'))
+      .not.toBeInTheDocument();
+  });
+
+  it('retains a trimmed active recipe name after remove and re-add without changing identity fields', () => {
+    const initial = createInitialState();
+    const actions = [];
+    useGameState.mockImplementation(() => statefulHarness.current.state);
+    useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+    render(<StatefulMenuPanel initial={initial} actions={actions} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Toasted Bread name' }));
+    const name = screen.getByRole('textbox', { name: 'Dish name' });
+    fireEvent.change(name, { target: { value: '  House Toast  ' } });
+    fireEvent.keyDown(name, { key: 'Enter' });
+
+    const updated = statefulHarness.current.state.dishes[0];
+    expect(updated).toMatchObject({ id: 'starter-toast', name: 'House Toast',
+      cookbookId: 'toast', base: 'Bread', method: 'Toasted', requiredEquipmentId: 'eq1' });
+    expect(actions[0]).toEqual({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { name: 'House Toast' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove House Toast from menu' }));
+    expect(statefulHarness.current.state.dishes).toEqual([]);
+    expect(statefulHarness.current.state.cookbook.entries.toast.menuSettings.name).toBe('House Toast');
+    fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add House Toast to menu' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
+
+    expect(screen.getByRole('article', { name: 'House Toast menu item' })).toBeInTheDocument();
+    expect(statefulHarness.current.state.dishes[0].name).toBe('House Toast');
+    expect(statefulHarness.current.state.cookbook.entries.toast.menuSettings.name).toBe('House Toast');
+    expect(actions).toEqual([
+      { type: 'UPDATE_DISH', id: 'starter-toast', changes: { name: 'House Toast' } },
+      { type: 'REMOVE_DISH', id: 'starter-toast' },
+      { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' },
+    ]);
+  });
+
   it('preserves Cookbook focus across an ordinary parent rerender', () => {
+    useGameState.mockReturnValue(createInitialState());
     const view = render(<MenuPanel />);
     fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
 
@@ -280,11 +391,12 @@ describe('MenuPanel drinks', () => {
     expect(readyActions).toHaveFocus();
   });
 
-  it('preserves creator focus on rerender and restores the New dish opener on Cancel', () => {
+  it('preserves name-editor focus on rerender and restores the active dish opener on Cancel', () => {
+    useGameState.mockReturnValue(createInitialState());
     const view = render(<MenuPanel />);
-    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Toasted Bread name' }));
 
-    const dishName = screen.getByLabelText('Dish name:');
+    const dishName = screen.getByRole('textbox', { name: 'Dish name' });
     dishName.focus();
     const state = useGameState();
     useGameState.mockReturnValue({
@@ -295,40 +407,40 @@ describe('MenuPanel drinks', () => {
 
     expect(dishName).toHaveFocus();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByRole('button', { name: '+ New dish' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Edit Toasted Bread name' })).toHaveFocus();
   });
 
-  it('returns focus to New dish after successful creation', () => {
-    const state = useGameState();
-    useGameState.mockReturnValue({
-      ...state,
-      equipment: [...state.equipment, { id: 'eq2', name: 'Oven', owned: true }],
-    });
+  it('commits only the trimmed active dish name, then restores focus to its editor trigger', () => {
+    useGameState.mockReturnValue(createInitialState());
     const dispatch = vi.fn();
     useDispatch.mockReturnValue(dispatch);
     render(<MenuPanel />);
 
-    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
-    fireEvent.change(screen.getByLabelText('Dish name:'), { target: { value: 'Soup' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Toasted Bread name' }));
+    const editor = screen.getByRole('textbox', { name: 'Dish name' });
+    fireEvent.change(editor, { target: { value: '  House Toast  ' } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
 
     expect(dispatch).toHaveBeenCalledOnce();
-    expect(dispatch.mock.calls[0][0]).toMatchObject({ type: 'ADD_DISH', dish: { name: 'Soup' } });
-    expect(screen.getByRole('button', { name: '+ New dish' })).toHaveFocus();
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { name: 'House Toast' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Edit Toasted Bread name' })).toHaveFocus();
   });
 
-  it('shows authored effective seconds, popularity and mastery separately from custom dishes', () => {
+  it('shows authored effective seconds, popularity and mastery without a custom recipe path', () => {
     let state = createInitialState();
     state = { ...state, ...normaliseCookbookState(state, { legacy: true }) };
     Object.assign(state.cookbook.entries.toast, { paidPortions: 15, perk: 'speed' });
-    state.dishes.push({ ...state.dishes[0], cookbookId: null, id: 'custom', name: 'Custom Toast', prepTime: 180 });
     useGameState.mockReturnValue(state);
     render(<MenuPanel />);
     const toast = within(screen.getByRole('article', { name: 'Toasted Bread menu item' }));
     expect(toast.getByText('$12 · 51s cook')).toBeInTheDocument();
     expect(toast.getByText('Popularity: 50%')).toBeInTheDocument();
     expect(toast.getByText('Cookbook recipe · Signature: Quick Service')).toBeInTheDocument();
-    expect(screen.getByText('Custom recipe')).toBeInTheDocument();
+    expect(screen.queryByText('Custom recipe')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /New dish/ })).not.toBeInTheDocument();
     expect(screen.getByText(/base cooking work, not the complete wait time/)).toBeInTheDocument();
   });
 
@@ -381,17 +493,13 @@ describe('MenuPanel drinks', () => {
         .not.toBeInTheDocument();
     });
 
-    it('omits mastery progress from custom dishes', () => {
+    it('does not expose unsupported custom dishes or mastery controls', () => {
       const state = stateWithMastery(14);
-      state.dishes.push({
-        ...state.dishes[0], id: 'custom-toast', cookbookId: null, name: 'Custom Toast',
-      });
       useGameState.mockReturnValue(state);
       render(<MenuPanel />);
 
       expect(toastCard()).toHaveTextContent('Mastery progress: 14/15 paid portions (cumulative)');
-      expect(within(screen.getByRole('article', { name: 'Custom Toast menu item' }))
-        .queryByText(/Mastery progress:/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('article', { name: 'Custom Toast menu item' })).not.toBeInTheDocument();
     });
 
     it('updates cumulative progress and choice availability on rerender without dispatch', () => {
@@ -446,33 +554,45 @@ describe('MenuPanel drinks', () => {
     });
   });
 
-  it('career decision blocks dish, drink and creator mutations while allowing cookbook browsing', () => {
-    const state = useGameState();
+  it('career decision blocks dish, drink, and name mutations while allowing cookbook browsing', () => {
+    const state = createInitialState();
     useGameState.mockReturnValue({ ...state, careerRun: { needsDecision: true } });
     const dispatch = vi.fn();
     useDispatch.mockReturnValue(dispatch);
     render(<MenuPanel />);
     expect(screen.getByText(/Career decision pending/)).toBeInTheDocument();
-    for (const name of ['+ New dish', 'Upgrade Toast quality ($50)', 'Remove Toast from menu', 'Upgrade Water quality ($50)', 'Unlock Tea ($150)']) {
+    for (const name of ['Edit Toasted Bread name', 'Upgrade Toasted Bread quality ($50)',
+      'Remove Toasted Bread from menu', 'Upgrade Water quality ($50)', 'Unlock Tea ($150)']) {
       const button = screen.getByRole('button', { name });
       expect(button).toBeDisabled();
       fireEvent.click(button);
     }
-    expect(screen.getByLabelText('Toast price')).toBeDisabled();
+    expect(screen.getByLabelText('Toasted Bread price')).toBeDisabled();
     expect(screen.getByLabelText('Water price')).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Toast price'), { target: { value: '99' } });
+    fireEvent.change(screen.getByLabelText('Toasted Bread price'), { target: { value: '99' } });
     fireEvent.change(screen.getByLabelText('Water price'), { target: { value: '99' } });
     expect(dispatch).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
     expect(screen.getByRole('button', { name: 'Back to menu' })).toBeEnabled();
   });
 
-  it('suppresses an already-open custom creator when the parent gate becomes read-only', () => {
+  it('keeps an open name editor read-only and discards its draft when the parent gate changes', () => {
+    const state = createInitialState();
+    useGameState.mockReturnValue(state);
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
     const view = render(<MenuPanel />);
-    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Toasted Bread name' }));
+    const name = screen.getByRole('textbox', { name: 'Dish name' });
+    fireEvent.change(name, { target: { value: 'Draft name' } });
+
     view.rerender(<MenuPanel readOnly />);
-    expect(screen.queryByRole('heading', { name: 'Create new dish' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '+ New dish' })).toBeDisabled();
+
+    expect(name).toBeDisabled();
+    expect(name).toHaveValue('Toasted Bread');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    fireEvent.keyDown(name, { key: 'Enter' });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   describe('menu affordability', () => {
@@ -502,7 +622,7 @@ describe('MenuPanel drinks', () => {
       const region = screen.getByRole('region', { name: 'Menu affordability' });
       expect(within(region).getByText('Can afford an order containing a dish: 0%')).toBeInTheDocument();
       expect(within(region).getByText('Can afford any order, including drink-only: 0%')).toBeInTheDocument();
-      expect(screen.getByText('No dishes yet. Create your first dish!')).toBeInTheDocument();
+      expect(screen.getByText('No dishes yet. Visit the Cookbook to add an owned recipe.')).toBeInTheDocument();
     });
 
     it('updates dish coverage when a dish price changes', () => {
@@ -510,7 +630,9 @@ describe('MenuPanel drinks', () => {
       expect(coverage('Can afford an order containing a dish: 80.4%')).toBeInTheDocument();
 
       const base = useGameState();
-      useGameState.mockReturnValue({ ...base, dishes: [{ ...base.dishes[0], price: 19 }] });
+      useGameState.mockReturnValue(updateCookbookDishSettings(base, 'toast', {
+        price: 19, quality: 10,
+      }));
       view.rerender(<MenuPanel />);
 
       expect(coverage('Can afford an order containing a dish: 53.6%')).toBeInTheDocument();
@@ -547,41 +669,42 @@ describe('MenuPanel drinks', () => {
       expect(coverage('Can afford any order, including drink-only: 80.4%')).toBeInTheDocument();
     });
 
-    it('formats exact endpoints and the smallest positive coverage', () => {
-      useGameState.mockReturnValue({
-        dishes: [{ id: 'toast', name: 'Toast', price: 6, prepTime: 60, quality: 2, popularity: 45 }],
-        recipeSlots: 1, unlockedDrinkIds: [], drinkOverrides: {}, upgrades: [],
-        restaurant: { funds: 200, reputation: 1 },
+    it('formats coverage for a canonical dish as its bounded price changes', () => {
+      const affordable = withOwnedAuthoredDishes({
+        dishes: [{ id: 'toast', cookbookId: 'toast', name: 'Toast', price: 9, quality: 1 }],
+        unlockedDrinkIds: [], restaurant: { funds: 200, reputation: 1 },
       });
+      useGameState.mockReturnValue(affordable);
       const view = render(<MenuPanel />);
-      expect(coverage('Can afford an order containing a dish: 100%')).toBeInTheDocument();
-      expect(coverage('Can afford any order, including drink-only: 100%')).toBeInTheDocument();
+      const initialCoverage = getMenuAnalysis(affordable).affordability;
+      expect(coverage(`Can afford an order containing a dish: ${formatCoverageForTest(initialCoverage.dishShare)}`))
+        .toBeInTheDocument();
+      expect(coverage(`Can afford any order, including drink-only: ${formatCoverageForTest(initialCoverage.anyOrderShare)}`))
+        .toBeInTheDocument();
 
-      const base = useGameState();
-      useGameState.mockReturnValue({ ...base, dishes: [{ ...base.dishes[0], price: 120 }] });
+      const dearer = updateCookbookDishSettings(affordable, 'toast', { price: 15 });
+      useGameState.mockReturnValue(dearer);
       view.rerender(<MenuPanel />);
-      expect(coverage('Can afford an order containing a dish: 0.1%')).toBeInTheDocument();
-      expect(coverage('Can afford any order, including drink-only: 0.1%')).toBeInTheDocument();
-
-      useGameState.mockReturnValue({ ...base, dishes: [{ ...base.dishes[0], price: 19 }] });
-      view.rerender(<MenuPanel />);
-      expect(coverage('Can afford an order containing a dish: 26.8%')).toBeInTheDocument();
+      const dearerCoverage = getMenuAnalysis(dearer).affordability;
+      expect(coverage(`Can afford an order containing a dish: ${formatCoverageForTest(dearerCoverage.dishShare)}`))
+        .toBeInTheDocument();
     });
 
-    it('shows exact 100% endpoints when every budget is covered at reputation 3', () => {
-      useGameState.mockReturnValue({
-        dishes: [{ id: 'toast', name: 'Toast', price: 6, prepTime: 60, quality: 2, popularity: 45 }],
-        recipeSlots: 1, unlockedDrinkIds: [], drinkOverrides: {}, upgrades: [],
-        restaurant: { funds: 200, reputation: 3 },
-      });
+    it('shows exact all-order coverage from an affordable unlocked drink', () => {
+      const state = {
+        ...createInitialState(), dishes: [], unlockedDrinkIds: ['water'],
+        drinkOverrides: { water: { price: 1 } },
+      };
+      useGameState.mockReturnValue(state);
       const view = render(<MenuPanel />);
-      expect(coverage('Can afford an order containing a dish: 100%')).toBeInTheDocument();
+      expect(coverage('Can afford an order containing a dish: 0%')).toBeInTheDocument();
       expect(coverage('Can afford any order, including drink-only: 100%')).toBeInTheDocument();
 
-      const base = useGameState();
-      useGameState.mockReturnValue({ ...base, restaurant: { ...base.restaurant, reputation: 2 } });
+      useGameState.mockReturnValue({
+        ...state, restaurant: { ...state.restaurant, reputation: 2 },
+      });
       view.rerender(<MenuPanel />);
-      expect(coverage('Can afford an order containing a dish: 100%')).toBeInTheDocument();
+      expect(coverage('Can afford an order containing a dish: 0%')).toBeInTheDocument();
       expect(coverage('Can afford any order, including drink-only: 100%')).toBeInTheDocument();
     });
 
@@ -603,46 +726,48 @@ describe('MenuPanel drinks', () => {
   describe('menu item demand', () => {
     const demandText = (state, kind, id) => {
       const demand = estimateMenuDemand(state);
-      return `Estimated demand: ${(kind === 'dish' ? demand.dishes : demand.drinks).get(id) ?? 0}%`;
+      return `Estimated walk-in demand: ${(kind === 'dish' ? demand.dishes : demand.drinks).get(id) ?? 0}%`;
     };
 
-    const singleDish = (price, reputation = 1) => ({
-      dishes: [{ id: 'toast', name: 'Toast', price, prepTime: 60, quality: 2, popularity: 45 }],
+    const singleDish = (price, reputation = 1) => withOwnedAuthoredDishes({
+      dishes: [{ id: 'toast', cookbookId: 'toast', name: 'Toast', price, quality: 10 }],
       recipeSlots: 1, equipment: [], unlockedDrinkIds: [], drinkOverrides: {}, upgrades: [],
       restaurant: { funds: 200, reputation },
     });
 
     it('shows exhaustive integer-budget demand and updates it as the price crosses tiers', () => {
-      const cheap = singleDish(7);
+      const cheap = singleDish(9);
       useGameState.mockReturnValue(cheap);
       const view = render(<MenuPanel />);
       const card = () => within(screen.getByRole('article', { name: 'Toast menu item' }));
-      expect(card().getByText('Estimated demand: 95%')).toBeInTheDocument();
+      expect(card().getByText(demandText(cheap, 'dish', 'toast'))).toBeInTheDocument();
+      const cheapDemand = card().getByText(/Estimated walk-in demand: /).textContent;
 
       const dearer = singleDish(19);
       useGameState.mockReturnValue(dearer);
       view.rerender(<MenuPanel />);
 
-      expect(card().getByText('Estimated demand: 27%')).toBeInTheDocument();
+      expect(card().getByText(demandText(dearer, 'dish', 'toast'))).toBeInTheDocument();
+      expect(card().getByText(/Estimated walk-in demand: /).textContent).not.toBe(cheapDemand);
       expect(card().getByText(demandText(dearer, 'dish', 'toast'))).toBeInTheDocument();
     });
 
     it('updates dish, drink, quality and reputation demand on rerender', () => {
-      const base = {
+      const base = withOwnedAuthoredDishes({
         dishes: [
-          { id: 'toast', name: 'Toast', price: 12, prepTime: 60, quality: 2, popularity: 45 },
-          { id: 'rival', name: 'Rival', price: 12, prepTime: 60, quality: 2, popularity: 45 },
+          { id: 'toast', cookbookId: 'toast', name: 'Toast', price: 12, quality: 2 },
+          { id: 'rival', cookbookId: 'cheese-toast', name: 'Rival', price: 12, quality: 2 },
         ],
         recipeSlots: 1, equipment: [], unlockedDrinkIds: ['water'],
         drinkOverrides: { water: { price: 8, quality: 3 } }, upgrades: [],
         restaurant: { funds: 200, reputation: 3 },
-      };
+      });
       useGameState.mockReturnValue(base);
       const view = render(<MenuPanel />);
       const dishDemand = () => within(screen.getByRole('article', { name: 'Toast menu item' }))
-        .getByText(/Estimated demand: /).textContent;
+        .getByText(/Estimated walk-in demand: /).textContent;
       const drinkDemand = () => within(screen.getByRole('article', { name: 'Water menu item' }))
-        .getByText(/Estimated demand: /).textContent;
+        .getByText(/Estimated walk-in demand: /).textContent;
       const expectShown = state => {
         expect(dishDemand()).toBe(demandText(state, 'dish', 'toast'));
         expect(drinkDemand()).toBe(demandText(state, 'drink', 'water'));
@@ -651,7 +776,7 @@ describe('MenuPanel drinks', () => {
       const initialWater = drinkDemand();
       expectShown(base);
 
-      const repricedDish = { ...base, dishes: [{ ...base.dishes[0], price: 19 }, base.dishes[1]] };
+      const repricedDish = updateCookbookDishSettings(base, 'toast', { price: 19, quality: 10 });
       useGameState.mockReturnValue(repricedDish);
       view.rerender(<MenuPanel />);
       expectShown(repricedDish);
@@ -663,7 +788,7 @@ describe('MenuPanel drinks', () => {
       expectShown(repricedDrink);
       expect(drinkDemand()).not.toBe(initialWater);
 
-      const upgradedDish = { ...base, dishes: [{ ...base.dishes[0], quality: 10 }, base.dishes[1]] };
+      const upgradedDish = updateCookbookDishSettings(base, 'toast', { quality: 10 });
       useGameState.mockReturnValue(upgradedDish);
       view.rerender(<MenuPanel />);
       expectShown(upgradedDish);
@@ -678,33 +803,22 @@ describe('MenuPanel drinks', () => {
     });
 
     it('updates demand when a cookbook dish resolution changes', () => {
-      const cookbookState = price => ({
+      const cookbookState = price => withOwnedAuthoredDishes({
         dishes: [
-          { id: 'toast', name: 'Toast', price: 12, prepTime: 60, quality: 2, popularity: 45 },
-          { id: 'cookbook-toast', cookbookId: 'toast' },
+          { id: 'cookbook-toast', cookbookId: 'toast', name: 'Toasted Bread', price, quality: 10 },
         ],
         recipeSlots: 1, equipment: [], unlockedDrinkIds: [], drinkOverrides: {}, upgrades: [],
         restaurant: { funds: 200, reputation: 3 },
-        cookbook: {
-          schemaVersion: 2,
-          lastAppliedPaidVisitSequence: 0,
-          entries: {
-            toast: {
-              discovered: true, paidPortions: 0, perk: null,
-              menuSettings: { name: 'Toasted Bread', price, quality: 2 },
-            },
-          },
-        },
       });
       const before = cookbookState(12);
       useGameState.mockReturnValue(before);
       const view = render(<MenuPanel />);
       const demand = () => within(screen.getByRole('article', { name: 'Toasted Bread menu item' }))
-        .getByText(/Estimated demand: /).textContent;
+        .getByText(/Estimated walk-in demand: /).textContent;
       const beforeText = demand();
       expect(beforeText).toBe(demandText(before, 'dish', 'cookbook-toast'));
 
-      const after = cookbookState(30);
+      const after = cookbookState(25);
       useGameState.mockReturnValue(after);
       view.rerender(<MenuPanel />);
 
@@ -821,7 +935,7 @@ describe('MenuPanel drinks', () => {
       expect(actions).toEqual([{ type: 'RESUME_ALL_MENU_ITEMS' }]);
       expect(dishCard.queryByText('Suspended for walk-ins')).not.toBeInTheDocument();
       expect(dishCard.getByText('Paid-sales threshold reached for walk-ins')).toBeInTheDocument();
-      expect(dishCard.getByText('Estimated demand: 0%')).toBeInTheDocument();
+      expect(dishCard.getByText('Estimated walk-in demand: 0%')).toBeInTheDocument();
       expect(waterCard.queryByText('Suspended for walk-ins')).not.toBeInTheDocument();
       expect(screen.getByRole('button', {
         name: 'Resume all manually suspended items',
@@ -931,11 +1045,9 @@ describe('MenuPanel drinks', () => {
       expect(screen.getByText('Can afford any order, including drink-only: 0%')).toBeInTheDocument();
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
-      useGameState.mockReturnValue({
-        dishes: [{ id: 'toast', name: 'Toast', price: 120, prepTime: 60, quality: 2, popularity: 45 }],
-        recipeSlots: 1, equipment: [], unlockedDrinkIds: [], drinkOverrides: {}, upgrades: [],
-        restaurant: { funds: 200, reputation: 1 },
-      });
+      useGameState.mockReturnValue(updateCookbookDishSettings(base, 'toast', {
+        price: 25, quality: 10,
+      }));
       view.rerender(<MenuPanel />);
 
       expect(screen.getByText(
@@ -951,8 +1063,8 @@ describe('MenuPanel drinks', () => {
       useGameState.mockReturnValue(base);
       const view = render(<MenuPanel />);
       const card = () => within(screen.getByRole('article', { name: 'Toast menu item' }));
-      const dishDemand = card().getByText(/Estimated demand: /).textContent;
-      expect(dishDemand).not.toBe('Estimated demand: 0%');
+      const dishDemand = card().getByText(/Estimated walk-in demand: /).textContent;
+      expect(dishDemand).not.toBe('Estimated walk-in demand: 0%');
 
       useGameState.mockReturnValue({
         ...base,
@@ -960,7 +1072,7 @@ describe('MenuPanel drinks', () => {
       });
       view.rerender(<MenuPanel />);
 
-      expect(card().getByText('Estimated demand: 0%')).toBeInTheDocument();
+      expect(card().getByText('Estimated walk-in demand: 0%')).toBeInTheDocument();
       expect(card().getByText('Suspended for walk-ins')).toBeInTheDocument();
       expect(card().getByRole('button', { name: 'Resume Toast for walk-ins' }))
         .toHaveAttribute('aria-pressed', 'true');
@@ -975,17 +1087,17 @@ describe('MenuPanel drinks', () => {
       const base = useGameState();
       const view = render(<MenuPanel />);
       const dishCard = () => within(screen.getByRole('article', { name: 'Toast menu item' }));
-      const initialDemand = dishCard().getByText(/Estimated demand: /).textContent;
-      expect(initialDemand).not.toBe('Estimated demand: 0%');
+      const initialDemand = dishCard().getByText(/Estimated walk-in demand: /).textContent;
+      expect(initialDemand).not.toBe('Estimated walk-in demand: 0%');
       expect(screen.getByText('Can afford an order containing a dish: 80.4%')).toBeInTheDocument();
       expect(screen.queryByText(
         'No items are available for new walk-in orders. Guests without an order may leave unhappy.',
       )).not.toBeInTheDocument();
 
-      const repriced = { ...base, dishes: [{ ...base.dishes[0], price: 19 }] };
+      const repriced = updateCookbookDishSettings(base, 'toast', { price: 19, quality: 10 });
       useGameState.mockReturnValue(repriced);
       view.rerender(<MenuPanel />);
-      expect(dishCard().getByText(/Estimated demand: /).textContent).not.toBe(initialDemand);
+      expect(dishCard().getByText(/Estimated walk-in demand: /).textContent).not.toBe(initialDemand);
       expect(screen.getByText('Can afford an order containing a dish: 53.6%')).toBeInTheDocument();
 
       useGameState.mockReturnValue({
@@ -996,7 +1108,7 @@ describe('MenuPanel drinks', () => {
       });
       view.rerender(<MenuPanel />);
 
-      expect(dishCard().getByText('Estimated demand: 0%')).toBeInTheDocument();
+      expect(dishCard().getByText('Estimated walk-in demand: 0%')).toBeInTheDocument();
       expect(screen.getByText('Can afford an order containing a dish: 0%')).toBeInTheDocument();
       expect(screen.getByText('Can afford any order, including drink-only: 0%')).toBeInTheDocument();
       expect(screen.getByText(
@@ -1006,24 +1118,14 @@ describe('MenuPanel drinks', () => {
   });
 
   describe('draft menu prices', () => {
-    const pricedMenu = () => ({
+    const pricedMenu = () => withOwnedAuthoredDishes({
       dishes: [
-        { id: 'toast', name: 'Toast', price: 12, prepTime: 60, quality: 2, popularity: 45 },
-        { id: 'cookbook-toast', cookbookId: 'toast' },
+        { id: 'toast', cookbookId: 'toast', name: 'Toast', price: 12, quality: 10 },
+        { id: 'cookbook-toast', cookbookId: 'cheese-toast', name: 'Toasted Bread', price: 18, quality: 10 },
       ],
       recipeSlots: 1, equipment: [], unlockedDrinkIds: ['water'],
       drinkOverrides: { water: { price: 8, quality: 3 } }, upgrades: [],
       restaurant: { funds: 200, reputation: 3 },
-      cookbook: {
-        schemaVersion: 2,
-        lastAppliedPaidVisitSequence: 0,
-        entries: {
-          toast: {
-            discovered: true, paidPortions: 0, perk: null,
-            menuSettings: { name: 'Toasted Bread', price: 12, quality: 2 },
-          },
-        },
-      },
     });
 
     beforeEach(() => {
@@ -1076,6 +1178,35 @@ describe('MenuPanel drinks', () => {
       fireEvent.change(field, { target: { value: '8.4' } });
       fireEvent.blur(field);
       expect(dispatch).toHaveBeenCalledTimes(3);
+    });
+
+    it('uses authored dish bounds while keeping drink prices on the original 1–100 range', () => {
+      const state = withOwnedAuthoredDishes({
+        dishes: [{ id: 'toast', cookbookId: 'toast', name: 'Toast', price: 12, quality: 1 }],
+        recipeSlots: 1, equipment: [], unlockedDrinkIds: ['water'],
+        drinkOverrides: { water: { price: 8, quality: 3 } }, upgrades: [],
+        restaurant: { funds: 200, reputation: 3 },
+      });
+      const dispatch = vi.fn();
+      useGameState.mockReturnValue(state);
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel />);
+
+      const dishPrice = screen.getByLabelText('Toast price');
+      const drinkPrice = screen.getByLabelText('Water price');
+      expect(dishPrice).toHaveAttribute('min', '9');
+      expect(dishPrice).toHaveAttribute('max', '15');
+      expect(drinkPrice).toHaveAttribute('min', '1');
+      expect(drinkPrice).toHaveAttribute('max', '100');
+
+      fireEvent.change(dishPrice, { target: { value: '99' } });
+      expect(screen.getByRole('group', { name: 'Price preview for Toast' }))
+        .toHaveTextContent('Draft price: $15');
+      expect(dispatch).not.toHaveBeenCalled();
+      fireEvent.blur(dishPrice);
+      expect(dispatch).toHaveBeenCalledWith({
+        type: 'UPDATE_DISH', id: 'toast', changes: { price: 15 },
+      });
     });
 
     it('restores the latest price on Escape and cancels stale drafts on authoritative changes', () => {
@@ -1157,9 +1288,9 @@ describe('MenuPanel drinks', () => {
       expect(dispatch).not.toHaveBeenCalled();
       const cookbookPreview = screen.getByRole('group', { name: 'Price preview for Toasted Bread' });
       expect(within(cookbookPreview).getByText(/Draft price: \$30/)).toBeInTheDocument();
-      expect(within(cookbookPreview).getByLabelText('Current whole-menu gross per 100 hypothetical walk-in guests'))
+      expect(within(cookbookPreview).getByLabelText('Current expected whole-menu gross per 100 hypothetical walk-in guests'))
         .toHaveTextContent(`$${getMenuAnalysis(state).expectedGrossPer100.toFixed(2)}`);
-      expect(within(cookbookPreview).getByLabelText('Draft whole-menu gross per 100 hypothetical walk-in guests'))
+      expect(within(cookbookPreview).getByLabelText('Draft expected whole-menu gross per 100 hypothetical walk-in guests'))
         .toHaveTextContent(`$${getMenuAnalysis(state, {
           kind: 'dish', id: 'cookbook-toast', price: 30,
         }).expectedGrossPer100.toFixed(2)}`);
@@ -1173,7 +1304,7 @@ describe('MenuPanel drinks', () => {
       expect(dispatch).not.toHaveBeenCalled();
       const waterPreview = screen.getByRole('group', { name: 'Price preview for Water' });
       expect(within(waterPreview).getByText(/Draft price: \$11/)).toBeInTheDocument();
-      expect(within(waterPreview).getByLabelText('Draft whole-menu gross per 100 hypothetical walk-in guests'))
+      expect(within(waterPreview).getByLabelText('Draft expected whole-menu gross per 100 hypothetical walk-in guests'))
         .toHaveTextContent(`$${getMenuAnalysis(state, {
           kind: 'drink', id: 'water', price: 11,
         }).expectedGrossPer100.toFixed(2)}`);
@@ -1190,12 +1321,12 @@ describe('MenuPanel drinks', () => {
     it('shows current-to-draft tier affordability for food and drink edits without dispatching', () => {
       const dispatch = vi.fn();
       useDispatch.mockReturnValue(dispatch);
-      const state = {
-        dishes: [{ id: 'toast', name: 'Toast', price: 12, prepTime: 60, quality: 2, popularity: 45 }],
+      const state = withOwnedAuthoredDishes({
+        dishes: [{ id: 'toast', cookbookId: 'toast', name: 'Toast', price: 12, quality: 10 }],
         recipeSlots: 1, equipment: [], unlockedDrinkIds: ['water'],
         drinkOverrides: { water: { price: 8, quality: 3 } }, upgrades: [],
         restaurant: { funds: 200, reputation: 3 },
-      };
+      });
       useGameState.mockReturnValue(state);
       const view = render(<MenuPanel />);
 
@@ -1236,16 +1367,16 @@ describe('MenuPanel drinks', () => {
       fireEvent.change(screen.getByLabelText('Toasted Bread price'), { target: { value: '70' } });
 
       const preview = screen.getByRole('group', { name: 'Price preview for Toasted Bread' });
-      expect(within(preview).getByLabelText('Current whole-menu gross per 100 hypothetical walk-in guests'))
+      expect(within(preview).getByLabelText('Current expected whole-menu gross per 100 hypothetical walk-in guests'))
         .toHaveTextContent(`$${getMenuAnalysis(state).expectedGrossPer100.toFixed(2)}`);
-      expect(within(preview).getByLabelText('Draft whole-menu gross per 100 hypothetical walk-in guests'))
+      expect(within(preview).getByLabelText('Draft expected whole-menu gross per 100 hypothetical walk-in guests'))
         .toHaveTextContent(`$${getMenuAnalysis(state, {
           kind: 'dish', id: 'cookbook-toast', price: 70,
         }).expectedGrossPer100.toFixed(2)}`);
       expect(dispatch).not.toHaveBeenCalled();
     });
 
-    it('keeps the active preview after the complete action row, including removal confirmation', () => {
+    it('keeps the active preview after the complete cookbook action row and removal dispatch', () => {
       useGameState.mockReturnValue(pricedMenu());
       const dispatch = vi.fn();
       useDispatch.mockReturnValue(dispatch);
@@ -1261,9 +1392,9 @@ describe('MenuPanel drinks', () => {
       expect(within(row).getByRole('button', { name: 'Remove Toast from menu' })).toBeInTheDocument();
 
       fireEvent.click(within(row).getByRole('button', { name: 'Remove Toast from menu' }));
-      const removal = within(row).getByRole('region', { name: 'Remove Toast? This permanently deletes its recipe.' });
-      expect(removal.compareDocumentPosition(activePreview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(dispatch).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledWith({ type: 'REMOVE_DISH', id: 'toast' });
+      expect(activePreview).toBeInTheDocument();
+      expect(row.compareDocumentPosition(activePreview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it('uses only active draft analyses and retains the last plain forecast while inactive', () => {
@@ -1309,24 +1440,14 @@ describe('MenuPanel drinks', () => {
   });
 
   describe('quality and unlock purchase guards', () => {
-    const cookbookState = () => ({
+    const cookbookState = () => withOwnedAuthoredDishes({
       dishes: [
-        { id: 'toast', name: 'Toast', price: 12, prepTime: 60, quality: 2, popularity: 45 },
-        { id: 'cookbook-toast', cookbookId: 'toast' },
+        { id: 'toast', cookbookId: 'toast', name: 'Toast', price: 12, quality: 2 },
+        { id: 'cookbook-toast', cookbookId: 'cheese-toast', name: 'Toasted Bread', price: 18, quality: 9 },
       ],
       recipeSlots: 1, equipment: [], unlockedDrinkIds: ['water'],
       drinkOverrides: { water: { price: 8, quality: 3 } }, upgrades: [],
       restaurant: { funds: 200, reputation: 3 },
-      cookbook: {
-        schemaVersion: 2,
-        lastAppliedPaidVisitSequence: 0,
-        entries: {
-          toast: {
-            discovered: true, paidPortions: 0, perk: null,
-            menuSettings: { name: 'Toasted Bread', price: 12, quality: 2 },
-          },
-        },
-      },
     });
 
     const purchaseControls = () => ({
@@ -1370,8 +1491,7 @@ describe('MenuPanel drinks', () => {
       expect(purchaseControls().drink).toBeEnabled();
 
       useGameState.mockReturnValue({
-        ...base,
-        dishes: [{ ...base.dishes[0], quality: 10 }, base.dishes[1]],
+        ...updateCookbookDishSettings(base, 'toast', { quality: 10 }),
         drinkOverrides: { water: { price: 8, quality: 10 } },
         restaurant: { ...base.restaurant, funds: 50 },
       });
@@ -1423,215 +1543,38 @@ describe('MenuPanel drinks', () => {
     });
   });
 
-  describe('custom dish removal confirmation', () => {
-    const removalMenu = () => ({
-      dishes: [
-        { id: 'toast', name: 'Toast', price: 12, prepTime: 60, quality: 2, popularity: 45 },
-        { id: 'cookbook-toast', cookbookId: 'toast' },
-      ],
-      recipeSlots: 1, equipment: [], unlockedDrinkIds: [], drinkOverrides: {}, upgrades: [],
-      restaurant: { funds: 200, reputation: 3 },
-      cookbook: {
-        schemaVersion: 2,
-        lastAppliedPaidVisitSequence: 0,
-        entries: {
-          toast: {
-            discovered: true, paidPortions: 0, perk: null,
-            menuSettings: { name: 'Toasted Bread', price: 12, quality: 2 },
-          },
-        },
-      },
-    });
-    const permanentWarning = 'Removing this custom dish permanently deletes its recipe. '
-      + 'Suspend it instead to stop new walk-in orders without deleting it.';
+  describe('cookbook dish removal', () => {
+    const removalMenu = () => withOwnedAuthoredDishes(createInitialState(), [
+      { id: 'toast', cookbookId: 'toast', name: 'Toast', price: 12, quality: 2 },
+      { id: 'cookbook-toast', cookbookId: 'cheese-toast', name: 'Toasted Bread', price: 18, quality: 10 },
+    ]);
     const removeButton = name => screen.getByRole('button', { name: `Remove ${name} from menu` });
-    const confirmation = () => screen.queryByRole('region', { name: /permanently deletes its recipe/ });
-    const customDish = (id, name) => ({
-      id, name, price: 12, prepTime: 60, quality: 2, popularity: 45,
-    });
-    const statefulRemovalMenu = dishes => ({ ...createInitialState(), dishes });
 
-    beforeEach(() => {
-      useGameState.mockReturnValue(removalMenu());
-    });
+    beforeEach(() => useGameState.mockReturnValue(removalMenu()));
 
-    it('requires explicit confirmation before dispatching a custom dish removal', () => {
+    it('removes cookbook dishes immediately without a custom-recipe warning', () => {
       const dispatch = vi.fn();
       useDispatch.mockReturnValue(dispatch);
       render(<MenuPanel />);
 
-      fireEvent.click(removeButton('Toast'));
-      expect(dispatch).not.toHaveBeenCalled();
-
-      const region = screen.getByRole('region', { name: 'Remove Toast? This permanently deletes its recipe.' });
-      expect(within(region).getByText(permanentWarning)).toBeInTheDocument();
-      expect(within(region).getByRole('button', { name: 'Cancel' })).toHaveFocus();
-      expect(removeButton('Toast')).toHaveTextContent('Remove');
-
-      fireEvent.click(within(region).getByRole('button', { name: 'Confirm remove Toast' }));
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(dispatch).toHaveBeenCalledWith({ type: 'REMOVE_DISH', id: 'toast' });
-      expect(confirmation()).not.toBeInTheDocument();
-    });
-
-    it('focuses Cookbook after a stateful custom removal with another dish remaining', () => {
-      const actions = [];
-      useGameState.mockImplementation(() => statefulHarness.current.state);
-      useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
-      render(<StatefulMenuPanel
-        initial={statefulRemovalMenu([
-          customDish('toast', 'Toast'),
-          customDish('rye-toast', 'Rye Toast'),
-        ])}
-        actions={actions}
-      />);
-
-      fireEvent.click(removeButton('Toast'));
-      const confirm = screen.getByRole('button', { name: 'Confirm remove Toast' });
-      confirm.focus();
-      expect(confirm).toHaveFocus();
-      fireEvent.click(confirm);
-
-      expect(screen.queryByRole('article', { name: 'Toast menu item' })).not.toBeInTheDocument();
-      expect(screen.getByRole('article', { name: 'Rye Toast menu item' })).toBeInTheDocument();
-      expect(actions).toEqual([{ type: 'REMOVE_DISH', id: 'toast' }]);
-      expect(screen.getByRole('button', { name: 'Cookbook' })).toHaveFocus();
-    });
-
-    it('focuses Cookbook after a stateful removal of the last dish', () => {
-      const actions = [];
-      useGameState.mockImplementation(() => statefulHarness.current.state);
-      useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
-      render(<StatefulMenuPanel
-        initial={statefulRemovalMenu([customDish('toast', 'Toast')])}
-        actions={actions}
-      />);
-
-      fireEvent.click(removeButton('Toast'));
-      const confirm = screen.getByRole('button', { name: 'Confirm remove Toast' });
-      confirm.focus();
-      expect(confirm).toHaveFocus();
-      fireEvent.click(confirm);
-
-      expect(screen.queryByRole('article', { name: 'Toast menu item' })).not.toBeInTheDocument();
-      expect(screen.getByText('No dishes yet. Create your first dish!')).toBeInTheDocument();
-      expect(actions).toEqual([{ type: 'REMOVE_DISH', id: 'toast' }]);
-      expect(screen.getByRole('button', { name: 'Cookbook' })).toHaveFocus();
-    });
-
-    it('cancels with Cancel or Escape without dispatch and returns focus to Remove', () => {
-      const dispatch = vi.fn();
-      useDispatch.mockReturnValue(dispatch);
-      render(<MenuPanel />);
-
-      fireEvent.click(removeButton('Toast'));
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(confirmation()).not.toBeInTheDocument();
-      expect(removeButton('Toast')).toHaveFocus();
-
-      fireEvent.click(removeButton('Toast'));
-      expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
-      const documentKeyDown = vi.fn();
-      document.addEventListener('keydown', documentKeyDown);
-      fireEvent.keyDown(screen.getByRole('button', { name: 'Cancel' }), { key: 'Escape' });
-      document.removeEventListener('keydown', documentKeyDown);
-      expect(documentKeyDown).not.toHaveBeenCalled();
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(confirmation()).not.toBeInTheDocument();
-      expect(removeButton('Toast')).toHaveFocus();
-    });
-
-    it('does not cancel when focus moves between the confirmation controls', () => {
-      const dispatch = vi.fn();
-      useDispatch.mockReturnValue(dispatch);
-      render(<MenuPanel />);
-
-      fireEvent.click(removeButton('Toast'));
-      const cancel = screen.getByRole('button', { name: 'Cancel' });
-      const confirm = screen.getByRole('button', { name: 'Confirm remove Toast' });
-      fireEvent.focus(confirm);
-      fireEvent.blur(cancel);
-      expect(confirmation()).toBeInTheDocument();
-
-      fireEvent.click(confirm);
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(dispatch).toHaveBeenCalledWith({ type: 'REMOVE_DISH', id: 'toast' });
-    });
-
-    it('closes the confirmation for a removed, replaced or blocked target without a stale action', () => {
-      const dispatch = vi.fn();
-      useDispatch.mockReturnValue(dispatch);
-      const base = removalMenu();
-      useGameState.mockReturnValue(base);
-      const view = render(<MenuPanel />);
-
-      fireEvent.click(removeButton('Toast'));
-      expect(confirmation()).toBeInTheDocument();
-
-      useGameState.mockReturnValue({ ...base, dishes: base.dishes.slice(1) });
-      view.rerender(<MenuPanel />);
-      expect(confirmation()).not.toBeInTheDocument();
-
-      useGameState.mockReturnValue(base);
-      view.rerender(<MenuPanel />);
-      expect(confirmation()).not.toBeInTheDocument();
-
-      useGameState.mockReturnValue({ ...base, dishes: [{ ...base.dishes[0] }, base.dishes[1]] });
-      view.rerender(<MenuPanel />);
-      fireEvent.click(removeButton('Toast'));
-      expect(confirmation()).toBeInTheDocument();
-      useGameState.mockReturnValue({ ...base, dishes: [{ ...base.dishes[0] }, base.dishes[1]] });
-      view.rerender(<MenuPanel />);
-      expect(confirmation()).not.toBeInTheDocument();
-
-      useGameState.mockReturnValue(base);
-      view.rerender(<MenuPanel />);
-      fireEvent.click(removeButton('Toast'));
-      expect(confirmation()).toBeInTheDocument();
-      useGameState.mockReturnValue({ ...base, careerRun: { needsDecision: true } });
-      view.rerender(<MenuPanel />);
-      expect(confirmation()).not.toBeInTheDocument();
-      expect(removeButton('Toast')).toBeDisabled();
-
-      useGameState.mockReturnValue(base);
-      view.rerender(<MenuPanel />);
-      expect(confirmation()).not.toBeInTheDocument();
-      expect(dispatch).not.toHaveBeenCalled();
-    });
-
-    it('removes cookbook dishes immediately with a contextual name and no permanent warning', () => {
-      const dispatch = vi.fn();
-      useDispatch.mockReturnValue(dispatch);
-      render(<MenuPanel />);
-
-      for (const name of ['Toast', 'Toasted Bread']) {
-        expect(removeButton(name)).toHaveTextContent('Remove');
-      }
       fireEvent.click(removeButton('Toasted Bread'));
-      expect(dispatch).toHaveBeenCalledTimes(1);
       expect(dispatch).toHaveBeenCalledWith({ type: 'REMOVE_DISH', id: 'cookbook-toast' });
-      expect(confirmation()).not.toBeInTheDocument();
-      expect(screen.queryByText(permanentWarning)).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: /Confirm remove/ })).not.toBeInTheDocument();
+      expect(screen.queryByText(/permanently deletes its recipe/)).not.toBeInTheDocument();
     });
 
-    it('focuses Cookbook after a stateful cookbook removal with another dish remaining', () => {
+    it('focuses Cookbook after removing an authored dish while another remains', () => {
       const actions = [];
       useGameState.mockImplementation(() => statefulHarness.current.state);
       useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
-      const initial = createInitialState();
-      initial.dishes.push(customDish('rye-toast', 'Rye Toast'));
-      render(<StatefulMenuPanel initial={initial} actions={actions} />);
+      render(<StatefulMenuPanel initial={removalMenu()} actions={actions} />);
 
-      const remove = removeButton('Toasted Bread');
+      const remove = removeButton('Toast');
       remove.focus();
-      expect(remove).toHaveFocus();
       fireEvent.click(remove);
 
-      expect(screen.queryByRole('article', { name: 'Toasted Bread menu item' })).not.toBeInTheDocument();
-      expect(screen.getByRole('article', { name: 'Rye Toast menu item' })).toBeInTheDocument();
-      expect(actions).toEqual([{ type: 'REMOVE_DISH', id: 'starter-toast' }]);
+      expect(screen.queryByRole('article', { name: 'Toast menu item' })).not.toBeInTheDocument();
+      expect(screen.getByRole('article', { name: 'Toasted Bread menu item' })).toBeInTheDocument();
+      expect(actions).toEqual([{ type: 'REMOVE_DISH', id: 'toast' }]);
       expect(screen.getByRole('button', { name: 'Cookbook' })).toHaveFocus();
     });
 
@@ -1647,7 +1590,7 @@ describe('MenuPanel drinks', () => {
       fireEvent.click(remove);
 
       expect(screen.queryByRole('article', { name: 'Toasted Bread menu item' })).not.toBeInTheDocument();
-      expect(screen.getByText('No dishes yet. Create your first dish!')).toBeInTheDocument();
+      expect(screen.getByText('No dishes yet. Visit the Cookbook to add an owned recipe.')).toBeInTheDocument();
       expect(actions).toEqual([{ type: 'REMOVE_DISH', id: 'starter-toast' }]);
       expect(screen.getByRole('button', { name: 'Cookbook' })).toHaveFocus();
     });
@@ -1671,54 +1614,14 @@ describe('MenuPanel drinks', () => {
       expect(dispatch).not.toHaveBeenCalled();
       expect(cookbook).toHaveFocus();
     });
-
-    it('clears a custom confirmation when detouring to the cookbook and back', () => {
-      const dispatch = vi.fn();
-      useDispatch.mockReturnValue(dispatch);
-      useGameState.mockReturnValue({ ...removalMenu(), cookbook: createCookbookState() });
-      render(<MenuPanel />);
-
-      fireEvent.click(removeButton('Toast'));
-      expect(confirmation()).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: 'Cookbook' }));
-      expect(screen.getByRole('heading', { name: 'Cookbook' })).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
-      expect(confirmation()).not.toBeInTheDocument();
-      expect(dispatch).not.toHaveBeenCalled();
-
-      fireEvent.click(removeButton('Toast'));
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-      expect(removeButton('Toast')).toHaveFocus();
-      expect(dispatch).not.toHaveBeenCalled();
-    });
-
-    it('clears a custom confirmation when detouring to the creator and back', () => {
-      const dispatch = vi.fn();
-      useDispatch.mockReturnValue(dispatch);
-      render(<MenuPanel />);
-
-      fireEvent.click(removeButton('Toast'));
-      expect(confirmation()).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
-      expect(screen.getByRole('heading', { name: 'Create new dish' })).toBeInTheDocument();
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-      expect(confirmation()).not.toBeInTheDocument();
-      expect(dispatch).not.toHaveBeenCalled();
-
-      fireEvent.click(removeButton('Toast'));
-      fireEvent.keyDown(screen.getByRole('button', { name: 'Cancel' }), { key: 'Escape' });
-      expect(removeButton('Toast')).toHaveFocus();
-      expect(dispatch).not.toHaveBeenCalled();
-    });
   });
 });
 
 describe('paid today counters', () => {
   beforeEach(() => {
-    useGameState.mockReturnValue({
+    useGameState.mockReturnValue(withOwnedAuthoredDishes({
       dishes: [{
-        id: 'toast', name: 'Toast', price: 12, prepTime: 60,
-        quality: 2, popularity: 45,
+        id: 'toast', cookbookId: 'toast', name: 'Toast', price: 12, quality: 2,
       }],
       recipeSlots: 1,
       equipment: [{ id: 'eq1', name: 'Toaster', owned: true }],
@@ -1726,7 +1629,7 @@ describe('paid today counters', () => {
       drinkOverrides: { water: { price: 8, quality: 3 } },
       upgrades: [],
       restaurant: { funds: 200, reputation: 3 },
-    });
+    }));
     useDispatch.mockReturnValue(vi.fn());
   });
 
@@ -1766,7 +1669,7 @@ describe('paid today counters', () => {
     const waterCard = within(screen.getByRole('article', { name: 'Water menu item' }));
     expect(dishCard.getByText('Paid today: 4')).toBeInTheDocument();
     expect(waterCard.getByText('Paid today: 2')).toBeInTheDocument();
-    expect(dishCard.getByText(/Estimated demand:/)).toBeInTheDocument();
+    expect(dishCard.getByText(/Estimated walk-in demand:/)).toBeInTheDocument();
 
     useGameState.mockReturnValue({
       ...base,
@@ -1924,15 +1827,15 @@ describe('paid today counters', () => {
     render(<MenuPanel />);
 
     const card = within(screen.getByRole('article', { name: 'Toast menu item' }));
-    expect(card.getByText('Estimated demand: 0%')).toBeInTheDocument();
+    expect(card.getByText('Estimated walk-in demand: 0%')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Toast price'), { target: { value: '20' } });
 
     const preview = screen.getByRole('group', { name: 'Price preview for Toast' });
     expect(within(preview).getByLabelText(
-      'Current whole-menu gross per 100 hypothetical walk-in guests',
+      'Current expected whole-menu gross per 100 hypothetical walk-in guests',
     )).toHaveTextContent(`$${getMenuAnalysis(state).expectedGrossPer100.toFixed(2)}`);
     expect(within(preview).getByLabelText(
-      'Draft whole-menu gross per 100 hypothetical walk-in guests',
+      'Draft expected whole-menu gross per 100 hypothetical walk-in guests',
     )).toHaveTextContent(`$${getMenuAnalysis(state, {
       kind: 'dish', id: 'toast', price: 20,
     }).expectedGrossPer100.toFixed(2)}`);
@@ -2079,25 +1982,17 @@ describe('MenuPanel kitchen equipment advice', () => {
     expect(starterDish().getByText(/Toaster.*no compatible kitchen station/)).toBeVisible();
   });
 
-  it('requires any station for an unrestricted dish and clears that warning when one is added', () => {
+  it('does not expose a price editor for a dish without an owned cookbook identity', () => {
     const dish = {
       id: 'unrestricted-dish', name: 'Garden Salad', price: 12, prepTime: 60,
       quality: 1, popularity: 50, requiredEquipmentId: null,
     };
     const state = { ...createInitialState(), dishes: [dish], kitchenStations: [] };
     useGameState.mockReturnValue(state);
-    const view = render(<MenuPanel />);
-    const card = () => within(screen.getByRole('article', { name: 'Garden Salad menu item' }));
+    render(<MenuPanel />);
 
-    expect(card().getByText('Kitchen equipment: this dish needs a kitchen station.')).toBeVisible();
-
-    useGameState.mockReturnValue({
-      ...state, kitchenStations: [{ id: 'bare-station', equipmentId: null }],
-    });
-    view.rerender(<MenuPanel />);
-
-    expect(card().queryByText('Kitchen equipment: this dish needs a kitchen station.'))
-      .not.toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'Garden Salad menu item' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Garden Salad price')).not.toBeInTheDocument();
   });
 
   it.each([

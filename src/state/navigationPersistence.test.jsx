@@ -48,7 +48,8 @@ describe('replacement navigation save boundary', () => {
 
   it('leaves the current game intact when Settings loads an incompatible saved game', async () => {
     loadLatestRepositoryState.mockResolvedValue({ filename: 'old.json', state: {
-      ...createInitialState(), version: 6, restaurant: { ...createInitialState().restaurant, funds: 9999 },
+      ...createInitialState(), version: SAVE_VERSION - 1,
+      restaurant: { ...createInitialState().restaurant, funds: 9999 },
     } });
     function CurrentFunds() { return <output data-testid="funds">{useGameState().restaurant.funds}</output>; }
     render(<GameProvider><CurrentFunds /><SettingsMenu isOpen onToggle={() => {}} /></GameProvider>);

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import UpgradePanel from './UpgradePanel';
 import { UPGRADES } from '../data/upgrades';
 import { createCookbookState } from '../simulation/cookbook';
+import { withOwnedAuthoredDishes } from '../simulation/menuTestFixtures';
 
 vi.mock('../state/GameContext', () => ({
   useGameState: vi.fn(),
@@ -959,17 +960,18 @@ describe('UpgradePanel equipment menu usage', () => {
     id, name, owned, level: 1, upgradeCosts: [100], purchaseCost: 200,
   });
 
-  const customDish = (id, name, requiredEquipmentId) => ({
-    id, name, requiredEquipmentId, cookbookId: null,
+  const authoredDish = (id, name, cookbookId) => ({
+    id, name, cookbookId,
   });
 
   it('shows matched dishes on owned and unowned cards without changing equipment actions', () => {
     const dispatch = vi.fn();
     const startPlacement = vi.fn();
-    useGameState.mockReturnValue(panelState({
+    useGameState.mockReturnValue(withOwnedAuthoredDishes(panelState({
       equipment: [equipmentItem('eq1', 'Toaster', true), equipmentItem('eq2', 'Oven', false)],
-      dishes: [customDish('toast', 'House Toast', 'eq1'), customDish('roast', 'Sunday Roast', 'eq2')],
-    }));
+      dishes: [authoredDish('toast', 'House Toast', 'toast'),
+        authoredDish('roast', 'Sunday Roast', 'roast-vegetables')],
+    })));
     useDispatch.mockReturnValue(dispatch);
 
     render(<UpgradePanel onStartPlacement={startPlacement} />);
@@ -1001,19 +1003,15 @@ describe('UpgradePanel equipment menu usage', () => {
     expect(startPlacement).toHaveBeenCalledWith({ itemType: 'equipmentStation', equipmentId: 'eq2' });
   });
 
-  it('uses resolved cookbook fields instead of stale raw menu fields', () => {
-    const cookbook = createCookbookState();
-    cookbook.entries.toast.menuSettings = { ...cookbook.entries.toast.menuSettings, name: 'Canonical Toast' };
-    useGameState.mockReturnValue(panelState({
+  it('lists canonical authored fields and rejects rows with stale raw cookbook fields', () => {
+    const validState = withOwnedAuthoredDishes(panelState({
       equipment: [equipmentItem('eq1', 'Toaster', true), equipmentItem('eq2', 'Oven', true)],
-      dishes: [{
-        id: 'cookbook:toast', cookbookId: 'toast', name: 'Stale Toast', requiredEquipmentId: 'eq2',
-      }],
-      cookbook,
+      dishes: [authoredDish('cookbook:toast', 'Canonical Toast', 'toast')],
     }));
+    useGameState.mockReturnValue(validState);
     useDispatch.mockReturnValue(vi.fn());
 
-    render(<UpgradePanel />);
+    const { rerender } = render(<UpgradePanel />);
 
     const toasterCard = screen.getByText('Toaster').parentElement;
     const ovenCard = screen.getByText('Oven').parentElement;
@@ -1022,13 +1020,25 @@ describe('UpgradePanel equipment menu usage', () => {
     fireEvent.click(toasterCard.querySelector('summary'));
     expect(within(toasterCard).getByText('Canonical Toast')).toBeVisible();
     expect(within(toasterCard).queryByText('Stale Toast')).not.toBeInTheDocument();
+
+    useGameState.mockReturnValue({
+      ...validState,
+      dishes: validState.dishes.map(dish => ({ ...dish, name: 'Stale Toast', requiredEquipmentId: 'eq2' })),
+    });
+    rerender(<UpgradePanel />);
+
+    expect(within(toasterCard).getByText('No current menu dishes require this equipment.')).toBeVisible();
+    expect(within(ovenCard).getByText('No current menu dishes require this equipment.')).toBeVisible();
+    expect(screen.queryByText('Canonical Toast')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stale Toast')).not.toBeInTheDocument();
   });
 
-  it('counts multiple custom dishes using string-equivalent equipment ids and reports cards with no matches', () => {
-    useGameState.mockReturnValue(panelState({
-      equipment: [equipmentItem(1, 'Toaster', false), equipmentItem('eq3', 'Fryer', true)],
-      dishes: [customDish('toast', 'House Toast', '1'), customDish('bagel', 'Sesame Bagel', 1)],
-    }));
+  it('counts multiple authored dishes and reports cards with no matches', () => {
+    useGameState.mockReturnValue(withOwnedAuthoredDishes(panelState({
+      equipment: [equipmentItem('eq1', 'Toaster', false), equipmentItem('eq3', 'Fryer', true)],
+      dishes: [authoredDish('toast', 'House Toast', 'toast'),
+        authoredDish('bagel', 'Sesame Bagel', 'cheese-toast')],
+    })));
     useDispatch.mockReturnValue(vi.fn());
 
     render(<UpgradePanel />);
@@ -1044,10 +1054,13 @@ describe('UpgradePanel equipment menu usage', () => {
     expect(within(fryerCard).queryByRole('group')).not.toBeInTheDocument();
   });
 
-  it('excludes unrestricted food, drinks and undiscovered cookbook entries', () => {
+  it('rejects unrestricted custom and undiscovered cookbook rows and excludes drinks', () => {
     useGameState.mockReturnValue(panelState({
       equipment: [equipmentItem('eq4', 'Blender', false)],
-      dishes: [customDish('salad', 'Garden Salad', null)],
+      dishes: [
+        { id: 'salad', name: 'Garden Salad', price: 10, requiredEquipmentId: null, cookbookId: null },
+        { id: 'gazpacho', name: 'Stale Gazpacho', requiredEquipmentId: 'eq4', cookbookId: 'gazpacho' },
+      ],
       drinks: [{ id: 'juice', name: 'Juice', requiredEquipmentId: 'eq4' }],
       cookbook: createCookbookState(),
     }));
@@ -1070,21 +1083,21 @@ describe('UpgradePanel equipment menu usage', () => {
     const card = screen.getByText('Toaster').parentElement;
     expect(within(card).getByText('No current menu dishes require this equipment.')).toBeVisible();
 
-    useGameState.mockReturnValue(panelState({
+    useGameState.mockReturnValue(withOwnedAuthoredDishes(panelState({
       equipment,
-      dishes: [customDish('toast', 'Walk-in Toast', 'eq1')],
+      dishes: [authoredDish('toast', 'Walk-in Toast', 'toast')],
       suspendedDishIds: ['toast'],
-    }));
+    })));
     rerender(<UpgradePanel />);
     expect(within(card).getByText('Menu dishes requiring this equipment (1)')).toBeVisible();
     fireEvent.click(card.querySelector('summary'));
     expect(within(card).getByText('Walk-in Toast')).toBeVisible();
 
-    useGameState.mockReturnValue(panelState({
+    useGameState.mockReturnValue(withOwnedAuthoredDishes(panelState({
       equipment,
-      dishes: [customDish('toast', 'Renamed Walk-in Toast', 'eq1')],
+      dishes: [authoredDish('toast', 'Renamed Walk-in Toast', 'toast')],
       suspendedDishIds: ['toast'],
-    }));
+    })));
     rerender(<UpgradePanel />);
     expect(within(card).getByText('Renamed Walk-in Toast')).toBeVisible();
     expect(within(card).queryByText('Walk-in Toast')).not.toBeInTheDocument();

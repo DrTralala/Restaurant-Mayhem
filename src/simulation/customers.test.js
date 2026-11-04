@@ -94,17 +94,17 @@ describe('spawnCustomers', () => {
     const fresh = createInitialState();
     const pendingPartyReviews = [
       {
-        partyId: 'p1', memberIds: ['c1'], orderedMemberIds: [],
-        unaffordableMemberIds: [], paidReviews: [],
+        partyId: 'p1', memberIds: ['c1'], orderedMemberIds: ['c1'],
+        unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
       },
       {
         partyId: 'p4', memberIds: ['c4'], orderedMemberIds: ['c4'],
-        unaffordableMemberIds: [], paidReviews: [],
+        unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
       },
     ];
     const partyReviewHistory = [{
       partyId: 'p5', day: 1, score: 80, memberCount: 1,
-      paidCount: 1, unaffordableCount: 0, reputationDelta: 0.016,
+      paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0.016,
     }];
     const hydrated = hydrateState({
       ...fresh,
@@ -1569,8 +1569,8 @@ describe('restored baseline customer gameplay', () => {
       ] },
     ];
     const pendingPartyReviews = [
-      { partyId: 'p1', memberIds: ['q1', 'q2'], orderedMemberIds: ['q2'], unaffordableMemberIds: [], paidReviews: [] },
-      { partyId: 'p2', memberIds: ['other'], orderedMemberIds: [], unaffordableMemberIds: ['other'], paidReviews: [] },
+      { partyId: 'p1', memberIds: ['q1', 'q2'], orderedMemberIds: ['q2'], unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [] },
+      { partyId: 'p2', memberIds: ['other'], orderedMemberIds: [], unaffordableMemberIds: ['other'], poorValueMemberIds: [], paidReviews: [] },
     ];
 
     const result = updateCustomers({ ...baseState, queue, pendingPartyReviews }, 2);

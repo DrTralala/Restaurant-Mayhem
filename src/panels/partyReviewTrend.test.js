@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { getPartyReviewDayTrend } from './partyReviewTrend';
 
-function review(partyId, day, score, memberCount = 1, unaffordableCount = 0) {
+function review(partyId, day, score, memberCount = 1, unaffordableCount = 0, poorValueCount = 0) {
   return {
     partyId,
     day,
     score,
     memberCount,
-    paidCount: memberCount - unaffordableCount,
+    paidCount: memberCount - unaffordableCount - poorValueCount,
     unaffordableCount,
+    poorValueCount,
     reputationDelta: 0,
   };
 }
@@ -32,16 +33,18 @@ describe('getPartyReviewDayTrend', () => {
     ])).toEqual([]);
   });
 
-  it('averages parties equally and counts parties with any unaffordable members', () => {
+  it('averages parties equally and reports separate refusal shares', () => {
     expect(getPartyReviewDayTrend([
       review('solo', 3, 80, 1),
-      review('larger', 3, 20, 4, 3),
+      review('larger', 3, 20, 4, 1, 2),
     ])).toEqual([{
       day: 3,
       reviewCount: 2,
       averageScore: 50,
       unaffordablePartyCount: 1,
       unaffordableShare: 0.5,
+      poorValuePartyCount: 1,
+      poorValueShare: 0.5,
     }]);
   });
 
@@ -81,6 +84,8 @@ describe('getPartyReviewDayTrend', () => {
         averageScore: 70,
         unaffordablePartyCount: 0,
         unaffordableShare: 0,
+        poorValuePartyCount: 0,
+        poorValueShare: 0,
       },
       {
         day: 1,
@@ -88,6 +93,8 @@ describe('getPartyReviewDayTrend', () => {
         averageScore: 35,
         unaffordablePartyCount: 0,
         unaffordableShare: 0,
+        poorValuePartyCount: 0,
+        poorValueShare: 0,
       },
     ]);
   });
@@ -104,6 +111,8 @@ describe('getPartyReviewDayTrend', () => {
         averageScore: 60,
         unaffordablePartyCount: 1,
         unaffordableShare: 1,
+        poorValuePartyCount: 0,
+        poorValueShare: 0,
       },
       {
         day: 2,
@@ -111,6 +120,8 @@ describe('getPartyReviewDayTrend', () => {
         averageScore: 40,
         unaffordablePartyCount: 0,
         unaffordableShare: 0,
+        poorValuePartyCount: 0,
+        poorValueShare: 0,
       },
     ];
 

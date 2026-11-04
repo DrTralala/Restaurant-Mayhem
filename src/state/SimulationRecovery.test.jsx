@@ -82,6 +82,7 @@ beforeEach(() => {
 it('Continue preserves a latched technical fault and only a genuinely new career resets it', () => {
   const state = createCareerInitialState({ scenarioId: 'opening-week', runId: 'faulted' });
   state.restaurant = { ...state.restaurant, gameTime: 640800, day: 8 };
+  state.menuSales = { day: 8, dishes: [], drinks: [] };
   state.careerRun = evaluateCareerRun(state.careerRun, state.restaurant);
   localStorage.setItem('restaurant-sim-save', JSON.stringify(state));
   function FaultButton() {

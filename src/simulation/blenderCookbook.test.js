@@ -29,6 +29,7 @@ function baseState() {
 }
 
 function addGazpacho(state) {
+  state = reduceCookbookAction(state, { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'gazpacho' }) ?? state;
   return reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
 }
 
@@ -81,6 +82,9 @@ function applyVisit(state, options) {
 }
 
 function payRecipe(state, cookbookId, count) {
+  if (state.cookbook.entries[cookbookId]?.discovered && !state.cookbook.entries[cookbookId].owned) {
+    state = reduceCookbookAction(state, { type: 'BUY_COOKBOOK_RECIPE', cookbookId }) ?? state;
+  }
   for (let index = 0; index < count; index += 1) state = applyVisit(state, { cookbookId });
   return state;
 }
@@ -90,6 +94,7 @@ function payGazpacho(state, count) {
 }
 
 function addFishBisque(state) {
+  state = reduceCookbookAction(state, { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'fish-bisque' }) ?? state;
   return reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'fish-bisque' });
 }
 
@@ -107,7 +112,8 @@ describe('Blender recipe gameplay', () => {
   it('discovers and adds off-station, guards duplicates and missing equipment, and retains menu edits through removal', () => {
     let state = baseState();
     expect(getCookbookEntryStatus(state, 'gazpacho')).toMatchObject({
-      discovered: true, equipmentOwned: true, stationAvailable: false, canAdd: true,
+      discovered: true, owned: false, equipmentOwned: true, stationAvailable: false,
+      purchaseCost: 125, canBuy: true, canAdd: false,
     });
     state = addGazpacho(state);
     expect(state.dishes).toHaveLength(1);
@@ -126,7 +132,7 @@ describe('Blender recipe gameplay', () => {
     state = reduceCookbookAction(state, { type: 'REMOVE_DISH', id: 'cookbook:gazpacho' });
     expect(state.dishes).toHaveLength(0);
     state = addGazpacho(state);
-    expect(getResolvedDish(state, 'cookbook:gazpacho')).toMatchObject({ name: 'House Gazpacho', price: 21 });
+    expect(getResolvedDish(state, 'cookbook:gazpacho')).toMatchObject({ name: 'House Gazpacho', price: 20 });
   });
 
   it('requires five paid Gazpacho portions and an owned Blender to discover Fish Bisque', () => {
@@ -140,7 +146,8 @@ describe('Blender recipe gameplay', () => {
     });
     state = payGazpacho(state, 1);
     expect(getCookbookEntryStatus(state, 'fish-bisque')).toMatchObject({
-      discovered: true, equipmentOwned: true, stationAvailable: false, canAdd: true,
+      discovered: true, owned: false, equipmentOwned: true, stationAvailable: false,
+      purchaseCost: 225, canBuy: true, canAdd: false,
       requirements: [
         { type: 'equipment', id: 'eq4', current: 1, required: 1, met: true },
         { type: 'paidPortions', id: 'gazpacho', current: 5, required: 5, met: true },
@@ -156,7 +163,11 @@ describe('Blender recipe gameplay', () => {
     });
     missing.equipment = missing.equipment.map(item => item.id === 'eq4' ? { ...item, owned: true } : item);
     missing = { ...missing, cookbook: reconcileCookbookDiscoveries(missing) };
-    expect(getCookbookEntryStatus(missing, 'fish-bisque')).toMatchObject({ discovered: true, canAdd: true });
+    missing = reduceCookbookAction(missing, { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'gazpacho' });
+    missing = payGazpacho(missing, 5);
+    expect(getCookbookEntryStatus(missing, 'fish-bisque')).toMatchObject({
+      discovered: true, owned: false, canBuy: true, canAdd: false,
+    });
   });
 
   it.each([
@@ -188,7 +199,7 @@ describe('Blender recipe gameplay', () => {
     state = reduceCookbookAction(state, { type: 'REMOVE_DISH', id: 'cookbook:fish-bisque' });
     expect(state.dishes).toHaveLength(0);
     state = addFishBisque(state);
-    expect(getResolvedDish(state, 'cookbook:fish-bisque')).toMatchObject({ name: 'House Fish Bisque', price: 27 });
+    expect(getResolvedDish(state, 'cookbook:fish-bisque')).toMatchObject({ name: 'House Fish Bisque', price: 25 });
   });
 
   it('prepares Gazpacho at a Blender station and not at a mismatched Oven station', () => {
@@ -297,7 +308,7 @@ describe('Blender recipe gameplay', () => {
       name: 'Fish Bisque', price: 20, prepTime, popularity, masteryPerk: perk,
     });
     expect(getResolvedDish(state, 'cookbook:fish-bisque')).toMatchObject({
-      name: 'Edited Fish Bisque', price: 31, prepTime, popularity,
+      name: 'Edited Fish Bisque', price: 25, prepTime, popularity,
     });
   });
 
@@ -312,7 +323,7 @@ describe('Blender recipe gameplay', () => {
     speed = reduceCookbookAction(speed, { type: 'UPDATE_DISH', id: 'cookbook:gazpacho',
       changes: { name: 'Edited Gazpacho', price: 30 } });
     expect(getResolvedDish(speed, 'cookbook:gazpacho')).toMatchObject({ name: 'Edited Gazpacho',
-      price: 30, prepTime: 64, popularity: 55 });
+      price: 20, prepTime: 64, popularity: 55 });
     expect(speed.customers[0].dishOrderSnapshot).toEqual(snapshot);
 
     const appeal = reduceCookbookAction(payGazpacho(withStation(addGazpacho(baseState()), 'k4', 'eq4'), 15), {
@@ -331,9 +342,9 @@ describe('Blender recipe gameplay', () => {
     // (675 native 8-second ticks) and the active staff scheduler serves one
     // additional guest versus the committed scheduler. Gazpacho remains dormant.
     expect(fingerprint).toEqual({ status: 'completed', ticks: 675, sequence: 8,
-      funds: 330.15999999999997, reputation: 1.0274999999999999,
+      funds: 358.99000000000007, reputation: 1.0274999999999999,
       queuePeak: 1, served: 8, customers: 3 });
-    expect(state.cookbook.schemaVersion).toBe(2);
+    expect(state.cookbook.schemaVersion).toBe(3);
     expect(state.cookbook.entries.gazpacho).toMatchObject({ discovered: false, paidPortions: 0, perk: null });
     expect(state.cookbook.entries['fish-bisque']).toMatchObject({ discovered: false, paidPortions: 0, perk: null });
     expect(state.cookbook.entries['baked-eggs']).toMatchObject({ discovered: false, paidPortions: 0, perk: null });

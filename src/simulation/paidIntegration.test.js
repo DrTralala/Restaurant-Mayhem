@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createCookbookState, createDishOrderSnapshot, getResolvedDish, reduceCookbookAction } from './cookbook';
+import { createDishOrderSnapshot, getResolvedDish, reduceCookbookAction } from './cookbook';
 import { createCareerRun } from './careerRun';
 import { createCustomerOrder, normaliseServiceItemOwnership } from './serviceItems';
 import { buildAffordableBaskets, isMenuItemSalesThresholdReached } from './menuEconomy';
@@ -14,22 +14,24 @@ import { getMenuSalesCount } from './menuSales';
 import { calculateRevenue } from './revenue';
 import { acceptServiceContract } from './serviceContracts';
 import { createInitialState } from '../state/initialState';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
 
 afterEach(() => vi.restoreAllMocks());
 
 function baseState(perk = null) {
-  const cookbook = createCookbookState();
-  Object.assign(cookbook.entries.toast, { paidPortions: perk ? 15 : 0, perk });
-  return { cookbook, paidVisitSequence: perk ? 15 : 0,
+  const state = withOwnedAuthoredDishes({
+    paidVisitSequence: perk ? 15 : 0,
     careerRun: createCareerRun({ scenarioId: 'opening-week', runId: 'run-1', startedAt: 36000 }),
     restaurant: { gameTime: 36000, expansionLevel: 1, day: 1, funds: 600, dailyRevenue: 0, totalServed: 0, reputation: 3 },
-    dishes: [{ id: 'starter-toast', cookbookId: 'toast', name: 'Toasted Bread', base: 'Bread', method: 'Toasted',
-      cuisine: 'generic', requiredEquipmentId: 'eq1', price: 12, quality: 1, prepTime: 60, popularity: 50 }],
+    dishes: [{ id: 'starter-toast', cookbookId: 'toast', name: 'Toasted Bread', price: 12, quality: 1 }],
     customers: [], serviceItems: [], staff: [], queue: [], tables: [], chairs: [], cookingBatches: [],
     equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }], upgrades: [],
     kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 100 }],
     serviceTables: [{ id: 'st1', x: 140, y: 120 }], doors: [{ id: 'door1', y: 340, role: 'exit' }],
-    unlockedDrinkIds: [], completedCustomers: [], pendingPartyReviews: [], partyReviewHistory: [] };
+    unlockedDrinkIds: [], completedCustomers: [], pendingPartyReviews: [], partyReviewHistory: [],
+  });
+  Object.assign(state.cookbook.entries.toast, { paidPortions: perk ? 15 : 0, perk });
+  return state;
 }
 
 function diner(id = 'c1') {
@@ -91,11 +93,12 @@ describe('committed food snapshots through real consumers', () => {
     expect(state.customers[0].dishOrderSnapshot.serviceItemId).toBe('service-item-1');
   });
 
-  it('never produces an authored snapshot for incomplete legacy custom fixtures or unaffordable orders', () => {
+  it('rejects incomplete custom dishes without producing an item or snapshot, and rejects unaffordable orders', () => {
     const state = { ...baseState(), dishes: [{ id: 'legacy', price: 12, prepTime: 60, popularity: 50, quality: 1 }] };
     const result = createCustomerOrder(state, diner(), () => 0);
     expect(result.customer).not.toHaveProperty('dishOrderSnapshot');
-    expect(result.serviceItems[0]).not.toHaveProperty('dishOrderSnapshot');
+    expect(result.customer).toMatchObject({ state: 'waiting_for_party', dishId: null });
+    expect(result.serviceItems).toEqual([]);
     const unaffordable = createCustomerOrder(baseState(), { ...diner(), spendingTier: 'budget', spendingBudget: 6 }, () => 0);
     expect(unaffordable.customer).not.toHaveProperty('dishOrderSnapshot');
     expect(unaffordable.serviceItems).toEqual([]);

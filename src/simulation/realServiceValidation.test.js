@@ -625,7 +625,7 @@ describe('real service release harness', () => {
     const incompatible = { id: 'family-reference', actions: [] };
     const legacy = createServiceFixture({ strategy: 'compact-service' });
     expect(legacy.actions.every(entry => entry.applied)).toBe(true);
-    expect(legacy.state.dishes.find(dish => dish.id === 'starter-toast').price).toBe(6);
+    expect(legacy.state.dishes.find(dish => dish.id === 'starter-toast').price).toBe(9);
     expect(legacy.state.drinkOverrides.water.price).toBe(100);
     expect(() => createServiceFixture({ strategy: 'compact-service', preparation: incompatible }))
       .toThrow(/cannot be combined/i);
@@ -640,7 +640,7 @@ describe('real service release harness', () => {
     expect(state.restaurant.gameTime).toBe(36000);
     expect(state.restaurant.reputation).toBe(1);
     expect(state.paidVisitSequence).toBe(0);
-    expect(state.dishes[0].price).toBe(6);
+    expect(state.dishes[0].price).toBe(9);
     expect(state.drinkOverrides.water.price).toBe(100);
     expect(state.staff.map(worker => worker.morale)).toEqual([100, 100, 100, 100, 100]);
     expect(state.tables.map(table => state.chairs.filter(chair => chair.tableId === table.id).length)).toEqual([4, 4, 4, 4]);

@@ -3,6 +3,7 @@ import { WALK_IN_ARCHETYPE_MIX } from '../data/customerArchetypes';
 import { clampReputation } from './balance';
 import { getResolvedDish } from './cookbook';
 import { getMenuSalesCount } from './menuSales';
+import { clampDishPrice, getDishValueAcceptance } from './dishPricing';
 
 export const SPENDING_TIER_RANGES = Object.freeze({
   budget: Object.freeze([6, 18]),
@@ -76,12 +77,12 @@ export function normaliseCustomerEconomy(customer) {
     delete normalised.spendingTier;
     delete normalised.spendingBudget;
   }
-  if (!['ordered', 'unaffordable'].includes(normalised.menuOutcome)) {
+  if (!['ordered', 'unaffordable', 'poor_value'].includes(normalised.menuOutcome)) {
     delete normalised.menuOutcome;
     delete normalised.dishPriceAtOrder;
     delete normalised.drinkPriceAtOrder;
     delete normalised.orderSubtotal;
-  } else if (normalised.menuOutcome === 'unaffordable') {
+  } else if (normalised.menuOutcome !== 'ordered') {
     normalised.dishPriceAtOrder = null;
     normalised.drinkPriceAtOrder = null;
     normalised.orderSubtotal = null;
@@ -126,15 +127,18 @@ function isValidPriceOverride(priceOverride) {
     && (priceOverride.kind === 'dish' || priceOverride.kind === 'drink')
     && typeof priceOverride.id === 'string'
     && priceOverride.id.length > 0
-    && Number.isInteger(priceOverride.price)
-    && priceOverride.price >= 1
-    && priceOverride.price <= 100;
+    && Number.isFinite(priceOverride.price);
 }
 
 function applyPriceOverride(item, kind, priceOverride) {
   if (!item || !isValidPriceOverride(priceOverride)
     || priceOverride.kind !== kind || priceOverride.id !== item.id) return item;
-  return { ...item, price: priceOverride.price };
+  const price = kind === 'dish'
+    ? clampDishPrice(item.cookbookId, item.quality, priceOverride.price)
+    : priceOverride.price;
+  if (price == null || (kind === 'drink'
+    && (!Number.isInteger(price) || price < 1 || price > 100))) return item;
+  return { ...item, price };
 }
 
 function buildMenuBaskets(state, customer, priceOverride = null) {
@@ -225,7 +229,9 @@ export function chooseAffordableBasket(state, customer, random = Math.random) {
     random,
   );
   const baskets = buildAffordableBaskets(state, profiledCustomer);
-  if (!baskets.length) return { customer: profiledCustomer, basket: null };
+  if (!baskets.length) {
+    return { customer: profiledCustomer, basket: null, menuOutcome: 'unaffordable' };
+  }
   const kinds = Object.keys(ORDER_KIND_WEIGHTS)
     .filter(kind => baskets.some(basket => basket.kind === kind));
   const kind = chooseByWeight(
@@ -234,21 +240,31 @@ export function chooseAffordableBasket(state, customer, random = Math.random) {
     boundedRoll(random),
   );
   const candidates = baskets.filter(basket => basket.kind === kind);
-  return {
-    customer: profiledCustomer,
-    basket: chooseByWeight(
-      candidates,
-      basket => getBasketWeight(basket, profiledCustomer),
-      boundedRoll(random),
-    ),
-  };
+  const basket = chooseByWeight(
+    candidates,
+    candidate => getBasketWeight(candidate, profiledCustomer),
+    boundedRoll(random),
+  );
+  const contractBypass = typeof profiledCustomer?.serviceContractId === 'string'
+    && profiledCustomer.serviceContractId.length > 0;
+  const acceptance = contractBypass ? 1
+    : getDishValueAcceptance(basket?.dish, profiledCustomer?.spendingTier);
+  if (acceptance < 1 && boundedRoll(random) >= acceptance) {
+    return { customer: profiledCustomer, basket: null, menuOutcome: 'poor_value' };
+  }
+  return { customer: profiledCustomer, basket, menuOutcome: 'ordered' };
 }
 
 function estimateDemandFromBaskets(state, baskets) {
   const dishes = new Map();
   const drinks = new Map();
+  const dishProbabilities = new Map();
+  const drinkProbabilities = new Map();
   const tierMix = getSpendingTierProbabilities(state?.restaurant?.reputation);
   let expectedGross = 0;
+  const addProbability = (map, id, probability) => {
+    map.set(id, (map.get(id) || 0) + probability);
+  };
   for (const [spendingTier, tierProbability] of Object.entries(tierMix)) {
     const [minimum, maximum] = SPENDING_TIER_RANGES[spendingTier];
     for (let spendingBudget = minimum; spendingBudget <= maximum; spendingBudget += 1) {
@@ -272,9 +288,19 @@ function estimateDemandFromBaskets(state, baskets) {
             const probability = tierProbability / (maximum - minimum + 1)
               * archetypeProbability * ORDER_KIND_WEIGHTS[kind] / kindWeightTotal
               * weights[index] / basketWeightTotal;
-            if (basket.dish) dishes.set(basket.dish.id, (dishes.get(basket.dish.id) || 0) + probability);
-            if (basket.drink) drinks.set(basket.drink.id, (drinks.get(basket.drink.id) || 0) + probability);
-            expectedGross += probability * basket.price;
+            const acceptance = basket.dish
+              ? getDishValueAcceptance(basket.dish, spendingTier)
+              : 1;
+            const acceptedProbability = probability * acceptance;
+            if (basket.dish) {
+              addProbability(dishes, basket.dish.id, acceptedProbability);
+              addProbability(dishProbabilities, basket.dish.id, acceptedProbability);
+            }
+            if (basket.drink) {
+              addProbability(drinks, basket.drink.id, acceptedProbability);
+              addProbability(drinkProbabilities, basket.drink.id, acceptedProbability);
+            }
+            expectedGross += acceptedProbability * basket.price;
           });
         }
       }
@@ -285,6 +311,7 @@ function estimateDemandFromBaskets(state, baskets) {
   ));
   return {
     demand: { dishes: rounded(dishes), drinks: rounded(drinks) },
+    demandProbabilities: { dishes: dishProbabilities, drinks: drinkProbabilities },
     expectedGrossPer100: expectedGross * 100,
   };
 }
@@ -340,12 +367,13 @@ export function getMenuAffordabilitySummary(state) {
 
 export function getMenuAnalysis(state, priceOverride = null) {
   const baskets = buildMenuBaskets(state, undefined, priceOverride);
-  const { demand, expectedGrossPer100 } = estimateDemandFromBaskets(state, baskets);
+  const { demand, demandProbabilities, expectedGrossPer100 } = estimateDemandFromBaskets(state, baskets);
   const { affordabilityByTier, dishShare, anyOrderShare } = affordabilityFromBaskets(state, baskets);
   return {
     affordability: { dishShare, anyOrderShare },
     affordabilityByTier,
     demand,
+    demandProbabilities,
     hasAvailableMenu: baskets.length > 0,
     expectedGrossPer100,
   };

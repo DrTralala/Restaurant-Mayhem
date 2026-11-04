@@ -1,22 +1,54 @@
 import { describe, expect, it } from 'vitest';
 import { processKitchen } from './kitchen';
 import { updateStaff } from './staff';
+import { createDishOrderSnapshot, getResolvedDish } from './cookbook';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
 import {
   getCookingBatchCapacity,
   getEligibleCookingItems,
   normaliseCookingBatches,
 } from './cookingBatches';
 
+function withAuthoredDishOrderSnapshots(state) {
+  const authored = withOwnedAuthoredDishes(state);
+  const serviceItems = (authored.serviceItems || []).map(item => {
+    if (item.kind !== 'dish' || item.menuItemId == null || Object.hasOwn(item, 'dishOrderSnapshot')) {
+      return item;
+    }
+    const dish = getResolvedDish(authored, item.menuItemId);
+    if (!dish) throw new Error(`Missing owned authored test dish ${item.menuItemId}`);
+    const owner = (authored.customers || []).find(customer => customer.id === item.customerId);
+    const snapshot = Object.freeze(createDishOrderSnapshot(dish, {
+      serviceItemId: item.id,
+      orderedAt: Number.isFinite(owner?.orderTime) ? owner.orderTime
+        : Number.isFinite(authored.restaurant?.gameTime) ? authored.restaurant.gameTime : 0,
+    }));
+    return { ...item, dishOrderSnapshot: snapshot };
+  });
+  const customers = (authored.customers || []).map(customer => {
+    const item = serviceItems.find(candidate => candidate.kind === 'dish'
+      && candidate.customerId === customer.id && candidate.dishOrderSnapshot);
+    if (!item || Object.hasOwn(customer, 'dishOrderSnapshot')) return customer;
+    return {
+      ...customer,
+      ...(customer.foodOutcome === 'cancelled' && customer.dishId == null
+        ? {} : { dishId: item.menuItemId }),
+      dishOrderSnapshot: Object.freeze({ ...item.dishOrderSnapshot }),
+    };
+  });
+  return { ...authored, customers, serviceItems };
+}
+
 function kitchenState({ skill = 3, gameTime = 0, serviceItems = [], customers = [], staffTask = null,
   serviceTables = [{ id: 'st1', x: 140, y: 120 }], counterItems = [] } = {}) {
-  return {
+  return withAuthoredDishOrderSnapshots({
     restaurant: { gameTime, expansionLevel: 1 },
     staff: [{ id: 'cook', role: 'cook', skill, morale: 50, x: 90, y: 130, task: staffTask }],
     customers,
     serviceItems: [...counterItems, ...serviceItems],
     dishes: [
-      { id: 'toast', name: 'Toast', prepTime: 60, requiredEquipmentId: 'eq1' },
-      { id: 'pie', name: 'Pie', prepTime: 90, requiredEquipmentId: 'eq1' },
+      { id: 'toast', cookbookId: 'toast' },
+      { id: 'pie', cookbookId: 'cheese-toast' },
     ],
     equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }],
     kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
@@ -28,7 +60,7 @@ function kitchenState({ skill = 3, gameTime = 0, serviceItems = [], customers = 
     washStations: [],
     unlockedDrinkIds: [],
     upgrades: [],
-  };
+  });
 }
 
 function orderedDish(id, customerId, menuItemId = 'toast') {

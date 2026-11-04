@@ -1,13 +1,16 @@
 import { getMenuAnalysis } from '../simulation/menuEconomy';
+import { getResolvedDish } from '../simulation/cookbook';
+import { getDishPricing } from '../simulation/dishPricing';
 import { TYPOGRAPHY } from '../typography';
 
-const DESCRIPTION = 'Modelled whole-menu gross per 100 hypothetical walk-in guests.';
-const CAVEAT = 'Not profit. Excludes service capacity and booked contracts; actual sales are not guaranteed.';
-const CURRENT_LABEL = 'Current whole-menu gross per 100 hypothetical walk-in guests';
-const DRAFT_LABEL = 'Draft whole-menu gross per 100 hypothetical walk-in guests';
+const DESCRIPTION = 'Expected whole-menu gross per 100 hypothetical walk-in guests.';
+const CAVEAT = 'Expected gross is not profit. Excludes service capacity and booked contracts; actual purchases are not guaranteed.';
+const CURRENT_LABEL = 'Current expected whole-menu gross per 100 hypothetical walk-in guests';
+const DRAFT_LABEL = 'Draft expected whole-menu gross per 100 hypothetical walk-in guests';
 const TIER_LABELS = Object.freeze({ budget: 'Budget', value: 'Value', premium: 'Premium' });
 const AFFORDABILITY_HEADING = 'Affordable integer-budget-point shares by tier (current → draft).';
-const AFFORDABILITY_CAVEAT = 'These shares describe affordable integer budget points, not predicted purchases.';
+const AFFORDABILITY_CAVEAT = 'These shares describe budget fit only, not predicted purchases.';
+const ABOVE_REFERENCE_CAVEAT = 'Above-reference dish prices reduce expected walk-in demand because some guests decline them even when their budget can afford the dish.';
 const formatGross = value => `$${Number(value).toFixed(2)}`;
 
 function formatCoverage(share) {
@@ -24,6 +27,8 @@ export function createMenuPricePreviewPresentation({
 }) {
   const draftAnalysis = getMenuAnalysis(state, { kind, id, price });
   const currentTiers = currentAffordabilityByTier ?? getMenuAnalysis(state).affordabilityByTier;
+  const dish = kind === 'dish' ? getResolvedDish(state, id) : null;
+  const pricing = dish ? getDishPricing(dish.cookbookId, dish.quality) : null;
   const affordabilityRows = Object.entries(TIER_LABELS).map(([tier, label]) => ({
     tier: label,
     dishCurrent: formatCoverage(currentTiers[tier].dishShare),
@@ -39,6 +44,10 @@ export function createMenuPricePreviewPresentation({
     currentAmount: formatGross(currentGrossPer100),
     draftLabel: DRAFT_LABEL,
     draftAmount: formatGross(draftAnalysis.expectedGrossPer100),
+    pricingLine: pricing
+      ? `Reference value ${formatGross(pricing.referenceValue)} · Allowed price $${pricing.minPrice}–$${pricing.maxPrice}`
+      : null,
+    pricingCaveat: pricing ? ABOVE_REFERENCE_CAVEAT : null,
     affordabilityHeading: AFFORDABILITY_HEADING,
     affordabilityRows,
     affordabilityCaveat: AFFORDABILITY_CAVEAT,
@@ -74,6 +83,16 @@ export default function MenuPricePreview({ presentation, inactive = false }) {
       <p style={{ ...TYPOGRAPHY.secondary, margin: '0 0 2px' }}>
         {presentation.itemLine}
       </p>
+      {presentation.pricingLine && (
+        <p style={{ ...TYPOGRAPHY.secondary, margin: '0 0 2px' }}>
+          {presentation.pricingLine}
+        </p>
+      )}
+      {presentation.pricingCaveat && (
+        <p style={{ ...TYPOGRAPHY.secondary, margin: '0 0 2px' }}>
+          {presentation.pricingCaveat}
+        </p>
+      )}
       <p style={{ ...TYPOGRAPHY.secondary, margin: '0 0 2px' }}>
         {presentation.description}
       </p>

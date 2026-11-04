@@ -500,7 +500,10 @@ describe('party checkout synchronisation', () => {
     });
   });
 
-  it('sends an unaffordable member away when ordering members leave for checkout', () => {
+  it.each([
+    ['unaffordable', 'menu_unaffordable'],
+    ['poor_value', 'menu_poor_value'],
+  ])('sends a %s member away when ordering members leave for checkout', (menuOutcome, departureReason) => {
     const result = advanceConsumption({
       customers: [
         {
@@ -509,7 +512,7 @@ describe('party checkout synchronisation', () => {
         },
         {
           id: 'non-payer', partyId: 'mixed', state: 'waiting_for_party',
-          menuOutcome: 'unaffordable', tableId: 't1',
+          menuOutcome, tableId: 't1',
           navigationGoal: { x: 2, y: 2 }, paymentReady: true,
         },
       ],
@@ -525,12 +528,29 @@ describe('party checkout synchronisation', () => {
     });
     const nonPayer = result.customers.find(customer => customer.id === 'non-payer');
     expect(nonPayer).toMatchObject({
-      state: 'leaving', departureReason: 'menu_unaffordable', exitPhase: 'to_door',
+      state: 'leaving', departureReason, exitPhase: 'to_door',
       exitDoorId: null, exitFadeProgress: 0, exitHeading: null,
       cashierStationId: null, checkoutPosition: null, paymentReady: false,
     });
     expect(nonPayer.paymentQueuedAt).toBeUndefined();
     expect(nonPayer).not.toHaveProperty('navigationGoal');
+  });
+
+  it('sends an all-refused party away with each member’s own refusal reason', () => {
+    const result = advanceConsumption({
+      customers: [
+        { id: 'unaffordable', partyId: 'all-refused', state: 'waiting_for_party', menuOutcome: 'unaffordable' },
+        { id: 'poor-value', partyId: 'all-refused', state: 'waiting_for_party', menuOutcome: 'poor_value' },
+      ],
+      serviceItems: [],
+      restaurant: { gameTime: 480 },
+    });
+
+    expect(result.customers).toEqual([
+      expect.objectContaining({ id: 'unaffordable', state: 'leaving', departureReason: 'menu_unaffordable' }),
+      expect.objectContaining({ id: 'poor-value', state: 'leaving', departureReason: 'menu_poor_value' }),
+    ]);
+    expect(result.serviceItems).toEqual([]);
   });
 
   it('keeps immediate individual checkout for an all-legacy party', () => {

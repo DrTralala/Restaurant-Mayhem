@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gameReducer, GameProvider, useDispatch, useGameState } from './GameContext';
 import { createInitialState } from './initialState';
@@ -8,6 +8,7 @@ import { getRestaurantWorld } from '../simulation/world';
 import { createDishOrderSnapshot } from '../simulation/cookbook';
 import { getFixtureSaleExpectation, getSaleSelection } from './fixtureSales';
 import SettingsMenu from '../components/SettingsMenu';
+import { SAVE_VERSION } from './saveVersion';
 
 function StaffNameHarness() {
   const state = useGameState();
@@ -58,8 +59,8 @@ function renderReducer(overrides = {}) {
   const saved = {
     ...initial,
     ...overrides,
-    // Most reducer fixtures intentionally contain partial legacy-shaped records;
-    // inject those directly instead of making them pretend to be v10 saves.
+    // Most reducer fixtures intentionally contain partial domain records; inject
+    // those directly instead of making them pretend to be persisted saves.
     ...(hasExplicitVersion ? {} : { version: undefined }),
     restaurant: { ...initial.restaurant, ...(overrides.restaurant || {}) },
   };
@@ -77,31 +78,6 @@ function renderReducer(overrides = {}) {
       return current.state;
     },
   };
-}
-
-function makeCustomDish(overrides = {}) {
-  const { cookbookId, masteryPerk, ...dish } = createInitialState().dishes[0];
-  return { ...dish, id: 'custom-test-dish', ...overrides };
-}
-
-function invalidCustomDishPatches() {
-  const requiredFields = ['name', 'base', 'method', 'cuisine'];
-  return [
-    ['zero prep time', { prepTime: 0 }],
-    ['NaN prep time', { prepTime: Number.NaN }],
-    ['infinite prep time', { prepTime: Number.POSITIVE_INFINITY }],
-    ['negative popularity', { popularity: -1 }],
-    ['popularity above 100', { popularity: 101 }],
-    ['NaN popularity', { popularity: Number.NaN }],
-    ...requiredFields.map(field => [`missing ${field}`, { [field]: undefined }]),
-    ...requiredFields.flatMap(field => [
-      [`blank ${field}`, { [field]: '' }],
-      [`whitespace-only ${field}`, { [field]: '   ' }],
-    ]),
-    ['blank equipment ID', { requiredEquipmentId: '' }],
-    ['whitespace-only equipment ID', { requiredEquipmentId: '   ' }],
-    ['non-text equipment ID', { requiredEquipmentId: 42 }],
-  ];
 }
 
 function makeNoSafeHireState() {
@@ -298,21 +274,21 @@ describe('GameProvider menu suspension action', () => {
     expect(game.state.restaurant.suspendedDishIds).toEqual(['stale-dish']);
   });
 
-  it('cleans a removed custom dish suspension while preserving committed orders and sales semantics', () => {
+  it('cleans a removed authored dish suspension while preserving committed orders and sales semantics', () => {
     const initial = createInitialState();
-    const dish = makeCustomDish({ id: 'custom-suspended' });
-    const snapshot = createDishOrderSnapshot({
-      ...dish, cookbookId: null, masteryPerk: null,
-    }, { serviceItemId: 'order-custom-suspended', orderedAt: 36000 });
+    const dish = initial.dishes[0];
+    const snapshot = createDishOrderSnapshot({ ...dish, masteryPerk: null }, {
+      serviceItemId: 'order-toast-suspended', orderedAt: 36000,
+    });
     const customer = {
       id: 'ordered-custom-customer', dishId: dish.id, dishOrderSnapshot: snapshot,
     };
     const serviceItem = {
-      id: 'order-custom-suspended', customerId: customer.id, kind: 'dish',
+      id: 'order-toast-suspended', customerId: customer.id, kind: 'dish',
       menuItemId: dish.id, dishOrderSnapshot: { ...snapshot },
     };
     const game = renderReducer({
-      dishes: [...initial.dishes, dish],
+      dishes: [dish],
       restaurant: {
         suspendedDishIds: ['unrelated-dish', dish.id],
         menuSalesThresholds: [
@@ -336,7 +312,7 @@ describe('GameProvider menu suspension action', () => {
 
     game.dispatch({ type: 'REMOVE_DISH', id: dish.id });
 
-    expect(game.state.dishes.map(candidate => candidate.id)).toEqual(['starter-toast']);
+    expect(game.state.dishes).toEqual([]);
     expect(game.state.restaurant.suspendedDishIds).toEqual(['unrelated-dish']);
     expect(game.state.restaurant.menuSalesThresholds).toEqual([
       { kind: 'dish', id: 'unrelated-dish', threshold: 8 },
@@ -348,7 +324,7 @@ describe('GameProvider menu suspension action', () => {
     expect(game.state.serviceItems[0].dishOrderSnapshot).toEqual(snapshot);
     expect(game.state.menuSales).toEqual({
       day: 1,
-      dishes: [{ key: 'starter-toast', count: 1, gross: 0, grossComplete: false }],
+      dishes: [],
       drinks: [],
     });
   });
@@ -604,20 +580,16 @@ describe('GameProvider menu sales threshold action', () => {
     expect(gameReducer(duplicatePolicy, action('dish', 'starter-toast'))).toBe(duplicatePolicy);
   });
 
-  it('preserves arbitrary custom IDs and permits the same text ID in both kinds', () => {
+  it('sets independent thresholds for an authored dish and an unlocked drink', () => {
     const initial = createInitialState();
-    const state = {
-      ...initial,
-      dishes: [...initial.dishes, { ...makeCustomDish({ id: '__proto__' }) }],
-    };
-    const dish = gameReducer(state, {
-      type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: '__proto__', threshold: 2,
+    const dish = gameReducer(initial, {
+      type: 'SET_MENU_SALES_THRESHOLD', kind: 'dish', id: 'starter-toast', threshold: 2,
     });
     const both = gameReducer(dish, {
       type: 'SET_MENU_SALES_THRESHOLD', kind: 'drink', id: 'water', threshold: 2,
     });
     expect(both.restaurant.menuSalesThresholds).toEqual([
-      { kind: 'dish', id: '__proto__', threshold: 2 },
+      { kind: 'dish', id: 'starter-toast', threshold: 2 },
       { kind: 'drink', id: 'water', threshold: 2 },
     ]);
   });
@@ -694,7 +666,7 @@ describe('GameProvider staff actions', () => {
     expect(game.state.movementCoordinator.requests).toEqual(new Map());
   });
 
-  it.each([4, 5, 6])('ignores old version %s saves and starts fresh without deleting the saved JSON', version => {
+  it.each([10])('ignores old version %s saves and starts fresh without deleting the saved JSON', version => {
     const saved = { ...createInitialState(), version, restaurant: { funds: 999 } };
     localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
 
@@ -702,6 +674,35 @@ describe('GameProvider staff actions', () => {
 
     expect(screen.getByTestId('funds')).toHaveTextContent('600');
     expect(localStorage.getItem('restaurant-sim-save')).toBe(JSON.stringify(saved));
+  });
+
+  it('keeps an incompatible-save notice until dismissed despite normal and career autosaves', () => {
+    const fresh = createInitialState();
+    const saved = { ...fresh, version: SAVE_VERSION - 1,
+      restaurant: { ...fresh.restaurant, funds: 999 } };
+    const serialized = JSON.stringify(saved);
+    localStorage.setItem('restaurant-sim-save', serialized);
+    const current = {};
+
+    render(<GameProvider><ReducerHarness current={current} /></GameProvider>);
+
+    expect(current.state.restaurant.funds).toBe(fresh.restaurant.funds);
+    expect(current.state.cookbook.entries.toast.owned).toBe(true);
+    expect(current.state).not.toHaveProperty('startupNotice');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Your previous save is incompatible with the new cookbook progression. A new game has been started.',
+    );
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
+
+    act(() => fireEvent(window, new Event('beforeunload')));
+    act(() => current.dispatch({ type: 'START_CAREER', scenarioId: 'opening-week',
+      runId: 'notice-test-run', confirmedReplace: true }));
+
+    expect(JSON.parse(localStorage.getItem('restaurant-sim-save')).version).toBe(SAVE_VERSION);
+    expect(screen.getByRole('status')).toHaveTextContent(/previous save is incompatible/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss notice' }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('renames only the selected staff member', () => {
@@ -2521,7 +2522,7 @@ describe('GameProvider guarded economy actions', () => {
   });
 
   it('places an expanded kitchen station in a save-safe snapped slot', () => {
-    const game = renderReducer({ restaurant: { funds: 10000 } });
+    const game = renderReducer({ version: SAVE_VERSION, restaurant: { funds: 10000 } });
 
     game.dispatch({ type: 'EXPAND' });
 
@@ -2537,6 +2538,7 @@ describe('GameProvider guarded economy actions', () => {
 
   it('keeps repeated expansions valid around moved fixtures and kitchen ID gaps', () => {
     const game = renderReducer({
+      version: SAVE_VERSION,
       restaurant: { funds: 10000, expansionLevel: 1 },
       kitchenStations: [
         { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
@@ -2651,14 +2653,14 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.kitchenStations).toHaveLength(3);
   });
 
-  it('enforces price limits and paid dish quality', () => {
+  it('enforces authored price bounds and paid dish quality', () => {
     const game = renderReducer({ restaurant: { funds: 50 } });
 
     game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: -20, quality: 10 } });
-    expect(game.state.dishes[0]).toMatchObject({ price: 1, quality: 1 });
+    expect(game.state.dishes[0]).toMatchObject({ price: 9, quality: 1 });
 
     game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 101 } });
-    expect(game.state.dishes[0].price).toBe(100);
+    expect(game.state.dishes[0].price).toBe(15);
 
     game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: 0 });
     expect(game.state.restaurant.funds).toBe(0);
@@ -2669,44 +2671,43 @@ describe('GameProvider guarded economy actions', () => {
     expect(game.state.dishes[0].quality).toBe(2);
 
     game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: Number.POSITIVE_INFINITY } });
-    expect(game.state.dishes[0].price).toBe(100);
+    expect(game.state.dishes[0].price).toBe(15);
   });
 
-  it('pins the custom-dish quality cost boundary, cap and forged cost', () => {
+  it('pins the authored-dish quality cost boundary, cap and forged cost', () => {
     const initial = createInitialState();
-    const exact = renderReducer({
-      restaurant: { funds: 50 },
-      dishes: [{ ...initial.dishes[0], cookbookId: null }],
-    });
+    const exact = renderReducer({ restaurant: { funds: 50 } });
     exact.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: 1 });
     expect(exact.state.restaurant.funds).toBe(0);
     expect(exact.state.dishes[0].quality).toBe(2);
 
-    const short = renderReducer({
-      restaurant: { funds: 49.99 },
-      dishes: [{ ...initial.dishes[0], cookbookId: null }],
-    });
+    const short = renderReducer({ restaurant: { funds: 49.99 } });
     const shortState = short.state;
     short.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: -50 });
     expect(short.state).toBe(shortState);
 
-    const capped = renderReducer({
-      restaurant: { funds: 50 },
-      dishes: [{ ...initial.dishes[0], cookbookId: null, quality: 10 }],
-    });
+    const cappedDish = { ...initial.dishes[0], quality: 10 };
+    const cappedCookbook = { ...initial.cookbook, entries: { ...initial.cookbook.entries,
+      toast: { ...initial.cookbook.entries.toast, menuSettings: {
+        ...initial.cookbook.entries.toast.menuSettings, quality: 10,
+      } },
+    } };
+    const capped = renderReducer({ restaurant: { funds: 50 }, dishes: [cappedDish], cookbook: cappedCookbook });
     const cappedState = capped.state;
     capped.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: 1 });
     expect(capped.state).toBe(cappedState);
     expect(capped.state.restaurant.funds).toBe(50);
   });
 
-  it('allows adding dishes beyond the legacy recipe-slot count', () => {
+  it('does not allow generic dish creation even beyond legacy recipe slots', () => {
     const game = renderReducer({ recipeSlots: 1 });
     const extraDish = { ...game.state.dishes[0], id: 'extra-dish' };
+    const before = game.state;
 
     game.dispatch({ type: 'ADD_DISH', dish: extraDish });
 
-    expect(game.state.dishes).toHaveLength(2);
+    expect(game.state).toBe(before);
+    expect(game.state.dishes).toHaveLength(1);
   });
 
   it('unlocks a canonical drink once at its catalogue cost', () => {
@@ -2850,68 +2851,18 @@ describe('GameProvider guarded economy actions', () => {
     expect(capped.state.restaurant.funds).toBe(50);
   });
 
-  it('canonicalises valid dish creation and rejects malformed dishes', () => {
-    const game = renderReducer({ dishes: [], recipeSlots: 3 });
-    const validDish = {
-      ...makeCustomDish(),
-      id: 'new-dish',
-      price: 100.6,
-      quality: 10,
-    };
-
-    game.dispatch({ type: 'ADD_DISH', dish: validDish });
-    expect(game.state.dishes).toEqual([{ ...validDish, price: 100, quality: 1 }]);
-
-    game.dispatch({ type: 'ADD_DISH', dish: { ...validDish, id: 'bad-price', price: Number.NaN } });
-    game.dispatch({ type: 'ADD_DISH', dish: { ...validDish, id: 'bad-quality', quality: Number.NaN } });
-    game.dispatch({ type: 'ADD_DISH', dish: { ...validDish, id: 'zero-quality', quality: 0 } });
-    game.dispatch({ type: 'ADD_DISH', dish: { ...validDish, id: '' } });
-
-    expect(game.state.dishes).toHaveLength(1);
-  });
-
-  it.each(invalidCustomDishPatches())('rejects custom dish creation with %s', (_label, patch) => {
-    const state = { ...createInitialState(), dishes: [] };
-    const dish = { ...makeCustomDish({ id: 'invalid-custom-dish' }), ...patch };
-
-    expect(gameReducer(state, { type: 'ADD_DISH', dish })).toBe(state);
-  });
-
-  it.each(invalidCustomDishPatches())('rejects custom dish updates with %s atomically', (_label, patch) => {
-    const dish = makeCustomDish();
-    const state = { ...createInitialState(), dishes: [dish] };
-
-    expect(gameReducer(state, {
-      type: 'UPDATE_DISH', id: dish.id, changes: { name: 'Would-be partial update', ...patch },
-    })).toBe(state);
-  });
-
-  it('updates a valid custom dish name and canonical price while protecting its identity and quality', () => {
-    const dish = makeCustomDish();
-    const state = { ...createInitialState(), dishes: [dish] };
-
-    const next = gameReducer(state, {
-      type: 'UPDATE_DISH', id: dish.id,
-      changes: {
-        id: 'forged-id', cookbookId: 'toast', masteryPerk: 'speed', quality: 10,
-        name: 'Renamed dish', price: 18.6,
-      },
-    });
-
-    expect(next.dishes).toEqual([{ ...dish, name: 'Renamed dish', price: 19 }]);
-  });
-
-  it('normalises fractional quality before enforcing the paid maximum', () => {
+  it('rejects generic creation and cannot mutate an unowned or missing authored recipe', () => {
     const initial = createInitialState();
-    const game = renderReducer({
-      restaurant: { funds: 50 },
-      dishes: [{ ...initial.dishes[0], cookbookId: null, quality: 9.5 }],
-    });
+    expect(gameReducer(initial, { type: 'ADD_DISH', dish: { ...initial.dishes[0], id: 'custom' } })).toBe(initial);
+    expect(gameReducer(initial, { type: 'UPDATE_DISH', id: 'missing', changes: { name: 'Fake' } })).toBe(initial);
 
-    game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast' });
-
-    expect(game.state.restaurant.funds).toBe(0);
-    expect(game.state.dishes[0].quality).toBe(10);
+    const unownedDish = { ...initial.dishes[0], id: 'cookbook:cheese-toast', cookbookId: 'cheese-toast' };
+    const unownedState = { ...initial, dishes: [unownedDish] };
+    for (const action of [
+      { type: 'UPDATE_DISH', id: unownedDish.id, changes: { name: 'Forged' } },
+      { type: 'REMOVE_DISH', id: unownedDish.id },
+      { type: 'UPGRADE_DISH_QUALITY', id: unownedDish.id },
+    ]) expect(gameReducer(unownedState, action)).toBe(unownedState);
   });
 });
 
@@ -3119,33 +3070,16 @@ describe('gameReducer speed actions', () => {
 describe('GameProvider menu sales telemetry', () => {
   beforeEach(() => localStorage.clear());
 
-  const customDish = {
-    id: 'custom-dish', name: 'Custom dish', base: 'Rice', method: 'Steamed',
-    cuisine: 'generic', requiredEquipmentId: null, price: 9, prepTime: 30,
-    quality: 1, popularity: 50, cookbookId: null, masteryPerk: null,
-  };
-
-  it('removes deleted custom and cookbook dish IDs without disturbing current counters', () => {
+  it('removes a deleted cookbook dish ID without disturbing unrelated counters', () => {
     const initial = createInitialState();
     const game = renderReducer({
-      dishes: [initial.dishes[0], customDish],
       menuSales: {
         day: 1,
         dishes: [
           { key: 'starter-toast', count: 1 },
-          { key: 'custom-dish', count: 3 },
         ],
         drinks: [],
       },
-    });
-
-    game.dispatch({ type: 'REMOVE_DISH', id: 'custom-dish' });
-
-    expect(game.state.dishes.map(dish => dish.id)).toEqual(['starter-toast']);
-    expect(game.state.menuSales).toEqual({
-      day: 1,
-      dishes: [{ key: 'starter-toast', count: 1, gross: 0, grossComplete: false }],
-      drinks: [],
     });
 
     game.dispatch({ type: 'REMOVE_DISH', id: 'starter-toast' });
@@ -3155,29 +3089,27 @@ describe('GameProvider menu sales telemetry', () => {
   });
 
   it('preserves counters through price, name, quality and suspension changes', () => {
-    const initial = createInitialState();
     const game = renderReducer({
-      dishes: [customDish],
       menuSales: {
         day: 1,
-        dishes: [{ key: 'custom-dish', count: 4 }],
+        dishes: [{ key: 'starter-toast', count: 4 }],
         drinks: [{ key: 'water', count: 2 }],
       },
     });
     const expectedSales = {
       day: 1,
-      dishes: [{ key: 'custom-dish', count: 4, gross: 0, grossComplete: false }],
+      dishes: [{ key: 'starter-toast', count: 4, gross: 0, grossComplete: false }],
       drinks: [{ key: 'water', count: 2, gross: 0, grossComplete: false }],
     };
 
-    game.dispatch({ type: 'UPDATE_DISH', id: 'custom-dish', changes: { price: 20 } });
+    game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 } });
     expect(game.state.menuSales).toEqual(expectedSales);
-    game.dispatch({ type: 'UPDATE_DISH', id: 'custom-dish', changes: { name: 'Renamed' } });
+    game.dispatch({ type: 'UPDATE_DISH', id: 'starter-toast', changes: { name: 'Renamed' } });
     expect(game.state.menuSales).toEqual(expectedSales);
-    game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'custom-dish' });
+    game.dispatch({ type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast' });
     expect(game.state.dishes[0].quality).toBe(2);
     expect(game.state.menuSales).toEqual(expectedSales);
-    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'custom-dish', suspended: true });
+    game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
     expect(game.state.menuSales).toEqual(expectedSales);
   });
 });

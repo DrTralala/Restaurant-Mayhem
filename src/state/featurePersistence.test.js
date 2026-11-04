@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCareerInitialState, createInitialState } from './initialState';
-import { hydrateState, loadState, saveState } from './persistence';
+import { hydrateState, loadState, loadStateResult, saveState } from './persistence';
+import { SAVE_VERSION } from './saveVersion';
 import { validateSavedState } from './saveValidation';
 import { acceptServiceContract } from '../simulation/serviceContracts';
 import { createDishOrderSnapshot, getResolvedDish } from '../simulation/cookbook';
@@ -13,27 +14,30 @@ import { buildAffordableBaskets } from '../simulation/menuEconomy';
 import { prioritiseQueuedParty } from '../simulation/queuePriority';
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
-function legacy() {
-  const raw = createInitialState();
-  delete raw.cookbook;
-  delete raw.serviceContracts;
-  delete raw.paidVisitSequence;
-  delete raw.careerRun;
-  delete raw.menuSales;
-  raw.dishes = raw.dishes.map(({ cookbookId, ...dish }) => dish);
-  return raw;
-}
 function orderFixture() {
-  const raw = legacy();
-  raw.customers = [{ id: 'guest', state: 'waiting_for_items', dishId: 'starter-toast', drinkId: null,
-    menuOutcome: 'ordered', foodOutcome: 'pending', foodOrderedAt: 35990,
-    foodPatienceBudget: 300, foodDeadlineAt: 36290, orderTime: 35990,
-    dishPriceAtOrder: 9, orderedServiceItemIds: ['dish-1'], consumedServiceItemIds: [] }];
-  raw.serviceItems = [{ id: 'dish-1', customerId: 'guest', menuItemId: 'starter-toast', kind: 'dish', state: 'ordered' }];
+  const raw = createInitialState();
+  const starter = raw.dishes[0];
+  const entry = raw.cookbook.entries.toast;
+  const priorSettings = { ...entry.menuSettings, price: 25, quality: 10 };
+  raw.cookbook.entries.toast = { ...entry, menuSettings: priorSettings };
+  raw.dishes[0] = { ...starter, ...priorSettings };
+  const snapshot = createDishOrderSnapshot(getResolvedDish(raw, starter.id), {
+    serviceItemId: 'dish-1', orderedAt: 35990,
+  });
+  raw.cookbook.entries.toast = entry;
+  raw.dishes[0] = starter;
+  raw.customers = [{ id: 'guest', state: 'waiting_for_items', tableId: 't1', chairId: 'ch1',
+    dishId: starter.id, drinkId: null, menuOutcome: 'ordered', foodOutcome: 'pending',
+    foodOrderedAt: 35990, foodPatienceBudget: 300, foodDeadlineAt: 36290,
+    dishPriceAtOrder: snapshot.price, drinkPriceAtOrder: null, orderSubtotal: snapshot.price,
+    orderedServiceItemIds: ['dish-1'], consumedServiceItemIds: [], cancelledServiceItemIds: [],
+    dishOrderSnapshot: snapshot }];
+  raw.serviceItems = [{ id: 'dish-1', customerId: 'guest', menuItemId: starter.id,
+    kind: 'dish', state: 'ordered', dishOrderSnapshot: { ...snapshot } }];
   return raw;
 }
 
-describe('additive v10 feature persistence', () => {
+describe('strict v11 feature persistence', () => {
   it('starts a new sandbox with an empty day-1 sales branch', () => {
     const fresh = createInitialState();
     expect(fresh.menuSales).toEqual({
@@ -62,9 +66,9 @@ describe('additive v10 feature persistence', () => {
     raw.cookbook.lastAppliedPaidVisitSequence = 20;
     raw.equipment = raw.equipment.map(item => item.id === 'eq4' ? { ...item, owned: true } : item);
     raw.cookbook.entries.gazpacho = { ...raw.cookbook.entries.gazpacho,
-      discovered: true, paidPortions: 5 };
+      discovered: true, owned: true, paidPortions: 5 };
     raw.cookbook.entries['fish-bisque'] = { ...raw.cookbook.entries['fish-bisque'],
-      discovered: true, paidPortions: 15, perk: 'appeal',
+      discovered: true, owned: true, paidPortions: 15, perk: 'appeal',
       menuSettings: { name: 'House Fish Bisque', price: 27, quality: 3 } };
     raw.dishes.push({ id: 'cookbook:fish-bisque', cookbookId: 'fish-bisque',
       name: 'House Fish Bisque', base: 'Fish', method: 'Blended', cuisine: 'generic',
@@ -86,7 +90,7 @@ describe('additive v10 feature persistence', () => {
     });
   });
 
-  it('rejects a previous eight-entry schema-2 save instead of auto-filling Baked Eggs', () => {
+  it('rejects a current-version save with a missing recipe entry instead of auto-filling it', () => {
     const old = createInitialState();
     delete old.cookbook.entries['baked-eggs'];
     expect(() => validateSavedState(old)).toThrow(/Invalid cookbook/);
@@ -94,27 +98,22 @@ describe('additive v10 feature persistence', () => {
 
     localStorage.setItem('restaurant-sim-save', JSON.stringify(old));
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(loadState()).toBeNull();
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
   });
 
-  it('loads a truly old sandbox without changing cash/time or awarding historical credit', () => {
-    const raw = legacy();
+  it('rejects a previous-version sandbox without changing its progress or evidence', () => {
+    const raw = createInitialState();
+    raw.version = SAVE_VERSION - 1;
     raw.restaurant.totalServed = 1000;
-    raw.completedCustomers = [{ customerId: 'old', revenue: 25 }];
-    localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
-    const loaded = loadState();
-    expect(loaded).not.toBeNull();
-    const state = hydrateState(loaded, createInitialState());
-    expect(state.restaurant).toEqual(raw.restaurant);
-    expect(state.careerRun).toBeNull();
-    expect(state.paidVisitSequence).toBe(0);
-    expect(state.cookbook.entries.toast.paidPortions).toBe(0);
-    expect(state.dishes[0].cookbookId).toBe('toast');
-    expect(state.serviceContracts.active).toBeNull();
-    expect(state.completedCustomers).toEqual(raw.completedCustomers);
-    expect(state.menuSales).toEqual({ day: raw.restaurant.day, dishes: [], drinks: [] });
+    const serialized = JSON.stringify(raw);
+    localStorage.setItem('restaurant-sim-save', serialized);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'incompatible' });
+    expect(() => hydrateState(raw, createInitialState())).toThrow(/incompatible/i);
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
   });
-  it('normalises malformed optional menu sales before strict validation in both entry points', () => {
+  it('rejects malformed current menu sales before normalisation can hide invalid identifiers', () => {
     const raw = {
       ...createInitialState(),
       menuSales: {
@@ -130,18 +129,11 @@ describe('additive v10 feature persistence', () => {
     };
     expect(() => validateSavedState(raw)).toThrow();
 
-    const expected = {
-      day: 1,
-      dishes: [{ key: 'starter-toast', count: 2, gross: 0, grossComplete: false }],
-      drinks: [{ key: 'water', count: 3, gross: 0, grossComplete: false }],
-    };
-    expect(hydrateState(raw, createInitialState()).menuSales).toEqual(expected);
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
 
     localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
-    const loaded = loadState();
-    expect(loaded).not.toBeNull();
-    expect(loaded.menuSales).toEqual(expected);
-    expect(hydrateState(loaded, createInitialState()).menuSales).toEqual(expected);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
   });
 
   it.each([
@@ -150,24 +142,33 @@ describe('additive v10 feature persistence', () => {
     { day: 1, dishes: 'bad', drinks: [] },
     { day: 1, dishes: [], drinks: 'bad' },
     { day: 2, dishes: [{ key: 'starter-toast', count: 4 }], drinks: [] },
-  ])('fills empty current-day menu sales for malformed value %s', value => {
+  ])('rejects malformed current menu sales value %s before filling defaults', value => {
     const raw = { ...createInitialState(), menuSales: value };
 
-    expect(hydrateState(raw, createInitialState()).menuSales).toEqual({
-      day: 1, dishes: [], drinks: [],
-    });
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
   });
 
-  it('round-trips valid menu sales including a custom dish ID ending in Id', () => {
+  it('round-trips multi-dish menu sales for distinct authored IDs, including one ending in Id', () => {
     const raw = createInitialState();
-    raw.dishes = [...raw.dishes, {
-      id: 'custom-menuId', name: 'Custom dish', price: 9, prepTime: 30,
-      quality: 1, popularity: 50,
-    }];
+    raw.dishes[0] = { ...raw.dishes[0], id: 'custom-menuId' };
+    raw.cookbook.entries.toast = { ...raw.cookbook.entries.toast, paidPortions: 3 };
+    const cheeseToast = raw.cookbook.entries['cheese-toast'];
+    raw.cookbook.entries['cheese-toast'] = {
+      ...cheeseToast, discovered: true, owned: true,
+    };
+    raw.dishes.push({
+      id: 'cookbook:cheese-toast', cookbookId: 'cheese-toast',
+      name: cheeseToast.menuSettings.name, base: 'Cheese', method: 'Toasted', cuisine: 'generic',
+      price: cheeseToast.menuSettings.price, quality: cheeseToast.menuSettings.quality,
+      prepTime: 90, popularity: 65, requiredEquipmentId: 'eq1', unlocked: true,
+    });
     raw.menuSales = {
       day: 1,
-      dishes: [{ key: 'custom-menuId', count: 2 }, { key: 'starter-toast', count: 1 }],
-      drinks: [{ key: 'iced-tea', count: 3 }],
+      dishes: [
+        { key: 'custom-menuId', count: 2, gross: 0, grossComplete: false },
+        { key: 'cookbook:cheese-toast', count: 3, gross: 0, grossComplete: false },
+      ],
+      drinks: [{ key: 'iced-tea', count: 3, gross: 0, grossComplete: false }],
     };
     expect(saveState(raw)).toBe(true);
 
@@ -176,7 +177,7 @@ describe('additive v10 feature persistence', () => {
       day: 1,
       dishes: [
         { key: 'custom-menuId', count: 2, gross: 0, grossComplete: false },
-        { key: 'starter-toast', count: 1, gross: 0, grossComplete: false },
+        { key: 'cookbook:cheese-toast', count: 3, gross: 0, grossComplete: false },
       ],
       drinks: [{ key: 'iced-tea', count: 3, gross: 0, grossComplete: false }],
     };
@@ -184,7 +185,9 @@ describe('additive v10 feature persistence', () => {
     const hydrated = hydrateState(loaded, createInitialState());
     expect(hydrated.menuSales).toEqual(expectedMenuSales);
     expect(hydrated.dishes.find(dish => dish.id === 'custom-menuId'))
-      .toMatchObject({ id: 'custom-menuId', price: 9 });
+      .toMatchObject({ id: 'custom-menuId', cookbookId: 'toast', price: 12 });
+    expect(hydrated.dishes.find(dish => dish.id === 'cookbook:cheese-toast'))
+      .toMatchObject({ id: 'cookbook:cheese-toast', cookbookId: 'cheese-toast', price: 14 });
   });
 
   it('round-trips incomplete gross completeness through save, load and hydration', () => {
@@ -201,7 +204,7 @@ describe('additive v10 feature persistence', () => {
     expect(hydrateState(loaded, createInitialState()).menuSales).toEqual(raw.menuSales);
   });
 
-  it('resets contradictory gross metadata after saving without backfilling sale counts', () => {
+  it('rejects contradictory current gross metadata before normalisation can hide it', () => {
     const raw = createInitialState();
     raw.menuSales = {
       day: raw.restaurant.day,
@@ -217,39 +220,87 @@ describe('additive v10 feature persistence', () => {
     };
 
     expect(saveState(raw)).toBe(true);
-    const loaded = loadState();
-
-    expect(loaded.menuSales).toEqual({
-      day: raw.restaurant.day,
-      dishes: [
-        { key: raw.dishes[0].id, count: 0, gross: 0, grossComplete: false },
-      ],
-      drinks: [
-        { key: 'water', count: 2, gross: 0, grossComplete: false },
-        { key: 'tea', count: 3, gross: 0, grossComplete: false },
-        { key: 'soda', count: 0, gross: 0, grossComplete: true },
-        { key: 'coffee', count: 0, gross: 0, grossComplete: false },
-      ],
-    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
+    expect(() => hydrateState(raw, createInitialState())).toThrow();
   });
 
-  it('migrates recoverable raw order stats/price before starter adoption with no authored provenance', () => {
+  it('preserves an in-flight snapshot at its captured quality after the current menu changes', () => {
     const raw = orderFixture();
-    // Only a complete original bill can opt into strict snapshot checkout.
-    Object.assign(raw.customers[0], { drinkPriceAtOrder: null, orderSubtotal: 9 });
-    raw.dishes[0].quality = 4;
     const hydrated = hydrateState(raw, createInitialState());
-    const snapshot = hydrated.customers[0].dishOrderSnapshot;
-    expect(snapshot).toMatchObject({ schemaVersion: 1, serviceItemId: 'dish-1', menuItemId: 'starter-toast',
-      orderedAt: 35990, cookbookId: null, masteryPerk: null, price: 9, quality: 4, prepTime: 60, popularity: 50 });
+    const snapshot = raw.customers[0].dishOrderSnapshot;
+    expect(snapshot).toMatchObject({ serviceItemId: 'dish-1', menuItemId: 'starter-toast',
+      orderedAt: 35990, cookbookId: 'toast', price: 25, quality: 10 });
+    expect(hydrated.customers[0].dishOrderSnapshot).toEqual(snapshot);
     expect(hydrated.serviceItems[0].dishOrderSnapshot).toEqual(snapshot);
-    expect(hydrated.dishes[0]).toMatchObject({ cookbookId: 'toast', quality: 4 });
-    expect(raw.customers[0]).not.toHaveProperty('dishOrderSnapshot');
+    expect(hydrated.dishes[0]).toMatchObject({ cookbookId: 'toast', price: 12, quality: 1 });
     expect(hydrateState(hydrated, createInitialState()).customers[0].dishOrderSnapshot).toEqual(snapshot);
   });
-  it('does not manufacture an incomplete legacy order snapshot from fresh defaults', () => {
+  it('round-trips off-menu owned mastery, poor-value party outcomes and an in-flight snapshot', () => {
     const raw = orderFixture();
-    raw.dishes = [];
+    raw.cookbook.entries['cheese-toast'] = {
+      ...raw.cookbook.entries['cheese-toast'],
+      discovered: true, owned: true, paidPortions: 15, perk: 'speed',
+      menuSettings: { name: 'House Cheese Toast', price: 14, quality: 1 },
+    };
+    raw.pendingPartyReviews = [{
+      partyId: 'party-pending', memberIds: ['ordered-member', 'refused-member'],
+      orderedMemberIds: ['ordered-member'], unaffordableMemberIds: [],
+      poorValueMemberIds: ['refused-member'], paidReviews: [],
+    }];
+    const snapshot = raw.customers[0].dishOrderSnapshot;
+
+    expect(saveState(raw)).toBe(true);
+    const hydrated = hydrateState(loadState(), createInitialState());
+
+    expect(hydrated.dishes.some(dish => dish.cookbookId === 'cheese-toast')).toBe(false);
+    expect(hydrated.cookbook.entries['cheese-toast']).toMatchObject({
+      discovered: true, owned: true, paidPortions: 15, perk: 'speed',
+      menuSettings: { name: 'House Cheese Toast', price: 14, quality: 1 },
+    });
+    expect(hydrated.pendingPartyReviews).toEqual(raw.pendingPartyReviews);
+    expect(hydrated.customers[0].dishOrderSnapshot).toEqual(snapshot);
+    expect(hydrated.serviceItems[0].dishOrderSnapshot).toEqual(snapshot);
+  });
+
+  it('rejects non-authored active dishes and snapshots with custom recipe identities', () => {
+    const customMenu = createInitialState();
+    customMenu.dishes.push({ ...customMenu.dishes[0], id: 'custom-dish', cookbookId: null });
+    expect(() => hydrateState(customMenu, createInitialState())).toThrow(/Invalid cookbook/);
+
+    const customSnapshot = orderFixture();
+    customSnapshot.customers[0].dishOrderSnapshot = {
+      ...customSnapshot.customers[0].dishOrderSnapshot, cookbookId: null,
+    };
+    expect(() => hydrateState(customSnapshot, createInitialState())).toThrow(/Invalid cookbook/);
+  });
+
+  it('rejects an out-of-range authored price before menu normalisation', () => {
+    const raw = createInitialState();
+    const invalidSettings = { ...raw.cookbook.entries.toast.menuSettings, price: 26, quality: 10 };
+    raw.cookbook.entries.toast = { ...raw.cookbook.entries.toast, menuSettings: invalidSettings };
+    raw.dishes[0] = { ...raw.dishes[0], ...invalidSettings };
+
+    expect(() => hydrateState(raw, createInitialState())).toThrow(/Invalid cookbook/);
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
+  });
+
+  it('rejects unpaid progress on a recipe that is not owned', () => {
+    const raw = createInitialState();
+    raw.cookbook.entries['cheese-toast'] = {
+      ...raw.cookbook.entries['cheese-toast'], discovered: true, owned: false, paidPortions: 1,
+    };
+
+    expect(() => validateSavedState(raw)).toThrow(/Invalid cookbook/);
+    expect(() => hydrateState(raw, createInitialState())).toThrow(/Invalid cookbook/);
+  });
+
+  it('does not manufacture a missing current-version order snapshot from fresh defaults', () => {
+    const raw = orderFixture();
+    delete raw.customers[0].dishOrderSnapshot;
+    delete raw.serviceItems[0].dishOrderSnapshot;
     const hydrated = hydrateState(raw, createInitialState());
     expect(hydrated.customers[0]).not.toHaveProperty('dishOrderSnapshot');
     expect(hydrated.serviceItems[0]).not.toHaveProperty('dishOrderSnapshot');
@@ -262,7 +313,7 @@ describe('additive v10 feature persistence', () => {
     }
   });
   it('rejects explicitly present undefined cookbook rather than treating it as absence', () => {
-    const raw = { ...legacy(), cookbook: undefined };
+    const raw = { ...createInitialState(), cookbook: undefined };
     expect(() => hydrateState(raw, createInitialState())).toThrow();
   });
   it.each([-1, 1.1, Number.MAX_SAFE_INTEGER + 1, null, undefined])('rejects invalid present root sequence %s', value => {
@@ -286,15 +337,17 @@ describe('additive v10 feature persistence', () => {
     raw.completedCustomers[0].paidVisitSequence = 1;
     expect(() => validateSavedState(raw)).not.toThrow();
   });
-  it('validates full snapshot copies before any legacy or cooking normalisation', () => {
+  it('validates full snapshot copies before any cooking normalisation', () => {
     const raw = orderFixture();
     raw.customers[0].dishOrderSnapshot = null;
     expect(() => hydrateState(raw, createInitialState())).toThrow();
+    const mismatched = orderFixture();
     const good = createInitialState();
     const snapshot = createDishOrderSnapshot(getResolvedDish(good, 'starter-toast'), { serviceItemId: 'dish-1', orderedAt: 35990 });
-    raw.customers[0] = { ...raw.customers[0], dishPriceAtOrder: 12, dishOrderSnapshot: snapshot };
-    raw.serviceItems[0].dishOrderSnapshot = { ...snapshot, price: 13 };
-    expect(() => hydrateState(raw, createInitialState())).toThrow();
+    mismatched.customers[0] = { ...mismatched.customers[0], dishPriceAtOrder: 12,
+      orderSubtotal: 12, dishOrderSnapshot: snapshot };
+    mismatched.serviceItems[0].dishOrderSnapshot = { ...snapshot, price: 13 };
+    expect(() => hydrateState(mismatched, createInitialState())).toThrow();
   });
   it.each(['queue', 'queueDepartures'])('rejects malformed present snapshots on %s actors too', key => {
     const raw = createInitialState();
@@ -331,6 +384,7 @@ describe('additive v10 feature persistence', () => {
   it('drains money only and settles due persisted contracts before exact-deadline career evaluation even paused', () => {
     let raw = createCareerInitialState({ scenarioId: 'opening-week', runId: 'run' });
     raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 634650, reputation: 2 };
+    raw.menuSales = { day: 8, dishes: [], drinks: [] };
     raw = acceptServiceContract(raw, { templateId: 'office-lunch' });
     // Office lasts 900 prep + 5250 service: its deadline coincides with Opening Week.
     expect(raw.serviceContracts.active.deadlineAt).toBe(640800);
@@ -360,6 +414,7 @@ describe('additive v10 feature persistence', () => {
   it('retains future booked arrivals at the cutoff without admission or missed-resume changes', () => {
     let raw = createCareerInitialState({ scenarioId: 'opening-week', runId: 'run' });
     raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 639900 };
+    raw.menuSales = { day: 8, dishes: [], drinks: [] };
     raw = acceptServiceContract(raw, { templateId: 'office-lunch' });
     raw.restaurant.gameTime = 640800;
     const hydrated = hydrateState(raw, createInitialState());
@@ -370,6 +425,7 @@ describe('additive v10 feature persistence', () => {
   it('keeps terminal and continued scores frozen on reload, without drain/recount', () => {
     const raw = createCareerInitialState({ scenarioId: 'opening-week', runId: 'run' });
     raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 640800 };
+    raw.menuSales = { day: 8, dishes: [], drinks: [] };
     raw.careerRun = evaluateCareerRun(raw.careerRun, raw.restaurant);
     const frozen = raw.careerRun.result;
     raw.careerRun = continueCareerAsSandbox(raw.careerRun);
@@ -386,43 +442,13 @@ describe('additive v10 feature persistence', () => {
     vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('full'); });
     expect(saveState(createInitialState())).toBe(false);
   });
-  function v1Cookbook() {
-    return { schemaVersion: 1, lastAppliedPaidVisitSequence: 0, entries: {
-      toast: { discovered: true, paidPortions: 15, perk: 'speed',
-        menuSettings: { name: 'Toasted Bread', price: 12, quality: 1 } },
-      'cheese-toast': { discovered: false, paidPortions: 0, perk: null,
-        menuSettings: { name: 'Cheese Toast', price: 14, quality: 1 } },
-      'roast-vegetables': { discovered: false, paidPortions: 0, perk: null,
-        menuSettings: { name: 'Roast Vegetables', price: 18, quality: 1 } },
-      'baked-potato': { discovered: false, paidPortions: 0, perk: null,
-        menuSettings: { name: 'Baked Potato', price: 22, quality: 1 } },
-      fries: { discovered: false, paidPortions: 0, perk: null,
-        menuSettings: { name: 'Crispy Fries', price: 10, quality: 1 } },
-      'fried-chicken': { discovered: false, paidPortions: 0, perk: null,
-        menuSettings: { name: 'Fried Chicken', price: 20, quality: 1 } },
-    } };
-  }
-  it('upgrades a recognised v1 cookbook ahead of strict validation in both entry points', () => {
+  it.each([1, 2])('rejects current-version cookbook schema %s instead of migrating it', schemaVersion => {
     const raw = createInitialState();
-    raw.cookbook = v1Cookbook();
-    localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
-    const loaded = loadState();
-    expect(loaded.cookbook.schemaVersion).toBe(2);
-    expect(loaded.cookbook.entries.toast).toMatchObject({ paidPortions: 15, perk: 'speed' });
-    const hydrated = hydrateState(raw, createInitialState());
-    expect(hydrated.cookbook.schemaVersion).toBe(2);
-    expect(hydrated.cookbook.entries.toast).toMatchObject({ paidPortions: 15, perk: 'speed',
-      menuSettings: { name: 'Toasted Bread', price: 12, quality: 1 } });
-    expect(hydrated.cookbook.entries.gazpacho).toEqual({ discovered: false, paidPortions: 0, perk: null,
-      menuSettings: { name: 'Gazpacho', price: 16, quality: 1 } });
-  });
-  it('fails closed for a malformed v1 cookbook in both entry points', () => {
-    const raw = createInitialState();
-    raw.cookbook = v1Cookbook();
-    delete raw.cookbook.entries.fries;
+    raw.cookbook.schemaVersion = schemaVersion;
     localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(loadState()).toBeNull();
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
     expect(() => hydrateState(raw, createInitialState())).toThrow(/Invalid cookbook/);
   });
 
@@ -527,7 +553,7 @@ describe('additive v10 feature persistence', () => {
       .toMatchObject({ state: 'carried' });
   });
 
-  it('keeps an old root-v10 drink set unchanged without auto-unlocking later drinks', () => {
+  it('keeps the persisted drink set unchanged without auto-unlocking later drinks', () => {
     const raw = {
       ...createInitialState(),
       unlockedDrinkIds: ['water', 'tea', 'soda', 'coffee', 'juice'],
@@ -585,7 +611,7 @@ describe('additive v10 feature persistence', () => {
     expect(createInitialState().restaurant).not.toHaveProperty('walkInsPaused');
   });
 
-  it('round-trips optional table admission holds in v10 and treats absence as false', () => {
+  it('round-trips optional table admission holds in v11 and treats absence as false', () => {
     const fresh = createInitialState();
     expect(fresh.tables[0]).not.toHaveProperty('admissionHeld');
     expect(() => validateSavedState(fresh)).not.toThrow();
@@ -800,7 +826,7 @@ describe('additive v10 feature persistence', () => {
   it.each([
     ['suspendedDishIds', ['starter-toast']],
     ['suspendedDrinkIds', ['water']],
-  ])('round-trips a synthetic v10 %s list while absence stays inactive', (key, value) => {
+  ])('round-trips a synthetic v11 %s list while absence stays inactive', (key, value) => {
     expect(createInitialState().restaurant).not.toHaveProperty('suspendedDishIds');
     expect(createInitialState().restaurant).not.toHaveProperty('suspendedDrinkIds');
     expect(() => validateSavedState(createInitialState())).not.toThrow();
@@ -839,11 +865,7 @@ describe('additive v10 feature persistence', () => {
   });
 
   it('keeps committed orders, snapshots and legacy recipe resolution unchanged with suspensions', () => {
-    const withOrderFacts = () => {
-      const raw = orderFixture();
-      Object.assign(raw.customers[0], { drinkPriceAtOrder: null, orderSubtotal: 9 });
-      return raw;
-    };
+    const withOrderFacts = () => orderFixture();
     const baseline = hydrateState(withOrderFacts(), createInitialState());
     const suspendedRaw = withOrderFacts();
     suspendedRaw.restaurant = {
@@ -861,10 +883,10 @@ describe('additive v10 feature persistence', () => {
     expect(suspended.restaurant.suspendedDrinkIds).toEqual(['water']);
     expect(suspended.customers[0]).toMatchObject({
       state: 'waiting_for_items', menuOutcome: 'ordered',
-      dishId: 'starter-toast', dishPriceAtOrder: 9, orderSubtotal: 9,
+      dishId: 'starter-toast', dishPriceAtOrder: 25, orderSubtotal: 25,
     });
     expect(suspended.customers[0].dishOrderSnapshot)
-      .toMatchObject({ schemaVersion: 1, menuItemId: 'starter-toast', price: 9, cookbookId: null });
+      .toMatchObject({ schemaVersion: 1, menuItemId: 'starter-toast', price: 25, quality: 10, cookbookId: 'toast' });
     expect(suspended.serviceItems[0]).toMatchObject({ id: 'dish-1', kind: 'dish', state: 'ordered' });
     expect(getResolvedDish(suspended, 'starter-toast')).not.toBeNull();
     expect(suspended.dishes[0].cookbookId).toBe('toast');
@@ -905,8 +927,7 @@ describe('additive v10 feature persistence', () => {
     expect(hydrateState(loadState(), createInitialState()).restaurant.menuSalesThresholds).toEqual([]);
 
     const raw = createInitialState();
-    const { cookbookId, masteryPerk, ...dish } = raw.dishes[0];
-    raw.dishes.push({ ...dish, id: '__proto__', name: 'Custom ID dish' });
+    raw.dishes = raw.dishes.map(dish => ({ ...dish, id: '__proto__' }));
     raw.restaurant = {
       ...raw.restaurant,
       menuSalesThresholds: [

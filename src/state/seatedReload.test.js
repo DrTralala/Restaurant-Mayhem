@@ -13,6 +13,8 @@ import { cellKey, worldToCell } from '../simulation/movement/navigationWorkspace
 import { createCustomerOrder } from '../simulation/serviceItems';
 import { advanceConsumption } from '../simulation/consumption';
 import { createStaffDutyDefaults } from '../simulation/staffSchedules';
+import { validateSavedState } from './saveValidation';
+import { recordPartyOrderOutcome } from '../simulation/partyReviews';
 
 afterEach(() => vi.restoreAllMocks());
 const point = actor => ({ x: actor.x, y: actor.y });
@@ -61,6 +63,10 @@ function reload(state) {
   expect(point(restored.customers[0])).toEqual(point(state.customers[0]));
   return restored;
 }
+function reloadWith(state) {
+  saveState(state);
+  return hydrateState(loadState(), createInitialState());
+}
 function partial() {
   const state = advance(checkout(seated()));
   expect(point(state.customers[0])).not.toEqual({ x: 190, y: 210 });
@@ -69,6 +75,97 @@ function partial() {
 }
 
 describe('durable domain seated residency', () => {
+  it('validates refusal outcomes and their empty bill/service tuple before hydration', () => {
+    const initial = createInitialState();
+    const member = {
+      id: 'poor-guest', partyId: 'poor-party', state: 'waiting_for_party',
+      menuOutcome: 'poor_value', dishId: null, drinkId: null,
+      dishPriceAtOrder: null, drinkPriceAtOrder: null, orderSubtotal: null,
+      orderedServiceItemIds: [], consumedServiceItemIds: [],
+    };
+    const valid = { ...initial, customers: [member], serviceItems: [] };
+    expect(validateSavedState(valid)).toMatchObject({ valid: true });
+    expect(() => validateSavedState({
+      ...initial,
+      customers: [{ ...member, tipAmount: 1 }],
+    })).toThrow(/tipAmount/);
+    expect(() => validateSavedState({
+      ...initial,
+      customers: [{ ...member, paidVisitSequence: 1 }],
+    })).toThrow(/paidVisitSequence/);
+
+    for (const outcome of ['unaffordable', 'poor_value']) {
+      const refusal = { ...member, menuOutcome: outcome };
+      expect(() => validateSavedState({
+        ...initial,
+        customers: [{ ...refusal, dishPriceAtOrder: 12, orderSubtotal: 12 }],
+      })).toThrow(/refusal|no-order|ordered/i);
+      expect(() => validateSavedState({
+        ...initial,
+        customers: [refusal],
+        serviceItems: [{ id: 'refused-item', kind: 'drink', menuItemId: 'water',
+          customerId: member.id, state: 'ordered' }],
+      })).toThrow(/refusal|no-order|ordered/i);
+    }
+  });
+
+  it('rejects malformed pending and settled poor-value review records before normalisation', () => {
+    const initial = createInitialState();
+    const emptyOutcomes = [{
+      partyId: 'empty-outcomes', memberIds: ['a', 'b'], orderedMemberIds: [],
+      unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
+    }];
+    expect(() => validateSavedState({ ...initial, pendingPartyReviews: emptyOutcomes }))
+      .toThrow(/outcome/i);
+    const partialOutcome = [{
+      partyId: 'partial-outcome', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
+      unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
+    }];
+    expect(validateSavedState({ ...initial, pendingPartyReviews: partialOutcome }))
+      .toMatchObject({ valid: true });
+
+    const members = [
+      { id: 'payer', partyId: 'mixed' },
+      { id: 'refused', partyId: 'mixed' },
+    ];
+    let pending = recordPartyOrderOutcome([], members, members[0], 'ordered');
+    pending = recordPartyOrderOutcome(pending, members, members[1], 'poor_value');
+    expect(validateSavedState({ ...initial, pendingPartyReviews: pending })).toMatchObject({ valid: true });
+
+    const overlap = pending.map(record => ({
+      ...record,
+      unaffordableMemberIds: ['refused'],
+    }));
+    expect(() => validateSavedState({ ...initial, pendingPartyReviews: overlap })).toThrow(/overlap|disjoint|outcome/i);
+    expect(() => validateSavedState({
+      ...initial,
+      partyReviewHistory: [{
+        partyId: 'mixed', day: 1, score: -5, memberCount: 2, paidCount: 1,
+        unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0,
+      }],
+    })).toThrow(/count|member/i);
+  });
+
+  it('round-trips pending and settled poor-value party reviews unchanged', () => {
+    const initial = createInitialState();
+    const members = [
+      { id: 'payer', partyId: 'poor-reload' },
+      { id: 'refused', partyId: 'poor-reload' },
+    ];
+    let pending = recordPartyOrderOutcome([], members, members[0], 'ordered');
+    pending = recordPartyOrderOutcome(pending, members, members[1], 'poor_value');
+    const pendingState = { ...initial, pendingPartyReviews: pending };
+    const first = reloadWith(pendingState);
+    expect(first.pendingPartyReviews).toEqual(pending);
+
+    const settledHistory = [{
+      partyId: 'poor-reload', day: 1, score: -5, memberCount: 2, paidCount: 1,
+      unaffordableCount: 0, poorValueCount: 1, reputationDelta: 0.003,
+    }];
+    const settled = reloadWith({ ...initial, pendingPartyReviews: [], partyReviewHistory: settledHistory });
+    expect(settled.partyReviewHistory).toEqual(settledHistory);
+  });
+
   it('records genuine atomic seating but neither save path serialises guide epoch proofs', async () => {
     const state = seated();
     expect(state.customers[0].seatResidency).toMatchObject({ phase: 'seated', position: { x: 190, y: 210 } });

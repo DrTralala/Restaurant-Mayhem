@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getKitchenBlockerSummary } from './kitchenBlockerSummary';
+import { createDishOrderSnapshot, getResolvedDish } from '../simulation/cookbook';
+import { withOwnedAuthoredDishes } from '../simulation/menuTestFixtures';
 
 function owner(id, overrides = {}) {
   return {
@@ -24,16 +26,27 @@ function dishItem(id, customerId = `customer-${id}`, overrides = {}) {
 }
 
 function makeState(overrides = {}) {
-  return {
+  const defaultDishes = [{ id: 'toast', cookbookId: 'toast', name: 'Dish toast' }];
+  const authored = withOwnedAuthoredDishes({
     customers: [owner('customer-item-1')],
     serviceItems: [dishItem('item-1')],
-    dishes: [{ id: 'toast', requiredEquipmentId: 'eq1' }],
+    dishes: defaultDishes,
     staff: [{ id: 'cook-1', role: 'cook' }],
     equipment: [{ id: 'eq1', owned: true }],
     kitchenStations: [{ id: 'station-1', equipmentId: 'eq1' }],
     cookingBatches: [],
     ...overrides,
-  };
+  }, overrides.dishes || defaultDishes);
+  const serviceItems = authored.serviceItems.map(item => {
+    if (item?.kind !== 'dish' || item.menuItemId == null || Object.hasOwn(item, 'dishOrderSnapshot')) return item;
+    const dish = getResolvedDish(authored, item.menuItemId);
+    if (!dish) return item;
+    return { ...item, dishOrderSnapshot: createDishOrderSnapshot(dish, {
+      serviceItemId: item.id,
+      orderedAt: 0,
+    }) };
+  });
+  return { ...authored, serviceItems };
 }
 
 function freeze(value) {
@@ -48,8 +61,8 @@ describe('getKitchenBlockerSummary', () => {
   it('groups blocked orders by dish identity and name without double-counting reasons', () => {
     const state = freeze(makeState({
       dishes: [
-        { id: 'toast', name: 'Toast', requiredEquipmentId: 'eq1' },
-        { id: 'other-toast', name: 'Toast', requiredEquipmentId: 'eq2' },
+        { id: 'toast', cookbookId: 'toast', name: 'Toast' },
+        { id: 'other-toast', cookbookId: 'roast-vegetables', name: 'Toast' },
       ],
       serviceItems: [dishItem('item-1'), dishItem('item-2', 'customer-item-1'),
         dishItem('item-3', 'customer-item-1', { menuItemId: 'other-toast' })],
@@ -66,18 +79,20 @@ describe('getKitchenBlockerSummary', () => {
   });
 
   it('uses recorded snapshot names rather than renamed live dishes', () => {
-    const state = freeze(makeState({
+    const authored = makeState({
       staff: [], kitchenStations: [],
-      dishes: [{ id: 'toast', name: 'Renamed toast', requiredEquipmentId: 'eq1' }],
-      serviceItems: [dishItem('item-1', 'customer-item-1', {
-        dishOrderSnapshot: {
-          schemaVersion: 1, serviceItemId: 'item-1', menuItemId: 'toast', orderedAt: 0,
-          name: 'Original toast', base: 'bread', method: 'toast', cuisine: 'Western',
-          requiredEquipmentId: 'eq1', price: 5, quality: 1, prepTime: 60, popularity: 50,
-          cookbookId: null, masteryPerk: null,
-        },
-      })],
-    }));
+      dishes: [{ id: 'toast', cookbookId: 'toast', name: 'Renamed toast' }],
+      serviceItems: [dishItem('item-1')],
+    });
+    const item = authored.serviceItems[0];
+    const dish = getResolvedDish(authored, item.menuItemId);
+    const originalNameSnapshot = createDishOrderSnapshot({ ...dish, name: 'Original toast' }, {
+      serviceItemId: item.id,
+      orderedAt: 0,
+    });
+    const state = freeze({ ...authored,
+      serviceItems: [{ ...item, dishOrderSnapshot: originalNameSnapshot }] });
+
     expect(getKitchenBlockerSummary(state).byDish).toEqual([
       { menuItemId: 'toast', name: 'Original toast', noCook: 1, noCompatibleStation: 1 },
     ]);

@@ -17,6 +17,11 @@ import {
   normaliseCustomerEconomy,
   SPENDING_TIER_RANGES,
 } from './menuEconomy';
+import { getDishValueAcceptance } from './dishPricing';
+import { createInitialState } from '../state/initialState';
+import { reduceCookbookAction } from './cookbook';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
+import { COOKBOOK_RECIPES, getCookbookRecipe } from '../data/cookbook';
 
 describe('customer spending profiles', () => {
   it.each([
@@ -77,6 +82,13 @@ describe('customer spending profiles', () => {
       id: 'waiting', menuOutcome: 'unaffordable', dishPriceAtOrder: null,
       drinkPriceAtOrder: null, orderSubtotal: null,
     });
+    expect(normaliseCustomerEconomy({
+      id: 'poor-value', menuOutcome: 'poor_value', dishPriceAtOrder: 9,
+      drinkPriceAtOrder: 2, orderSubtotal: 11,
+    })).toEqual({
+      id: 'poor-value', menuOutcome: 'poor_value', dishPriceAtOrder: null,
+      drinkPriceAtOrder: null, orderSubtotal: null,
+    });
 
     const invalid = normaliseCustomerEconomy({
       id: 'invalid', spendingTier: 'budget', spendingBudget: 99,
@@ -96,15 +108,15 @@ describe('customer spending profiles', () => {
   });
 });
 
-const menuState = {
+const menuState = withOwnedAuthoredDishes({
   restaurant: { reputation: 3 },
   dishes: [
-    { id: 'cheap', price: 10, quality: 2, popularity: 50, prepTime: 120 },
-    { id: 'premium', price: 40, quality: 9, popularity: 90, prepTime: 300 },
+    { id: 'cheap', cookbookId: 'fries', price: 10, quality: 2 },
+    { id: 'premium', cookbookId: 'baked-potato', price: 40, quality: 10 },
   ],
   unlockedDrinkIds: ['water', 'coffee'],
   drinkOverrides: {},
-};
+});
 
 describe('affordable weighted menu selection', () => {
   it('builds only baskets within the whole customer budget', () => {
@@ -231,20 +243,151 @@ describe('affordable weighted menu selection', () => {
   it('returns null only when no basket is affordable', () => {
     const result = chooseAffordableBasket({
       ...menuState,
-      dishes: [{ ...menuState.dishes[0], price: 100 }],
       drinkOverrides: { water: { price: 100 }, coffee: { price: 100 } },
     }, { archetype: 'regular', spendingTier: 'budget', spendingBudget: 6 }, () => 0);
     expect(result.basket).toBeNull();
+  });
+
+  it('rejects the selected $15 toast at the value boundary without rerolling', () => {
+    const initial = createInitialState();
+    const state = reduceCookbookAction(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 },
+    });
+    const rolls = [0, 0, 0.9];
+    const result = chooseAffordableBasket(state, {
+      id: 'guest', archetype: 'regular', spendingTier: 'budget', spendingBudget: 18,
+    }, () => {
+      const roll = rolls.shift();
+      return roll;
+    });
+
+    expect(result).toMatchObject({ basket: null, menuOutcome: 'poor_value' });
+    expect(rolls).toEqual([]);
+    expect(getDishValueAcceptance(state.dishes[0], 'budget')).toBeCloseTo(0.64);
+  });
+
+  it.each([
+    ['just below acceptance', 0.639999, 'ordered'],
+    ['exactly acceptance', (12 / 15) ** 2, 'poor_value'],
+    ['negative draw is bounded to zero', -1, 'ordered'],
+    ['draw above one is bounded below one', 2, 'poor_value'],
+    ['non-finite draw is bounded to zero', Number.NaN, 'ordered'],
+  ])('uses a bounded acceptance draw (%s)', (_label, acceptanceRoll, menuOutcome) => {
+    const initial = createInitialState();
+    const state = reduceCookbookAction(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 },
+    });
+    const rolls = [0, 0, acceptanceRoll];
+    const result = chooseAffordableBasket(state, {
+      id: 'guest', archetype: 'regular', spendingTier: 'budget', spendingBudget: 18,
+    }, () => rolls.shift());
+
+    expect(result.menuOutcome).toBe(menuOutcome);
+    if (menuOutcome === 'ordered') expect(result.basket).not.toBeNull();
+    else expect(result.basket).toBeNull();
+    expect(rolls).toEqual([]);
+  });
+
+  it('uses no acceptance draw at reference value, for drinks, or for contracts', () => {
+    const initial = createInitialState();
+    const atReference = reduceCookbookAction(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 12 },
+    });
+    const chooseWithCount = (state, customer, values) => {
+      let calls = 0;
+      const result = chooseAffordableBasket(state, customer, () => {
+        calls += 1;
+        return values[calls - 1] ?? 0;
+      });
+      return { result, calls };
+    };
+    const reference = chooseWithCount(atReference,
+      { archetype: 'regular', spendingTier: 'budget', spendingBudget: 18 }, [0, 0]);
+    const drinks = chooseWithCount({ ...atReference, dishes: [], unlockedDrinkIds: ['water'] },
+      { archetype: 'regular', spendingTier: 'budget', spendingBudget: 18 }, [0, 0]);
+    const contract = chooseWithCount(reduceCookbookAction(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 },
+    }), {
+      archetype: 'regular', spendingTier: 'budget', spendingBudget: 18,
+      serviceContractId: 'contract-1',
+    }, [0, 0]);
+
+    expect(reference.result.menuOutcome).toBe('ordered');
+    expect(reference.calls).toBe(2);
+    expect(drinks.result.menuOutcome).toBe('ordered');
+    expect(drinks.calls).toBe(2);
+    expect(contract.result.menuOutcome).toBe('ordered');
+    expect(contract.calls).toBe(2);
+
+    const unaffordableContract = chooseWithCount({
+      ...reduceCookbookAction(initial, {
+        type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 },
+      }),
+      unlockedDrinkIds: [],
+    }, {
+      archetype: 'regular', spendingTier: 'budget', spendingBudget: 6,
+      serviceContractId: 'contract-1',
+    }, []);
+    expect(unaffordableContract.result).toMatchObject({ basket: null, menuOutcome: 'unaffordable' });
+    expect(unaffordableContract.calls).toBe(0);
+  });
+
+  it('does not fall back to a drink when the selected combined basket fails value acceptance', () => {
+    const initial = createInitialState();
+    const state = reduceCookbookAction(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 },
+    });
+    const rolls = [0.8, 0, 0.9];
+    const result = chooseAffordableBasket(state, {
+      id: 'guest', archetype: 'regular', spendingTier: 'value', spendingBudget: 20,
+    }, () => rolls.shift());
+
+    expect(result).toMatchObject({ basket: null, menuOutcome: 'poor_value' });
+    expect(rolls).toEqual([]);
+  });
+
+  it('does not offer custom or unowned dishes from a menu state', () => {
+    const bakedEggs = getCookbookRecipe('baked-eggs');
+    const state = {
+      ...menuState,
+      dishes: [...menuState.dishes,
+        { id: 'unowned', ...bakedEggs, price: 15, quality: 1 },
+        { id: 'custom', price: 8, quality: 1, popularity: 100, prepTime: 30 },
+      ],
+      cookbook: {
+        ...menuState.cookbook,
+        entries: {
+          ...menuState.cookbook.entries,
+          'baked-eggs': {
+            discovered: true, owned: false, paidPortions: 0, perk: null,
+            menuSettings: { name: 'Baked Eggs', price: 15, quality: 1 },
+          },
+        },
+      },
+    };
+    const baskets = buildAffordableBaskets(state, {
+      archetype: 'regular', spendingTier: 'value', spendingBudget: 45,
+    });
+
+    expect(baskets.some(basket => basket.dish?.id === 'custom')).toBe(false);
+    expect(baskets.some(basket => basket.dish?.id === 'unowned')).toBe(false);
+    expect(baskets.some(basket => basket.dish?.id === 'cheap')).toBe(true);
+    expect(buildAffordableBaskets(state, {
+      archetype: 'regular', spendingTier: 'value', spendingBudget: 45,
+      serviceContractId: 'contract-1',
+    }).some(basket => basket.dish?.id === 'unowned')).toBe(false);
   });
 });
 
 describe('estimated menu demand', () => {
   it('never increases when only price rises and decreases under competing affordability', () => {
     const low = estimateMenuItemDemand(menuState, 'dish', 'cheap');
-    const high = estimateMenuItemDemand({
+    const higherPrice = withOwnedAuthoredDishes({
       ...menuState,
-      dishes: menuState.dishes.map(dish => dish.id === 'cheap' ? { ...dish, price: 35 } : dish),
-    }, 'dish', 'cheap');
+    }, menuState.dishes.map(dish => dish.id === 'cheap'
+      ? { ...dish, cookbookId: 'toast', price: 15 }
+      : dish));
+    const high = estimateMenuItemDemand(higherPrice, 'dish', 'cheap');
     expect(high).toBeLessThan(low);
   });
 
@@ -266,12 +409,12 @@ describe('estimated menu demand', () => {
 
   it('allows quality to improve demand without changing affordability', () => {
     const low = estimateMenuItemDemand(menuState, 'dish', 'cheap');
-    const high = estimateMenuItemDemand({
+    const higherQuality = withOwnedAuthoredDishes({
       ...menuState,
-      dishes: menuState.dishes.map(dish => dish.id === 'cheap'
-        ? { ...dish, quality: 10 }
-        : dish),
-    }, 'dish', 'cheap');
+    }, menuState.dishes.map(dish => dish.id === 'cheap'
+      ? { ...dish, quality: 10 }
+      : dish));
+    const high = estimateMenuItemDemand(higherQuality, 'dish', 'cheap');
     expect(high).toBeGreaterThan(low);
   });
 
@@ -283,9 +426,9 @@ describe('estimated menu demand', () => {
   });
 });
 
-const singleDishState = (price, reputation = 1) => ({
+const singleDishState = (price, reputation = 1) => withOwnedAuthoredDishes({
   restaurant: { reputation },
-  dishes: [{ id: 'test', name: 'Test', price, quality: 1, popularity: 50, prepTime: 60 }],
+  dishes: [{ id: 'test', name: 'Test', price }],
   unlockedDrinkIds: [],
 });
 
@@ -301,15 +444,16 @@ describe('menu affordability summary', () => {
       restaurant: { reputation: 1 }, dishes: [], unlockedDrinkIds: [],
     })).toEqual({ dishShare: 0, anyOrderShare: 0 });
 
+    const oneDish = singleDishState(19);
     const offMenu = {
-      ...singleDishState(19),
+      ...oneDish,
       cookbook: {
-        schemaVersion: 2,
-        lastAppliedPaidVisitSequence: 0,
+        ...oneDish.cookbook,
         entries: {
+          ...oneDish.cookbook.entries,
           gazpacho: {
-            discovered: true, paidPortions: 0, perk: null,
-            menuSettings: { name: 'Gazpacho', price: 6, quality: 1 },
+            discovered: true, owned: false, paidPortions: 0, perk: null,
+            menuSettings: { name: 'Gazpacho', price: 16, quality: 1 },
           },
         },
       },
@@ -346,16 +490,14 @@ describe('menu affordability summary', () => {
   });
 
   it.each([
-    [5.5, 1],
-    [6, 1],
+    [8, 0.70 * 11 / 13 + 0.25 + 0.05],
+    [9, 0.70 * 10 / 13 + 0.25 + 0.05],
     [15, 0.70 * 4 / 13 + 0.25 + 0.05],
     [18, 0.70 / 13 + 0.25 * 28 / 31 + 0.05],
-    [18.5, 0.25 * 27 / 31 + 0.05],
+    [19, 0.25 * 27 / 31 + 0.05],
     [35, 0.25 * 11 / 31 + 0.05],
     [45, 0.25 / 31 + 0.05 * 76 / 86],
-    [45.5, 0.05 * 75 / 86],
-    [120, 0.05 / 86],
-    [120.5, 0],
+    [47, 0.05 * 74 / 86],
   ])('counts inclusive integer budgets for a $%s dish', (price, expected) => {
     const { dishShare, anyOrderShare } = getMenuAffordabilitySummary(singleDishState(price));
     expect(dishShare).toBeCloseTo(expected, 12);
@@ -371,10 +513,16 @@ describe('menu affordability summary', () => {
     expect(getMenuAffordabilitySummary(singleDishState(19, 9)).dishShare).toBeCloseTo(fiveStar, 12);
   });
 
-  it.each([1, 2, 3, 4, 5])('returns the exact one endpoint when every budget is covered at reputation %s', reputation => {
-    const { dishShare, anyOrderShare } = getMenuAffordabilitySummary(singleDishState(6, reputation));
-    expect(dishShare).toBe(1);
-    expect(anyOrderShare).toBe(1);
+  it.each([
+    [1, 0.70 * 11 / 13 + 0.30],
+    [2, 0.5625 * 11 / 13 + 0.4375],
+    [3, 0.425 * 11 / 13 + 0.575],
+    [4, 0.2875 * 11 / 13 + 0.7125],
+    [5, 0.15 * 11 / 13 + 0.85],
+  ])('reports exact coverage for the lowest legal authored dish at reputation %s', (reputation, expected) => {
+    const { dishShare, anyOrderShare } = getMenuAffordabilitySummary(singleDishState(8, reputation));
+    expect(dishShare).toBe(expected);
+    expect(anyOrderShare).toBe(expected);
   });
 
   it('returns the exact one endpoint for universal drink-only coverage at reputation 3', () => {
@@ -384,23 +532,11 @@ describe('menu affordability summary', () => {
   });
 
   it('resolves cookbook dish menu settings instead of the raw stored price', () => {
-    const state = {
+    const state = withOwnedAuthoredDishes({
       restaurant: { reputation: 1 },
-      dishes: [{
-        id: 'cookbook:toast', cookbookId: 'toast', name: 'Toasted Bread', base: 'Bread',
-        method: 'Toasted', requiredEquipmentId: 'eq1', price: 100, quality: 1, popularity: 50, prepTime: 60,
-      }],
-      cookbook: {
-        schemaVersion: 2, lastAppliedPaidVisitSequence: 0,
-        entries: {
-          toast: {
-            discovered: true, paidPortions: 0, perk: null,
-            menuSettings: { name: 'Toasted Bread', price: 12, quality: 1 },
-          },
-        },
-      },
+      dishes: [{ id: 'cookbook:toast', cookbookId: 'toast', price: 12, quality: 1 }],
       unlockedDrinkIds: [],
-    };
+    });
     const { dishShare, anyOrderShare } = getMenuAffordabilitySummary(state);
     expect(dishShare).toBeCloseTo(0.70 * 7 / 13 + 0.25 + 0.05, 12);
     expect(anyOrderShare).toBeCloseTo(0.70 * 7 / 13 + 0.25 + 0.05, 12);
@@ -408,7 +544,7 @@ describe('menu affordability summary', () => {
 
   it('never increases coverage as prices rise and keeps dish share within any-order share', () => {
     for (const reputation of [1, 3, 5]) {
-      const shares = [5.5, 6, 18, 18.5, 35, 45, 45.5, 120, 120.5]
+      const shares = [8, 9, 15, 18, 19, 35, 45, 47]
         .map(price => getMenuAffordabilitySummary(singleDishState(price, reputation)));
       shares.forEach((share, index) => {
         expect(share.dishShare).toBeLessThanOrEqual(share.anyOrderShare);
@@ -421,11 +557,11 @@ describe('menu affordability summary', () => {
   });
 
   it('leaves frozen input untouched and consumes no randomness', () => {
+    const authored = singleDishState(19, 3);
     const state = {
-      restaurant: Object.freeze({ reputation: 3 }),
-      dishes: Object.freeze([Object.freeze({
-        id: 'test', name: 'Test', price: 19, quality: 1, popularity: 50, prepTime: 60,
-      })]),
+      ...authored,
+      restaurant: Object.freeze({ ...authored.restaurant }),
+      dishes: Object.freeze(authored.dishes.map(dish => Object.freeze(dish))),
       unlockedDrinkIds: Object.freeze(['water']),
       drinkOverrides: Object.freeze({ water: Object.freeze({ price: 8 }) }),
     };
@@ -476,8 +612,18 @@ function referenceMenuDemand(state) {
             * REFERENCE_KIND_WEIGHTS[kind] / kindWeightTotal;
           group.forEach((basket, index) => {
             const probability = share * weights[index] / basketWeightTotal;
-            if (basket.dish) add(`dish:${basket.dish.id}`, probability);
-            if (basket.drink) add(`drink:${basket.drink.id}`, probability);
+            const recipe = basket.dish
+              ? COOKBOOK_RECIPES.find(candidate => candidate.id === basket.dish.cookbookId)
+              : null;
+            const referenceValue = recipe
+              ? recipe.price * (100 + 8 * (basket.dish.quality - 1)) / 100
+              : null;
+            const sensitivity = { budget: 2, value: 1, premium: 0.25 }[tier];
+            const acceptance = !basket.dish || basket.dish.price <= referenceValue
+              ? 1 : (referenceValue / basket.dish.price) ** sensitivity;
+            const acceptedProbability = probability * acceptance;
+            if (basket.dish) add(`dish:${basket.dish.id}`, acceptedProbability);
+            if (basket.drink) add(`drink:${basket.drink.id}`, acceptedProbability);
           });
         }
       }
@@ -492,14 +638,14 @@ function referenceMenuDemand(state) {
   return { dishes: rounded('dish'), drinks: rounded('drink') };
 }
 
-const competingMenuState = reputation => ({
+const competingMenuState = reputation => withOwnedAuthoredDishes({
   restaurant: { reputation },
   dishes: [
-    { id: 'floor', name: 'Floor', price: 6, quality: 2, popularity: 35, prepTime: 45 },
-    { id: 'value-edge', name: 'Value Edge', price: 15, quality: 4, popularity: 55, prepTime: 90 },
-    { id: 'premium-edge', name: 'Premium Edge', price: 35, quality: 6, popularity: 65, prepTime: 180 },
-    { id: 'value-cap', name: 'Value Cap', price: 45, quality: 8, popularity: 75, prepTime: 240 },
-    { id: 'ceiling', name: 'Ceiling', price: 120, quality: 10, popularity: 90, prepTime: 420 },
+    { id: 'floor', cookbookId: 'fries', price: 8, quality: 1 },
+    { id: 'value-edge', cookbookId: 'toast', price: 15, quality: 4 },
+    { id: 'premium-edge', cookbookId: 'baked-potato', price: 35, quality: 8 },
+    { id: 'value-cap', cookbookId: 'fried-chicken', price: 40, quality: 10 },
+    { id: 'ceiling', cookbookId: 'fish-bisque', price: 43, quality: 10 },
   ],
   unlockedDrinkIds: ['water', 'tea', 'iced-tea'],
   drinkOverrides: { tea: { price: 18 } },
@@ -507,14 +653,14 @@ const competingMenuState = reputation => ({
 
 describe('batch menu demand', () => {
   it('reads the archetype distribution from the shared source', async () => {
-    const state = {
+    const state = withOwnedAuthoredDishes({
       restaurant: { reputation: 1 },
       dishes: [
-        { id: 'plain', price: 6, quality: 0, popularity: 0, prepTime: 600 },
-        { id: 'quality', price: 6, quality: 10, popularity: 0, prepTime: 600 },
+        { id: 'plain', cookbookId: 'fries', price: 8, quality: 1 },
+        { id: 'quality', cookbookId: 'toast', price: 9, quality: 10 },
       ],
       unlockedDrinkIds: [],
-    };
+    });
     const existingDistribution = estimateMenuDemand(state);
 
     vi.resetModules();
@@ -537,16 +683,36 @@ describe('batch menu demand', () => {
   });
 
   it('weights every integer budget rather than five representative points', () => {
-    expect(estimateMenuItemDemand(singleDishState(7), 'dish', 'test')).toBe(95);
+    expect(estimateMenuItemDemand(singleDishState(8), 'dish', 'test')).toBe(89);
   });
 
   it('renormalises combined baskets across every integer budget', () => {
-    const state = { ...singleDishState(7), unlockedDrinkIds: ['water'] };
+    const state = { ...singleDishState(8), unlockedDrinkIds: ['water'] };
     const demand = estimateMenuDemand(state);
-    const dishProbability = 0.7 * (2 * 0.75 / 0.8 + 10 * 0.95) / 13 + 0.3 * 0.95;
-    const waterProbability = 0.7 * (1 + 2 * 0.05 / 0.8 + 10 * 0.25) / 13 + 0.3 * 0.25;
+    const dishProbability = 0.7 * (2 * 0.75 / 0.8 + 9 * 0.95) / 13 + 0.3 * 0.95;
+    const waterProbability = 0.7 * (2 + 2 * 0.05 / 0.8 + 9 * 0.25) / 13 + 0.3 * 0.25;
     expect(demand.dishes.get('test')).toBe(Math.round(100 * dishProbability));
     expect(demand.drinks.get('water')).toBe(Math.round(100 * waterProbability));
+  });
+
+  it('keeps unrounded accepted demand and gross separate from affordability', () => {
+    const initial = createInitialState();
+    const state = reduceCookbookAction(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 },
+    });
+    state.unlockedDrinkIds = [];
+    const analysis = getMenuAnalysis(state);
+    const expectedAcceptance = 0.70 * (4 / 13) * ((12 / 15) ** 2)
+      + 0.25 * (12 / 15)
+      + 0.05 * ((12 / 15) ** 0.25);
+
+    expect(analysis.demandProbabilities.dishes.get('starter-toast'))
+      .toBeCloseTo(expectedAcceptance, 12);
+    expect(analysis.demand.dishes.get('starter-toast'))
+      .toBe(Math.round(expectedAcceptance * 100));
+    expect(analysis.demandProbabilities.drinks.size).toBe(0);
+    expect(analysis.expectedGrossPer100).toBeCloseTo(100 * 15 * expectedAcceptance, 10);
+    expect(analysis.affordability.dishShare).toBeCloseTo(0.70 * 4 / 13 + 0.25 + 0.05, 12);
   });
 
   it.each([1, 3, 5])('matches the exhaustive reference at reputation %s', reputation => {
@@ -555,14 +721,17 @@ describe('batch menu demand', () => {
   });
 
   it('matches the reference for exact tier boundary prices', () => {
-    const state = {
+    const state = withOwnedAuthoredDishes({
       restaurant: { reputation: 1 },
-      dishes: [6, 15, 18, 35, 45, 120].map(price => ({
-        id: `dish-${price}`, name: `Dish ${price}`, price,
-        quality: 5, popularity: 50, prepTime: 120,
-      })),
+      dishes: [
+        { id: 'dish-8', cookbookId: 'fries', price: 8, quality: 1 },
+        { id: 'dish-15', cookbookId: 'toast', price: 15, quality: 4 },
+        { id: 'dish-18', cookbookId: 'roast-vegetables', price: 18, quality: 1 },
+        { id: 'dish-35', cookbookId: 'baked-potato', price: 35, quality: 8 },
+        { id: 'dish-43', cookbookId: 'fried-chicken', price: 43, quality: 10 },
+      ],
       unlockedDrinkIds: [],
-    };
+    });
     expect(estimateMenuDemand(state)).toEqual(referenceMenuDemand(state));
   });
 
@@ -580,7 +749,7 @@ describe('batch menu demand', () => {
     expect(estimateMenuItemDemand(state, 'side', 'floor')).toBe(0);
   });
 
-  it('returns empty maps for an empty menu and an unaffordable menu', () => {
+  it('returns empty maps for an empty menu and retains a customer-specific unaffordable item', () => {
     const empty = { restaurant: { reputation: 3 }, dishes: [], unlockedDrinkIds: [], drinkOverrides: {} };
     const emptyDemand = estimateMenuDemand(empty);
     expect(emptyDemand.dishes.size).toBe(0);
@@ -588,16 +757,12 @@ describe('batch menu demand', () => {
     expect(estimateMenuItemDemand(empty, 'dish', 'anything')).toBe(0);
     expect(emptyDemand).toEqual(referenceMenuDemand(empty));
 
-    const expensive = {
-      restaurant: { reputation: 1 },
-      dishes: [{
-        id: 'expensive', name: 'Expensive', price: 150, quality: 5, popularity: 50, prepTime: 120,
-      }],
-      unlockedDrinkIds: [],
-    };
+    const expensive = singleDishState(47);
     const expensiveDemand = estimateMenuDemand(expensive);
-    expect(expensiveDemand.dishes.size).toBe(0);
-    expect(estimateMenuItemDemand(expensive, 'dish', 'expensive')).toBe(0);
+    expect(buildAffordableBaskets(expensive, {
+      spendingTier: 'budget', spendingBudget: 6,
+    })).toEqual([]);
+    expect(expensiveDemand.dishes.get('test')).toBeGreaterThan(0);
     expect(expensiveDemand).toEqual(referenceMenuDemand(expensive));
   });
 
@@ -628,6 +793,7 @@ describe('batch menu demand', () => {
 const suspensionState = {
   restaurant: { reputation: 3, suspendedDishIds: ['cheap'], suspendedDrinkIds: ['coffee'] },
   dishes: menuState.dishes,
+  cookbook: menuState.cookbook,
   unlockedDrinkIds: ['water', 'coffee'],
   drinkOverrides: {},
 };
@@ -781,6 +947,7 @@ describe('menu item suspension', () => {
         suspendedDrinkIds: ['water', 'coffee'],
       },
       dishes: menuState.dishes,
+      cookbook: menuState.cookbook,
       unlockedDrinkIds: ['water', 'coffee'],
       drinkOverrides: {},
     };
@@ -792,73 +959,47 @@ describe('menu item suspension', () => {
       .not.toBeNull();
   });
 
-  it('reports an active offering even when every walk-in basket is unaffordable', () => {
-    const expensive = {
-      restaurant: { reputation: 1 },
-      dishes: [{ id: 'costly', price: 150, quality: 1, popularity: 50, prepTime: 60 }],
-      unlockedDrinkIds: [],
-    };
-    expect(getMenuAffordabilitySummary(expensive).anyOrderShare).toBe(0);
+  it('keeps an active offering even when a particular guest cannot afford it', () => {
+    const expensive = singleDishState(47);
+    expect(buildAffordableBaskets(expensive, {
+      spendingTier: 'budget', spendingBudget: 6,
+    })).toEqual([]);
     expect(hasAvailableWalkInMenu(expensive)).toBe(true);
     expect(hasAvailableWalkInMenu({
       ...expensive,
-      restaurant: { reputation: 1, suspendedDishIds: ['costly'] },
+      restaurant: { reputation: 1, suspendedDishIds: ['test'] },
     })).toBe(false);
   });
 });
 
 describe('combined menu analysis', () => {
-  const cookbookState = {
+  const cookbookState = withOwnedAuthoredDishes({
     restaurant: { reputation: 1 },
-    dishes: [{ id: 'cookbook-toast', cookbookId: 'toast' }],
-    cookbook: {
-      schemaVersion: 2,
-      entries: {
-        toast: {
-          discovered: true, paidPortions: 0, perk: null,
-          menuSettings: { name: 'Toasted Bread', price: 12, quality: 1 },
-        },
-      },
-    },
+    dishes: [{ id: 'cookbook-toast', cookbookId: 'toast', price: 12, quality: 1 }],
     unlockedDrinkIds: ['water'],
-  };
+  });
   const fixtures = {
     mixed: {
       state: menuState,
       expected: {
-        affordability: { dishShare: 0.8692307692307691, anyOrderShare: 1 },
-        demand: {
-          dishes: new Map([['cheap', 66], ['premium', 16]]),
-          drinks: new Map([['water', 20], ['coffee', 14]]),
-        },
+        affordability: getMenuAffordabilitySummary(menuState),
+        demand: referenceMenuDemand(menuState),
         hasAvailableMenu: true,
       },
     },
     suspended: {
       state: suspensionState,
       expected: {
-        affordability: { dishShare: 0.31707614403600903, anyOrderShare: 1 },
-        demand: { dishes: new Map([['premium', 30]]), drinks: new Map([['water', 76]]) },
+        affordability: getMenuAffordabilitySummary(suspensionState),
+        demand: referenceMenuDemand(suspensionState),
         hasAvailableMenu: true,
       },
     },
     cookbook: {
       state: cookbookState,
       expected: {
-        affordability: { dishShare: 0.676923076923077, anyOrderShare: 1 },
-        demand: { dishes: new Map([['cookbook-toast', 64]]), drinks: new Map([['water', 47]]) },
-        hasAvailableMenu: true,
-      },
-    },
-    expensive: {
-      state: {
-        restaurant: { reputation: 1 },
-        dishes: [{ id: 'expensive', price: 150, quality: 5, popularity: 50, prepTime: 120 }],
-        unlockedDrinkIds: [],
-      },
-      expected: {
-        affordability: { dishShare: 0, anyOrderShare: 0 },
-        demand: { dishes: new Map(), drinks: new Map() },
+        affordability: getMenuAffordabilitySummary(cookbookState),
+        demand: referenceMenuDemand(cookbookState),
         hasAvailableMenu: true,
       },
     },
@@ -873,15 +1014,16 @@ describe('combined menu analysis', () => {
   };
 
   it.each(Object.entries(fixtures))('pins existing helper results for the %s menu', (_name, fixture) => {
-    const { expectedGrossPer100, affordabilityByTier, ...existingAnalysis } = getMenuAnalysis(fixture.state);
+    const { expectedGrossPer100, demandProbabilities, affordabilityByTier, ...existingAnalysis } = getMenuAnalysis(fixture.state);
     expect(existingAnalysis).toEqual(fixture.expected);
+    expect(demandProbabilities).toEqual(expect.objectContaining({ dishes: expect.any(Map), drinks: expect.any(Map) }));
     expect(affordabilityByTier).toBeDefined();
     expect(Number.isFinite(expectedGrossPer100)).toBe(true);
     expect(expectedGrossPer100).toBeGreaterThanOrEqual(0);
   });
 
   it.each(Object.entries(fixtures))('matches the public wrappers for the %s menu', (_name, { state }) => {
-    const { expectedGrossPer100, affordabilityByTier, ...existingAnalysis } = getMenuAnalysis(state);
+    const { expectedGrossPer100, demandProbabilities, affordabilityByTier, ...existingAnalysis } = getMenuAnalysis(state);
     expect(existingAnalysis).toEqual({
       affordability: getMenuAffordabilitySummary(state),
       demand: estimateMenuDemand(state),
@@ -920,16 +1062,16 @@ describe('tier affordability analysis', () => {
 
     const draft = getMenuAnalysis(state, { kind: 'dish', id: 'test', price: 19 });
     expect(draft.affordabilityByTier).toEqual({
-      budget: { dishShare: 0, anyOrderShare: 0 },
-      value: { dishShare: 27 / 31, anyOrderShare: 27 / 31 },
+      budget: { dishShare: 1 / 13, anyOrderShare: 1 / 13 },
+      value: { dishShare: 28 / 31, anyOrderShare: 28 / 31 },
       premium: { dishShare: 1, anyOrderShare: 1 },
     });
     expect(state.dishes[0].price).toBe(18);
   });
 
   it.each([
-    [6, {
-      budget: { dishShare: 1, anyOrderShare: 1 },
+    [8, {
+      budget: { dishShare: 11 / 13, anyOrderShare: 11 / 13 },
       value: { dishShare: 1, anyOrderShare: 1 },
       premium: { dishShare: 1, anyOrderShare: 1 },
     }],
@@ -953,10 +1095,10 @@ describe('tier affordability analysis', () => {
       value: { dishShare: 1 / 31, anyOrderShare: 1 / 31 },
       premium: { dishShare: 76 / 86, anyOrderShare: 76 / 86 },
     }],
-    [120, {
+    [47, {
       budget: { dishShare: 0, anyOrderShare: 0 },
       value: { dishShare: 0, anyOrderShare: 0 },
-      premium: { dishShare: 1 / 86, anyOrderShare: 1 / 86 },
+      premium: { dishShare: 74 / 86, anyOrderShare: 74 / 86 },
     }],
   ])('counts inclusive integer budget points at the $%s tier edges', (price, expected) => {
     expect(getMenuAnalysis(singleDishState(price)).affordabilityByTier).toEqual(expected);
@@ -1002,24 +1144,24 @@ describe('tier affordability analysis', () => {
   });
 
   it('keeps the source state unchanged while analysing a frozen price draft', () => {
+    const authored = singleDishState(18, 1);
     const state = {
-      restaurant: Object.freeze({ reputation: 1 }),
-      dishes: Object.freeze([Object.freeze({
-        id: 'test', name: 'Test', price: 18, quality: 1, popularity: 50, prepTime: 60,
-      })]),
+      ...authored,
+      restaurant: Object.freeze({ ...authored.restaurant }),
+      dishes: Object.freeze(authored.dishes.map(dish => Object.freeze(dish))),
       unlockedDrinkIds: Object.freeze([]),
     };
     const before = structuredClone(state);
     const draft = getMenuAnalysis(state, { kind: 'dish', id: 'test', price: 19 });
 
-    expect(draft.affordabilityByTier.budget.dishShare).toBe(0);
-    expect(draft.affordabilityByTier.value.dishShare).toBe(27 / 31);
+    expect(draft.affordabilityByTier.budget.dishShare).toBe(1 / 13);
+    expect(draft.affordabilityByTier.value.dishShare).toBe(28 / 31);
     expect(state).toEqual(before);
   });
 });
 
 describe('paid-sales menu thresholds', () => {
-  const stateWithThresholds = () => ({
+  const stateWithThresholds = () => withOwnedAuthoredDishes({
     restaurant: {
       day: 1,
       reputation: 3,
@@ -1028,9 +1170,7 @@ describe('paid-sales menu thresholds', () => {
         { kind: 'drink', id: 'water', threshold: 2 },
       ],
     },
-    dishes: [
-      { id: '__proto__', name: 'Custom', price: 10, quality: 2, popularity: 50, prepTime: 60 },
-    ],
+    dishes: [{ id: '__proto__', cookbookId: 'fries', price: 10, quality: 2 }],
     unlockedDrinkIds: ['water'],
     drinkOverrides: {},
     menuSales: {

@@ -6,11 +6,10 @@ import { continueCareerAsSandbox, isCareerDecisionPending } from '../simulation/
 import {
   reconcileCookbookDiscoveries,
   reduceCookbookAction,
-  validateDishOrderSnapshot,
 } from '../simulation/cookbook';
 import { isMenuItemSuspended } from '../simulation/menuEconomy';
 import { acceptServiceContract, withdrawServiceContract } from '../simulation/serviceContracts';
-import { hydrateState, loadState, saveState } from './persistence';
+import { hydrateState, loadStateResult, saveState } from './persistence';
 import { ITEM_PRICES } from '../data/items';
 import { createHighTopCounterRecords } from '../data/highTopCounters';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
@@ -55,33 +54,6 @@ import { getFixtureSaleEligibility, sellFixtures } from './fixtureSales';
 import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
 import { prioritiseQueuedParty } from '../simulation/queuePriority';
 import { STAFF_CLEANING_FOCUS_VALUES } from '../simulation/cleaningFocus';
-
-const STARTING_DISH_QUALITY = 1;
-
-function hasValidCustomDishSnapshot(dish) {
-  try {
-    validateDishOrderSnapshot({
-      schemaVersion: 1,
-      serviceItemId: dish.id,
-      menuItemId: dish.id,
-      cookbookId: null,
-      orderedAt: 0,
-      name: dish.name,
-      base: dish.base,
-      method: dish.method,
-      cuisine: dish.cuisine,
-      requiredEquipmentId: dish.requiredEquipmentId,
-      price: dish.price,
-      quality: dish.quality,
-      prepTime: dish.prepTime,
-      popularity: dish.popularity,
-      masteryPerk: null,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function canAfford(state, cost) {
   return Number.isFinite(cost)
@@ -668,51 +640,6 @@ function reduceGameAction(state, action) {
     }
     case 'SET_MENU_SALES_THRESHOLD':
       return setMenuItemSalesThreshold(state, action.kind, action.id, action.threshold);
-    case 'ADD_DISH': {
-      const dish = action.dish;
-      if (!dish || typeof dish.id !== 'string' || !dish.id
-        || typeof dish.name !== 'string' || !dish.name.trim()
-        || !Number.isFinite(dish.price) || !Number.isFinite(dish.quality)
-        || dish.quality < STARTING_DISH_QUALITY
-        || state.dishes.some(existing => existing.id === dish.id)
-        || [...(state.customers || []), ...(state.serviceItems || [])].some(holder =>
-          holder.dishOrderSnapshot?.menuItemId === dish.id)) return state;
-      const { cookbookId, masteryPerk, ...customDish } = dish;
-      const candidate = {
-        ...customDish,
-        price: Math.min(100, Math.max(1, Math.round(dish.price))),
-        quality: STARTING_DISH_QUALITY,
-      };
-      if (!hasValidCustomDishSnapshot(candidate)) return state;
-      return {
-        ...state,
-        dishes: [...state.dishes, candidate],
-      };
-    }
-    case 'REMOVE_DISH':
-      if (!state.dishes.some(dish => dish.id === action.id)) return state;
-      return { ...state, dishes: state.dishes.filter(d => d.id !== action.id) };
-    case 'UPDATE_DISH': {
-      const dish = state.dishes.find(candidate => candidate.id === action.id);
-      if (!dish || !action.changes) return state;
-      const changes = { ...action.changes };
-      delete changes.quality;
-      delete changes.id;
-      delete changes.cookbookId;
-      delete changes.masteryPerk;
-      if ('price' in changes) {
-        if (!Number.isFinite(changes.price)) delete changes.price;
-        else changes.price = Math.min(100, Math.max(1, Math.round(changes.price)));
-      }
-      const updatedDish = { ...dish, ...changes };
-      if (!hasValidCustomDishSnapshot(updatedDish)) return state;
-      return {
-        ...state,
-        dishes: state.dishes.map(candidate => candidate.id === action.id
-          ? updatedDish
-          : candidate),
-      };
-    }
     case 'UPDATE_DRINK': {
       const drink = getDrink(action.id);
       const unlockedDrinkIds = Array.isArray(state.unlockedDrinkIds)
@@ -727,19 +654,6 @@ function reduceGameAction(state, action) {
         [drink.id]: { ...currentOverrides[drink.id], price },
       });
       return { ...state, drinkOverrides };
-    }
-    case 'UPGRADE_DISH_QUALITY': {
-      const dish = state.dishes.find(candidate => candidate.id === action.id);
-      const quality = Math.min(10, Math.max(0, Math.floor(dish?.quality)));
-      if (!dish || !Number.isFinite(dish.quality) || quality >= 10
-        || !canAfford(state, MENU_QUALITY_COST)) return state;
-      return {
-        ...state,
-        restaurant: { ...state.restaurant, funds: state.restaurant.funds - MENU_QUALITY_COST },
-        dishes: state.dishes.map(candidate => candidate.id === dish.id
-          ? { ...candidate, quality: quality + 1 }
-          : candidate),
-      };
     }
     case 'UPGRADE_DRINK_QUALITY': {
       const drink = getResolvedDrink(state, action.id);
@@ -1168,25 +1082,34 @@ export function gameReducer(state, action) {
 }
 
 const GameGenerationContext = createContext(0);
+const INCOMPATIBLE_SAVE_NOTICE = 'Your previous save is incompatible with the new cookbook progression. A new game has been started.';
+
+function createInitialGameSession() {
+  const result = loadStateResult();
+  const fresh = createInitialState();
+  return {
+    state: result.state ? hydrateState(result.state, fresh) : fresh,
+    generation: 0,
+    startupNotice: result.reason === 'incompatible' ? INCOMPATIBLE_SAVE_NOTICE : null,
+  };
+}
 
 function reduceGameSession(session, action) {
+  if (action.type === 'DISMISS_STARTUP_NOTICE') {
+    return session.startupNotice ? { ...session, startupNotice: null } : session;
+  }
   const state = gameReducer(session.state, action);
   if (action.type === 'LOAD_STATE' || (state !== session.state
     && ['START_CAREER', 'RETRY_CAREER'].includes(action.type))) {
-    return { state, generation: session.generation + 1 };
+    return { ...session, state, generation: session.generation + 1 };
   }
   return state === session.state ? session : { ...session, state };
 }
 
 export function GameProvider({ children }) {
-  const [{ state, generation }, dispatch] = useReducer(reduceGameSession, null, () => {
-    const saved = loadState();
-    const fresh = createInitialState();
-    return {
-      state: saved && saved.version === fresh.version ? hydrateState(saved, fresh) : fresh,
-      generation: 0,
-    };
-  });
+  const [{ state, generation, startupNotice }, dispatch] = useReducer(
+    reduceGameSession, null, createInitialGameSession,
+  );
   const stateRef = useRef(state);
   stateRef.current = state;
   const [saveMessage, setSaveMessage] = useState('');
@@ -1227,8 +1150,22 @@ export function GameProvider({ children }) {
       <DispatchContext.Provider value={dispatch}>
         <GameGenerationContext.Provider value={generation}>
           {children}
-          {saveMessage && <div role="status" style={{ ...TYPOGRAPHY.secondary,
+          {startupNotice && <div role="status" style={{ ...TYPOGRAPHY.secondary,
             position: 'fixed', top: 8, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 210, maxWidth: '90vw', padding: '8px 12px', display: 'flex',
+            alignItems: 'center', gap: 12, background: '#16213e', color: '#f0a500',
+            border: '1px solid #0f3460', borderRadius: 4,
+          }}>
+            <span>{startupNotice}</span>
+            <button type="button" aria-label="Dismiss notice"
+              onClick={() => dispatch({ type: 'DISMISS_STARTUP_NOTICE' })}
+              style={{ ...TYPOGRAPHY.control, background: 'transparent', border: 0,
+                color: 'inherit', cursor: 'pointer', padding: 0 }}>
+              ×
+            </button>
+          </div>}
+          {saveMessage && <div role="status" style={{ ...TYPOGRAPHY.secondary,
+            position: 'fixed', top: startupNotice ? 58 : 8, left: '50%', transform: 'translateX(-50%)',
             zIndex: 210, maxWidth: '90vw', padding: '8px 12px', background: '#16213e',
             color: '#f0a500', border: '1px solid #0f3460', borderRadius: 4,
           }}>{saveMessage}</div>}

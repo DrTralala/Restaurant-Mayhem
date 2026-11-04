@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { releaseStaffWork } from './staffTaskLifecycle';
 import { resolveStaffAfterMovement, updateStaff } from './staff';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
 
 function baseState(overrides = {}) {
-  return {
+  return withOwnedAuthoredDishes({
     restaurant: { gameTime: 100, reputation: 2 },
     staff: [],
     customers: [],
@@ -15,7 +16,7 @@ function baseState(overrides = {}) {
     serviceTables: [],
     washStations: [],
     ...overrides,
-  };
+  });
 }
 
 describe('releaseStaffWork', () => {
@@ -243,7 +244,7 @@ describe('releaseStaffWork', () => {
 
   it('snapshots all eligible seated party members for a level-ten waiter', () => {
     const state = baseState({
-      dishes: [{ id: 'dish', price: 5, quality: 1, popularity: 50, prepTime: 60 }],
+      dishes: [{ id: 'dish', cookbookId: 'toast', price: 9, quality: 1 }],
       tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
       staff: [{ id: 'w1', role: 'waiter', skill: 10, morale: 50, x: 180, y: 220, task: null }],
       customers: [
@@ -262,7 +263,7 @@ describe('releaseStaffWork', () => {
   it('orders valid snapshot members even when the anchor leaves before completion', () => {
     const state = baseState({
       restaurant: { gameTime: 100, reputation: 2, day: 1 },
-      dishes: [{ id: 'dish', price: 5, quality: 1, popularity: 50, prepTime: 60 }],
+      dishes: [{ id: 'dish', cookbookId: 'toast', price: 9, quality: 1 }],
       tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
       staff: [{ id: 'w1', role: 'waiter', skill: 10, morale: 50, x: 180, y: 220,
         task: {
@@ -271,7 +272,8 @@ describe('releaseStaffWork', () => {
         } }],
       customers: [
         { id: 'c1', partyId: 'p1', state: 'leaving', tableId: 't1' },
-        { id: 'c2', partyId: 'p1', state: 'seated', tableId: 't1' },
+        { id: 'c2', partyId: 'p1', state: 'seated', tableId: 't1',
+          archetype: 'regular', spendingTier: 'budget', spendingBudget: 18 },
       ],
     });
 

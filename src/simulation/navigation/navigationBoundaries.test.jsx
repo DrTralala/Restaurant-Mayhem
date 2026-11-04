@@ -465,7 +465,7 @@ describe('S2 atomic editing boundaries', () => {
 });
 
 describe('S3 hydration and save boundaries', () => {
-  it('T10 accepts an overlapping version-10 payload for validation, then quarantines it without dropping IDs', () => {
+  it('T10 accepts an overlapping current-version payload for validation, then quarantines it without dropping IDs', () => {
     const fresh = createInitialState();
     const saved = {
       ...fresh,
@@ -552,7 +552,6 @@ describe('S3 hydration and save boundaries', () => {
     };
     const saved = {
       ...fresh,
-      version: undefined,
       cashierStations: [legacyStation],
       customers: [customer],
       staff: fresh.staff.map(worker => {

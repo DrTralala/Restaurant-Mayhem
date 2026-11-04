@@ -29,7 +29,8 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
   }));
   const equipmentEntries = equipmentFilter === 'all' ? entries
     : entries.filter(({ recipe }) => recipe.requiredEquipmentId === equipmentFilter);
-  const readyEntries = equipmentEntries.filter(({ status }) => status.canAdd || status.canChoosePerk);
+  const readyEntries = equipmentEntries.filter(({ status }) =>
+    status.canBuy || status.canAdd || status.canChoosePerk);
   const readyIds = new Set(readyEntries.map(({ recipe }) => recipe.id));
   const filteredEntries = filter === 'ready'
     ? equipmentEntries.filter(({ recipe }) => readyIds.has(recipe.id))
@@ -46,8 +47,8 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
         <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: 0 }}>Cookbook</h3>
         <button autoFocus onClick={onClose} style={buttonStyle}>Back to menu</button>
       </div>
-      <p style={detailStyle}>Discover recipes, add them for free, then serve paid portions to choose a signature.</p>
-      <p style={detailStyle}>Speed changes base cooking work, not the complete wait time. Custom recipes remain unrestricted.</p>
+      <p style={detailStyle}>Discover recipes, buy each recipe once, then add owned recipes to your menu for free.</p>
+      <p style={detailStyle}>Recipe purchase costs are separate from the menu price charged per paid dish. Speed changes base cooking work, not the complete wait time.</p>
       {blocked && <p role="status" style={{ ...detailStyle, color: '#f0a500' }}>Career decision pending — menu changes are unavailable. You can still browse.</p>}
       <div role="group" aria-label="Cookbook view" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', margin: '8px 0' }}>
         <button style={buttonStyle} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All</button>
@@ -64,23 +65,25 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
 
       {visibleEntries.map(({ recipe, status }) => {
         const settings = viewState.cookbook.entries[recipe.id].menuSettings;
+        const displayName = status.owned ? settings.name : recipe.name;
         const pinned = recipe.id === pinnedId;
         const pendingPerk = confirmation?.cookbookId === recipe.id ? confirmation.perk : null;
         const previewPerk = pendingPerk || status.perk;
         const prep = previewPerk === 'speed' ? Math.max(1, Math.round(recipe.prepTime * 0.85)) : recipe.prepTime;
         const popularity = previewPerk === 'appeal' ? Math.min(100, recipe.popularity + 10) : recipe.popularity;
-        const additionReason = status.activeDishId ? 'On menu' : !status.discovered ? 'Locked — meet the discovery requirements below'
-          : !status.equipmentOwned ? 'Equipment needed' : 'Ready to add';
         return (
-          <article key={recipe.id} aria-label={`${recipe.name} recipe`} style={{ background: '#1a1a2e',
+          <article key={recipe.id} aria-label={`${displayName} recipe`} style={{ background: '#1a1a2e',
             border: '1px solid #0f3460', borderRadius: 8, padding: 12, marginTop: 12 }}>
-            <h4 style={{ ...TYPOGRAPHY.subheading, margin: '0 0 4px', color: '#f0a500' }}>{recipe.name}</h4>
+            <h4 style={{ ...TYPOGRAPHY.subheading, margin: '0 0 4px', color: '#f0a500' }}>{displayName}</h4>
             {pinned && <p style={detailStyle}>Shown while its signature choice is open.</p>}
-            {status.discovered && <p style={detailStyle}>Discovered</p>}
-            <p style={detailStyle}>{additionReason}</p>
+            {status.discovered ? <p style={detailStyle}>Discovered</p>
+              : <p style={detailStyle}>Locked — meet the discovery requirements below</p>}
+            {status.discovered && <p style={detailStyle}>{status.owned
+              ? status.activeDishId ? 'On menu' : 'Owned'
+              : 'Not owned'}</p>}
             <p style={detailStyle}>Equipment: {equipmentName(recipe.requiredEquipmentId)} · {recipe.base} / {recipe.method}</p>
             <p style={detailStyle}>Base cook work: {recipe.prepTime} seconds · Base popularity: {recipe.popularity}</p>
-            <p style={detailStyle}>{settings.name} · ${settings.price} · Quality {settings.quality}</p>
+            <p style={detailStyle}>One-time recipe purchase: ${status.purchaseCost} · Menu price: ${settings.price} per paid dish · Quality {settings.quality}</p>
             {status.requirements.length > 0 && (
               <ul style={{ ...TYPOGRAPHY.secondary, paddingLeft: 20, margin: '8px 0' }}>
                 {status.requirements.map(requirement => (
@@ -91,11 +94,28 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
                 ))}
               </ul>
             )}
-            {!status.equipmentOwned && status.discovered && <p style={detailStyle}>Own {equipmentName(recipe.requiredEquipmentId)} before adding this recipe.</p>}
+            {!status.equipmentOwned && status.discovered && <p style={detailStyle}>
+              {status.owned
+                ? status.activeDishId
+                  ? `Equipment needed: Own ${equipmentName(recipe.requiredEquipmentId)} before serving this on-menu recipe.`
+                  : `Equipment needed: Own ${equipmentName(recipe.requiredEquipmentId)} before adding this owned recipe to the menu.`
+                : `Equipment needed: Own ${equipmentName(recipe.requiredEquipmentId)} before buying this recipe.`}
+            </p>}
+            {status.discovered && !status.owned && !status.canAfford
+              && <p style={detailStyle}>Need ${status.purchaseCost} to buy this recipe.</p>}
+            {status.discovered && !status.owned && (
+              <button style={buttonStyle} disabled={blocked || !status.canBuy}
+                onClick={() => { if (!blocked && status.canBuy) dispatch({
+                  type: 'BUY_COOKBOOK_RECIPE', cookbookId: recipe.id,
+                }); }}>
+                Buy recipe — ${status.purchaseCost}
+              </button>
+            )}
             {status.discovered && !status.stationAvailable && <p style={detailStyle}>No matching kitchen station — place a compatible station before serving.</p>}
-            <button style={buttonStyle} disabled={blocked || !status.canAdd}
+            <button style={{ ...buttonStyle, marginLeft: status.discovered && !status.owned ? 8 : 0 }}
+              disabled={blocked || !status.canAdd}
               onClick={() => { if (!blocked && status.canAdd) dispatch({ type: 'ADD_COOKBOOK_DISH', cookbookId: recipe.id }); }}>
-              Add {recipe.name} to menu
+              Add {displayName} to menu
             </button>
 
             {status.discovered && (

@@ -21,6 +21,7 @@ function getPendingRecordParts(record) {
     || !Array.isArray(record.memberIds)
     || !Array.isArray(record.orderedMemberIds)
     || !Array.isArray(record.unaffordableMemberIds)
+    || !Array.isArray(record.poorValueMemberIds)
     || !Array.isArray(record.paidReviews)) return null;
 
   const memberIds = record.memberIds;
@@ -43,6 +44,14 @@ function getPendingRecordParts(record) {
     unaffordableSet.add(memberId);
   }
 
+  const poorValueMemberIds = record.poorValueMemberIds;
+  const poorValueSet = new Set();
+  for (const memberId of poorValueMemberIds) {
+    if (memberId == null || poorValueSet.has(memberId)
+      || !memberSet.has(memberId) || orderedSet.has(memberId) || unaffordableSet.has(memberId)) return null;
+    poorValueSet.add(memberId);
+  }
+
   const paidMemberIds = new Set();
   for (const payment of record.paidReviews) {
     if (!payment || typeof payment !== 'object' || Array.isArray(payment)
@@ -57,6 +66,7 @@ function getPendingRecordParts(record) {
     orderedMemberIds,
     orderedSet,
     unaffordableMemberIds,
+    poorValueMemberIds,
     paidReviews: record.paidReviews,
   };
 }
@@ -66,7 +76,7 @@ export function getPartyKey(customer) {
 }
 
 export function recordPartyOrderOutcome(records, partyMembers, customer, outcome) {
-  if (!['ordered', 'unaffordable'].includes(outcome)) return records;
+  if (!['ordered', 'unaffordable', 'poor_value'].includes(outcome)) return records;
 
   const entries = getRecordEntries(records);
   const partyId = getPartyKey(customer);
@@ -84,6 +94,7 @@ export function recordPartyOrderOutcome(records, partyMembers, customer, outcome
         memberIds,
         orderedMemberIds: outcome === 'ordered' ? [customerId] : [],
         unaffordableMemberIds: outcome === 'unaffordable' ? [customerId] : [],
+        poorValueMemberIds: outcome === 'poor_value' ? [customerId] : [],
         paidReviews: [],
       },
     ];
@@ -92,12 +103,13 @@ export function recordPartyOrderOutcome(records, partyMembers, customer, outcome
   const record = entries[recordIndex];
   const parts = getPendingRecordParts(record);
   if (!parts || !parts.memberSet.has(customerId)) return records;
-  const requestedMemberIds = outcome === 'ordered'
-    ? parts.orderedMemberIds : parts.unaffordableMemberIds;
+  const requestedMemberIds = outcome === 'ordered' ? parts.orderedMemberIds
+    : outcome === 'unaffordable' ? parts.unaffordableMemberIds : parts.poorValueMemberIds;
   if (requestedMemberIds.includes(customerId)) return records;
 
   const orderedMemberIds = parts.orderedMemberIds.filter(id => id !== customerId);
   const unaffordableMemberIds = parts.unaffordableMemberIds.filter(id => id !== customerId);
+  const poorValueMemberIds = parts.poorValueMemberIds.filter(id => id !== customerId);
   const paidReviews = outcome === 'ordered'
     ? parts.paidReviews
     : parts.paidReviews.filter(review => review.customerId !== customerId);
@@ -107,6 +119,8 @@ export function recordPartyOrderOutcome(records, partyMembers, customer, outcome
       ? [...orderedMemberIds, customerId] : orderedMemberIds,
     unaffordableMemberIds: outcome === 'unaffordable'
       ? [...unaffordableMemberIds, customerId] : unaffordableMemberIds,
+    poorValueMemberIds: outcome === 'poor_value'
+      ? [...poorValueMemberIds, customerId] : poorValueMemberIds,
     paidReviews,
   };
 
@@ -162,7 +176,8 @@ export function cancelPendingPartyReviews(records, partyIds) {
 function getCompletePendingRecord(record) {
   const parts = getPendingRecordParts(record);
   if (!parts) return null;
-  const outcomeCount = parts.orderedMemberIds.length + parts.unaffordableMemberIds.length;
+  const outcomeCount = parts.orderedMemberIds.length + parts.unaffordableMemberIds.length
+    + parts.poorValueMemberIds.length;
   if (outcomeCount !== parts.memberIds.length
     || parts.paidReviews.length !== parts.orderedMemberIds.length
     || parts.orderedMemberIds.some(memberId => !parts.paidReviews.some(review =>
@@ -202,6 +217,7 @@ export function settlePartyReview({
 
   const orderedMemberIds = completeRecord.orderedMemberIds;
   const unaffordableMemberIds = completeRecord.unaffordableMemberIds;
+  const poorValueMemberIds = completeRecord.poorValueMemberIds;
   const paidReviews = completeRecord.paidReviews;
   const paidTotal = orderedMemberIds.reduce((total, memberId) => {
     const payment = paidReviews.find(review =>
@@ -211,11 +227,12 @@ export function settlePartyReview({
   }, 0);
   const memberCount = completeRecord.memberIds.length;
   const unaffordableCount = unaffordableMemberIds.length;
+  const poorValueCount = poorValueMemberIds.length;
   const unaffordableScore = memberCount === 1 ? -50 : -110;
-  const unaffordableTotal = unaffordableCount * unaffordableScore;
-  const contributionTotal = paidTotal + unaffordableTotal;
+  const refusalTotal = (unaffordableCount + poorValueCount) * unaffordableScore;
+  const contributionTotal = paidTotal + refusalTotal;
   const score = contributionTotal / memberCount;
-  const rawDelta = getPaidReviewReputationGain(paidTotal) + unaffordableTotal / 5000;
+  const rawDelta = getPaidReviewReputationGain(paidTotal) + refusalTotal / 5000;
   const reputationGainEffect = getUpgradeEffect({ upgrades }, 'reputationGain');
   const reputationDelta = rawDelta > 0 ? rawDelta * (1 + reputationGainEffect) : rawDelta;
   const review = {
@@ -225,6 +242,7 @@ export function settlePartyReview({
     memberCount,
     paidCount: orderedMemberIds.length,
     unaffordableCount,
+    poorValueCount,
     reputationDelta,
   };
 
@@ -264,18 +282,26 @@ export function normalisePendingPartyReviews(value) {
       || !Array.isArray(record.memberIds)
       || !Array.isArray(record.orderedMemberIds)
       || !Array.isArray(record.unaffordableMemberIds)
+      || !Array.isArray(record.poorValueMemberIds)
       || !Array.isArray(record.paidReviews)
       || seenPartyIds.has(record.partyId)) return [];
 
     const memberIds = uniqueNonEmptyStrings(record.memberIds);
     if (!memberIds.length) return [];
-    seenPartyIds.add(record.partyId);
     const memberSet = new Set(memberIds);
     const orderedMemberIds = uniqueNonEmptyStrings(record.orderedMemberIds)
       .filter(memberId => memberSet.has(memberId));
     const orderedSet = new Set(orderedMemberIds);
     const unaffordableMemberIds = uniqueNonEmptyStrings(record.unaffordableMemberIds)
       .filter(memberId => memberSet.has(memberId) && !orderedSet.has(memberId));
+    const unaffordableSet = new Set(unaffordableMemberIds);
+    const poorValueMemberIds = uniqueNonEmptyStrings(record.poorValueMemberIds)
+      .filter(memberId => memberSet.has(memberId)
+        && !orderedSet.has(memberId) && !unaffordableSet.has(memberId));
+    if (orderedMemberIds.length + unaffordableMemberIds.length + poorValueMemberIds.length === 0) {
+      return [];
+    }
+    seenPartyIds.add(record.partyId);
     const paidReviews = [];
     const paidMemberIds = new Set();
     for (const payment of record.paidReviews) {
@@ -293,6 +319,7 @@ export function normalisePendingPartyReviews(value) {
       memberIds,
       orderedMemberIds,
       unaffordableMemberIds,
+      poorValueMemberIds,
       paidReviews,
     }];
   });
@@ -309,7 +336,8 @@ export function normalisePartyReviewHistory(value) {
     && Number.isInteger(record.memberCount) && record.memberCount > 0
     && Number.isInteger(record.paidCount) && record.paidCount >= 0
     && Number.isInteger(record.unaffordableCount) && record.unaffordableCount >= 0
-    && record.paidCount + record.unaffordableCount === record.memberCount)
+    && Number.isInteger(record.poorValueCount) && record.poorValueCount >= 0
+    && record.paidCount + record.unaffordableCount + record.poorValueCount === record.memberCount)
     .map(record => ({
       partyId: record.partyId,
       day: record.day,
@@ -317,6 +345,7 @@ export function normalisePartyReviewHistory(value) {
       memberCount: record.memberCount,
       paidCount: record.paidCount,
       unaffordableCount: record.unaffordableCount,
+      poorValueCount: record.poorValueCount,
       reputationDelta: record.reputationDelta,
     }))
     .slice(-30);

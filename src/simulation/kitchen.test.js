@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { processKitchen } from './kitchen';
+import {
+  createDishOrderSnapshot,
+  getResolvedDish,
+  validateDishOrderSnapshots,
+} from './cookbook';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
 
 const baseState = {
   customers: [{ id: 'c1', state: 'waiting_for_items' }],
@@ -13,6 +19,46 @@ const baseState = {
   tables: [],
 };
 
+function withAuthoredDishOrderSnapshots(state) {
+  const dishSpecs = (state.dishes || []).map(dish => ({
+    ...dish,
+    cookbookId: dish.cookbookId ?? 'toast',
+  }));
+  for (const item of state.serviceItems || []) {
+    if (item.kind === 'dish' && item.menuItemId != null
+      && !dishSpecs.some(dish => dish.id === item.menuItemId)) {
+      dishSpecs.push({ id: item.menuItemId, cookbookId: 'toast' });
+    }
+  }
+  const authored = withOwnedAuthoredDishes(state, dishSpecs);
+  const serviceItems = (authored.serviceItems || []).map(item => {
+    if (item.kind !== 'dish' || item.menuItemId == null || Object.hasOwn(item, 'dishOrderSnapshot')) {
+      return item;
+    }
+    const dish = getResolvedDish(authored, item.menuItemId);
+    if (!dish) throw new Error(`Missing owned authored test dish ${item.menuItemId}`);
+    const owner = (authored.customers || []).find(customer => customer.id === item.customerId);
+    const snapshot = Object.freeze(createDishOrderSnapshot(dish, {
+      serviceItemId: item.id,
+      orderedAt: Number.isFinite(owner?.orderTime) ? owner.orderTime
+        : Number.isFinite(authored.restaurant?.gameTime) ? authored.restaurant.gameTime : 0,
+    }));
+    return { ...item, dishOrderSnapshot: snapshot };
+  });
+  const customers = (authored.customers || []).map(customer => {
+    const item = serviceItems.find(candidate => candidate.kind === 'dish'
+      && candidate.customerId === customer.id && candidate.dishOrderSnapshot);
+    if (!item || Object.hasOwn(customer, 'dishOrderSnapshot')) return customer;
+    return {
+      ...customer,
+      ...(customer.foodOutcome === 'cancelled' && customer.dishId == null
+        ? {} : { dishId: item.menuItemId }),
+      dishOrderSnapshot: Object.freeze({ ...item.dishOrderSnapshot }),
+    };
+  });
+  return { ...authored, customers, serviceItems };
+}
+
 describe('processKitchen', () => {
   it('advances dish preparation with the cook morale rate without changing automatic timers', () => {
     const item = {
@@ -20,22 +66,23 @@ describe('processKitchen', () => {
       state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
       preparationStartedAt: 0, accumulatedWork: 0, lastProgressAt: 0,
     };
-    const result = processKitchen({
+    const result = processKitchen(withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 30 },
       serviceItems: [item],
-      dishes: [{ id: 'toast', prepTime: 60 }],
-      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
+      dishes: [{ id: 'toast', cookbookId: 'toast' }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 100 }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }],
       staff: [{ id: 'cook1', role: 'cook', morale: 0,
         x: 90, y: 110,
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' } }],
-    });
+    }));
 
     expect(result.serviceItems[0]).toMatchObject({ accumulatedWork: 15, lastProgressAt: 30 });
   });
 
   it('does not progress a dish when the assigned cook has no active task record', () => {
-    const result = processKitchen({
+    const result = processKitchen(withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 50 },
       serviceItems: [{
@@ -43,18 +90,18 @@ describe('processKitchen', () => {
         state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
         preparationStartedAt: 0,
       }],
-      dishes: [{ id: 'toast', prepTime: 120 }],
-       kitchenStations: [{ id: 'k1', equipmentId: 'oven', x: 100, y: 100 }],
-      equipment: [{ id: 'oven', owned: true, speedMultiplier: 2 }],
+      dishes: [{ id: 'toast', cookbookId: 'baked-eggs' }],
+       kitchenStations: [{ id: 'k1', equipmentId: 'eq2', x: 100, y: 100 }],
+      equipment: [{ id: 'eq2', owned: true, speedMultiplier: 2 }],
       upgrades: [{ level: 1, effects: { type: 'globalSpeed', value: 0.25 } }],
       staff: [{ id: 'cook1', role: 'cook', morale: 50 }],
-    });
+    }));
 
     expect(result.serviceItems[0]).toMatchObject({ state: 'preparing' });
   });
 
   it('keeps the cook task ledger in step when an older item ledger is missing', () => {
-    const result = processKitchen({
+    const result = processKitchen(withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 40 },
       serviceItems: [{
@@ -62,13 +109,14 @@ describe('processKitchen', () => {
         state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
         preparationStartedAt: 0,
       }],
-      dishes: [{ id: 'toast', prepTime: 120 }],
-      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
+      dishes: [{ id: 'toast', cookbookId: 'baked-eggs' }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq2', x: 100, y: 100 }],
+      equipment: [{ id: 'eq2', owned: true, speedMultiplier: 1 }],
       staff: [{ id: 'cook1', role: 'cook', morale: 100,
         x: 90, y: 110,
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
           accumulatedWork: 30, lastProgressAt: 30 } }],
-    });
+    }));
 
     expect(result.serviceItems[0]).toMatchObject({ accumulatedWork: 45, lastProgressAt: 40 });
     expect(result.staff[0].task).toMatchObject({ accumulatedWork: 45, lastProgressAt: 40 });
@@ -156,20 +204,21 @@ describe('processKitchen', () => {
       preparationStartedAt: null,
     };
 
-    const result = processKitchen({
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 999 },
       serviceItems: [item],
-      dishes: [{ id: 'd1', prepTime: 60, requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast' }],
       kitchenStations: [{ id: 'k1', equipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', speedMultiplier: 1, owned: true }],
     });
+    const result = processKitchen(state);
 
-    expect(result.serviceItems).toEqual([item]);
+    expect(result.serviceItems).toEqual(state.serviceItems);
   });
 
   it('finishes preparation at the kitchen station without teleporting the dish', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 91 },
       serviceItems: [{
@@ -177,9 +226,9 @@ describe('processKitchen', () => {
         state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1', preparationStartedAt: 0,
         serviceTableId: null, serviceSlotIndex: null,
       }],
-      dishes: [{ id: 'd1', prepTime: 120, requiredEquipmentId: 'eq1' }],
-       kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
-      equipment: [{ id: 'eq1', speedMultiplier: 1.2, qualityBonus: 0, owned: true }],
+      dishes: [{ id: 'd1', cookbookId: 'baked-eggs' }],
+       kitchenStations: [{ id: 'k1', equipmentId: 'eq2', x: 100, y: 120 }],
+      equipment: [{ id: 'eq2', speedMultiplier: 1.2, qualityBonus: 0, owned: true }],
       upgrades: [{ level: 1, effects: { type: 'globalSpeed', value: 0.1 } }],
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       staff: [{
@@ -187,7 +236,7 @@ describe('processKitchen', () => {
         x: 90, y: 130,
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
       }],
-    };
+    });
 
     const result = processKitchen(state);
 
@@ -210,33 +259,41 @@ describe('processKitchen', () => {
         preparationStartedAt: 0,
       },
       {
-        id: 'missing-cook', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
+        id: 'missing-cook', kind: 'dish', menuItemId: 'toast', customerId: 'c2',
         state: 'preparing', stationId: 'toast-station', assignedStaffId: 'missing',
         preparationStartedAt: 0,
       },
     ];
-    const result = processKitchen({
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 100 },
+      customers: [
+        { id: 'c1', state: 'waiting_for_items' },
+        { id: 'c2', state: 'waiting_for_items' },
+      ],
       serviceItems: items,
-      dishes: [{ id: 'toast', prepTime: 60, requiredEquipmentId: 'toaster' }],
+      dishes: [{ id: 'toast', cookbookId: 'toast' }],
       kitchenStations: [
         { id: 'oven-station', equipmentId: 'oven' },
-        { id: 'toast-station', equipmentId: 'toaster' },
+        { id: 'toast-station', equipmentId: 'eq1' },
       ],
-      equipment: [{ id: 'toaster', speedMultiplier: 1, owned: true }],
+      equipment: [{ id: 'eq1', speedMultiplier: 1, owned: true }],
       staff: [{ id: 'cook1', role: 'cook' }],
     });
 
-    expect(result.serviceItems).toEqual(items);
+    expect(() => validateDishOrderSnapshots(state)).not.toThrow();
+    const result = processKitchen(state);
+
+    expect(result.serviceItems).toEqual(state.serviceItems);
   });
 
   it('pauses remote dish work without catch-up and advances both ledgers to now', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 100 },
-      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
-      dishes: [{ id: 'toast', prepTime: 120 }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq2', x: 100, y: 100 }],
+      equipment: [{ id: 'eq2', owned: true, speedMultiplier: 1 }],
+      dishes: [{ id: 'toast', cookbookId: 'baked-eggs' }],
       serviceItems: [{
         id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
         state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
@@ -247,7 +304,7 @@ describe('processKitchen', () => {
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
           accumulatedWork: 12, lastProgressAt: 20 },
       }],
-    };
+    });
 
     const paused = processKitchen(state);
 
@@ -264,11 +321,12 @@ describe('processKitchen', () => {
   });
 
   it('does not complete saved work while the cook is remote', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 100 },
-      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
-      dishes: [{ id: 'toast', prepTime: 60 }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 100 }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }],
+      dishes: [{ id: 'toast', cookbookId: 'toast' }],
       serviceItems: [{
         id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
         state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
@@ -279,7 +337,7 @@ describe('processKitchen', () => {
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
           accumulatedWork: 60, lastProgressAt: 20 },
       }],
-    };
+    });
 
     const paused = processKitchen(state);
 
@@ -290,11 +348,12 @@ describe('processKitchen', () => {
   });
 
   it('does not move paused progress timestamps backwards on an older replay time', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 50 },
-      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
-      dishes: [{ id: 'toast', prepTime: 120 }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq2', x: 100, y: 100 }],
+      equipment: [{ id: 'eq2', owned: true, speedMultiplier: 1 }],
+      dishes: [{ id: 'toast', cookbookId: 'baked-eggs' }],
       serviceItems: [{
         id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1',
         state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
@@ -305,7 +364,7 @@ describe('processKitchen', () => {
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1',
           accumulatedWork: 12, lastProgressAt: 100 },
       }],
-    };
+    });
 
     const replayed = processKitchen(state);
 
@@ -314,12 +373,13 @@ describe('processKitchen', () => {
   });
 
   it('pauses every member of an attended-gated cooking batch while its cook is away', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 100 },
       customers: [{ id: 'c1', state: 'waiting_for_items' }, { id: 'c2', state: 'waiting_for_items' }],
-      kitchenStations: [{ id: 'k1', x: 100, y: 100 }],
-      dishes: [{ id: 'toast', prepTime: 120 }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq2', x: 100, y: 100 }],
+      equipment: [{ id: 'eq2', owned: true, speedMultiplier: 1 }],
+      dishes: [{ id: 'toast', cookbookId: 'baked-eggs' }],
       serviceItems: [
         {
           id: 'i1', kind: 'dish', menuItemId: 'toast', customerId: 'c1', batchId: 'b1',
@@ -344,7 +404,7 @@ describe('processKitchen', () => {
           accumulatedWork: 12, lastProgressAt: 20,
         },
       }],
-    };
+    });
 
     const result = processKitchen(state);
 
@@ -361,19 +421,20 @@ describe('processKitchen', () => {
       state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
       preparationStartedAt: 0, accumulatedWork: 12, lastProgressAt: 20,
     };
-    const result = processKitchen({
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 100 },
       serviceItems: [item],
-      dishes: [{ id: 'toast', prepTime: 120, requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'toast', cookbookId: 'baked-eggs' }],
       kitchenStations: [{ id: 'k1', x: 100, y: 100, equipmentId: 'other' }],
       staff: [{
         id: 'cook1', role: 'cook', x: 90, y: 110,
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
       }],
     });
+    const result = processKitchen(state);
 
-    expect(result.serviceItems).toEqual([item]);
+    expect(result.serviceItems).toEqual(state.serviceItems);
     expect(result.staff[0].task).toBeNull();
   });
 
@@ -383,7 +444,7 @@ describe('processKitchen', () => {
       foodOrderedAt: 0, foodPatienceBudget: 100, foodDeadlineAt: 100,
       foodOutcome: 'pending', cancelledServiceItemIds: [],
     };
-    const result = processKitchen({
+    const result = processKitchen(withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 100 },
       customers: [customer],
@@ -392,11 +453,12 @@ describe('processKitchen', () => {
         state: 'preparing', stationId: 'k1', assignedStaffId: 'cook1',
         preparationStartedAt: 0,
       }],
-      dishes: [{ id: 'toast', prepTime: 60 }],
-      kitchenStations: [{ id: 'k1' }],
+      dishes: [{ id: 'toast', cookbookId: 'toast' }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }],
       staff: [{ id: 'cook1', role: 'cook', morale: 100,
         task: { type: 'prepare_dish', serviceItemId: 'dish', stationId: 'k1' } }],
-    });
+    }));
 
     expect(result.customers[0].foodOutcome).toBe('cancelled');
     expect(result.serviceItems).toEqual([]);
@@ -404,7 +466,7 @@ describe('processKitchen', () => {
   });
 
   it('marks food delivered rather than cancelling when the dish was already delivered', () => {
-    const result = processKitchen({
+    const result = processKitchen(withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 100 },
       customers: [{
@@ -415,7 +477,7 @@ describe('processKitchen', () => {
       serviceItems: [{
         id: 'dish', kind: 'dish', menuItemId: 'toast', customerId: 'c1', state: 'delivered',
       }],
-    });
+    }));
 
     expect(result.customers[0].foodOutcome).toBe('delivered');
     expect(result.serviceItems[0].state).toBe('delivered');
@@ -517,19 +579,20 @@ describe('processKitchen', () => {
   });
 
   it('clears an invalid cook preparation task without stamping route state', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { gameTime: 50 },
       serviceItems: [{
         id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'delivered',
       }],
-      dishes: [{ id: 'd1', prepTime: 60 }],
-      kitchenStations: [{ id: 'k1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast' }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1' }],
+      equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }],
       staff: [{
         id: 'cook1', role: 'cook',
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
       }],
-    };
+    });
 
     const result = processKitchen(state);
 

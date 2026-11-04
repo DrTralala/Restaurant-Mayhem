@@ -16,6 +16,7 @@ import { validateCookbookState, validateDishOrderSnapshots } from '../simulation
 import { validateServiceContractsState } from '../simulation/serviceContracts';
 import { getOrderSnapshotSubtotal } from '../simulation/menuEconomy';
 import { STAFF_CLEANING_FOCUS_VALUES } from '../simulation/cleaningFocus';
+import { getDrink } from '../data/drinks';
 
 const STAFF_ROLES = new Set(['cook', 'waiter', 'janitor']);
 const STAFF_DUTIES = new Set(['work', 'rest', 'pto']);
@@ -210,6 +211,46 @@ function validateMenuSalesThresholds(restaurant) {
   });
 }
 
+function validateMenuSales(state) {
+  if (state.version !== SAVE_VERSION) return;
+  if (!has(state, 'menuSales')) fail('menuSales', `is required in version ${SAVE_VERSION} saves`);
+  const sales = state.menuSales;
+  validateObject(sales, 'menuSales');
+  if (Object.keys(sales).length !== 3 || !['day', 'dishes', 'drinks'].every(key => has(sales, key))) {
+    fail('menuSales', 'must contain exactly day, dishes and drinks');
+  }
+  validateFinite(sales.day, 'menuSales.day', { minimum: 1, integer: true });
+  if (sales.day !== state.restaurant?.day) fail('menuSales.day', 'must match the current restaurant day');
+  const dishIds = new Set((state.dishes || []).map(dish => dish?.id));
+  for (const [kind, field] of [['dish', 'dishes'], ['drink', 'drinks']]) {
+    validateArray(sales[field], `menuSales.${field}`);
+    const seen = new Set();
+    sales[field].forEach((record, index) => {
+      const path = `menuSales.${field}[${index}]`;
+      validateObject(record, path);
+      if (Object.keys(record).length !== 4
+        || !['key', 'count', 'gross', 'grossComplete'].every(key => has(record, key))) {
+        fail(path, 'must contain exactly key, count, gross and grossComplete');
+      }
+      validateId(record.key, `${path}.key`);
+      validateFinite(record.count, `${path}.count`, { minimum: 0, integer: true });
+      if (!Number.isSafeInteger(record.count)) fail(`${path}.count`, 'must be a safe integer');
+      validateFinite(record.gross, `${path}.gross`, { minimum: 0 });
+      if (typeof record.grossComplete !== 'boolean') {
+        fail(`${path}.grossComplete`, 'must be boolean');
+      }
+      const validMenuId = kind === 'dish' ? dishIds.has(record.key) : getDrink(record.key) !== null;
+      if (!validMenuId) fail(`${path}.key`, 'must name a current authored menu item');
+      if (seen.has(record.key)) fail(`menuSales.${field}`, `contains duplicate key ${record.key}`);
+      seen.add(record.key);
+      if ((record.count === 0 && record.gross > 0)
+        || (record.count > 0 && record.gross === 0 && record.grossComplete)) {
+        fail(path, 'contains contradictory gross metadata');
+      }
+    });
+  }
+}
+
 function validateRecordCollection(state, key) {
   if (!has(state, key)) return [];
   validateArray(state[key], key);
@@ -219,7 +260,7 @@ function validateRecordCollection(state, key) {
 
 function validateVersionedStringId(value, path) {
   if (typeof value !== 'string' || value.length === 0) {
-    fail(path, 'must use a non-empty string ID representation in version 10');
+    fail(path, `must use a non-empty string ID representation in version ${SAVE_VERSION}`);
   }
 }
 
@@ -237,7 +278,9 @@ function validateVersionedIdRepresentations(value, path, seen = new WeakSet()) {
     const isIdList = key.endsWith('Ids');
     if (isIdField && child != null) validateVersionedStringId(child, `${path}.${key}`);
     if (isIdList && child != null) {
-      if (!Array.isArray(child)) fail(`${path}.${key}`, 'must be an array of string IDs in version 10');
+      if (!Array.isArray(child)) {
+        fail(`${path}.${key}`, `must be an array of string IDs in version ${SAVE_VERSION}`);
+      }
       child.forEach((id, index) => validateVersionedStringId(id, `${path}.${key}[${index}]`));
     }
     validateVersionedIdRepresentations(child, `${path}.${key}`, seen);
@@ -246,11 +289,12 @@ function validateVersionedIdRepresentations(value, path, seen = new WeakSet()) {
 
 function validateVersionedShape(state) {
   if (state.version !== SAVE_VERSION) return;
-  if (!has(state, 'restaurant')) fail('restaurant', 'is required in version 10 saves');
+  if (!has(state, 'restaurant')) fail('restaurant', `is required in version ${SAVE_VERSION} saves`);
   for (const key of VERSIONED_COLLECTIONS) {
-    if (!has(state, key)) fail(key, 'is required in version 10 saves');
+    if (!has(state, key)) fail(key, `is required in version ${SAVE_VERSION} saves`);
     validateArray(state[key], key);
   }
+  if (!has(state, 'menuSales')) fail('menuSales', `is required in version ${SAVE_VERSION} saves`);
 
   const idCollections = [
     'tables', 'chairs', 'doors', 'cashierStations', 'kitchenStations', 'washStations',
@@ -279,7 +323,9 @@ function validateVersionedShape(state) {
     const path = `staff[${index}]`;
     validateVersionedStringId(worker.role, `${path}.role`);
     for (const key of VERSIONED_STAFF_FIELDS) {
-      if (!has(worker, key)) fail(`${path}.${key}`, 'is required in version 10 saves');
+      if (!has(worker, key)) {
+        fail(`${path}.${key}`, `is required in version ${SAVE_VERSION} saves`);
+      }
     }
   });
   const { careerRun, ...strictState } = state;
@@ -359,6 +405,14 @@ function validateRestaurant(state) {
   const restaurant = state.restaurant;
   validateOptionalFinite(restaurant, 'gameTime', 'restaurant', { minimum: 0 });
   validateOptionalFinite(restaurant, 'day', 'restaurant', { minimum: 1, integer: true });
+  for (const key of ['openHour', 'closeHour']) {
+    if (!has(restaurant, key)) continue;
+    const value = restaurant[key];
+    if (!Number.isFinite(value)
+      || !(value === 24 || (value >= 0 && value < 24 && Number.isInteger(value * 2)))) {
+      fail(`restaurant.${key}`, 'must be a finite half-hour value from 0 through 24');
+    }
+  }
   validateOptionalFinite(restaurant, 'totalServed', 'restaurant', { minimum: 0, integer: true });
   validateOptionalFinite(restaurant, 'funds', 'restaurant');
   validateOptionalFinite(restaurant, 'dailyRevenue', 'restaurant');
@@ -572,6 +626,107 @@ function validateCustomer(customer, index) {
   if (Number.isFinite(customer.foodCancelledAt) && Number.isFinite(customer.foodOrderedAt)
     && customer.foodCancelledAt < customer.foodOrderedAt) {
     fail(path, 'foodCancelledAt must not precede foodOrderedAt');
+  }
+}
+
+function validateNoOrderOutcomes(state, serviceItems) {
+  const refusals = new Set(['unaffordable', 'poor_value']);
+  for (const customer of state.customers || []) {
+    if (!refusals.has(customer.menuOutcome)) continue;
+    const path = `customers.${String(customer.id)}`;
+    if (customer.menuOutcome === 'poor_value' && customer.serviceContractId != null) {
+      fail(`${path}.menuOutcome`, 'service contracts cannot refuse a menu item as poor value');
+    }
+    for (const key of [
+      'dishId', 'drinkId', 'dishPriceAtOrder', 'drinkPriceAtOrder', 'orderSubtotal',
+    ]) {
+      if (has(customer, key) && customer[key] != null) {
+        fail(`${path}.${key}`, 'must be null for a menu refusal with no order');
+      }
+    }
+    if (has(customer, 'orderedServiceItemIds') && customer.orderedServiceItemIds.length !== 0) {
+      fail(`${path}.orderedServiceItemIds`, 'must be empty for a menu refusal with no order');
+    }
+    if (has(customer, 'consumedServiceItemIds') && customer.consumedServiceItemIds.length !== 0) {
+      fail(`${path}.consumedServiceItemIds`, 'must be empty for a menu refusal with no order');
+    }
+    if (has(customer, 'tipAmount') && customer.tipAmount != null && customer.tipAmount !== 0) {
+      fail(`${path}.tipAmount`, 'must be zero for a menu refusal with no order');
+    }
+    if (customer.paidVisitSequence != null) {
+      fail(`${path}.paidVisitSequence`, 'is not allowed for a menu refusal with no order');
+    }
+    if (['checkout_queued', 'checkout_moving', 'checkout_processing', 'paying'].includes(customer.state)) {
+      fail(`${path}.state`, 'cannot enter checkout after a menu refusal with no order');
+    }
+    if (has(customer, 'dishOrderSnapshot')) {
+      fail(`${path}.dishOrderSnapshot`, 'is not allowed for a menu refusal with no order');
+    }
+    if (serviceItems.some(item => sameId(item.customerId, customer.id))) {
+      fail(`${path}`, 'cannot own ordered service items after a menu refusal');
+    }
+  }
+}
+
+function validatePartyReviewRecords(state) {
+  if (has(state, 'pendingPartyReviews')) {
+    validateArray(state.pendingPartyReviews, 'pendingPartyReviews');
+    const partyIds = new Set();
+    state.pendingPartyReviews.forEach((record, index) => {
+      const path = `pendingPartyReviews[${index}]`;
+      validateObject(record, path);
+      validateId(record.partyId, `${path}.partyId`);
+      const partyKey = idKey(record.partyId);
+      if (partyIds.has(partyKey)) fail(path, `duplicates party ID ${partyKey}`);
+      partyIds.add(partyKey);
+      for (const key of ['memberIds', 'orderedMemberIds', 'unaffordableMemberIds', 'poorValueMemberIds']) {
+        validateUniqueIds(record[key], `${path}.${key}`);
+      }
+      validateArray(record.paidReviews, `${path}.paidReviews`);
+      if (record.memberIds.length === 0) fail(`${path}.memberIds`, 'must not be empty');
+      const members = new Set(record.memberIds.map(idKey));
+      const outcomes = new Set();
+      for (const key of ['orderedMemberIds', 'unaffordableMemberIds', 'poorValueMemberIds']) {
+        for (const memberId of record[key]) {
+          const memberKey = idKey(memberId);
+          if (!members.has(memberKey)) fail(`${path}.${key}`, `references non-member ${memberKey}`);
+          if (outcomes.has(memberKey)) fail(`${path}.${key}`, `overlaps another outcome for ${memberKey}`);
+          outcomes.add(memberKey);
+        }
+      }
+      if (outcomes.size === 0) fail(path, 'must contain at least one recorded member outcome');
+      const ordered = new Set(record.orderedMemberIds.map(idKey));
+      const paid = new Set();
+      record.paidReviews.forEach((payment, paymentIndex) => {
+        const paymentPath = `${path}.paidReviews[${paymentIndex}]`;
+        validateObject(payment, paymentPath);
+        validateId(payment.customerId, `${paymentPath}.customerId`);
+        validateFinite(payment.score, `${paymentPath}.score`, { minimum: 0, maximum: 100 });
+        const memberKey = idKey(payment.customerId);
+        if (!ordered.has(memberKey)) fail(paymentPath, 'must reference an ordered member');
+        if (paid.has(memberKey)) fail(paymentPath, `duplicates paid review for ${memberKey}`);
+        paid.add(memberKey);
+      });
+    });
+  }
+
+  if (has(state, 'partyReviewHistory')) {
+    validateArray(state.partyReviewHistory, 'partyReviewHistory');
+    state.partyReviewHistory.forEach((record, index) => {
+      const path = `partyReviewHistory[${index}]`;
+      validateObject(record, path);
+      validateId(record.partyId, `${path}.partyId`);
+      validateFinite(record.day, `${path}.day`, { minimum: 1, integer: true });
+      validateFinite(record.score, `${path}.score`);
+      validateFinite(record.reputationDelta, `${path}.reputationDelta`);
+      validateFinite(record.memberCount, `${path}.memberCount`, { minimum: 1, integer: true });
+      validateFinite(record.paidCount, `${path}.paidCount`, { minimum: 0, integer: true });
+      validateFinite(record.unaffordableCount, `${path}.unaffordableCount`, { minimum: 0, integer: true });
+      validateFinite(record.poorValueCount, `${path}.poorValueCount`, { minimum: 0, integer: true });
+      if (record.paidCount + record.unaffordableCount + record.poorValueCount !== record.memberCount) {
+        fail(path, 'paid, unaffordable and poor-value counts must cover every member exactly once');
+      }
+    });
   }
 }
 
@@ -1032,9 +1187,8 @@ function validateTaskForeignKeys(state, worker, task, fixtures, serviceItemHisto
 }
 
 function validateForeignKeys(state, serviceItems, fixtures) {
-  // Versionless objects are intentionally partial hydration fixtures.  The
-  // persisted version-ten boundary is the point at which all FK collections
-  // are known to be present and can be checked without defeating legacy fill-in.
+  // Versionless objects are partial domain fixtures; persisted current saves
+  // have complete FK collections and are checked without legacy fill-in.
   if (state.version !== SAVE_VERSION) return;
 
   const staff = Array.isArray(state.staff) ? state.staff : [];
@@ -1371,9 +1525,8 @@ function validateActorIdentityUniqueness(state, queueActors, departureActors) {
 
 /**
  * Validate the persisted domain before any normaliser is allowed to repair it.
- * The validator intentionally treats omitted optional fields as absent so that
- * the existing direct hydration fixtures can still exercise default filling;
- * fields emitted by the version-ten runtime are validated strictly.
+ * The validator treats omitted optional fields as absent; fields emitted by
+ * the current runtime are validated strictly.
  */
 export function validateSavedState(state) {
   validateObject(state, 'save');
@@ -1394,6 +1547,8 @@ export function validateSavedState(state) {
     fail('progression', error.message);
   }
   validateVersionedShape(state);
+  validateMenuSales(state);
+  validatePartyReviewRecords(state);
   if (state.version === SAVE_VERSION) validateSavedNavigationGeometry(state);
   validateRestaurant(state);
   const fixtures = validateFixtureCollections(state);
@@ -1411,6 +1566,7 @@ export function validateSavedState(state) {
   validateActorIdentityUniqueness({ ...state, staff, customers }, queueActors, departureActors);
   validateCleaningTargets(state, staff);
   const itemIds = validateServiceItems(state, serviceItems, fixtures);
+  validateNoOrderOutcomes(state, serviceItems);
   validateCookingBatches(state, serviceItems);
   validateForeignKeys(state, serviceItems, fixtures);
   validateAmenities(state, staff);

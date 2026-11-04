@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCareerInitialState, createInitialState } from './initialState';
-import { hydrateState, loadState, saveState } from './persistence';
+import { hydrateState, loadState, loadStateResult, saveState } from './persistence';
+import { SAVE_VERSION } from './saveVersion';
 import { validateSavedState } from './saveValidation';
 import { createCustomerOrder, normaliseServiceItemOwnership } from '../simulation/serviceItems';
 import { expireFoodPatience } from '../simulation/foodPatience';
@@ -99,46 +100,33 @@ describe('I1 cancelled dish-only checkout', () => {
   });
 });
 
-describe('I2 complete legacy migration or conservative absence', () => {
+describe('I2 v11 persistence rejects legacy order compatibility', () => {
   it.each([
-    ['complete edited price', () => {}, true, 9, 3],
-    ['partial tuple', customer => { delete customer.drinkPriceAtOrder; delete customer.orderSubtotal; }, false, 12, 3],
-    ['absent menu outcome', customer => { delete customer.menuOutcome; }, false, 12, 3.025],
-    ['inconsistent legacy tuple', customer => { customer.orderSubtotal = 99; }, false, 12, 3],
-  ])('preserves billing and actual checkout/review semantics for %s', (_name, alter, hasSnapshot, subtotal, reputation) => {
+    ['complete edited price', () => {}],
+    ['partial tuple', customer => { delete customer.drinkPriceAtOrder; delete customer.orderSubtotal; }],
+    ['absent menu outcome', customer => { delete customer.menuOutcome; }],
+    ['inconsistent legacy tuple', customer => { customer.orderSubtotal = 99; }],
+  ])('rejects previous-version order data with %s without rewriting it', (_name, alter) => {
     const raw = legacyOrder();
     alter(raw.customers[0]);
-    expect(() => validateSavedState(raw)).not.toThrow();
-    expect(getCheckoutBill(raw, raw.customers[0]).subtotal).toBe(subtotal);
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
-    const rawPaid = completeCheckout(raw);
-    const hydrated = hydrateState(raw, createInitialState());
-    expect(Boolean(hydrated.customers[0].dishOrderSnapshot)).toBe(hasSnapshot);
-    if (hasSnapshot) expect(hydrated.customers[0].dishOrderSnapshot).toMatchObject({ price: 9, cookbookId: null, masteryPerk: null });
-    else expect(hydrated.serviceItems[0]).not.toHaveProperty('dishOrderSnapshot');
-    expect(getCheckoutBill(hydrated, hydrated.customers[0]).subtotal).toBe(subtotal);
-    const again = hydrateState(hydrated, createInitialState());
-    expect(again.customers[0].dishOrderSnapshot).toEqual(hydrated.customers[0].dishOrderSnapshot);
-    const paid = completeCheckout(again);
-    expect(paid.completedCustomers[0]).toMatchObject(subtotal === 9
-      ? { revenue: 10.8, tip: 1.8, reviewScore: 100 } : { revenue: 14.4, tip: 2.4, reviewScore: 100 });
-    expect(paid.completedCustomers[0]).toEqual(rawPaid.completedCustomers[0]);
-    expect(paid.restaurant.reputation).toBeCloseTo(reputation, 4);
-    expect(paid.restaurant.reputation).toBe(rawPaid.restaurant.reputation);
-    expect(paid.restaurant.totalServed).toBe(rawPaid.restaurant.totalServed);
-    expect(paid.cookbook.entries.toast.paidPortions).toBe(0);
+    raw.version = SAVE_VERSION - 1;
+    const serialized = JSON.stringify(raw);
+    localStorage.setItem('restaurant-sim-save', serialized);
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'incompatible' });
+    expect(loadState()).toBeNull();
+    expect(() => hydrateState(raw, createInitialState())).toThrow(/incompatible/i);
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
   });
 
-  it('retains recoverable historical cancellation price but bills only the surviving zero tuple', () => {
-    let raw = legacyOrder();
-    raw.serviceItems[0] = { ...raw.serviceItems[0], state: 'ready', stationId: 'k1', x: 120, y: 140 };
-    raw = cashierReady(expireFoodPatience({ ...raw, restaurant: { ...raw.restaurant, gameTime: 36290 } }, 36290));
-    const hydrated = hydrateState(raw, createInitialState());
-    expect(hydrated.customers[0].dishOrderSnapshot).toMatchObject({ cookbookId: null, price: 9 });
-    expect(getCheckoutBill(hydrated, hydrated.customers[0]).subtotal).toBe(0);
-    const paid = completeCheckout(hydrated);
-    expect(paid.completedCustomers[0]).toMatchObject({ revenue: 0, tip: 0 });
-    expect(paid.cookbook.entries.toast.paidPortions).toBe(0);
+  it('rejects an absent cookbook in a current-version save instead of adopting starter defaults', () => {
+    const raw = legacyOrder();
+    raw.version = SAVE_VERSION;
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
+    expect(() => hydrateState(raw, createInitialState())).toThrow(/Invalid cookbook: missing cookbook/);
   });
 
   it.each(['menuOutcome', 'orderSubtotal', 'drinkPriceAtOrder'])('rejects a present new snapshot missing %s before normalisation can hide it', key => {

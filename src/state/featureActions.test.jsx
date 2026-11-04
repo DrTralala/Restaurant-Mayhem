@@ -1,9 +1,11 @@
 import { act, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCareerInitialState, createInitialState } from './initialState';
+import { SAVE_VERSION } from './saveVersion';
 import { GameProvider, gameReducer, useDispatch, useGameGeneration, useGameState } from './GameContext';
 import { evaluateCareerRun, normaliseCareerRun } from '../simulation/careerRun';
-import { createDishOrderSnapshot, getResolvedDish, validateCookbookState } from '../simulation/cookbook';
+import { createDishOrderSnapshot, getCookbookEntryStatus, getResolvedDish,
+  reconcileCookbookDiscoveries, validateCookbookState } from '../simulation/cookbook';
 import { buildAffordableBaskets } from '../simulation/menuEconomy';
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
@@ -15,11 +17,11 @@ function terminal() {
 }
 
 describe('shared feature defaults and actions', () => {
-  it('initialises v10 sandbox branches and tagged starter atomically', () => {
+  it('initialises v11 sandbox branches and tagged starter atomically', () => {
     const state = createInitialState();
-    expect(state).toMatchObject({ version: 10, paidVisitSequence: 0, careerRun: null,
-      cookbook: { schemaVersion: 2, lastAppliedPaidVisitSequence: 0,
-        entries: { toast: { discovered: true, paidPortions: 0, perk: null } } },
+    expect(state).toMatchObject({ version: SAVE_VERSION, paidVisitSequence: 0, careerRun: null,
+      cookbook: { schemaVersion: 3, lastAppliedPaidVisitSequence: 0,
+        entries: { toast: { discovered: true, owned: true, paidPortions: 0, perk: null } } },
       serviceContracts: { version: 1, active: null, results: [] },
     });
     expect(state.dishes[0]).toMatchObject({ id: 'starter-toast', cookbookId: 'toast', prepTime: 60, popularity: 50 });
@@ -70,7 +72,7 @@ describe('shared feature defaults and actions', () => {
   });
   it.each(['TICK', 'TOGGLE_PAUSE', 'SET_SPEED', 'ADD_DISH', 'UPDATE_DISH',
     'REMOVE_DISH', 'CHOOSE_DISH_MASTERY', 'ADD_COOKBOOK_DISH', 'ACCEPT_SERVICE_CONTRACT',
-    'WITHDRAW_SERVICE_CONTRACT', 'HIRE_STAFF', 'FIRE_STAFF', 'MOVE_STAFF', 'PLACE_ITEM',
+    'BUY_COOKBOOK_RECIPE', 'WITHDRAW_SERVICE_CONTRACT', 'HIRE_STAFF', 'FIRE_STAFF', 'MOVE_STAFF', 'PLACE_ITEM',
     'SELL_ITEMS', 'SET_OPERATING_HOURS', 'UNLOCK_DRINK', 'RENAME_STAFF'])('pending decision blocks %s', type => {
     const state = terminal();
     expect(gameReducer(state, { type, nextState: createInitialState(), speed: 4,
@@ -101,6 +103,48 @@ describe('shared feature defaults and actions', () => {
     state = gameReducer(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' });
     expect(state.dishes[0]).toMatchObject({ price: 15, quality: 2, cookbookId: 'toast' });
   });
+  it('buys a discovered recipe once before separately adding it for free at the exact funds boundary', () => {
+    let state = createInitialState();
+    state.cookbook.entries.toast.paidPortions = 3;
+    state.cookbook = reconcileCookbookDiscoveries(state);
+    state.restaurant.funds = 75;
+
+    expect(getCookbookEntryStatus(state, 'cheese-toast')).toMatchObject({
+      discovered: true, owned: false, purchaseCost: 75, canAfford: true, canBuy: true, canAdd: false,
+    });
+    const bought = gameReducer(state, { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'cheese-toast' });
+    expect(bought.restaurant.funds).toBe(0);
+    expect(bought.cookbook.entries['cheese-toast'].owned).toBe(true);
+    expect(bought.dishes).toHaveLength(1);
+    expect(gameReducer(bought, { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'cheese-toast' })).toBe(bought);
+
+    const added = gameReducer(bought, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'cheese-toast' });
+    expect(added.restaurant.funds).toBe(0);
+    expect(added.dishes).toHaveLength(2);
+    expect(gameReducer(added, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'cheese-toast' })).toBe(added);
+
+    const withoutEquipment = { ...bought, equipment: bought.equipment.map(item =>
+      item.id === 'eq1' ? { ...item, owned: false } : item) };
+    expect(getCookbookEntryStatus(withoutEquipment, 'cheese-toast')).toMatchObject({
+      owned: true, equipmentOwned: false, canAdd: false,
+    });
+    expect(gameReducer(withoutEquipment, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'cheese-toast' }))
+      .toBe(withoutEquipment);
+  });
+  it('updates only the active dish name and retains it when that recipe is removed and re-added', () => {
+    const initial = createInitialState();
+    const renamed = gameReducer(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { name: '  House Toast  ' },
+    });
+    expect(renamed.dishes[0]).toMatchObject({ id: 'starter-toast', name: 'House Toast',
+      cookbookId: 'toast', base: 'Bread', method: 'Toasted', requiredEquipmentId: 'eq1' });
+    expect(renamed.cookbook.entries.toast.menuSettings.name).toBe('House Toast');
+
+    const removed = gameReducer(renamed, { type: 'REMOVE_DISH', id: 'starter-toast' });
+    const readded = gameReducer(removed, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' });
+    expect(readded.dishes[0]).toMatchObject({ name: 'House Toast', cookbookId: 'toast',
+      base: 'Bread', method: 'Toasted', requiredEquipmentId: 'eq1' });
+  });
   it('clears a removed cookbook dish suspension so same-ID re-addition returns to walk-in baskets', () => {
     let state = gameReducer(createInitialState(), { type: 'REMOVE_DISH', id: 'starter-toast' });
     state = gameReducer(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' });
@@ -127,27 +171,25 @@ describe('shared feature defaults and actions', () => {
     expect(buildAffordableBaskets(state, { spendingBudget: 100 })
       .some(basket => basket.kind === 'dish' && basket.dish.id === dishId)).toBe(true);
   });
-  it('keeps custom recipes free, unlimited and q1 while stripping authored metadata', () => {
-    let state = createInitialState();
-    for (let index = 0; index < 8; index += 1) state = gameReducer(state, { type: 'ADD_DISH', dish: {
-      ...state.dishes[0], id: `custom-${index}`, cookbookId: 'toast', masteryPerk: 'speed', quality: 10,
+  it('rejects free custom creation and ignores forged authored identity changes', () => {
+    const state = createInitialState();
+    const custom = { ...state.dishes[0], id: 'custom-0', cookbookId: null, masteryPerk: 'speed', quality: 10 };
+    expect(gameReducer(state, { type: 'ADD_DISH', dish: custom })).toBe(state);
+
+    const forged = gameReducer(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: {
+      id: 'fake-id', cookbookId: 'fries', masteryPerk: 'appeal', base: 'Gold', method: 'Fried',
+      requiredEquipmentId: 'eq3', quality: 10, name: 'Forged Toast', price: 15,
     } });
-    expect(state.dishes).toHaveLength(9);
-    expect(state.dishes[8]).not.toHaveProperty('cookbookId');
-    expect(state.dishes[8]).not.toHaveProperty('masteryPerk');
-    expect(state.dishes[8].quality).toBe(1);
-    expect(state.restaurant.funds).toBe(600);
-    state = gameReducer(state, { type: 'UPDATE_DISH', id: 'custom-7', changes: {
-      id: 'starter-toast', cookbookId: 'toast', masteryPerk: 'appeal', price: 17, quality: 10,
-    } });
-    expect(state.dishes[8]).toMatchObject({ id: 'custom-7', price: 17, quality: 1 });
-    expect(state.dishes[8]).not.toHaveProperty('cookbookId');
+    expect(forged.dishes[0]).toMatchObject({ id: 'starter-toast', cookbookId: 'toast',
+      base: 'Bread', method: 'Toasted', requiredEquipmentId: 'eq1', quality: 1,
+      name: 'Forged Toast', price: 15 });
+    expect(forged.dishes[0]).not.toHaveProperty('masteryPerk', 'appeal');
   });
   it('rejects menu ID collisions with live dishes and retained snapshots', () => {
     const state = createInitialState();
     const add = id => ({ type: 'ADD_DISH', dish: { ...state.dishes[0], id } });
     expect(gameReducer(state, add('starter-toast'))).toBe(state);
-    const snapshot = createDishOrderSnapshot({ ...state.dishes[0], id: 'old-menu', cookbookId: null, masteryPerk: null },
+    const snapshot = createDishOrderSnapshot({ ...state.dishes[0], id: 'old-menu', cookbookId: 'toast', masteryPerk: null },
       { serviceItemId: 'old-item', orderedAt: 36000 });
     for (const key of ['customers', 'serviceItems']) {
       const reserved = { ...state, [key]: [{ dishOrderSnapshot: snapshot }] };

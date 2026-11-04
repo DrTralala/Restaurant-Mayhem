@@ -7,6 +7,8 @@ import {
   prepareStaffForMovement,
   resolveStaffAfterMovement,
 } from '../staff';
+import { createDishOrderSnapshot, getResolvedDish } from '../cookbook';
+import { withOwnedAuthoredDishes } from '../menuTestFixtures';
 
 const state = {
   restaurant: { gameTime: 400, expansionLevel: 1 },
@@ -75,11 +77,11 @@ function blockedServiceTaskState(type) {
         id: 'customer', state: 'waiting_for_items', tableId: 'table', dishId: 'dish',
         drinkId: null, happiness: 80,
       };
-  return {
+  const authored = withOwnedAuthoredDishes({
     ...state,
     restaurant: { ...state.restaurant, gameTime: 100, day: 1, reputation: 3, totalServed: 0 },
     tables: [{ id: 'table', status: 'occupied', seats: 2, x: 240, y: 220 }],
-    dishes: [{ id: 'dish', price: 10, quality: 1, popularity: 50, prepTime: 60 }],
+    dishes: [{ id: 'dish', cookbookId: 'toast', price: 10, quality: 1 }],
     staff: [worker, blocker],
     customers: [customer],
     serviceItems: type === 'deliver_service_item'
@@ -91,6 +93,27 @@ function blockedServiceTaskState(type) {
     completedCustomers: [],
     upgrades: [],
     movementCoordinator: coordinator,
+  });
+  if (type !== 'deliver_service_item') return authored;
+
+  const snapshot = createDishOrderSnapshot(getResolvedDish(authored, 'dish'), {
+    serviceItemId: 'item', orderedAt: authored.restaurant.gameTime,
+  });
+  return {
+    ...authored,
+    customers: authored.customers.map(candidate => candidate.id === 'customer'
+      ? {
+        ...candidate, menuOutcome: 'ordered', foodOutcome: 'pending',
+        foodOrderedAt: authored.restaurant.gameTime, foodPatienceBudget: 10_000,
+        foodDeadlineAt: authored.restaurant.gameTime + 10_000,
+        dishPriceAtOrder: snapshot.price, drinkPriceAtOrder: null,
+        orderSubtotal: snapshot.price, orderedServiceItemIds: ['item'],
+        dishOrderSnapshot: snapshot,
+      }
+      : candidate),
+    serviceItems: authored.serviceItems.map(item => item.id === 'item'
+      ? { ...item, dishOrderSnapshot: snapshot }
+      : item),
   };
 }
 
@@ -402,13 +425,13 @@ describe('idle yielding', () => {
     const current = heldState();
     const yielded = prepareIdleYield(current, current.staff[0]);
     const worker = { ...yielded, role: 'waiter' };
-    const dispatchState = {
+    const dispatchState = withOwnedAuthoredDishes({
       ...replaceWorker(current, worker),
       customers: [{ id: 'new-customer', state: 'seated', tableId: 'table',
         x: 210, y: 230, dishId: null, drinkId: null }],
       tables: [{ id: 'table', status: 'occupied', x: 200, y: 220 }],
-      dishes: [{ id: 'dish', price: 10, popularity: 50 }],
-    };
+      dishes: [{ id: 'dish', cookbookId: 'toast', price: 10, quality: 1 }],
+    });
 
     const result = resolveStaffAfterMovement(dispatchState, 0);
 

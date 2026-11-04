@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHighTopCounterRecords } from '../data/highTopCounters';
 import { createEmptyCounterTestState } from '../state/highTopCounter.testSupport';
-import { updateStaff } from './staff';
+import { resolveStaffAfterMovement, updateStaff } from './staff';
+import { reduceCookbookAction } from './cookbook';
 import { createGrid } from './navigation/grid';
 import { findRoute } from './navigation/router';
 import { recordSeatResidency } from './movement/seatedDeparture';
@@ -29,6 +30,8 @@ function occupiedCounter(counter, seatIndex = 0, blockBack = false) {
 }
 
 describe('counter chair-side service access', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('takes the corner counter order from the saved layout without crossing stools or diners', () => {
     const state = occupiedCounter({ id: 'htc1', x: 60, y: 100, rotation: 0 });
     const prepared = updateStaff(state, 0);
@@ -42,6 +45,55 @@ describe('counter chair-side service access', () => {
       expect(grid.segmentClear(previous, point)).toBe(true);
       previous = point;
     }
+  });
+
+  it('completes a counter-seated poor-value order without service or a bill', () => {
+    let state = occupiedCounter({ id: 'htc1', x: 60, y: 100, rotation: 0 });
+    state = reduceCookbookAction(state, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 },
+    });
+    state.unlockedDrinkIds = [];
+    state.customers = state.customers.map(customer => customer.id === 'guest-0'
+      ? { ...customer, archetype: 'regular', spendingTier: 'budget', spendingBudget: 18,
+        dishId: null, drinkId: null }
+      : customer);
+    const rolls = [0, 0, 0.9];
+    vi.spyOn(Math, 'random').mockImplementation(() => rolls.shift() ?? 0);
+
+    const assigned = updateStaff(state, 0);
+    expect(assigned.staff[0].task).toMatchObject({
+      type: 'take_order', customerId: 'guest-0', tableId: 'htc1-seat-0',
+    });
+    const goal = assigned.staff[0].navigationGoal;
+    const atCounter = {
+      ...assigned,
+      staff: assigned.staff.map(worker => worker.id === 'waiter'
+        ? { ...worker, x: goal.x, y: goal.y }
+        : worker),
+    };
+    const arrived = resolveStaffAfterMovement(atCounter, 0, new Map([
+      ['waiter', { plan: 'arrived', motion: 'holding' }],
+    ]));
+    const completed = resolveStaffAfterMovement({
+      ...arrived,
+      restaurant: { ...arrived.restaurant, gameTime: arrived.restaurant.gameTime + 60 },
+    }, 60, new Map([['waiter', { plan: 'arrived', motion: 'holding' }]]));
+    const refused = completed.customers.find(customer => customer.id === 'guest-0');
+
+    expect(refused).toMatchObject({
+      state: 'leaving', menuOutcome: 'poor_value', departureReason: 'menu_poor_value',
+      dishId: null, drinkId: null, dishPriceAtOrder: null, drinkPriceAtOrder: null,
+      orderSubtotal: null,
+    });
+    expect(refused).not.toHaveProperty('dishOrderSnapshot');
+    expect(completed.serviceItems).toEqual([]);
+    expect(completed.completedCustomers).toEqual([]);
+    expect(completed.restaurant.totalServed).toBe(0);
+    expect(completed.partyReviewHistory).toEqual([expect.objectContaining({
+      partyId: 'solo-0', score: -50, paidCount: 0, unaffordableCount: 0,
+      poorValueCount: 1, reputationDelta: -0.01,
+    })]);
+    expect(rolls).toEqual([]);
   });
 
   it.each([

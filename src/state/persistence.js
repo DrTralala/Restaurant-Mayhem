@@ -13,10 +13,9 @@ import { clearNavigationGoal, setNavigationGoal } from '../simulation/movement/n
 import { createMovementCoordinator } from '../simulation/navigation/coordinator';
 import { getCashierCustomerPosition, getCashierWorkPosition } from '../simulation/world';
 import { SAVE_VERSION } from './saveVersion';
-import { migrateLegacyCookbook } from './cookbookMigration';
 import { normaliseDoorAdmissions } from './doorAdmissions';
 import { hydrateMovementResidencies, movementSaveSnapshot, validateSavedNavigationGeometry } from './movementPersistence';
-import { getOrderSnapshotSubtotal, normaliseCustomerEconomy } from '../simulation/menuEconomy';
+import { normaliseCustomerEconomy } from '../simulation/menuEconomy';
 import { repairInvalidStaffOverlaps, repairInvalidStaffPreparationPositions } from './staffMoves';
 import { getCarriedServiceItemIds, getStaffCarryCapacity, withCarriedServiceItemIds } from '../simulation/staffInventory';
 import { normaliseServiceItemOwnership } from '../simulation/serviceItems';
@@ -28,7 +27,7 @@ import {
 import { validateSavedState } from './saveValidation';
 import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
 import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
-import { createDishOrderSnapshot, normaliseCookbookState, validateDishOrderSnapshots } from '../simulation/cookbook';
+import { normaliseCookbookState } from '../simulation/cookbook';
 import { hydrateServiceContractsState, settleServiceContracts } from '../simulation/serviceContracts';
 import { evaluateCareerRun, normaliseCareerRun } from '../simulation/careerRun';
 import { normaliseMenuSales } from '../simulation/menuSales';
@@ -48,22 +47,46 @@ export function saveState(state) {
   }
 }
 
-export function loadState() {
+function loadFailure(reason, error = null) {
+  if (error) console.warn('Failed to load state:', error);
+  return { state: null, reason };
+}
+
+export function loadStateResult() {
+  let serialized;
   try {
-    const serialized = localStorage.getItem(SAVE_KEY);
-    if (!serialized) return null;
-    let saved = JSON.parse(serialized);
-    if (saved?.version !== SAVE_VERSION) return null;
-    saved = migrateLegacyCookbook(saved);
-    saved = { ...saved, menuSales: normaliseMenuSales(saved.menuSales, saved) };
+    serialized = localStorage.getItem(SAVE_KEY);
+  } catch (error) {
+    return loadFailure('unavailable', error);
+  }
+  if (serialized == null) return loadFailure('missing');
+
+  let saved;
+  try {
+    saved = JSON.parse(serialized);
+  } catch (error) {
+    return loadFailure('invalid', error);
+  }
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)
+    || saved.version !== SAVE_VERSION) {
+    return loadFailure('incompatible');
+  }
+
+  try {
     validateSavedNavigationGeometry(saved);
     validateSavedServiceItemInventory(saved);
     validateSavedState(saved);
-    return saved;
-  } catch (e) {
-    console.warn('Failed to load state:', e);
-    return null;
+    return {
+      state: { ...saved, menuSales: normaliseMenuSales(saved.menuSales, saved) },
+      reason: null,
+    };
+  } catch (error) {
+    return loadFailure('invalid', error);
   }
+}
+
+export function loadState() {
+  return loadStateResult().state;
 }
 
 function uniqueCompletedCustomerVisits(value) {
@@ -373,48 +396,14 @@ function finishCompletedCheckout(customer, completedCustomerIds, cashierStations
   });
 }
 
-function migrateLegacyDishSnapshots(saved) {
-  let customers = saved.customers || [];
-  let serviceItems = saved.serviceItems || [];
-  for (const item of serviceItems) {
-    if (item.kind !== 'dish' || Object.hasOwn(item, 'dishOrderSnapshot')) continue;
-    const customer = customers.find(actor => actor.id === item.customerId);
-    if (!customer || Object.hasOwn(customer, 'dishOrderSnapshot')) continue;
-    // A complete recipe is not a complete committed order. Keep legacy price
-    // fallback and legacy review routing when the original ordered bill cannot
-    // be recovered; never fabricate menuOutcome or a half-new snapshot.
-    if (getOrderSnapshotSubtotal(customer) === null) continue;
-    const dish = (saved.dishes || []).find(candidate => candidate.id === item.menuItemId);
-    if (!dish || (customer.dishId !== dish.id && customer.foodOutcome !== 'cancelled')) continue;
-    const orderedAt = customer.foodOrderedAt ?? customer.orderTime;
-    // Raw saved stats only, before cookbook adoption; never resolve today's perk
-    // or fill missing recipe/order facts from the fresh restaurant.
-    let snapshot;
-    try {
-      const price = customer.foodOutcome === 'cancelled'
-        ? customer.foodCancelledPrice ?? dish.price : customer.dishPriceAtOrder;
-      snapshot = createDishOrderSnapshot({ ...dish, price, cookbookId: null, masteryPerk: null },
-        { serviceItemId: item.id, orderedAt });
-    } catch {
-      continue; // Incomplete legacy evidence remains absent, never fake authored history.
-    }
-    customers = customers.map(actor => actor.id === customer.id ? { ...actor, dishOrderSnapshot: snapshot } : actor);
-    serviceItems = serviceItems.map(candidate => candidate.id === item.id ? { ...candidate, dishOrderSnapshot: { ...snapshot } } : candidate);
-  }
-  const migrated = { ...saved,
-    ...(saved.customers ? { customers } : {}), ...(saved.serviceItems ? { serviceItems } : {}),
-  };
-  validateDishOrderSnapshots(migrated);
-  return migrated;
-}
-
 export function hydrateState(saved, fresh) {
-  // Partial domain fixtures may omit a version; imported saves are version-gated
-  // by loadState/Settings before reaching this normalisation boundary.
-  if (saved.version != null && saved.version !== SAVE_VERSION) {
+  if (!saved || saved.version !== SAVE_VERSION) {
     throw new Error('Saved game is incompatible with the current game version');
   }
-  saved = migrateLegacyCookbook(saved);
+  validateSavedState(saved);
+  validateSavedNavigationGeometry(saved);
+  validateSavedServiceItemInventory(saved);
+  saved = { ...saved, menuSales: normaliseMenuSales(saved.menuSales, saved) };
   const savedRestaurantForSales = saved.restaurant && typeof saved.restaurant === 'object'
     && !Array.isArray(saved.restaurant) ? saved.restaurant : {};
   const freshRestaurantForSales = fresh?.restaurant && typeof fresh.restaurant === 'object'
@@ -427,10 +416,6 @@ export function hydrateState(saved, fresh) {
       restaurant: { ...freshRestaurantForSales, ...savedRestaurantForSales },
     }),
   };
-  validateSavedNavigationGeometry(saved);
-  validateSavedServiceItemInventory(saved);
-  validateSavedState(saved);
-  saved = migrateLegacyDishSnapshots(saved);
   const staff = (saved.staff || fresh.staff || []).map(character => {
     const { navigationYield, ...withoutYield } = character;
     const clean = samePoint(withoutYield.navigationGoal, navigationYield?.goal)
@@ -491,9 +476,7 @@ export function hydrateState(saved, fresh) {
     washStations: Array.isArray(saved.washStations) ? saved.washStations : fresh.washStations,
   };
   hydrated.paidVisitSequence = saved.paidVisitSequence ?? 0;
-  const cookbookSource = { ...hydrated };
-  if (!Object.hasOwn(saved, 'cookbook') && Object.hasOwn(saved, 'dishes')) delete cookbookSource.cookbook;
-  Object.assign(hydrated, normaliseCookbookState(cookbookSource, {
+  Object.assign(hydrated, normaliseCookbookState(hydrated, {
     lastPaidVisitSequence: hydrated.paidVisitSequence,
   }));
   hydrated.serviceContracts = hydrateServiceContractsState(saved.serviceContracts);

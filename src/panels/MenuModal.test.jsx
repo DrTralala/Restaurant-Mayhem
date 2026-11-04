@@ -128,47 +128,39 @@ describe('MenuModal', () => {
     expect(opener).toHaveFocus();
 
     fireEvent.click(opener);
-    fireEvent.click(screen.getByRole('button', { name: '+ New dish' }));
-    const base = screen.getByRole('combobox', { name: 'Base ingredient:' });
-    const method = screen.getByRole('combobox', { name: 'Cooking method:' });
-    expect(base).toHaveFocus();
-    fireEvent.keyDown(base, { key: 'Tab' });
-    expect(method).toHaveFocus();
-    fireEvent.keyDown(method, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Toasted Bread name' }));
+    const name = screen.getByRole('textbox', { name: 'Dish name' });
+    expect(name).toHaveFocus();
+    fireEvent.change(name, { target: { value: 'Uncommitted name' } });
+    fireEvent.keyDown(name, { key: 'Escape' });
+    expect(name).toHaveValue('Toasted Bread');
+    expect(screen.getByRole('dialog', { name: 'Menu' })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Cancel' }), { key: 'Escape' });
 
     expect(screen.queryByRole('dialog', { name: 'Menu' })).not.toBeInTheDocument();
     expect(opener).toHaveFocus();
   });
 
   it('recalculates the real panel order for dynamic inputs and removal controls', () => {
-    gameState.current = {
-      ...createInitialState(),
-      dishes: [
-        { id: 'toast', name: 'Toast', price: 12, prepTime: 60, quality: 2, popularity: 45 },
-      ],
-    };
+    gameState.current = createInitialState();
     render(<MenuModal isOpen onClose={vi.fn()} />);
 
-    const newDish = screen.getByRole('button', { name: '+ New dish' });
-    newDish.focus();
-    fireEvent.keyDown(newDish, { key: 'Tab' });
-    expect(screen.getByLabelText('Toast price')).toHaveFocus();
+    const cookbook = screen.getByRole('button', { name: 'Cookbook' });
+    cookbook.focus();
+    fireEvent.keyDown(cookbook, { key: 'Tab' });
+    expect(screen.getByRole('button', { name: 'Edit Toasted Bread name' })).toHaveFocus();
 
-    const upgrade = screen.getByRole('button', { name: 'Upgrade Toast quality ($50)' });
-    fireEvent.keyDown(screen.getByLabelText('Toast price'), { key: 'Tab' });
+    const price = screen.getByLabelText('Toasted Bread price');
+    const upgrade = screen.getByRole('button', { name: 'Upgrade Toasted Bread quality ($50)' });
+    price.focus();
+    fireEvent.keyDown(price, { key: 'Tab' });
     expect(upgrade).toHaveFocus();
 
-    const remove = screen.getByRole('button', { name: 'Remove Toast from menu' });
+    const remove = screen.getByRole('button', { name: 'Remove Toasted Bread from menu' });
     fireEvent.click(remove);
-    const cancel = screen.getByRole('button', { name: 'Cancel' });
-    const confirm = screen.getByRole('button', { name: 'Confirm remove Toast' });
-    expect(cancel).toHaveFocus();
-
-    remove.focus();
-    fireEvent.keyDown(remove, { key: 'Tab' });
-    expect(cancel).toHaveFocus();
-    fireEvent.keyDown(cancel, { key: 'Tab' });
-    expect(confirm).toHaveFocus();
+    expect(dispatch).toHaveBeenCalledWith({ type: 'REMOVE_DISH', id: 'starter-toast' });
+    expect(screen.queryByRole('button', { name: /Confirm remove/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cookbook' })).toHaveFocus();
   });
 
   it('skips disabled real panel controls when containing Tab', () => {
@@ -178,7 +170,8 @@ describe('MenuModal', () => {
 
     const close = screen.getByRole('button', { name: 'Close menu' });
     const cookbook = screen.getByRole('button', { name: 'Cookbook' });
-    expect(screen.getByRole('button', { name: '+ New dish' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /New dish/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit Toasted Bread name' })).toBeDisabled();
     expect(screen.getByLabelText('Water price')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Remove Toasted Bread from menu' })).toBeDisabled();
     expect(close).toHaveFocus();
@@ -219,28 +212,18 @@ describe('MenuModal', () => {
     expect(opener).toHaveFocus();
   });
 
-  it('cancels a real removal confirmation on child Escape without closing the modal', () => {
-    const base = createInitialState();
-    gameState.current = {
-      ...base,
-      dishes: [
-        ...base.dishes,
-        { id: 'toast', name: 'Toast', price: 12, prepTime: 60, quality: 2, popularity: 45 },
-      ],
-    };
+  it('reverts a name draft on child Escape without closing the modal', () => {
+    gameState.current = createInitialState();
     const onClose = vi.fn();
     render(<MenuModal isOpen onClose={onClose} />);
 
-    const remove = screen.getByRole('button', { name: 'Remove Toast from menu' });
-    fireEvent.click(remove);
-    const cancel = screen.getByRole('button', { name: 'Cancel' });
-    expect(cancel).toHaveFocus();
-
-    const childResult = fireEvent.keyDown(cancel, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Toasted Bread name' }));
+    const name = screen.getByRole('textbox', { name: 'Dish name' });
+    fireEvent.change(name, { target: { value: 'Draft Toast' } });
+    const childResult = fireEvent.keyDown(name, { key: 'Escape' });
 
     expect(childResult).toBe(false);
-    expect(screen.queryByRole('region', { name: /permanently deletes its recipe/ })).not.toBeInTheDocument();
-    expect(remove).toHaveFocus();
+    expect(name).toHaveValue('Toasted Bread');
     expect(dispatch).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog', { name: 'Menu' })).toBeInTheDocument();

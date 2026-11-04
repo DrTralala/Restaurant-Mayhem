@@ -158,7 +158,7 @@ it('routes a real resident out of a couch before returning to work', () => {
   });
 });
 
-it('rejects v10 saves with an out-of-floor, overlapping amenity', () => {
+it('rejects v11 saves with an out-of-floor, overlapping amenity', () => {
   const state = liveState();
   state.staffAmenities = [{
     id: 'bad-amenity', type: 'bed', x: 40, y: 50, rotation: 0,
@@ -173,7 +173,7 @@ it('rejects v10 saves with an out-of-floor, overlapping amenity', () => {
     .toThrow(/saved navigation geometry|overlap|floor/i);
 });
 
-it('rejects v10 saves with missing fixture and staff IDs', () => {
+it('rejects v11 saves with missing fixture and staff IDs', () => {
   const state = liveState();
   delete state.tables;
   state.staff = [{ ...state.staff[0] }];
@@ -181,7 +181,7 @@ it('rejects v10 saves with missing fixture and staff IDs', () => {
   expect(() => validateSavedState(state)).toThrow(/tables|staff.*id/i);
 });
 
-it('rejects a v10 service item reference after its target collection is emptied', () => {
+it('rejects a v11 service item reference after its target collection is emptied', () => {
   const state = liveState();
   state.serviceTables = [];
   state.serviceItems = [{
@@ -304,7 +304,7 @@ it('rejects an occupied arcade whose actor is not at its approach point', () => 
   expect(() => validateSavedState(state)).toThrow(/approach|arcade|residen/i);
 });
 
-it('rejects a v10 staff record that omits emitted wellbeing fields', () => {
+it('rejects a v11 staff record that omits emitted wellbeing fields', () => {
   const state = liveState();
   const worker = state.staff[0];
   for (const key of [

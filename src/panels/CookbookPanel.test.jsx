@@ -1,13 +1,17 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { useReducer } from 'react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import CookbookPanel from './CookbookPanel';
-import { useDispatch, useGameState } from '../state/GameContext';
+import { gameReducer, useDispatch, useGameState } from '../state/GameContext';
 import { createInitialState } from '../state/initialState';
 import { applyCookbookPaidVisit, getCookbookEntryStatus, normaliseCookbookState, reconcileCookbookDiscoveries } from '../simulation/cookbook';
 
-vi.mock('../state/GameContext', () => ({ useGameState: vi.fn(), useDispatch: vi.fn() }));
-vi.mock('../simulation/cookbook', async importOriginal => {
+vi.mock('../state/GameContext', async importOriginal => {
   const actual = await importOriginal();
+  return { ...actual, useGameState: vi.fn(), useDispatch: vi.fn() };
+});
+vi.mock('../simulation/cookbook', async importOriginal => {
+const actual = await importOriginal();
   return { ...actual, getCookbookEntryStatus: vi.fn(actual.getCookbookEntryStatus) };
 });
 
@@ -27,6 +31,20 @@ function paidToast(state, count) {
     state.cookbook = reconcileCookbookDiscoveries(state);
   }
   return state;
+}
+
+const statefulHarness = { current: null };
+
+function StatefulCookbookPanel({ initial, actions }) {
+  const [current, dispatch] = useReducer(gameReducer, initial);
+  statefulHarness.current = {
+    state: current,
+    dispatch: action => {
+      actions.push(action);
+      dispatch(action);
+    },
+  };
+  return <CookbookPanel onClose={vi.fn()} />;
 }
 
 describe('CookbookPanel', () => {
@@ -67,16 +85,106 @@ describe('CookbookPanel', () => {
     expect(fishBisque.getByRole('button', { name: 'Add Fish Bisque to menu' })).toBeDisabled();
   });
 
-  it('starterCookbookProgress: three real canonical outcomes expose free Cheese Toast addition', () => {
+  it('three real paid portions unlock a one-time recipe purchase, separate from free menu addition', () => {
     state = paidToast(state, 3);
     render(<CookbookPanel onClose={vi.fn()} />);
     const cheese = within(screen.getByRole('article', { name: 'Cheese Toast recipe' }));
-    expect(cheese.getByText('Ready to add')).toBeInTheDocument();
-    fireEvent.click(cheese.getByRole('button', { name: 'Add Cheese Toast to menu' }));
+    expect(cheese.getByText('Discovered')).toBeInTheDocument();
+    expect(cheese.getByText(/One-time recipe purchase:/)).toHaveTextContent('One-time recipe purchase: $75');
+    expect(cheese.getByText(/Menu price:/)).toHaveTextContent('Menu price: $14 per paid dish');
+    expect(cheese.getByRole('button', { name: 'Buy recipe — $75' })).toBeEnabled();
+    expect(cheese.getByRole('button', { name: 'Add Cheese Toast to menu' })).toBeDisabled();
+    fireEvent.click(cheese.getByRole('button', { name: 'Buy recipe — $75' }));
     expect(dispatch).toHaveBeenCalledOnce();
-    expect(dispatch).toHaveBeenCalledWith({ type: 'ADD_COOKBOOK_DISH', cookbookId: 'cheese-toast' });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'cheese-toast' });
     expect(state.restaurant.funds).toBe(600);
     expect(state.recipeSlots).toBe(1);
+  });
+
+  it('shows an unaffordable discovered recipe but excludes it from Ready actions', () => {
+    state = paidToast(state, 3);
+    state.restaurant.funds = 74;
+    render(<CookbookPanel onClose={vi.fn()} />);
+
+    const cheese = within(screen.getByRole('article', { name: 'Cheese Toast recipe' }));
+    expect(cheese.getByText('Need $75 to buy this recipe.')).toBeInTheDocument();
+    expect(cheese.getByRole('button', { name: 'Buy recipe — $75' })).toBeDisabled();
+    expect(cheese.getByRole('button', { name: 'Add Cheese Toast to menu' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
+    expect(screen.getByText('0 recipes have ready actions.')).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'Cheese Toast recipe' })).not.toBeInTheDocument();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('enables purchase at the exact funds boundary and guards equipment loss', () => {
+    state = paidToast(state, 3);
+    state.restaurant.funds = 75;
+    const view = render(<CookbookPanel onClose={vi.fn()} />);
+    const cheese = () => within(screen.getByRole('article', { name: 'Cheese Toast recipe' }));
+    expect(cheese().getByRole('button', { name: 'Buy recipe — $75' })).toBeEnabled();
+
+    state.equipment = state.equipment.map(item => item.id === 'eq1' ? { ...item, owned: false } : item);
+    view.rerender(<CookbookPanel onClose={vi.fn()} />);
+    expect(cheese().getByRole('button', { name: 'Buy recipe — $75' })).toBeDisabled();
+    expect(cheese().getByText(/Equipment needed:/))
+      .toHaveTextContent('Equipment needed: Own Toaster before buying this recipe.');
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('describes missing equipment on an owned off-menu recipe as an add prerequisite', () => {
+    state = { ...state, dishes: [], equipment: state.equipment.map(item =>
+      item.id === 'eq1' ? { ...item, owned: false } : item) };
+    render(<CookbookPanel onClose={vi.fn()} />);
+
+    const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
+    expect(toast.getByText('Owned')).toBeInTheDocument();
+    expect(toast.getByText(/Equipment needed:/))
+      .toHaveTextContent('Equipment needed: Own Toaster before adding this owned recipe to the menu.');
+    expect(toast.queryByRole('button', { name: /Buy recipe/ })).not.toBeInTheDocument();
+    expect(toast.getByRole('button', { name: 'Add Toasted Bread to menu' })).toBeDisabled();
+  });
+
+  it('describes missing equipment on an owned on-menu recipe as a serving prerequisite', () => {
+    state.equipment = state.equipment.map(item =>
+      item.id === 'eq1' ? { ...item, owned: false } : item);
+    render(<CookbookPanel onClose={vi.fn()} />);
+
+    const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
+    expect(toast.getByText('On menu')).toBeInTheDocument();
+    expect(toast.getByText(/Equipment needed:/))
+      .toHaveTextContent('Equipment needed: Own Toaster before serving this on-menu recipe.');
+    expect(toast.queryByRole('button', { name: /Buy recipe/ })).not.toBeInTheDocument();
+    expect(toast.getByRole('button', { name: 'Add Toasted Bread to menu' })).toBeDisabled();
+  });
+
+  it('uses the real reducer for purchase, repeat-purchase, separate addition, and retained ownership', () => {
+    let start = paidToast(initial(), 3);
+    start.restaurant.funds = 75;
+    const actions = [];
+    useGameState.mockImplementation(() => statefulHarness.current.state);
+    useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+    render(<StatefulCookbookPanel initial={start} actions={actions} />);
+
+    const cheese = () => within(screen.getByRole('article', { name: 'Cheese Toast recipe' }));
+    fireEvent.click(cheese().getByRole('button', { name: 'Buy recipe — $75' }));
+    expect(statefulHarness.current.state.restaurant.funds).toBe(0);
+    expect(statefulHarness.current.state.cookbook.entries['cheese-toast'].owned).toBe(true);
+    expect(statefulHarness.current.state.dishes).toHaveLength(1);
+    expect(cheese().getByText('Owned')).toBeInTheDocument();
+    expect(cheese().getByRole('button', { name: 'Add Cheese Toast to menu' })).toBeEnabled();
+
+    act(() => statefulHarness.current.dispatch({ type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'cheese-toast' }));
+    expect(statefulHarness.current.state.restaurant.funds).toBe(0);
+    fireEvent.click(cheese().getByRole('button', { name: 'Add Cheese Toast to menu' }));
+    expect(statefulHarness.current.state.dishes).toHaveLength(2);
+    expect(statefulHarness.current.state.restaurant.funds).toBe(0);
+    expect(actions).toEqual([
+      { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'cheese-toast' },
+      { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'cheese-toast' },
+      { type: 'ADD_COOKBOOK_DISH', cookbookId: 'cheese-toast' },
+    ]);
+    expect(cheese().getByText('On menu')).toBeInTheDocument();
+    expect(cheese().getByRole('button', { name: 'Add Cheese Toast to menu' })).toBeDisabled();
   });
 
   it('shows equipment-missing reasons and warns about absent stations without preventing eligible addition', () => {
@@ -84,7 +192,8 @@ describe('CookbookPanel', () => {
     state.equipment = [];
     const view = render(<CookbookPanel onClose={vi.fn()} />);
     const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
-    expect(toast.getByText('Equipment needed')).toBeInTheDocument();
+    expect(toast.getByText(/Equipment needed:/))
+      .toHaveTextContent('Equipment needed: Own Toaster before adding this owned recipe to the menu.');
     expect(toast.getByRole('button', { name: 'Add Toasted Bread to menu' })).toBeDisabled();
     state.equipment = [{ id: 'eq1', owned: true }];
     state.kitchenStations = [];
@@ -93,23 +202,23 @@ describe('CookbookPanel', () => {
     expect(toast.getByRole('button', { name: 'Add Toasted Bread to menu' })).toBeEnabled();
   });
 
-  it('discovers the Blender recipe on ownership and adds it without a placed station', () => {
+  it('discovers the Blender recipe on ownership and exposes its purchase action without a placed station', () => {
     state.equipment = state.equipment.map(equipment =>
       equipment.id === 'eq4' ? { ...equipment, owned: true } : equipment);
     state.cookbook = reconcileCookbookDiscoveries(state);
     render(<CookbookPanel onClose={vi.fn()} />);
     const gazpacho = within(screen.getByRole('article', { name: 'Gazpacho recipe' }));
     expect(gazpacho.getByText('Discovered')).toBeInTheDocument();
-    expect(gazpacho.getByText('Ready to add')).toBeInTheDocument();
+    expect(gazpacho.getByText('Not owned')).toBeInTheDocument();
     expect(gazpacho.getByText(/No matching kitchen station/)).toBeInTheDocument();
-    fireEvent.click(gazpacho.getByRole('button', { name: 'Add Gazpacho to menu' }));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
+    fireEvent.click(gazpacho.getByRole('button', { name: 'Buy recipe — $125' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'gazpacho' });
   });
 
   it('offers Fish Bisque after Blender ownership and five paid Gazpacho portions', () => {
     state.equipment = state.equipment.map(item => item.id === 'eq4' ? { ...item, owned: true } : item);
     state.cookbook.entries.gazpacho = { ...state.cookbook.entries.gazpacho,
-      discovered: true, paidPortions: 5 };
+      discovered: true, owned: true, paidPortions: 5 };
     state.cookbook = reconcileCookbookDiscoveries(state);
     render(<CookbookPanel onClose={vi.fn()} />);
 
@@ -117,15 +226,16 @@ describe('CookbookPanel', () => {
     expect(fishBisque.getByText('Discovered')).toBeInTheDocument();
     expect(fishBisque.getByText('Gazpacho paid portions: 5/5')).toBeInTheDocument();
     expect(fishBisque.getByText(/No matching kitchen station/)).toBeInTheDocument();
-    expect(fishBisque.getByRole('button', { name: 'Add Fish Bisque to menu' })).toBeEnabled();
-    fireEvent.click(fishBisque.getByRole('button', { name: 'Add Fish Bisque to menu' }));
-    expect(dispatch).toHaveBeenCalledWith({ type: 'ADD_COOKBOOK_DISH', cookbookId: 'fish-bisque' });
+    expect(fishBisque.getByRole('button', { name: 'Buy recipe — $225' })).toBeEnabled();
+    fireEvent.click(fishBisque.getByRole('button', { name: 'Buy recipe — $225' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'fish-bisque' });
   });
 
   it('offers the Gazpacho mastery preview once 15 paid portions are recorded', () => {
     state.equipment = state.equipment.map(equipment =>
       equipment.id === 'eq4' ? { ...equipment, owned: true } : equipment);
     state.cookbook = reconcileCookbookDiscoveries(state);
+    state.cookbook.entries.gazpacho.owned = true;
     state.cookbook = { ...state.cookbook, entries: { ...state.cookbook.entries,
       gazpacho: { ...state.cookbook.entries.gazpacho, paidPortions: 15 } } };
     state.dishes = [];
@@ -162,13 +272,13 @@ describe('CookbookPanel', () => {
   it('shows permanently chosen effective stats and retained settings, without another choice', () => {
     state = paidToast(state, 15);
     state.cookbook.entries.toast.perk = 'speed';
-    state.cookbook.entries.toast.menuSettings = { name: 'House Toast', price: 24, quality: 4 };
+    state.cookbook.entries.toast.menuSettings = { name: 'House Toast', price: 18, quality: 4 };
     state.dishes = [];
     render(<CookbookPanel onClose={vi.fn()} />);
-    const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
+    const toast = within(screen.getByRole('article', { name: 'House Toast recipe' }));
     expect(toast.getByText('Signature: Quick Service')).toBeInTheDocument();
     expect(toast.getByText('60 → 51 seconds base cook work')).toBeInTheDocument();
-    expect(toast.getByText(/House Toast.*\$24.*Quality 4/)).toBeInTheDocument();
+    expect(toast.getByText(/Menu price:/)).toHaveTextContent('$18 per paid dish · Quality 4');
     expect(toast.queryByRole('button', { name: 'Choose House Favourite' })).not.toBeInTheDocument();
     expect(toast.getByText('Paid portions: 15/15')).toBeInTheDocument();
   });
@@ -194,7 +304,11 @@ describe('CookbookPanel', () => {
     state = paidToast(state, 3);
     const onClose = vi.fn();
     render(<CookbookPanel readOnly onClose={onClose} />);
-    expect(screen.getByRole('button', { name: 'Add Cheese Toast to menu' })).toBeDisabled();
+    const cheese = within(screen.getByRole('article', { name: 'Cheese Toast recipe' }));
+    const buy = cheese.getByRole('button', { name: 'Buy recipe — $75' });
+    expect(buy).toBeDisabled();
+    expect(cheese.getByRole('button', { name: 'Add Cheese Toast to menu' })).toBeDisabled();
+    fireEvent.click(buy);
     fireEvent.click(screen.getByRole('button', { name: 'Back to menu' }));
     expect(onClose).toHaveBeenCalledOnce();
     expect(dispatch).not.toHaveBeenCalled();
@@ -222,11 +336,12 @@ describe('CookbookPanel', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('includes each recipe whose status canAdd or canChoosePerk exactly once', () => {
+  it('includes each recipe with a buy, add, or mastery action exactly once', () => {
     state = paidToast(state, 15);
     state.equipment = state.equipment.map(equipment =>
       equipment.id === 'eq4' ? { ...equipment, owned: true } : equipment);
     state.cookbook = reconcileCookbookDiscoveries(state);
+    state.cookbook.entries.gazpacho.owned = true;
     state.cookbook = { ...state.cookbook, entries: { ...state.cookbook.entries,
       gazpacho: { ...state.cookbook.entries.gazpacho, paidPortions: 15 } } };
     state.cookbook = reconcileCookbookDiscoveries(state);
@@ -248,6 +363,9 @@ describe('CookbookPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ready actions' }));
     expect(screen.getByText('1 recipes have ready actions.')).toBeInTheDocument();
     const cheese = within(screen.getByRole('article', { name: 'Cheese Toast recipe' }));
+    const buy = cheese.getByRole('button', { name: 'Buy recipe — $75' });
+    expect(buy).toBeDisabled();
+    fireEvent.click(buy);
     const add = cheese.getByRole('button', { name: 'Add Cheese Toast to menu' });
     expect(add).toBeDisabled();
     fireEvent.click(add);

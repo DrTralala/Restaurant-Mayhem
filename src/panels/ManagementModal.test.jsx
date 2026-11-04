@@ -261,10 +261,11 @@ describe('ManagementModal', () => {
     expect(first).toHaveFocus();
   });
 
-  it('reaches the real Contracts panel Details and Guest details summaries with Tab', () => {
+  it('reaches Recent results, Guest details and offer Details summaries with Tab', () => {
     gameState.current = acceptServiceContract(createInitialState(), { templateId: 'office-lunch' });
     render(<ManagementModal isOpen onClose={vi.fn()} initialTab="contracts" />);
     const close = screen.getByRole('button', { name: 'Close management' });
+    const recentResults = screen.getByText('Recent contract results (0)');
     const guestDetails = screen.getByText('Guest details');
     const withdraw = screen.getByRole('button', { name: 'Withdraw contract' });
     const office = screen.getByRole('region', { name: 'Office lunch offer' });
@@ -272,6 +273,9 @@ describe('ManagementModal', () => {
 
     expect(close).toHaveFocus();
     fireEvent.keyDown(close, { key: 'Tab' });
+    expect(recentResults).toHaveFocus();
+
+    fireEvent.keyDown(recentResults, { key: 'Tab' });
     expect(guestDetails).toHaveFocus();
 
     fireEvent.keyDown(guestDetails, { key: 'Tab' });
@@ -281,6 +285,9 @@ describe('ManagementModal', () => {
     expect(guestDetails).toHaveFocus();
 
     fireEvent.keyDown(guestDetails, { key: 'Tab', shiftKey: true });
+    expect(recentResults).toHaveFocus();
+
+    fireEvent.keyDown(recentResults, { key: 'Tab', shiftKey: true });
     expect(close).toHaveFocus();
 
     withdraw.focus();

@@ -14,6 +14,7 @@ import { buildAffordableBaskets, getBasketWeight } from './menuEconomy';
 import { resolveStaffAfterMovement, updateStaff } from './staff';
 import { getStaffTaskDuration } from './staffPerformance';
 import { advanceConsumption } from './consumption';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -51,11 +52,10 @@ function menuState({ dishes = [], drinkOverrides = {}, unlockedDrinkIds = ['juic
 }
 
 function bakedPotatoEntry() {
-  const cookbook = createCookbookState();
-  cookbook.entries['baked-potato'] = {
-    ...cookbook.entries['baked-potato'], discovered: true,
-  };
-  return { dish: { id: 'baked-potato', cookbookId: 'baked-potato' }, cookbook };
+  const menu = withOwnedAuthoredDishes({
+    cookbook: createCookbookState(), dishes: [],
+  }, [{ id: 'baked-potato', cookbookId: 'baked-potato', price: 22, quality: 1 }]);
+  return { dish: menu.dishes[0], cookbook: menu.cookbook };
 }
 
 function bakedPotatoMenuState(overrides = {}) {
@@ -99,19 +99,23 @@ const BASE_TIME = 36_000;
 
 function orderDrink(drinkId, arrival, includeDish = false) {
   const initial = createInitialState();
-  const dishes = includeDish ? [{
-    id: 'toast', price: 8, quality: 1, popularity: 50, prepTime: 60,
-  }] : [];
+  const menu = includeDish
+    ? withOwnedAuthoredDishes(initial, [{
+      id: 'toast', cookbookId: 'toast', name: 'Toasted Bread', price: 9, quality: 1,
+    }])
+    : { ...initial, dishes: [] };
+  const dishes = menu.dishes;
   const customer = {
     id: `guest-${arrival}`, partyId: `party-${arrival}`, tableId: 't1', state: 'seated',
     archetype: 'regular', happiness: 80, spendingTier: 'value', spendingBudget: 45,
   };
   const rolls = includeDish ? [0.8, 0.99] : [0.99, 0.99];
   const order = createCustomerOrder({
-    restaurant: { ...initial.restaurant, gameTime: BASE_TIME + arrival, reputation: 3 },
+    ...menu,
+    restaurant: { ...menu.restaurant, gameTime: BASE_TIME + arrival, reputation: 3 },
     dishes, unlockedDrinkIds: [drinkId], drinkOverrides: {}, serviceItems: [], customers: [],
   }, customer, () => rolls.shift() ?? 0.99);
-  return { ...order, dishes };
+  return { ...order, dishes, cookbook: menu.cookbook };
 }
 
 function cashierReady(state) {
@@ -149,6 +153,7 @@ function prepareDeliverAndPayDrink(drinkId, arrival, start, includeDish = false)
     ...initial,
     restaurant: { ...initial.restaurant, gameTime: BASE_TIME + start },
     dishes: order.dishes,
+    cookbook: order.cookbook,
     unlockedDrinkIds: [drinkId],
     kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 100 }],
     serviceTables: [{ id: 'st1', x: 300, y: 120 }],
@@ -626,11 +631,13 @@ describe('Premium Lemonade shared drink preparation', () => {
       spendingTier: 'value', spendingBudget: 45,
     };
     const rolls = [0.8, 0.99];
-    const order = createCustomerOrder({
+    const orderState = withOwnedAuthoredDishes({
+      ...initial,
       restaurant: { ...initial.restaurant, gameTime: 100, reputation: 3 },
-      dishes: [{ id: 'toast', price: 8, quality: 1, popularity: 50, prepTime: 60 }],
+      dishes: [],
       unlockedDrinkIds: ['premium-lemonade'], drinkOverrides: {}, serviceItems: [], customers: [],
-    }, customer, () => rolls.shift() ?? 0.99);
+    }, [{ id: 'toast', cookbookId: 'toast', name: 'Toasted Bread', price: 9, quality: 1 }]);
+    const order = createCustomerOrder(orderState, customer, () => rolls.shift() ?? 0.99);
     const cook = {
       id: 'cook', role: 'cook', morale: 50, x: 90, y: 110,
       task: {
@@ -641,6 +648,8 @@ describe('Premium Lemonade shared drink preparation', () => {
     const active = {
       ...initial,
       restaurant: { ...initial.restaurant, gameTime: 100 },
+      dishes: orderState.dishes,
+      cookbook: orderState.cookbook,
       kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 100 }],
       serviceTables: [{ id: 'st1', x: 300, y: 120 }],
       customers: [order.customer],
@@ -697,14 +706,15 @@ describe('Premium Lemonade actual service comparison', () => {
     const mixed = prepareDeliverAndPayDrink('premium-lemonade', 0, 0, true);
 
     expect(mixed.customer).toMatchObject({
-      dishId: 'toast', drinkId: 'premium-lemonade', orderSubtotal: 17,
+      dishId: 'toast', drinkId: 'premium-lemonade', dishPriceAtOrder: 9,
+      drinkPriceAtOrder: 9, orderSubtotal: 18,
     });
     expect(mixed.preparationCompleted).toBe(true);
     expect(mixed.delivered).toBe(true);
     expect(mixed.paid.completedCustomers).toHaveLength(1);
     expect(mixed.paid.paidVisitSequence).toBe(1);
     expect(mixed.paid.completedCustomers[0]).toMatchObject({
-      customerId: 'guest-0', revenue: 20.4, tip: 3.4, totalPaid: 20.4,
+      customerId: 'guest-0', revenue: 21.6, tip: 3.6, totalPaid: 21.6,
     });
     expect(mixed.paid.menuSales.drinks).toEqual([
       { key: 'premium-lemonade', count: 1, gross: 9, grossComplete: true },

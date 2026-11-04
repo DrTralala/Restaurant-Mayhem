@@ -1,5 +1,6 @@
 import { COOKBOOK_RECIPES, getCookbookRecipe, MASTERY_PORTION_THRESHOLD } from '../data/cookbook';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
+import { clampDishPrice } from './dishPricing';
 
 const isText = value => typeof value === 'string' && value.trim().length > 0;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -24,12 +25,26 @@ function effectiveStats(recipe, perk) {
   };
 }
 
+function isValidCookbookEntry(entry, recipe) {
+  if (!isObject(entry) || typeof entry.discovered !== 'boolean' || typeof entry.owned !== 'boolean'
+    || !isIntegerIn(entry.paidPortions, 0, MASTERY_PORTION_THRESHOLD) || !isPerk(entry.perk)
+    || (entry.owned && !entry.discovered)
+    || (entry.paidPortions > 0 && (!entry.discovered || !entry.owned))
+    || (entry.perk !== null && (!entry.discovered || !entry.owned
+      || entry.paidPortions !== MASTERY_PORTION_THRESHOLD))
+    || (recipe.id === 'toast' && (!entry.discovered || !entry.owned))) return false;
+  const settings = entry.menuSettings;
+  return isObject(settings) && isText(settings.name) && isIntegerIn(settings.price, 1, 100)
+    && isIntegerIn(settings.quality, 1, 10)
+    && clampDishPrice(recipe.id, settings.quality, settings.price) === settings.price;
+}
+
 export function createCookbookState(lastAppliedPaidVisitSequence = 0) {
   requireValid(isCounter(lastAppliedPaidVisitSequence), 'paid visit watermark');
   return {
-    schemaVersion: 2, lastAppliedPaidVisitSequence,
+    schemaVersion: 3, lastAppliedPaidVisitSequence,
     entries: Object.fromEntries(COOKBOOK_RECIPES.map(recipe => [recipe.id, {
-      discovered: recipe.id === 'toast', paidPortions: 0, perk: null,
+      discovered: recipe.id === 'toast', owned: recipe.id === 'toast', paidPortions: 0, perk: null,
       menuSettings: { name: recipe.name, price: recipe.price, quality: 1 },
     }])),
   };
@@ -39,7 +54,7 @@ function requirementsFor(state, recipe) {
   return recipe.requirements.map(requirement => {
     const isEquipment = requirement.type === 'equipment';
     const id = isEquipment ? requirement.equipmentId : requirement.cookbookId;
-    const current = isEquipment ? Number(owned(state, id)) : state.cookbook.entries[id].paidPortions;
+    const current = isEquipment ? Number(owned(state, id)) : state.cookbook.entries[id]?.paidPortions ?? 0;
     const required = isEquipment ? 1 : requirement.count;
     return { type: requirement.type, id, current, required, met: current >= required };
   });
@@ -60,26 +75,28 @@ export function reconcileCookbookDiscoveries(state) {
 export function getCookbookEntryStatus(state, cookbookId) {
   const recipe = getCookbookRecipe(cookbookId);
   const entry = state.cookbook?.entries[cookbookId];
-  if (!recipe || !entry) return null;
+  if (!recipe || !isValidCookbookEntry(entry, recipe)) return null;
   const activeDishId = (state.dishes || []).find(dish => dish.cookbookId === cookbookId)?.id ?? null;
   const equipmentOwned = owned(state, recipe.requiredEquipmentId);
+  const purchaseCost = recipe.purchaseCost;
+  const canAfford = Number.isFinite(state.restaurant?.funds) && state.restaurant.funds >= purchaseCost;
   return {
-    discovered: entry.discovered, requirements: requirementsFor(state, recipe), activeDishId, equipmentOwned,
+    discovered: entry.discovered, owned: entry.owned, purchaseCost, canAfford,
+    canBuy: entry.discovered && entry.owned === false && equipmentOwned && canAfford,
+    requirements: requirementsFor(state, recipe), activeDishId, equipmentOwned,
     stationAvailable: (state.kitchenStations || []).some(station => station.equipmentId === recipe.requiredEquipmentId),
-    canAdd: entry.discovered && equipmentOwned && activeDishId === null,
+    canAdd: entry.discovered && entry.owned === true && equipmentOwned && activeDishId === null,
     paidPortions: entry.paidPortions, perk: entry.perk,
-    canChoosePerk: entry.discovered && entry.paidPortions === MASTERY_PORTION_THRESHOLD && entry.perk === null,
+    canChoosePerk: entry.discovered && entry.owned === true
+      && entry.paidPortions === MASTERY_PORTION_THRESHOLD && entry.perk === null,
   };
 }
 
 export function validateCookbookState(state) {
-  if (!has(state, 'cookbook')) {
-    requireValid(!(state.dishes || []).some(dish => dish.cookbookId != null || dish.masteryPerk != null),
-      'authored metadata without cookbook');
-    return;
-  }
+  requireValid(isObject(state) && has(state, 'cookbook'), 'missing cookbook');
+  requireValid(Array.isArray(state.dishes), 'dishes');
   const cookbook = state.cookbook;
-  requireValid(isObject(cookbook) && cookbook.schemaVersion === 2, 'schema');
+  requireValid(isObject(cookbook) && cookbook.schemaVersion === 3, 'schema');
   requireValid(isCounter(cookbook.lastAppliedPaidVisitSequence)
     && isCounter(state.paidVisitSequence ?? 0)
     && cookbook.lastAppliedPaidVisitSequence <= (state.paidVisitSequence ?? 0), 'paid visit watermark');
@@ -87,58 +104,49 @@ export function validateCookbookState(state) {
     && Object.keys(cookbook.entries).every(id => getCookbookRecipe(id)), 'entries');
   for (const recipe of COOKBOOK_RECIPES) {
     const entry = cookbook.entries[recipe.id];
-    requireValid(isObject(entry) && typeof entry.discovered === 'boolean'
-      && isIntegerIn(entry.paidPortions, 0, MASTERY_PORTION_THRESHOLD) && isPerk(entry.perk), `entry ${recipe.id}`);
-    requireValid((entry.paidPortions === 0 || entry.discovered)
-      && (entry.perk === null || (entry.discovered && entry.paidPortions === MASTERY_PORTION_THRESHOLD))
-      && (recipe.id !== 'toast' || entry.discovered), `progress ${recipe.id}`);
-    const settings = entry.menuSettings;
-    requireValid(isObject(settings) && isText(settings.name) && isIntegerIn(settings.price, 1, 100)
-      && isIntegerIn(settings.quality, 1, 10), `settings ${recipe.id}`);
+    requireValid(isValidCookbookEntry(entry, recipe), `entry ${recipe.id}`);
   }
   const active = new Set();
-  for (const dish of state.dishes || []) {
-    if (dish.cookbookId == null) continue;
+  const menuIds = new Set();
+  for (const dish of state.dishes) {
+    requireValid(isObject(dish), 'dish record');
     const recipe = getCookbookRecipe(dish.cookbookId);
-    requireValid(recipe && !active.has(recipe.id), 'unknown or duplicate active identity');
+    requireValid(recipe && !active.has(recipe.id) && isText(dish.id) && !menuIds.has(dish.id),
+      'unknown or duplicate active identity');
     const entry = cookbook.entries[recipe.id];
-    requireValid(entry.discovered && isText(dish.id)
+    requireValid(entry.discovered && entry.owned
       && [...identityFields, 'prepTime', 'popularity'].every(key => dish[key] === recipe[key])
       && ['name', 'price', 'quality'].every(key => dish[key] === entry.menuSettings[key])
       && (dish.masteryPerk == null), `active dish ${recipe.id}`);
     active.add(recipe.id);
+    menuIds.add(dish.id);
   }
 }
 
-export function normaliseCookbookState(state, { legacy, lastPaidVisitSequence = 0 } = {}) {
-  // Absence alone is the legacy signal. A caller's legacy flag never repairs present corruption.
-  if (has(state, 'cookbook')) {
-    validateCookbookState({ ...state, paidVisitSequence: state.paidVisitSequence ?? lastPaidVisitSequence });
-    return { cookbook: reconcileCookbookDiscoveries(state), dishes: state.dishes };
-  }
-  void legacy;
-  validateCookbookState(state);
-  let cookbook = createCookbookState(lastPaidVisitSequence);
-  const toast = getCookbookRecipe('toast');
-  const dishes = (state.dishes || []).map(dish => {
-    if (dish.id !== 'starter-toast' || dish.cookbookId != null
-      || !['base', 'method', 'requiredEquipmentId', 'prepTime', 'popularity'].every(key => dish[key] === toast[key])
-      || !isText(dish.name) || !Number.isFinite(dish.price) || !isIntegerIn(dish.quality, 1, 10)) return dish;
-    const menuSettings = { name: dish.name, price: Math.min(100, Math.max(1, Math.round(dish.price))), quality: dish.quality };
-    cookbook = { ...cookbook, entries: { ...cookbook.entries, toast: { ...cookbook.entries.toast, menuSettings } } };
-    return { ...dish, ...menuSettings, cuisine: toast.cuisine, cookbookId: 'toast' };
-  });
-  return { cookbook: reconcileCookbookDiscoveries({ ...state, cookbook, dishes }), dishes };
+export function normaliseCookbookState(state, { lastPaidVisitSequence = 0 } = {}) {
+  requireValid(isObject(state) && has(state, 'cookbook'), 'missing cookbook');
+  const paidVisitSequence = state.paidVisitSequence ?? lastPaidVisitSequence;
+  validateCookbookState({ ...state, paidVisitSequence });
+  return { cookbook: reconcileCookbookDiscoveries({ ...state, paidVisitSequence }), dishes: state.dishes };
 }
 
 export function getResolvedDish(state, menuItemId) {
-  const dish = (state.dishes || []).find(candidate => candidate.id === menuItemId);
-  if (!dish) return null;
-  if (dish.cookbookId == null) return { ...dish, cookbookId: null, masteryPerk: null };
+  const matches = (state.dishes || []).filter(candidate => candidate.id === menuItemId);
+  if (matches.length !== 1) return null;
+  const dish = matches[0];
+  if (dish.cookbookId == null) return null;
   const recipe = getCookbookRecipe(dish.cookbookId);
   const entry = state.cookbook?.entries[dish.cookbookId];
-  if (!recipe || !entry) return null;
-  const { requirements, id, ...base } = recipe;
+  const boundedPrice = clampDishPrice(recipe?.id, entry?.menuSettings?.quality, entry?.menuSettings?.price);
+  if (!recipe || !isValidCookbookEntry(entry, recipe) || !entry.discovered || entry.owned !== true
+    || !isText(dish.id)
+    || ![...identityFields, 'prepTime', 'popularity'].every(key => dish[key] === recipe[key])
+    || !['name', 'price', 'quality'].every(key => dish[key] === entry.menuSettings?.[key])
+    || dish.masteryPerk != null
+    || !isText(entry.menuSettings?.name)
+    || boundedPrice === null || boundedPrice !== entry.menuSettings?.price
+    || (state.dishes || []).filter(candidate => candidate.cookbookId === recipe.id).length !== 1) return null;
+  const { requirements, purchaseCost, id, ...base } = recipe;
   return { ...dish, ...base, ...entry.menuSettings, ...effectiveStats(recipe, entry.perk),
     id: dish.id, cookbookId: id, masteryPerk: entry.perk };
 }
@@ -152,14 +160,11 @@ export function validateDishOrderSnapshot(snapshot) {
     && Number.isFinite(snapshot.prepTime) && snapshot.prepTime > 0
     && Number.isFinite(snapshot.popularity) && snapshot.popularity >= 0 && snapshot.popularity <= 100
     && isPerk(snapshot.masteryPerk), 'dish snapshot fields');
-  if (snapshot.cookbookId === null) {
-    requireValid(snapshot.masteryPerk === null, 'custom snapshot mastery');
-  } else {
-    const recipe = getCookbookRecipe(snapshot.cookbookId);
-    requireValid(recipe && identityFields.every(key => snapshot[key] === recipe[key]), 'snapshot identity');
-    const stats = effectiveStats(recipe, snapshot.masteryPerk);
-    requireValid(snapshot.prepTime === stats.prepTime && snapshot.popularity === stats.popularity, 'snapshot mastery stats');
-  }
+  const recipe = getCookbookRecipe(snapshot.cookbookId);
+  requireValid(recipe && identityFields.every(key => snapshot[key] === recipe[key]), 'snapshot identity');
+  requireValid(clampDishPrice(recipe.id, snapshot.quality, snapshot.price) === snapshot.price, 'snapshot price bounds');
+  const stats = effectiveStats(recipe, snapshot.masteryPerk);
+  requireValid(snapshot.prepTime === stats.prepTime && snapshot.popularity === stats.popularity, 'snapshot mastery stats');
 }
 
 export function createDishOrderSnapshot(resolvedDish, { serviceItemId, orderedAt }) {
@@ -181,9 +186,7 @@ export function getDishForServiceItem(state, serviceItem) {
     }
     return { ...snapshot, id: snapshot.menuItemId };
   }
-  // Partial legacy fixtures must never gain current mastery or authored provenance.
-  const raw = (state.dishes || []).find(dish => dish.id === serviceItem.menuItemId);
-  return raw ? { ...raw, cookbookId: null, masteryPerk: null } : null;
+  return null;
 }
 
 // Parent persistence can use these guards before normalising cooking/service state.
@@ -245,8 +248,10 @@ export function applyCookbookPaidVisit(cookbook, paidVisitOutcome) {
     || paidVisitOutcome.sequence <= cookbook.lastAppliedPaidVisitSequence) return cookbook;
   const { dish, sequence, menuOutcome, foodOutcome } = paidVisitOutcome;
   const entry = dish?.cookbookId ? cookbook.entries[dish.cookbookId] : null;
+  const recipe = dish?.cookbookId ? getCookbookRecipe(dish.cookbookId) : null;
   const eligible = menuOutcome === 'ordered' && foodOutcome === 'delivered'
-    && isText(dish?.serviceItemId) && entry?.discovered
+    && isText(dish?.serviceItemId) && recipe && isValidCookbookEntry(entry, recipe)
+    && entry.discovered && entry.owned === true
     && dish.fulfilled && dish.paid && dish.chargedAmount > 0;
   return {
     ...cookbook, lastAppliedPaidVisitSequence: sequence,
@@ -274,11 +279,18 @@ function allocateMenuId(state, cookbookId) {
 }
 
 export function reduceCookbookAction(state, action) {
+  if (action.type === 'BUY_COOKBOOK_RECIPE') {
+    const status = getCookbookEntryStatus(state, action.cookbookId);
+    if (!status?.canBuy) return state;
+    return { ...updateEntry(state, action.cookbookId, { owned: true }),
+      restaurant: { ...state.restaurant, funds: state.restaurant.funds - status.purchaseCost } };
+  }
+  if (action.type === 'ADD_DISH') return state;
   if (action.type === 'ADD_COOKBOOK_DISH') {
     const status = getCookbookEntryStatus(state, action.cookbookId);
     if (!status?.canAdd) return state;
-    const { requirements, id, ...recipe } = getCookbookRecipe(action.cookbookId);
-    return { ...state, dishes: [...state.dishes, { ...recipe, ...state.cookbook.entries[id].menuSettings,
+    const { requirements, purchaseCost, id, ...recipe } = getCookbookRecipe(action.cookbookId);
+    return { ...state, dishes: [...(state.dishes || []), { ...recipe, ...state.cookbook.entries[id].menuSettings,
       id: allocateMenuId(state, id), cookbookId: id, unlocked: true }] };
   }
   if (action.type === 'CHOOSE_DISH_MASTERY') {
@@ -288,9 +300,16 @@ export function reduceCookbookAction(state, action) {
   }
   if (!['UPDATE_DISH', 'REMOVE_DISH', 'UPGRADE_DISH_QUALITY'].includes(action.type)) return null;
   const dish = (state.dishes || []).find(candidate => candidate.id === action.id);
-  if (dish?.cookbookId == null) return null;
+  if (!dish || dish.cookbookId == null) return state;
   const entry = state.cookbook?.entries[dish.cookbookId];
-  if (!getCookbookRecipe(dish.cookbookId) || !entry) return state;
+  const recipe = getCookbookRecipe(dish.cookbookId);
+  if (!recipe || !isValidCookbookEntry(entry, recipe) || !entry.discovered || entry.owned !== true
+    || ![...identityFields, 'prepTime', 'popularity'].every(key => dish[key] === recipe[key])
+    || !['name', 'price', 'quality'].every(key => dish[key] === entry.menuSettings[key])
+    || !isText(entry.menuSettings.name)
+    || clampDishPrice(recipe.id, entry.menuSettings.quality, entry.menuSettings.price) !== entry.menuSettings.price
+    || (state.dishes || []).filter(candidate => candidate.cookbookId === recipe.id).length !== 1
+    || (state.dishes || []).filter(candidate => candidate.id === dish.id).length !== 1) return state;
   if (action.type === 'REMOVE_DISH') {
     return { ...updateEntry(state, dish.cookbookId, { menuSettings: {
       name: dish.name, price: dish.price, quality: dish.quality,
@@ -304,7 +323,9 @@ export function reduceCookbookAction(state, action) {
     restaurant = { ...restaurant, funds: restaurant.funds - MENU_QUALITY_COST };
   } else {
     if (isText(action.changes?.name)) settings.name = action.changes.name.trim();
-    if (Number.isFinite(action.changes?.price)) settings.price = Math.max(1, Math.min(100, Math.round(action.changes.price)));
+    if (Number.isFinite(action.changes?.price)) {
+      settings.price = clampDishPrice(dish.cookbookId, settings.quality, action.changes.price);
+    }
     if (['name', 'price', 'quality'].every(key => settings[key] === entry.menuSettings[key])) return state;
   }
   return { ...updateEntry(state, dish.cookbookId, { menuSettings: settings }), restaurant,

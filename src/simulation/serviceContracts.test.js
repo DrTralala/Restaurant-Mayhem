@@ -4,6 +4,7 @@ import { validateSavedState } from '../state/saveValidation';
 import { advanceClock } from './clock';
 import * as staffSchedules from './staffSchedules';
 import { buildAffordableBaskets } from './menuEconomy';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
 import { acceptServiceContract, advanceServiceContractArrivals, createServiceContractsState,
   getNextServiceContractBoundary, getServiceContractOffer, hydrateServiceContractsState,
   recordServiceContractPaidVisit, selectServiceContractView, settleServiceContracts,
@@ -54,7 +55,7 @@ const paid = (state, index, changes) => {
 describe('offers and immutable acceptance', () => {
   it('defaults absent features without mutation, RNG, bookings or rewards', () => {
     const state = createInitialState();
-    delete state.serviceContracts; // Explicit v10 legacy absence, not a fresh-game default.
+    delete state.serviceContracts; // Exercise the standalone API's absent-feature behavior.
     const random = vi.spyOn(Math, 'random').mockImplementation(() => { throw new Error('RNG'); });
     expect(createServiceContractsState()).toEqual({ version: 1, nextInstanceSerial: 1,
       lastAcceptedDayByTemplate: {}, active: null, results: [] });
@@ -135,7 +136,8 @@ describe('offers and immutable acceptance', () => {
 describe('kitchen-aware readiness advice', () => {
   const fullGap = 'no_preparable_affordable_dish';
   const partialGap = 'some_unpreparable_affordable_dishes';
-  const roast = { id: 'roast', name: 'Roast', price: 20, requiredEquipmentId: 'eq2' };
+  const roast = { id: 'roast', cookbookId: 'roast-vegetables', name: 'Roast', price: 18,
+    quality: 1, requiredEquipmentId: 'eq2' };
 
   it.each([
     ['no stations', state => ({ ...state, kitchenStations: [] })],
@@ -160,8 +162,10 @@ describe('kitchen-aware readiness advice', () => {
   });
 
   it('identifies partial coverage even for suspended dishes that contract guests can order', () => {
-    const state = createInitialState();
-    state.dishes.push(roast);
+    const initial = createInitialState();
+    const state = withOwnedAuthoredDishes({
+      ...initial, dishes: [...initial.dishes, roast],
+    });
     state.restaurant.suspendedDishIds = ['roast'];
     const customer = { serviceContractId: 'sc-1', spendingBudget: 24 };
     expect(buildAffordableBaskets(state, customer).some(basket => basket.dish?.id === 'roast')).toBe(true);
@@ -174,8 +178,9 @@ describe('kitchen-aware readiness advice', () => {
   });
 
   it('clears equipment advice only after ownership and a matching station are both present', () => {
-    const state = createInitialState();
-    state.dishes = [roast];
+    const state = withOwnedAuthoredDishes({
+      ...createInitialState(), dishes: [roast],
+    });
     expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain(fullGap);
     state.equipment = state.equipment.map(equipment => equipment.id === 'eq2'
       ? { ...equipment, owned: true } : equipment);
@@ -186,18 +191,27 @@ describe('kitchen-aware readiness advice', () => {
     });
   });
 
-  it.each([null, undefined])('requires a station even for an unrestricted dish (%s)', requiredEquipmentId => {
-    const state = createInitialState();
-    state.dishes = [{ ...roast, requiredEquipmentId }];
-    state.equipment = [];
-    expect(getServiceContractOffer(state, 'office-lunch').warnings).not.toContain(fullGap);
-    state.kitchenStations = [];
+  it('requires owned equipment and a matching station for an authored dish', () => {
+    const state = withOwnedAuthoredDishes({
+      ...createInitialState(), dishes: [roast],
+    });
     expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain(fullGap);
+    state.equipment = state.equipment.map(equipment => equipment.id === 'eq2'
+      ? { ...equipment, owned: true } : equipment);
+    expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain(fullGap);
+    state.kitchenStations.push({ id: 'oven-station', equipmentId: 'eq2', x: 200, y: 120 });
+    expect(getServiceContractOffer(state, 'office-lunch').warnings).not.toContain(fullGap);
   });
 
   it.each([[], [{ ...roast, price: 25 }], [{ ...roast, price: NaN }], [{ ...roast, price: -1 }]].map(dishes => [dishes]))(
     'does not duplicate affordability advice with equipment advice for %j', dishes => {
-      const offer = getServiceContractOffer({ ...createInitialState(), dishes }, 'office-lunch');
+      const initial = createInitialState();
+      const state = dishes[0]?.price === 25
+        ? withOwnedAuthoredDishes({ ...initial,
+          dishes: dishes.map(dish => ({ ...dish, quality: 5 })),
+        }, dishes.map(dish => ({ ...dish, quality: 5 })))
+        : { ...initial, dishes };
+      const offer = getServiceContractOffer(state, 'office-lunch');
       expect(offer.warnings).toContain('no_affordable_dish');
       expect(offer.warnings).not.toContain(fullGap);
       expect(offer.warnings).not.toContain(partialGap);
@@ -206,12 +220,14 @@ describe('kitchen-aware readiness advice', () => {
   );
 
   it('uses resolved cookbook prices and requirements, including the exact guest budget', () => {
-    const state = createInitialState();
-    state.dishes[0] = { ...state.dishes[0], price: 100, requiredEquipmentId: null };
-    state.cookbook.entries.toast.menuSettings.price = 24;
+    const state = withOwnedAuthoredDishes({
+      ...createInitialState(),
+      dishes: [{ id: 'potato', cookbookId: 'baked-potato', price: 24, quality: 10 }],
+    });
     state.kitchenStations = [{ id: 'bare', equipmentId: null }];
     expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain(fullGap);
-    state.cookbook.entries.toast.menuSettings.price = 25;
+    state.cookbook.entries['baked-potato'].menuSettings.price = 25;
+    state.dishes[0].price = 25;
     const offer = getServiceContractOffer(state, 'office-lunch');
     expect(offer.warnings).toContain('no_affordable_dish');
     expect(offer.unpreparableDishes).toEqual([]);

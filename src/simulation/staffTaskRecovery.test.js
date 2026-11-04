@@ -306,6 +306,7 @@ describe('waiter orderability recovery', () => {
         memberIds: [terminal.id, eligible.id],
         orderedMemberIds: [terminal.id],
         unaffordableMemberIds: [],
+        poorValueMemberIds: [],
         paidReviews: [{ customerId: terminal.id, score: 100 }],
       }],
     };
@@ -325,6 +326,7 @@ describe('waiter orderability recovery', () => {
       memberIds: [terminal.id, eligible.id],
       orderedMemberIds: [terminal.id, eligible.id],
       unaffordableMemberIds: [],
+      poorValueMemberIds: [],
       paidReviews: [{ customerId: terminal.id, score: 100 }],
     }]);
 
@@ -361,7 +363,7 @@ describe('waiter orderability recovery', () => {
     expect(settled.pendingPartyReviews).toEqual([]);
     expect(settled.partyReviewHistory).toEqual([
       expect.objectContaining({
-        partyId: 'party-1', memberCount: 2, paidCount: 2, unaffordableCount: 0,
+        partyId: 'party-1', memberCount: 2, paidCount: 2, unaffordableCount: 0, poorValueCount: 0,
       }),
     ]);
     expect(settled.customers.find(customer => customer.id === terminal.id)).toEqual(
@@ -385,6 +387,7 @@ describe('waiter orderability recovery', () => {
       memberIds: [eligible.id],
       orderedMemberIds: [eligible.id],
       unaffordableMemberIds: [],
+      poorValueMemberIds: [],
       paidReviews: [],
     });
   });

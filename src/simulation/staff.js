@@ -199,6 +199,10 @@ function leavingFields(customer, overrides = {}) {
   });
 }
 
+function menuRefusalDepartureReason(customer) {
+  return customer?.menuOutcome === 'poor_value' ? 'menu_poor_value' : 'menu_unaffordable';
+}
+
 function checkoutDepartureFor(customer, station) {
   if (customer?.checkoutDeparture?.stationId != null
     && Number.isFinite(customer.checkoutDeparture.position?.x)
@@ -1475,7 +1479,7 @@ function resolveTakeOrderTask({ state, staff, customers, queue, tables, serviceI
       updatedCustomers = updatedCustomers.map(candidate =>
         getPartyKey(candidate) === getPartyKey(ordered.customer)
           && candidate.state === 'waiting_for_party'
-          ? leavingFields({ ...candidate, departureReason: 'menu_unaffordable' })
+          ? leavingFields({ ...candidate, departureReason: menuRefusalDepartureReason(candidate) })
           : candidate);
     }
   }
@@ -1792,7 +1796,7 @@ function resolveTask({
     const partyId = getPartyKey(customer);
     const hasPendingTracker = Array.isArray(pendingPartyReviews)
       && pendingPartyReviews.some(record => record?.partyId === partyId);
-    const hasExplicitMenuOutcome = ['ordered', 'unaffordable'].includes(customer.menuOutcome);
+    const hasExplicitMenuOutcome = ['ordered', 'unaffordable', 'poor_value'].includes(customer.menuOutcome);
     let nextPendingPartyReviews = pendingPartyReviews;
     let nextPartyReviewHistory = partyReviewHistory;
     let nextRestaurant = restaurant;
@@ -1825,7 +1829,7 @@ function resolveTask({
     if (settledReview) {
       updatedCustomers = updatedCustomers.map(candidate =>
         getPartyKey(candidate) === partyId && candidate.state === 'waiting_for_party'
-          ? leavingFields({ ...candidate, departureReason: 'menu_unaffordable' })
+          ? leavingFields({ ...candidate, departureReason: menuRefusalDepartureReason(candidate) })
           : candidate);
     }
     const recovered = recoverCarriedItemsForCustomer(serviceItems, customer.id);
@@ -2880,7 +2884,17 @@ function resolveTask({
       && !anotherWorkerOwnsStation;
 
     if (!validAssignment) {
-      return { staff: completedStaff, queue, tables, customers, serviceItems };
+      const released = releaseStaffWork({
+        ...state, staff: state.staff || [staff], serviceItems,
+      }, staff.id,
+        'invalid-preparation', state.restaurant?.gameTime);
+      return {
+        staff: released.staff?.find(worker => sameId(worker.id, staff.id)) || completedStaff,
+        queue, tables, customers,
+        serviceItems: released.serviceItems || serviceItems,
+        ...(Array.isArray(released.cookingBatches)
+          ? { cookingBatches: released.cookingBatches } : {}),
+      };
     }
     return {
       staff: clearNavigationGoal(staff), queue, tables, customers,

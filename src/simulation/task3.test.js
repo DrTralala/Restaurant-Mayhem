@@ -97,6 +97,7 @@ describe('Task 3 three-person party integration', () => {
     expect(state.partyReviewHistory).toEqual([
       expect.objectContaining({
         partyId: 'triple-party', memberCount: 3, paidCount: 3, unaffordableCount: 0,
+        poorValueCount: 0,
       }),
     ]);
   });

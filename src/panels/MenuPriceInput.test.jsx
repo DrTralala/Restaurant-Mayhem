@@ -12,15 +12,21 @@ const setup = (overrides = {}) => {
 
 // Simulates a parent layout effect reacting to an external price/disabled update:
 // focusout fires during the commit, before the input's passive reset effect can run.
-const BlurOnRender = ({ price, disabled = false, onCommit }) => {
+const BlurOnRender = ({
+  price, disabled = false, minPrice, maxPrice, pricingKey, getPreviewPresentation, onCommit,
+}) => {
   const holder = useRef(null);
   useLayoutEffect(() => {
     const field = holder.current?.querySelector('input');
     if (field) field.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
-  }, [price, disabled]);
+  }, [price, disabled, minPrice, maxPrice, pricingKey]);
   return (
     <div ref={holder}>
-      <MenuPriceInput price={price} label="Water price" disabled={disabled} onCommit={onCommit} />
+      <MenuPriceInput
+        price={price} label="Water price" disabled={disabled}
+        minPrice={minPrice} maxPrice={maxPrice} pricingKey={pricingKey}
+        getPreviewPresentation={getPreviewPresentation} onCommit={onCommit}
+      />
     </div>
   );
 };
@@ -134,6 +140,121 @@ describe('MenuPriceInput', () => {
     expect(onCommit.mock.calls.map(([value]) => value)).toEqual([1, 100, 2]);
   });
 
+  it('uses supplied bounds for input attributes, preview normalisation and commit', () => {
+    const getPreviewPresentation = vi.fn(price => ({
+      accessibleName: 'Bounded preview',
+      itemLine: `Draft price: $${price}`,
+      description: 'Expected walk-in gross forecast.',
+      currentLabel: 'Current expected gross',
+      currentAmount: '$12.00',
+      draftLabel: 'Draft expected gross',
+      draftAmount: '$15.00',
+      affordabilityHeading: 'Budget fit',
+      affordabilityRows: [],
+      affordabilityCaveat: 'Budget fit is not a purchase forecast.',
+      caveat: 'Not profit.',
+    }));
+    const { input, onCommit } = setup({
+      price: 12, minPrice: 9, maxPrice: 15, pricingKey: 'toast:1:12', getPreviewPresentation,
+    });
+    const field = input();
+
+    expect(field).toHaveAttribute('min', '9');
+    expect(field).toHaveAttribute('max', '15');
+    fireEvent.change(field, { target: { value: '99' } });
+
+    expect(getPreviewPresentation).toHaveBeenCalledWith(15);
+    expect(screen.getByRole('group', { name: 'Bounded preview' }))
+      .toHaveTextContent('Draft price: $15');
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.blur(field);
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(onCommit).toHaveBeenCalledWith(15);
+  });
+
+  it('discards a dirty draft when pricing context changes even if the bounds stay the same', () => {
+    const onCommit = vi.fn();
+    const view = render(
+      <MenuPriceInput
+        price={12} label="Toast price" minPrice={9} maxPrice={15}
+        pricingKey="toast:quality-a" onCommit={onCommit}
+      />,
+    );
+    const field = screen.getByLabelText('Toast price');
+    fireEvent.change(field, { target: { value: '14' } });
+
+    view.rerender(
+      <MenuPriceInput
+        price={12} label="Toast price" minPrice={9} maxPrice={15}
+        pricingKey="toast:quality-b" onCommit={onCommit}
+      />,
+    );
+
+    expect(field).toHaveValue(12);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: /Price preview/ })).not.toBeInTheDocument();
+  });
+
+  it('discards a dirty draft when a bound changes independently of the pricing key', () => {
+    const onCommit = vi.fn();
+    const view = render(
+      <MenuPriceInput
+        price={12} label="Toast price" minPrice={9} maxPrice={15}
+        pricingKey="toast:stable" onCommit={onCommit}
+      />,
+    );
+    const field = screen.getByLabelText('Toast price');
+    fireEvent.change(field, { target: { value: '14' } });
+
+    view.rerender(
+      <MenuPriceInput
+        price={12} label="Toast price" minPrice={9} maxPrice={16}
+        pricingKey="toast:stable" onCommit={onCommit}
+      />,
+    );
+
+    expect(field).toHaveValue(12);
+    expect(field).toHaveAttribute('max', '16');
+    fireEvent.blur(field);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('discards a Q1 toast draft on a Q2 rerender and cannot commit it during reset', () => {
+    const onCommit = vi.fn();
+    const getPreviewPresentation = price => ({
+      accessibleName: 'Price preview for Toast',
+      itemLine: `Toast · Draft price: $${price}`,
+      description: 'Expected walk-in gross forecast.',
+      currentLabel: 'Current expected gross',
+      currentAmount: '$12.00',
+      draftLabel: 'Draft expected gross',
+      draftAmount: '$15.00',
+      affordabilityHeading: 'Affordable integer-budget-point shares by tier (current → draft).',
+      affordabilityRows: [],
+      affordabilityCaveat: 'These shares describe budget fit only, not predicted purchases.',
+      caveat: 'Expected gross is not profit.',
+    });
+    const view = render(
+      <BlurOnRender
+        price={12} minPrice={9} maxPrice={15} pricingKey="toast:1:12"
+        getPreviewPresentation={getPreviewPresentation} onCommit={onCommit}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('Water price'), { target: { value: '15' } });
+
+    view.rerender(
+      <BlurOnRender
+        price={12} minPrice={9} maxPrice={16} pricingKey="toast:2:12.96"
+        getPreviewPresentation={getPreviewPresentation} onCommit={onCommit}
+      />,
+    );
+
+    expect(screen.getByLabelText('Water price')).toHaveValue(12);
+    expect(screen.getByLabelText('Water price')).toHaveAttribute('max', '16');
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(view.container.querySelector('[aria-hidden="true"]')).toHaveTextContent('Draft price: $15');
+  });
+
   it('cancels a stale draft when the authoritative price changes', () => {
     const { input, onCommit, view } = setup();
     fireEvent.change(input(), { target: { value: '50' } });
@@ -228,12 +349,15 @@ describe('MenuPriceInput', () => {
     const makePresentation = price => ({
       accessibleName: 'Price preview for Water',
       itemLine: `Water · Draft price: $${price}`,
-      description: 'Modelled whole-menu gross per 100 hypothetical walk-in guests.',
-      currentLabel: 'Current whole-menu gross per 100 hypothetical walk-in guests',
+      description: 'Expected whole-menu gross per 100 hypothetical walk-in guests.',
+      currentLabel: 'Current expected whole-menu gross per 100 hypothetical walk-in guests',
       currentAmount: '$100.00',
-      draftLabel: 'Draft whole-menu gross per 100 hypothetical walk-in guests',
+      draftLabel: 'Draft expected whole-menu gross per 100 hypothetical walk-in guests',
       draftAmount: `$${(price * 10).toFixed(2)}`,
-      caveat: 'Not profit. Excludes service capacity and booked contracts; actual sales are not guaranteed.',
+      affordabilityHeading: 'Affordable integer-budget-point shares by tier (current → draft).',
+      affordabilityRows: [],
+      affordabilityCaveat: 'These shares describe budget fit only, not purchases.',
+      caveat: 'Expected gross is not profit. Excludes service capacity and booked contracts; actual purchases are not guaranteed.',
     });
 
     const sizingLayer = container => container.querySelector('[aria-hidden="true"]');
@@ -387,5 +511,13 @@ describe('parseMenuPriceDraft', () => {
     expect(parseMenuPriceDraft('101')).toBe(100);
     expect(parseMenuPriceDraft('1.6')).toBe(2);
     expect(parseMenuPriceDraft('12')).toBe(12);
+  });
+
+  it('rounds and clamps finite drafts to caller-supplied bounds', () => {
+    const bounds = { minPrice: 9, maxPrice: 15 };
+    expect(parseMenuPriceDraft('99', bounds)).toBe(15);
+    expect(parseMenuPriceDraft('8.6', bounds)).toBe(9);
+    expect(parseMenuPriceDraft('12.6', bounds)).toBe(13);
+    expect(parseMenuPriceDraft('1e999', bounds)).toBeNull();
   });
 });

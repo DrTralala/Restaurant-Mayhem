@@ -170,18 +170,13 @@ describe('atomic paid visit producer', () => {
     });
   });
 
-  it('projects drink-only none, custom paid food, and conservative unknown legacy food', () => {
+  it('projects drink-only none and conservative unknown legacy food', () => {
     const drink = fixture();
     delete drink.customers[0].dishOrderSnapshot;
     Object.assign(drink.customers[0], { foodOutcome: null, dishId: null, dishPriceAtOrder: null,
       drinkId: 'water', drinkPriceAtOrder: 5, orderSubtotal: 5 });
     drink.serviceItems = [];
     expect(commit(drink, receipt('c1', 5, 1)).outcome).toMatchObject({ foodOutcome: 'none', dish: null });
-    const custom = fixture();
-    custom.customers[0].dishOrderSnapshot.cookbookId = null;
-    custom.serviceItems = [];
-    expect(commit(custom).state.cookbook.entries.toast.paidPortions).toBe(0);
-    expect(commit(custom).state.careerRun.paidMeals).toBe(1);
     const legacy = fixture();
     delete legacy.customers[0].dishOrderSnapshot;
     delete legacy.serviceItems[0].dishOrderSnapshot;
@@ -209,6 +204,7 @@ describe('atomic paid visit producer', () => {
     state => { state.customers[0].orderedServiceItemIds = ['different-item']; },
     state => { state.customers[0].foodOutcome = 'fake'; },
     state => { state.customers[0].menuOutcome = 'unaffordable'; },
+    state => { state.customers[0].menuOutcome = 'poor_value'; },
     state => { state.customers[0].serviceContractId = ''; },
     state => { state.customers[0].paidVisitSequence = 2; },
     state => { state.paidVisitSequence = -1; },

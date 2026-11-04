@@ -4,6 +4,7 @@ import { EQUIPMENT } from '../data/equipment';
 import { MASTERY_PORTION_THRESHOLD } from '../data/cookbook';
 import { DRINKS, getResolvedDrink } from '../data/drinks';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
+import { getDishPricing } from '../simulation/dishPricing';
 import {
   getMenuAnalysis,
   getMenuItemSalesThreshold,
@@ -43,14 +44,14 @@ function grossSalesLabel(state, kind, id) {
 export default function MenuPanel({ readOnly = false }) {
   const state = useGameState();
   const dispatch = useDispatch();
-  const [showCreator, setShowCreator] = useState(false);
   const [showCookbook, setShowCookbook] = useState(false);
+  const [editingDishId, setEditingDishId] = useState(null);
   const [pendingRemoval, setPendingRemoval] = useState(null);
   const cookbookButtonRef = useRef(null);
-  const newDishButtonRef = useRef(null);
   const returnFocusRef = useRef(null);
   const unlockedDrinkIds = state.unlockedDrinkIds || [];
   const blocked = readOnly || state.careerRun?.needsDecision === true;
+  const editingDish = editingDishId == null ? null : getResolvedDish(state, editingDishId);
   const hasManualSuspensions = ['suspendedDishIds', 'suspendedDrinkIds'].some(key =>
     Array.isArray(state.restaurant?.[key]) && state.restaurant[key].length > 0);
   const mutate = action => { if (!blocked) dispatch(action); };
@@ -65,24 +66,33 @@ export default function MenuPanel({ readOnly = false }) {
     returnFocusRef.current = cookbookButtonRef;
     setShowCookbook(false);
   };
-  const closeCreator = () => {
-    returnFocusRef.current = newDishButtonRef;
-    setShowCreator(false);
+  const closeNameEditor = () => {
+    setEditingDishId(null);
   };
 
   useLayoutEffect(() => {
+    if (showCookbook || editingDishId != null) return;
     const openerRef = returnFocusRef.current;
     if (!openerRef) return;
     returnFocusRef.current = null;
-    const opener = openerRef.current;
+    const opener = openerRef.current
+      ?? (openerRef.dishId
+        ? document.querySelector(`[data-name-editor-trigger="${openerRef.dishId}"]`)
+        : openerRef);
     if (opener?.isConnected && !opener.disabled) opener.focus();
-  }, [showCookbook, showCreator]);
+  }, [showCookbook, editingDishId]);
 
   useEffect(() => {
     if (!pendingRemoval) return;
     const current = (state.dishes || []).find(dish => dish.id === pendingRemoval.id);
     if (blocked || !current || current !== pendingRemoval.dish) setPendingRemoval(null);
   }, [state.dishes, blocked, pendingRemoval]);
+
+  useEffect(() => {
+    if (editingDishId == null || editingDish) return;
+    returnFocusRef.current = cookbookButtonRef;
+    setEditingDishId(null);
+  }, [editingDishId, editingDish]);
 
   const cancelRemoval = () => {
     const trigger = pendingRemoval?.trigger;
@@ -110,8 +120,20 @@ export default function MenuPanel({ readOnly = false }) {
   if (showCookbook) {
     return <CookbookPanel onClose={closeCookbook} readOnly={blocked} />;
   }
-  if (showCreator && !blocked) {
-    return <RecipeCreator onClose={closeCreator} />;
+  if (editingDishId != null && editingDish) {
+    return <RecipeCreator
+      dish={editingDish}
+      disabled={blocked}
+      onCommit={name => {
+        if (blocked) return;
+        const currentDish = getResolvedDish(state, editingDishId);
+        if (!currentDish || currentDish.id !== editingDish.id
+          || currentDish.cookbookId !== editingDish.cookbookId
+          || currentDish.name !== editingDish.name) return;
+        dispatch({ type: 'UPDATE_DISH', id: editingDish.id, changes: { name } });
+      }}
+      onCancel={closeNameEditor}
+    />;
   }
 
   const analysis = getMenuAnalysis(state);
@@ -124,13 +146,6 @@ export default function MenuPanel({ readOnly = false }) {
         <button ref={cookbookButtonRef} onClick={() => { setPendingRemoval(null); setShowCookbook(true); }} style={{ ...TYPOGRAPHY.control,
           background: '#333', color: '#ccc', border: '1px solid #555', padding: '6px 14px', borderRadius: 4, cursor: 'pointer' }}>
           Cookbook
-        </button>
-        <button ref={newDishButtonRef} disabled={blocked} onClick={() => { if (!blocked) { setPendingRemoval(null); setShowCreator(true); } }} style={{
-          ...TYPOGRAPHY.control,
-          background: '#f0a500', color: '#111', border: 'none',
-          padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
-        }}>
-          + New dish
         </button>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -147,7 +162,7 @@ export default function MenuPanel({ readOnly = false }) {
         </span>
       </div>
       {blocked && <p role="status" style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>Career decision pending — menu changes are unavailable. You can still browse.</p>}
-      <p style={TYPOGRAPHY.secondary}>Cook seconds show base cooking work, not the complete wait time. Estimated demand is not a sales guarantee.</p>
+      <p style={TYPOGRAPHY.secondary}>Cook seconds show base cooking work, not the complete wait time. Estimated walk-in demand and expected gross are forecasts, not guaranteed purchases.</p>
       <p style={TYPOGRAPHY.secondary}>Suspension affects new walk-in orders only. Booked contract guests can still order these items; orders already taken continue unchanged.</p>
       <p style={TYPOGRAPHY.secondary}>Daily paid-sales thresholds stop offering an item to new walk-ins after that many paid checkout lines. Booked contract guests can still order thresholded items, and their paid lines count toward the threshold. Paid-sales counts reset automatically each new game day; thresholds remain in place and apply again. Orders already in progress are not cancelled, so paid sales can exceed the threshold. Threshold settings do not change manual suspension.</p>
       <p style={TYPOGRAPHY.secondary}>Paid today counts charged units from successful checkouts, including booked guests; free or cancelled lines do not count. It is not a demand percentage. Gross sales use recorded menu charges only, exclude tips and are not profit; legacy count-only data can show partial or unavailable gross. Sales from before this feature, including older saves, are not tracked, and removing a dish clears its paid count.</p>
@@ -163,15 +178,17 @@ export default function MenuPanel({ readOnly = false }) {
         <p>Can afford an order containing a dish: {formatCoverage(affordability.dishShare)}</p>
         <p>Can afford any order, including drink-only: {formatCoverage(affordability.anyOrderShare)}</p>
         <p style={TYPOGRAPHY.secondary}>Price-only coverage for new walk-in guest budgets at current reputation, not existing guests or booked contracts. These overlapping percentages are not additive and do not predict purchases or service capacity. Item demand weights every possible budget and guest preference; item percentages overlap and are not additive.</p>
+        <p style={TYPOGRAPHY.secondary}>Above-reference dish prices reduce expected walk-in demand because some guests decline them even when their budget can afford the dish.</p>
       </section>
 
       {state.dishes.length === 0 && (
-        <p style={{ ...TYPOGRAPHY.secondary, color: '#666' }}>No dishes yet. Create your first dish!</p>
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#666' }}>No dishes yet. Visit the Cookbook to add an owned recipe.</p>
       )}
 
       {state.dishes.map(rawDish => ({ rawDish, dish: getResolvedDish(state, rawDish.id) }))
-        .filter(entry => entry.dish)
-        .map(({ rawDish, dish }) => {
+         .filter(entry => entry.dish)
+         .map(({ rawDish, dish }) => {
+        const pricing = getDishPricing(dish.cookbookId, dish.quality);
         const suspended = isMenuItemSuspended(state, 'dish', dish.id);
         const hasCompatibleStation = (state.kitchenStations || []).some(station =>
           isDishCompatibleWithStation(state, dish, station));
@@ -187,9 +204,25 @@ export default function MenuPanel({ readOnly = false }) {
           background: '#1a1a2e', borderRadius: 8, padding: 12, marginBottom: 8,
           border: '1px solid #0f3460',
         }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, justifyContent: 'space-between', marginBottom: 4 }}>
               <strong style={TYPOGRAPHY.subheading}>{dish.name}</strong>
-            <span style={{ color: '#f0a500' }}>${dish.price} · {dish.prepTime}s cook</span>
+              {dish.cookbookId != null && <button
+                type="button"
+                aria-label={`Edit ${dish.name} name`}
+                disabled={blocked}
+                onClick={() => {
+                  if (blocked) return;
+                  setPendingRemoval(null);
+                  returnFocusRef.current = { current: null, dishId: dish.id };
+                  setEditingDishId(dish.id);
+                }}
+                data-name-editor-trigger={dish.id}
+                style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555',
+                  padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
+              >
+                Edit name
+              </button>}
+              <span style={{ color: '#f0a500' }}>${dish.price} · {dish.prepTime}s cook</span>
           </div>
           {suspended && (
             <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4, color: '#f0a500' }}>
@@ -204,9 +237,9 @@ export default function MenuPanel({ readOnly = false }) {
             </div>
           )}
           <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
-            {dish.cookbookId ? `Cookbook recipe · ${dish.masteryPerk
+            {`Cookbook recipe · ${dish.masteryPerk
               ? `Signature: ${dish.masteryPerk === 'speed' ? 'Quick Service' : 'House Favourite'}`
-              : 'No signature chosen'}` : 'Custom recipe'}
+              : 'No signature chosen'}`}
           </div>
           {mastery && (
             <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
@@ -218,7 +251,7 @@ export default function MenuPanel({ readOnly = false }) {
             <span>Quality: {'█'.repeat(dish.quality)}{'░'.repeat(10 - dish.quality)} Lv.{dish.quality}</span>
           </div>
           <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
-            <span>Estimated demand: {demand.dishes.get(dish.id) ?? 0}%</span>
+            <span>Estimated walk-in demand: {demand.dishes.get(dish.id) ?? 0}%</span>
             {' · '}
             <span>Paid today: {getMenuSalesCount(state, 'dish', dish.id)}</span>
           </div>
@@ -244,6 +277,9 @@ export default function MenuPanel({ readOnly = false }) {
             price={dish.price}
             label={`${dish.name} price`}
             disabled={blocked}
+            minPrice={pricing.minPrice}
+            maxPrice={pricing.maxPrice}
+            pricingKey={`${dish.cookbookId}:${dish.quality}:${pricing.referenceValue}`}
             onCommit={price => mutate({ type: 'UPDATE_DISH', id: dish.id, changes: { price } })}
             getPreviewPresentation={price => createMenuPricePreviewPresentation({
               state, kind: 'dish', id: dish.id, name: dish.name, price,
@@ -348,7 +384,7 @@ export default function MenuPanel({ readOnly = false }) {
                   </span>
                 </div>
                 <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
-                  <span>Estimated demand: {demand.drinks.get(resolvedDrink.id) ?? 0}%</span>
+                  <span>Estimated walk-in demand: {demand.drinks.get(resolvedDrink.id) ?? 0}%</span>
                   {' · '}
                   <span>Paid today: {getMenuSalesCount(state, 'drink', resolvedDrink.id)}</span>
                 </div>

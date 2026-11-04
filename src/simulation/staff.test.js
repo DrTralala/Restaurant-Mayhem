@@ -14,6 +14,8 @@ import { updateAutomaticDishwashers } from './dishwashing';
 import { getDoorPosition, getDoors, getRestaurantWorld } from './world';
 import { ACTIVITY_DURATIONS } from './activity';
 import { isAtPreparationPosition } from './preparationPosition';
+import { createDishOrderSnapshot, getResolvedDish } from './cookbook';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
 
 const baseState = {
   staff: [],
@@ -30,11 +32,44 @@ const baseState = {
   doors: [{ id: 'door1', y: 340, role: 'exit' }],
 };
 
+function withAuthoredDishOrderSnapshots(state) {
+  const dishSpecs = [...(state.dishes || [])];
+  for (const item of state.serviceItems || []) {
+    if (item.kind === 'dish' && item.menuItemId != null
+      && !dishSpecs.some(dish => dish.id === item.menuItemId)) {
+      dishSpecs.push({ id: item.menuItemId, cookbookId: 'toast', price: 12, quality: 1 });
+    }
+  }
+  const authored = withOwnedAuthoredDishes(state, dishSpecs);
+  const serviceItems = (authored.serviceItems || []).map(item => {
+    if (item.kind !== 'dish' || Object.hasOwn(item, 'dishOrderSnapshot')) return item;
+    const dish = getResolvedDish(authored, item.menuItemId);
+    if (!dish) throw new Error(`Missing owned authored test dish ${item.menuItemId}`);
+    const owner = (authored.customers || []).find(customer => customer.id === item.customerId);
+    const snapshot = createDishOrderSnapshot(dish, {
+      serviceItemId: item.id,
+      orderedAt: owner?.orderTime ?? authored.restaurant?.gameTime ?? 0,
+    });
+    return { ...item, dishOrderSnapshot: snapshot };
+  });
+  const customers = (authored.customers || []).map(customer => {
+    const item = serviceItems.find(candidate => candidate.kind === 'dish'
+      && candidate.customerId === customer.id && candidate.dishOrderSnapshot);
+    if (!item || Object.hasOwn(customer, 'dishOrderSnapshot')) return customer;
+    return {
+      ...customer,
+      ...(customer.dishId == null ? { dishId: item.menuItemId } : {}),
+      dishOrderSnapshot: { ...item.dishOrderSnapshot },
+    };
+  });
+  return { ...authored, customers, serviceItems };
+}
+
 function ordinaryDrinkWithContractDish({ dishStation = null, equipment = [] } = {}) {
-  return {
+  return withAuthoredDishOrderSnapshots({
     ...baseState,
     restaurant: { ...baseState.restaurant, gameTime: 100 },
-    dishes: [{ id: 'd1', requiredEquipmentId: 'eq1', prepTime: 60 }],
+    dishes: [{ id: 'd1', cookbookId: 'toast', requiredEquipmentId: 'eq1', price: 12, quality: 1 }],
     equipment,
     kitchenStations: [
       { id: 'dispenser', equipmentId: null, x: 100, y: 100 },
@@ -57,7 +92,7 @@ function ordinaryDrinkWithContractDish({ dishStation = null, equipment = [] } = 
       { id: 'contract-dish', kind: 'dish', menuItemId: 'd1', customerId: 'contract-guest',
         tableId: 't2', state: 'ordered' },
     ],
-  };
+  });
 }
 
 it('prepares staff paths without changing positions', () => {
@@ -489,7 +524,7 @@ describe('updateStaff', () => {
   });
 
   function orderOutcomeState(customers) {
-    return {
+    return withOwnedAuthoredDishes({
       ...baseState,
       restaurant: {
         ...baseState.restaurant, gameTime: 60, day: 1, reputation: 3, totalServed: 0,
@@ -501,13 +536,19 @@ describe('updateStaff', () => {
       })),
       customers,
       tables: [{ id: 't1', status: 'occupied', seats: 2, x: 200, y: 200 }],
-      dishes: [{ id: 'toast', price: 10, quality: 1, popularity: 50, prepTime: 60 }],
+      dishes: [{ id: 'toast', cookbookId: 'fries', price: 10, quality: 1 }],
       unlockedDrinkIds: [],
       completedCustomers: [],
       pendingPartyReviews: [],
       partyReviewHistory: [],
       upgrades: [],
-    };
+    });
+  }
+
+  function poorValueOrderOutcomeState(customers) {
+    return withOwnedAuthoredDishes({
+      ...orderOutcomeState(customers),
+    }, [{ id: 'toast', cookbookId: 'toast', price: 15, quality: 1 }]);
   }
 
   it('records both outcomes and keeps an unaffordable member waiting for an ordered party member', () => {
@@ -530,7 +571,7 @@ describe('updateStaff', () => {
     expect(result.customers.find(customer => customer.id === 'b').state).toBe('waiting_for_party');
     expect(result.pendingPartyReviews).toEqual([{
       partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
-      unaffordableMemberIds: ['b'], paidReviews: [],
+      unaffordableMemberIds: ['b'], poorValueMemberIds: [], paidReviews: [],
     }]);
     expect(result.partyReviewHistory).toEqual([]);
     expect(result.tables[0].status).toBe('occupied');
@@ -558,12 +599,45 @@ describe('updateStaff', () => {
     ]);
     expect(result.partyReviewHistory).toEqual([
       expect.objectContaining({
-        partyId: 'p1', score: -110, paidCount: 0, unaffordableCount: 2,
+        partyId: 'p1', score: -110, paidCount: 0, unaffordableCount: 2, poorValueCount: 0,
         reputationDelta: -0.044,
       }),
     ]);
     expect(result.restaurant.reputation).toBe(2.956);
     expect(result.pendingPartyReviews).toEqual([]);
+  });
+
+  it('settles an all-poor-value couple after the second order task in the same tick', () => {
+    const state = poorValueOrderOutcomeState([
+      {
+        id: 'a', partyId: 'p1', partySize: 2, state: 'seated', tableId: 't1',
+        spendingTier: 'budget', spendingBudget: 18, archetype: 'regular',
+        patience: 100, happiness: 80,
+      },
+      {
+        id: 'b', partyId: 'p1', partySize: 2, state: 'seated', tableId: 't1',
+        spendingTier: 'budget', spendingBudget: 18, archetype: 'regular',
+        patience: 100, happiness: 80,
+      },
+    ]);
+    const rolls = [0, 0, 0.9, 0, 0, 0.9];
+    vi.spyOn(Math, 'random').mockImplementation(() => rolls.shift() ?? 0);
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers).toEqual([
+      expect.objectContaining({ id: 'a', state: 'leaving', departureReason: 'menu_poor_value' }),
+      expect.objectContaining({ id: 'b', state: 'leaving', departureReason: 'menu_poor_value' }),
+    ]);
+    expect(result.partyReviewHistory).toEqual([expect.objectContaining({
+      partyId: 'p1', score: -110, paidCount: 0, unaffordableCount: 0,
+      poorValueCount: 2, reputationDelta: -0.044,
+    })]);
+    expect(result.serviceItems).toEqual([]);
+    expect(result.completedCustomers).toEqual([]);
+    expect(result.restaurant.totalServed).toBe(0);
+    expect(result.pendingPartyReviews).toEqual([]);
+    expect(rolls).toEqual([]);
   });
 
   it('settles a solo unaffordable order without payment, service, or served-count effects', () => {
@@ -580,7 +654,7 @@ describe('updateStaff', () => {
     });
     expect(result.partyReviewHistory).toEqual([
       expect.objectContaining({
-        partyId: 'solo-party', score: -50, paidCount: 0, unaffordableCount: 1,
+        partyId: 'solo-party', score: -50, paidCount: 0, unaffordableCount: 1, poorValueCount: 0,
         reputationDelta: -0.01,
       }),
     ]);
@@ -588,6 +662,71 @@ describe('updateStaff', () => {
     expect(result.pendingPartyReviews).toEqual([]);
     expect(result.serviceItems).toEqual([]);
     expect(result.completedCustomers).toEqual([]);
+  });
+
+  it('settles a solo poor-value order without creating a bill or paid visit', () => {
+    const state = poorValueOrderOutcomeState([{
+      id: 'solo', partyId: 'solo-party', partySize: 1, state: 'seated', tableId: 't1',
+      spendingTier: 'budget', spendingBudget: 18, archetype: 'regular',
+      patience: 100, happiness: 80,
+    }]);
+    const rolls = [0, 0, 0.9];
+    vi.spyOn(Math, 'random').mockImplementation(() => rolls.shift() ?? 0);
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers[0]).toMatchObject({
+      state: 'leaving', departureReason: 'menu_poor_value', menuOutcome: 'poor_value',
+      dishId: null, drinkId: null, dishPriceAtOrder: null,
+      drinkPriceAtOrder: null, orderSubtotal: null,
+      orderedServiceItemIds: [], consumedServiceItemIds: [],
+    });
+    expect(result.customers[0]).not.toHaveProperty('dishOrderSnapshot');
+    expect(result.customers[0]).not.toHaveProperty('tipAmount');
+    expect(result.customers[0]).not.toHaveProperty('paidVisitSequence');
+    expect(result.partyReviewHistory).toEqual([expect.objectContaining({
+      partyId: 'solo-party', score: -50, memberCount: 1, paidCount: 0,
+      unaffordableCount: 0, poorValueCount: 1, reputationDelta: -0.01,
+    })]);
+    expect(result.pendingPartyReviews).toEqual([]);
+    expect(result.serviceItems).toEqual([]);
+    expect(result.completedCustomers).toEqual([]);
+    expect(result.restaurant).toMatchObject({ totalServed: 0, reputation: 2.99 });
+    expect(result.cookbook.entries.toast.paidPortions).toBe(0);
+    expect(rolls).toEqual([]);
+  });
+
+  it('keeps a mixed paying and poor-value party pending until the ordered member pays', () => {
+    const state = poorValueOrderOutcomeState([
+      {
+        id: 'a', partyId: 'p1', partySize: 2, state: 'seated', tableId: 't1',
+        spendingTier: 'budget', spendingBudget: 18, archetype: 'regular',
+        patience: 100, happiness: 80,
+      },
+      {
+        id: 'b', partyId: 'p1', partySize: 2, state: 'seated', tableId: 't1',
+        spendingTier: 'budget', spendingBudget: 18, archetype: 'regular',
+        patience: 100, happiness: 80,
+      },
+    ]);
+    const rolls = [0, 0, 0.1, 0, 0, 0.9];
+    vi.spyOn(Math, 'random').mockImplementation(() => rolls.shift() ?? 0);
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers.find(customer => customer.id === 'a').state).toBe('waiting_for_items');
+    expect(result.customers.find(customer => customer.id === 'b')).toMatchObject({
+      state: 'waiting_for_party', menuOutcome: 'poor_value',
+    });
+    expect(result.pendingPartyReviews).toEqual([{
+      partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
+      unaffordableMemberIds: [], poorValueMemberIds: ['b'], paidReviews: [],
+    }]);
+    expect(result.partyReviewHistory).toEqual([]);
+    expect(result.serviceItems).toEqual([
+      expect.objectContaining({ customerId: 'a', kind: 'dish', state: 'ordered' }),
+    ]);
+    expect(rolls).toEqual([]);
   });
 
   function partyPaymentState({ customers, pendingPartyReviews, upgrades = [] }) {
@@ -632,7 +771,7 @@ describe('updateStaff', () => {
       ],
       pendingPartyReviews: [{
         partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
-        unaffordableMemberIds: ['b'], paidReviews: [],
+        unaffordableMemberIds: ['b'], poorValueMemberIds: [], paidReviews: [],
       }],
     });
 
@@ -648,7 +787,7 @@ describe('updateStaff', () => {
     });
     expect(result.partyReviewHistory.at(-1)).toMatchObject({
       partyId: 'p1', score: -5, memberCount: 2, paidCount: 1,
-      unaffordableCount: 1,
+      unaffordableCount: 1, poorValueCount: 0,
     });
     expect(result.partyReviewHistory.at(-1).reputationDelta).toBeCloseTo(0.003, 4);
     expect(result.pendingPartyReviews).toEqual([]);
@@ -661,6 +800,51 @@ describe('updateStaff', () => {
     expect(repeated.completedCustomers).toEqual(result.completedCustomers);
     expect(repeated.restaurant).toEqual(result.restaurant);
     expect(randomSpy.mock.calls.length).toBe(randomCallsAfterPayment);
+  });
+
+  it('settles a mixed poor-value party through the cashier without billing the refused member', () => {
+    const state = partyPaymentState({
+      customers: [
+        {
+          id: 'a', partyId: 'p1', state: 'checkout_processing', menuOutcome: 'ordered',
+          cashierStationId: 'cashier1', paymentReady: false, x: 840, y: 180,
+          happiness: 100, dishId: 'toast', drinkId: null,
+          dishPriceAtOrder: 12, drinkPriceAtOrder: null, orderSubtotal: 12,
+          tableId: 't1',
+        },
+        {
+          id: 'b', partyId: 'p1', state: 'waiting_for_party', menuOutcome: 'poor_value',
+          happiness: 80, dishId: null, drinkId: null,
+          dishPriceAtOrder: null, drinkPriceAtOrder: null, orderSubtotal: null,
+          orderedServiceItemIds: [], tableId: 't1',
+        },
+      ],
+      pendingPartyReviews: [{
+        partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
+        unaffordableMemberIds: [], poorValueMemberIds: ['b'], paidReviews: [],
+      }],
+    });
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const result = updateStaff(state, 0);
+
+    expect(result.customers.find(customer => customer.id === 'a')).toMatchObject({
+      state: 'leaving', departureReason: 'served', paidVisitSequence: 1,
+    });
+    expect(result.customers.find(customer => customer.id === 'b')).toMatchObject({
+      state: 'leaving', departureReason: 'menu_poor_value', menuOutcome: 'poor_value',
+      orderSubtotal: null, dishPriceAtOrder: null, drinkPriceAtOrder: null,
+    });
+    expect(result.customers.find(customer => customer.id === 'b')).not.toHaveProperty('paidVisitSequence');
+    expect(result.partyReviewHistory).toEqual([expect.objectContaining({
+      partyId: 'p1', score: -5, paidCount: 1, unaffordableCount: 0,
+      poorValueCount: 1,
+    })]);
+    expect(result.partyReviewHistory[0].reputationDelta).toBeCloseTo(0.003, 12);
+    expect(result.pendingPartyReviews).toEqual([]);
+    expect(result.completedCustomers).toHaveLength(1);
+    expect(result.restaurant.totalServed).toBe(1);
+    expect(result.serviceItems).toEqual([]);
   });
 
   it('records the departing payer position before clearing checkout fields', () => {
@@ -763,7 +947,8 @@ describe('updateStaff', () => {
       ],
       pendingPartyReviews: [{
         partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a', 'b'],
-        unaffordableMemberIds: [], paidReviews: [{ customerId: 'b', score: 100 }],
+        unaffordableMemberIds: [], poorValueMemberIds: [],
+        paidReviews: [{ customerId: 'b', score: 100 }],
       }],
       upgrades: [{ level: 2, effects: { type: 'reputationGain', value: 0.01 } }],
     }), 0);
@@ -771,7 +956,7 @@ describe('updateStaff', () => {
     expect(result.partyReviewHistory).toEqual([
       expect.objectContaining({
         partyId: 'p1', score: 100, memberCount: 2, paidCount: 2,
-        unaffordableCount: 0,
+        unaffordableCount: 0, poorValueCount: 0,
       }),
     ]);
     expect(result.partyReviewHistory[0].reputationDelta).toBeCloseTo(0.051, 4);
@@ -1824,10 +2009,10 @@ describe('updateStaff', () => {
   });
 
   it('reconciles drink and unbatched dish tasks that claim one preparation station', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 100 }],
-      dishes: [{ id: 'dish', requiredEquipmentId: null, prepTime: 60 }],
+      dishes: [{ id: 'dish', cookbookId: 'toast', price: 12, quality: 1 }],
       serviceTables: [{ id: 'st1', x: 300, y: 120 }],
       customers: [
         { id: 'drink-customer', state: 'waiting_for_items', drinkId: 'water', tableId: 't1' },
@@ -1860,7 +2045,7 @@ describe('updateStaff', () => {
         },
       ],
       restaurant: { ...baseState.restaurant, gameTime: 120 },
-    };
+    });
 
     const result = resolveStaffAfterMovement(state, 120, new Map([
       ['cook-a', { plan: 'arrived', motion: 'holding' }],
@@ -1879,62 +2064,54 @@ describe('updateStaff', () => {
     expect(result.staff.find(worker => worker.id === 'cook-b')?.task).toBeNull();
   });
 
-  it('reconciles a drink claim against a batched dish claim on one preparation station', () => {
-    const state = {
+  it('reconciles a batched dish claim against an unbatched dish claim on one station', () => {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
-      kitchenStations: [{ id: 'dispenser', equipmentId: null, x: 100, y: 100 }],
-      dishes: [{ id: 'dish', requiredEquipmentId: null, prepTime: 60 }],
-      serviceTables: [{ id: 'st1', x: 300, y: 120 }],
+      kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 100 }],
+      dishes: [{ id: 'dish', cookbookId: 'toast', price: 12, quality: 1 }],
+      equipment: [{ id: 'eq1', owned: true }],
       customers: [
-        { id: 'drink-customer', state: 'waiting_for_items', drinkId: 'water', tableId: 't1' },
-        { id: 'dish-customer', state: 'waiting_for_items', dishId: 'dish', tableId: 't2' },
+        { id: 'unbatched-customer', state: 'waiting_for_items', dishId: 'dish' },
+        { id: 'batch-customer', state: 'waiting_for_items', dishId: 'dish' },
       ],
       staff: [
         {
           id: 'cook-a', role: 'cook', morale: 80, x: 90, y: 110,
-          task: {
-            type: 'prepare_drink', serviceItemId: 'drink', stationId: 'dispenser',
-            serviceTableId: 'st1', serviceSlotIndex: 0,
-          },
+          task: { type: 'prepare_dish', serviceItemId: 'unbatched-dish', stationId: 'k1' },
         },
         {
           id: 'cook-b', role: 'cook', morale: 80, x: 90, y: 110,
           task: {
-            type: 'prepare_dish', batchId: 'batch', serviceItemId: 'dish',
-            serviceItemIds: ['dish'], stationId: 'dispenser',
+            type: 'prepare_dish', batchId: 'batch', serviceItemId: 'batched-dish',
+            serviceItemIds: ['batched-dish'], stationId: 'k1',
           },
         },
       ],
       serviceItems: [
         {
-          id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'drink-customer',
-          tableId: 't1', state: 'preparing', stationId: 'dispenser', serviceTableId: 'st1',
-          serviceSlotIndex: 0, assignedStaffId: 'cook-a', preparationStartedAt: 0,
-          accumulatedWork: 240, lastProgressAt: 120,
+          id: 'unbatched-dish', kind: 'dish', menuItemId: 'dish',
+          customerId: 'unbatched-customer', state: 'ordered', assignedStaffId: null,
         },
         {
-          id: 'dish', kind: 'dish', menuItemId: 'dish', customerId: 'dish-customer',
-          tableId: 't2', state: 'preparing', batchId: 'batch', stationId: 'dispenser',
+          id: 'batched-dish', kind: 'dish', menuItemId: 'dish', customerId: 'batch-customer',
+          state: 'preparing', batchId: 'batch', stationId: 'k1',
           assignedStaffId: 'cook-b', preparationStartedAt: 0, accumulatedWork: 30,
           lastProgressAt: 20,
         },
       ],
       cookingBatches: [{
-        id: 'batch', cookId: 'cook-b', stationId: 'dispenser', serviceItemIds: ['dish'],
+        id: 'batch', cookId: 'cook-b', stationId: 'k1', serviceItemIds: ['batched-dish'],
         status: 'preparing', startedAt: 0, readyAt: null,
       }],
       restaurant: { ...baseState.restaurant, gameTime: 120 },
-    };
+    });
 
     const result = resolveStaffAfterMovement(state, 120, new Map([
       ['cook-a', { plan: 'arrived', motion: 'holding' }],
       ['cook-b', { plan: 'arrived', motion: 'holding' }],
     ]));
 
-    expect(result.serviceItems.find(item => item.id === 'drink')).toMatchObject({
-      state: 'carried', assignedStaffId: 'cook-a', stationId: null,
-    });
-    const dish = result.serviceItems.find(item => item.id === 'dish');
+    const dish = result.serviceItems.find(item => item.id === 'batched-dish');
     expect(dish).toMatchObject({
       state: 'ordered', stationId: null, assignedStaffId: null,
       lastProgressAt: 120,
@@ -2404,7 +2581,7 @@ describe('updateStaff', () => {
         }],
         pendingPartyReviews: [{
           partyId: 'p1', memberIds: ['a'], orderedMemberIds: ['a'],
-          unaffordableMemberIds: [], paidReviews: [],
+          unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
         }],
       });
 
@@ -2455,7 +2632,7 @@ describe('updateStaff', () => {
       }],
       pendingPartyReviews: [{
         partyId: 'p1', memberIds: ['a'], orderedMemberIds: ['a'],
-        unaffordableMemberIds: [], paidReviews: [],
+        unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
       }],
     }), 0);
 
@@ -3156,14 +3333,14 @@ describe('updateStaff', () => {
     [0.97, ['drink'], null, 'water'],
   ])('creates customer-owned service items for roll %s', (roll, kinds, dishId, drinkId) => {
     vi.spyOn(Math, 'random').mockReturnValue(roll);
-    const state = {
+    const state = withOwnedAuthoredDishes({
       ...baseState,
       staff: [{ id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220, task: { type: 'take_order', customerId: 'c1', startedAt: 0 } }],
       customers: [{ id: 'c1', state: 'seated', tableId: 't1', dishId: null, drinkId: null }],
       tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
-      dishes: [{ id: 'd1', popularity: 50, quality: 1, price: 12 }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', quality: 1, price: 12 }],
       unlockedDrinkIds: ['water'],
-    };
+    });
 
     const result = updateStaff(state, 0);
 
@@ -3658,7 +3835,7 @@ describe('updateStaff', () => {
   });
 
   it('adds dish quality, upgrade, and equipment quality only for a dish delivery', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       staff: [{
         id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220,
@@ -3667,11 +3844,11 @@ describe('updateStaff', () => {
       customers: [{ id: 'c1', state: 'waiting_for_items', happiness: 50, dishId: 'd1', drinkId: null, tableId: 't1' }],
       tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
       serviceItems: [{ id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', tableId: 't1', state: 'carried' }],
-      dishes: [{ id: 'd1', quality: 5, requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', quality: 5, price: 12, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1.3, qualityBonus: 0.15 }],
       upgrades: [{ level: 2, effects: { type: 'qualityBonus', value: 0.05 } }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
-    };
+    });
 
     const result = updateStaff(state, 0);
 
@@ -3700,7 +3877,7 @@ describe('updateStaff', () => {
   });
 
   it('caps dish-delivery happiness at 100', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       staff: [{
         id: 'w1', role: 'waiter', morale: 80, x: 180, y: 220,
@@ -3709,10 +3886,10 @@ describe('updateStaff', () => {
       customers: [{ id: 'c1', state: 'waiting_for_items', happiness: 95, dishId: 'd1', drinkId: null, tableId: 't1' }],
       tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
       serviceItems: [{ id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', tableId: 't1', state: 'carried' }],
-      dishes: [{ id: 'd1', quality: 5, requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', quality: 5, price: 12, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, qualityBonus: 0 }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
-    };
+    });
 
     const result = updateStaff(state, 0);
 
@@ -3955,7 +4132,7 @@ describe('updateStaff', () => {
   // --- Dish preparation ---
 
   it('prefers a cook’s selected compatible station for a new food batch', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       staff: [{
         id: 'c1', role: 'cook', morale: 80, x: 500, y: 600, preferredStationId: 'k2',
@@ -3964,11 +4141,11 @@ describe('updateStaff', () => {
         { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 },
         { id: 'k2', equipmentId: 'eq1', x: 240, y: 120 },
       ],
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       customers: [{ id: 'guest', state: 'waiting_for_items', dishId: 'd1' }],
       serviceItems: [{ id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'guest', state: 'ordered' }],
-    };
+    });
 
     const result = updateStaff(state, 1);
 
@@ -3985,7 +4162,7 @@ describe('updateStaff', () => {
       id: 'cook', role: 'cook', morale: 80, x: 500, y: 600,
       ...(noPreference ? {} : { preferredStationId }),
     };
-    return {
+    return withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 100 },
       staff: [cook],
@@ -3994,11 +4171,11 @@ describe('updateStaff', () => {
         station2,
       ],
       __preparationStationClaims: preparationStationClaims,
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }, { id: 'eq2', owned: true }],
       customers: [{ id: 'guest', state: 'waiting_for_items', dishId: 'd1' }],
       serviceItems: [{ id: 'pending', kind: 'dish', menuItemId: 'd1', customerId: 'guest', state: 'ordered' }],
-    };
+    });
   }
 
   it.each([
@@ -4022,11 +4199,11 @@ describe('updateStaff', () => {
 
   it('cook paths to a compatible station for the oldest ordered dish item', () => {
     const cook = { id: 'c1', name: 'Marco', role: 'cook', skill: 5, morale: 80, salary: 200, x: 500, y: 600 };
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       staff: [cook],
        kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+       dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       serviceItems: [
         { id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'ordered' },
@@ -4034,7 +4211,7 @@ describe('updateStaff', () => {
       ],
       customers: [{ id: 'c1', dishId: 'd1' }, { id: 'c2', dishId: 'd1' }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
-    };
+    });
     const result = updateStaff(state, 1);
 
     expect(result.staff[0].task).toMatchObject({
@@ -4046,11 +4223,11 @@ describe('updateStaff', () => {
 
   it('recovers an old arrived preparation goal before resolving a remote cook', () => {
     const station = { id: 'k1', equipmentId: 'eq1', x: 100, y: 100 };
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 100 },
       kitchenStations: [station],
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       serviceItems: [{
         id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1',
@@ -4062,7 +4239,7 @@ describe('updateStaff', () => {
         navigationGoal: { x: 90, y: 110 },
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
       }],
-    };
+    });
 
     const recovered = resolveStaffAfterMovement(state, 0, new Map([
       ['cook1', { plan: 'arrived', motion: 'holding' }],
@@ -4082,7 +4259,7 @@ describe('updateStaff', () => {
   });
 
   it('cook selects the oldest eligible food or drink preparation', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       staff: [{
         id: 'cook', role: 'cook', morale: 80, x: 500, y: 600, preferredStationId: 'k1',
@@ -4091,7 +4268,7 @@ describe('updateStaff', () => {
         { id: 'k1', equipmentId: 'eq1', x: 90, y: 70 },
         { id: 'dispenser', equipmentId: null, x: 360, y: 120 },
       ],
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       customers: [
@@ -4103,7 +4280,7 @@ describe('updateStaff', () => {
         { id: 'drink', kind: 'drink', menuItemId: 'water', customerId: 'drink-customer', state: 'ordered' },
       ],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
-    };
+    });
 
     const result = updateStaff(state, 1);
 
@@ -4152,7 +4329,7 @@ describe('updateStaff', () => {
     });
 
   it('selects a contract dish ahead of an older walk-in drink when a cook becomes free', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       staff: [{
         id: 'cook', role: 'cook', morale: 80, x: 500, y: 600, task: null,
@@ -4163,7 +4340,7 @@ describe('updateStaff', () => {
         { id: 'k2', equipmentId: 'eq1', x: 240, y: 120 },
         { id: 'dispenser', equipmentId: null, x: 360, y: 120 },
       ],
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       serviceTables: [{ id: 'st1', x: 140, y: 120 }],
       customers: [
@@ -4176,7 +4353,7 @@ describe('updateStaff', () => {
         { id: 'contract-dish', kind: 'dish', menuItemId: 'd1', customerId: 'contract-guest', state: 'ordered' },
       ],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
-    };
+    });
 
     const result = updateStaff(state, 1);
 
@@ -4193,11 +4370,11 @@ describe('updateStaff', () => {
        x: 90, y: 130,
       task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
     };
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       staff: [cook],
       kitchenStations: [station, { id: 'k2', equipmentId: 'eq1', x: 240, y: 120 }],
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       serviceItems: [
         { id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'ordered' },
@@ -4205,7 +4382,7 @@ describe('updateStaff', () => {
       ],
       customers: [{ id: 'c1', dishId: 'd1' }, { id: 'c2', dishId: 'd1' }],
       restaurant: { ...baseState.restaurant, gameTime: 100 },
-    };
+    });
     const result = updateStaff(state, 1);
 
     expect(result.staff[0].task).toEqual({
@@ -4222,7 +4399,7 @@ describe('updateStaff', () => {
 
   it('cook picks up their finished dish and paths to a reserved service-counter slot', () => {
     const station = { id: 'k1', equipmentId: 'eq1', x: 100, y: 120 };
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 160 },
       staff: [{
@@ -4232,14 +4409,14 @@ describe('updateStaff', () => {
       customers: [{ id: 'customer', state: 'waiting_for_items', dishId: 'd1' }],
       kitchenStations: [station],
       serviceTables: [{ id: 'st1', x: 300, y: 120 }],
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       serviceItems: [{
         id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'customer',
         state: 'ready', stationId: 'k1', assignedStaffId: 'cook1', readyAt: 160,
         serviceTableId: null, serviceSlotIndex: null, x: 120, y: 140,
       }],
-    };
+    });
 
     const result = updateStaff(state, 0);
 
@@ -4258,7 +4435,7 @@ describe('updateStaff', () => {
   });
 
   it('batches ready dishes for a cook without calling a shadowed ownership flag', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       staff: [{
          id: 'cook', role: 'cook', skill: 10, x: 90, y: 130,
@@ -4270,14 +4447,14 @@ describe('updateStaff', () => {
         { id: 'c2', state: 'waiting_for_items', dishId: 'd1' },
       ],
       kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1', prepTime: 60 }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       serviceTables: [{ id: 'st1', x: 300, y: 120 }],
       serviceItems: [
         { id: 'i1', kind: 'dish', menuItemId: 'd1', customerId: 'c1', state: 'ready', stationId: 'k1', assignedStaffId: 'cook', readyAt: 1 },
         { id: 'i2', kind: 'dish', menuItemId: 'd1', customerId: 'c2', state: 'ready', stationId: 'k1', assignedStaffId: 'cook', readyAt: 2 },
       ],
-    };
+    });
 
     let result;
     expect(() => { result = updateStaff(state, 0); }).not.toThrow();
@@ -4289,7 +4466,7 @@ describe('updateStaff', () => {
   });
 
   it('clears an already-reached goal when preparing a dish transitions into service placement', () => {
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       ...baseState,
       restaurant: { ...baseState.restaurant, gameTime: 160 },
       staff: [{
@@ -4298,7 +4475,7 @@ describe('updateStaff', () => {
         task: { type: 'prepare_dish', serviceItemId: 'i1', stationId: 'k1' },
       }],
       kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 200, y: 200 }],
-      dishes: [{ id: 'd1', requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'd1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true }],
       customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'd1' }],
       serviceTables: [{ id: 'st1', x: 140, y: 240 }],
@@ -4307,7 +4484,7 @@ describe('updateStaff', () => {
         stationId: 'k1', assignedStaffId: 'cook1', readyAt: 160,
         serviceTableId: null, serviceSlotIndex: null,
       }],
-    };
+    });
 
     const result = resolveStaffAfterMovement(state, 0);
 
@@ -4724,13 +4901,14 @@ describe('updateStaff', () => {
         staff: [{ id: 'j1', role: 'janitor', x: 180, y: 180, task: null }],
         floorDirt: [{ id: 'd1', x: 200, y: 200 }],
       }), { type: 'clean_floor', dirtId: 'd1' }, { x: 8, y: 9 }],
-      ['kitchen station', () => ({
+      ['kitchen station', () => withAuthoredDishOrderSnapshots({
         ...baseState,
         staff: [{ id: 'cook1', role: 'cook', x: 180, y: 200, task: null }],
         kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 200, y: 200 }],
-        dishes: [{ id: 'dish1', requiredEquipmentId: 'eq1' }],
+        dishes: [{ id: 'dish1', cookbookId: 'toast', price: 12, quality: 1, requiredEquipmentId: 'eq1' }],
         equipment: [{ id: 'eq1', owned: true }],
-        serviceItems: [{ id: 'item1', kind: 'dish', menuItemId: 'dish1', state: 'ordered' }],
+        customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'dish1' }],
+        serviceItems: [{ id: 'item1', kind: 'dish', menuItemId: 'dish1', customerId: 'c1', state: 'ordered' }],
        }), { type: 'prepare_dish', serviceItemId: 'item1', stationId: 'k1' }, { x: 9.5, y: 10.5 }],
       ['service counter', () => ({
         ...baseState,
@@ -4797,12 +4975,12 @@ describe('updateStaff', () => {
         washStations: [{ id: 'sink', type: 'manual', x: 400, y: 200, w: 40, h: 40 }],
         serviceItems: [{ id: 'dirty1', tableId: 't1', state: 'dirty_at_table', dirtyAt: 1 }],
       }), { type: 'collect_dirty_item', serviceItemId: 'dirty1', tableId: 't1' }, { x: 9, y: 10 }],
-      ['table ordering', () => ({
+      ['table ordering', () => withOwnedAuthoredDishes({
         ...baseState,
         staff: [{ id: 'w1', role: 'waiter', x: 180, y: 200, task: null }],
         customers: [{ id: 'c1', state: 'seated', tableId: 't1', dishId: null, drinkId: null }],
         tables: [{ id: 't1', status: 'occupied', x: 200, y: 200 }],
-        dishes: [{ id: 'dish1', popularity: 50 }],
+        dishes: [{ id: 'dish1', cookbookId: 'toast', price: 12, quality: 1 }],
       }), { type: 'take_order', customerId: 'c1' }, { x: 9, y: 10 }],
     ];
 

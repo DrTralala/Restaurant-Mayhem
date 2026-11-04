@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { resolveStaffAfterMovement, updateStaff } from './staff';
 import { releaseStaffWork } from './staffTaskLifecycle';
 import { getWashStationUsage } from './dishwashing';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
 
-const baseState = {
+const baseState = withOwnedAuthoredDishes({
   staff: [],
   customers: [],
   queue: [],
@@ -12,12 +13,12 @@ const baseState = {
   serviceItems: [],
   unlockedDrinkIds: [],
   kitchenStations: [],
-  dishes: [{ id: 'toast', price: 10, quality: 1, popularity: 50, prepTime: 60 }],
+  dishes: [{ id: 'toast', cookbookId: 'toast', price: 10, quality: 1 }],
   restaurant: { gameTime: 0, expansionLevel: 1 },
   serviceTables: [],
   washStations: [],
   doors: [{ id: 'door1', y: 340, role: 'exit' }],
-};
+});
 
 describe('staff task ownership', () => {
   it('assigns one low-skill waiter to a table with multiple ready diners', () => {

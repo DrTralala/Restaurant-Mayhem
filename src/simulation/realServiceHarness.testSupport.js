@@ -209,7 +209,7 @@ export function createServiceFixture({ mode = 'contract', templateId = 'office-l
   if (['compact-service', 'compact-capacity'].includes(strategy)) {
     // Chosen only after the recorded seed-1 preparation comparison demonstrated
     // four genuine Office payments. Every relocation is a normal player action.
-    state = applyAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 6 } }, actions);
+    state = applyAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 9 } }, actions);
     state = applyAction(state, { type: 'UPDATE_DRINK', id: 'water', changes: { price: 100 } }, actions);
     for (const [id, x, y] of [['starter-cook', 390, 100], ['starter-waiter', 460, 480],
       ['starter-host', 500, 480], ['starter-janitor', 540, 480]]) {
@@ -237,7 +237,7 @@ export function createServiceFixture({ mode = 'contract', templateId = 'office-l
   }
   if (strategy === 'career-day-service') {
     state = applyAction(state, { type: 'SET_OPERATING_HOURS', openHour: 10, closeHour: 20 }, actions);
-    state = applyAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 6 } }, actions);
+    state = applyAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 9 } }, actions);
     state = applyAction(state, { type: 'UPGRADE_EQUIPMENT', id: 'eq1' }, actions);
     const schedule = Array.from({ length: 48 }, (_, slot) => slot >= 18 && slot < 44 ? 'work' : 'pto');
     for (const worker of state.staff) state = applyAction(state, { type: 'SET_STAFF_SCHEDULE', id: worker.id, schedule }, actions);

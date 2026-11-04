@@ -13,6 +13,38 @@ import { getCustomerConsumptionRemainingFraction } from '../simulation/consumpti
 import { getRemainingFraction } from '../simulation/activity';
 import { createCounterTestState } from '../state/highTopCounter.testSupport';
 import { getHighTopCounterGeometry } from '../data/highTopCounters';
+import { createDishOrderSnapshot, getResolvedDish } from '../simulation/cookbook';
+import { withOwnedAuthoredDishes } from '../simulation/menuTestFixtures';
+
+function withAuthoredDishOrderSnapshots(state) {
+  const authored = withOwnedAuthoredDishes(state);
+  const serviceItems = (authored.serviceItems || []).map(item => {
+    if (item.kind !== 'dish' || item.menuItemId == null || Object.hasOwn(item, 'dishOrderSnapshot')) {
+      return item;
+    }
+    const dish = getResolvedDish(authored, item.menuItemId);
+    if (!dish) throw new Error(`Missing owned authored test dish ${item.menuItemId}`);
+    const owner = (authored.customers || []).find(customer => customer.id === item.customerId);
+    const snapshot = Object.freeze(createDishOrderSnapshot(dish, {
+      serviceItemId: item.id,
+      orderedAt: Number.isFinite(owner?.orderTime) ? owner.orderTime
+        : Number.isFinite(authored.restaurant?.gameTime) ? authored.restaurant.gameTime : 0,
+    }));
+    return { ...item, dishOrderSnapshot: snapshot };
+  });
+  const customers = (authored.customers || []).map(customer => {
+    const item = serviceItems.find(candidate => candidate.kind === 'dish'
+      && candidate.customerId === customer.id && candidate.dishOrderSnapshot);
+    if (!item || Object.hasOwn(customer, 'dishOrderSnapshot')) return customer;
+    return {
+      ...customer,
+      ...(customer.foodOutcome === 'cancelled' && customer.dishId == null
+        ? {} : { dishId: item.menuItemId }),
+      dishOrderSnapshot: Object.freeze({ ...item.dishOrderSnapshot }),
+    };
+  });
+  return { ...authored, customers, serviceItems };
+}
 
 describe('high top counter drawing', () => {
   it.each([0, 1, 2, 3])('draws one continuous surface and four chairs at rotation %s', rotation => {
@@ -1311,13 +1343,13 @@ describe('drawFurnitureLayer', () => {
 
   it('uses canonical drink and recipe/equipment durations', () => {
     const ctx = recordCtx();
-    drawStaffLayer(ctx, {
+    drawStaffLayer(ctx, withAuthoredDishOrderSnapshots({
       restaurant: { gameTime: 30 },
       serviceItems: [
         { id: 'drink', kind: 'drink', preparationStartedAt: 0, menuItemId: 'water' },
         { id: 'food', kind: 'dish', preparationStartedAt: 0, menuItemId: 'dish', stationId: 'k1' },
       ],
-      dishes: [{ id: 'dish', prepTime: 100 }],
+      dishes: [{ id: 'dish', cookbookId: 'cheese-toast' }],
       kitchenStations: [{ id: 'k1', equipmentId: 'eq1' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 2 }],
       staff: [
@@ -1325,11 +1357,11 @@ describe('drawFurnitureLayer', () => {
         { id: 'f', name: 'F', role: 'cook', x: 200, y: 100, task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } },
         { id: 'm', name: 'M', role: 'janitor', x: 300, y: 100, task: { type: 'wash_item', washingStartedAt: 0 } },
       ],
-    }, { x: 0, y: 0, zoom: 1 });
+    }), { x: 0, y: 0, zoom: 1 });
     const fills = ctx._calls.rects.filter(rect => rect.w === 1 && rect.h > 0 && rect.h <= 14);
     expect(fills).toHaveLength(2);
     expect(fills.map(fill => fill.h)).toEqual(expect.arrayContaining([
-      10.5, 5.6000000000000005,
+      10.5, 14 * (1 - (30 * 2) / 90),
     ]));
   });
 
@@ -1484,15 +1516,15 @@ describe('drawFurnitureLayer', () => {
 
   it('renders production cook progress from preparation start until kitchen completion', () => {
     const station = { id: 'k1', equipmentId: 'eq1', x: 100, y: 100 };
-    const state = {
+    const state = withAuthoredDishOrderSnapshots({
       restaurant: { gameTime: 100 }, customers: [{ id: 'customer', state: 'waiting_for_items', dishId: 'dish' }],
       queue: [], tables: [], chairs: [], floorDirt: [], washStations: [], serviceTables: [{ id: 'st1', x: 200, y: 100 }],
-      dishes: [{ id: 'dish', prepTime: 60, requiredEquipmentId: 'eq1' }],
+      dishes: [{ id: 'dish', cookbookId: 'toast' }],
       equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }], kitchenStations: [station],
       staff: [{ id: 'cook', name: 'Cook', role: 'cook', morale: 80, x: 90, y: 110,
         task: { type: 'prepare_dish', serviceItemId: 'food', stationId: 'k1' } }],
       serviceItems: [{ id: 'food', kind: 'dish', menuItemId: 'dish', customerId: 'customer', state: 'ordered' }],
-    };
+    });
     const preparing = updateStaff(state, 0);
     expect(preparing.staff[0].task).toMatchObject({ type: 'prepare_dish', serviceItemId: 'food' });
     expect(preparing.serviceItems[0]).toMatchObject({ state: 'preparing', preparationStartedAt: 100 });

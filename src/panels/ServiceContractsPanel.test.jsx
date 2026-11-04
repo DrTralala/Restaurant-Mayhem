@@ -4,6 +4,7 @@ import { createInitialState } from '../state/initialState';
 import { SERVICE_CONTRACT_RULES_VERSION, getServiceContractTemplate } from '../data/serviceContracts';
 import { acceptServiceContract, advanceServiceContractArrivals, recordServiceContractPaidVisit,
   selectServiceContractView, settleServiceContracts, withdrawServiceContract } from '../simulation/serviceContracts';
+import { withOwnedAuthoredDishes } from '../simulation/menuTestFixtures';
 import ServiceContractsPanel, { ServiceContractTracker } from './ServiceContractsPanel';
 
 let state;
@@ -73,7 +74,10 @@ describe('ServiceContractsPanel', () => {
   });
 
   it('updates partial equipment advice during review after a compatible station is placed', () => {
-    state.dishes.push({ id: 'roast', name: 'Roast', price: 20, requiredEquipmentId: 'eq2' });
+    state = withOwnedAuthoredDishes(state, [
+      { ...state.dishes[0], cookbookId: 'toast' },
+      { id: 'roast', cookbookId: 'roast-vegetables', name: 'Roast', price: 20 },
+    ]);
     const { rerender } = render(<ServiceContractsPanel />);
     const card = () => screen.getByRole('region', { name: 'Office lunch offer' });
     expect(within(card()).getByText(/Some affordable dishes lack a compatible kitchen station/)).toBeVisible();
@@ -91,12 +95,15 @@ describe('ServiceContractsPanel', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('describes the station requirement for equipment-free dishes', () => {
-    state.dishes = [{ id: 'salad', name: 'Salad', price: 10, requiredEquipmentId: null }];
+  it('describes the station requirement for an owned authored dish', () => {
+    state = withOwnedAuthoredDishes(state, [
+      { id: 'roast', cookbookId: 'roast-vegetables', name: 'Roast Vegetables' },
+    ]);
     state.kitchenStations = [];
     render(<ServiceContractsPanel />);
     const card = screen.getByRole('region', { name: 'Office lunch offer' });
-    expect(within(card).getByText(/Salad.*needs a kitchen station/)).toBeVisible();
+    expect(within(card).getByText(/Roast Vegetables.*needs owned equipment at a matching kitchen station: Oven/))
+      .toBeVisible();
     expect(within(card).queryByText(/undefined|null/)).not.toBeInTheDocument();
   });
 

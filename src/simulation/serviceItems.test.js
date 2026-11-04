@@ -10,6 +10,9 @@ import {
   selectUnlockedDrinkId,
   normaliseServiceItemOwnership,
 } from './serviceItems';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
+import { createInitialState } from '../state/initialState';
+import { reduceCookbookAction } from './cookbook';
 
 describe('service item orders', () => {
   it.each([
@@ -31,11 +34,11 @@ describe('service item orders', () => {
   });
 
   it('creates scalar-owned items and snapshots an affordable combined basket', () => {
-    const state = {
+    const state = withOwnedAuthoredDishes({
       restaurant: { reputation: 3, gameTime: 42 },
-      dishes: [{ id: 'toast', price: 12, quality: 1, popularity: 50, prepTime: 120 }],
+      dishes: [{ id: 'toast', cookbookId: 'toast', price: 12, quality: 1 }],
       unlockedDrinkIds: ['water'], drinkOverrides: {}, serviceItems: [],
-    };
+    });
     const rolls = [0.8, 0];
     const result = createCustomerOrder(state, {
       id: 'c1', partyId: 'p1', tableId: 't1', state: 'seated',
@@ -67,12 +70,12 @@ describe('service item orders', () => {
   });
 
   it('creates no service item when every basket is unaffordable', () => {
-    const expensiveState = {
+    const expensiveState = withOwnedAuthoredDishes({
       restaurant: { reputation: 3, gameTime: 42 },
-      dishes: [{ id: 'toast', price: 100, quality: 1, popularity: 50, prepTime: 120 }],
+      dishes: [{ id: 'toast', cookbookId: 'toast', price: 15, quality: 1 }],
       unlockedDrinkIds: ['water'], drinkOverrides: { water: { price: 100 } },
       serviceItems: [],
-    };
+    });
     const result = createCustomerOrder(expensiveState, {
       id: 'c1', partyId: 'p1', state: 'seated', tableId: 't1',
       archetype: 'regular', spendingTier: 'budget', spendingBudget: 6,
@@ -88,10 +91,35 @@ describe('service item orders', () => {
     });
   });
 
+  it('records poor value with the same empty bill and no-order service tuple', () => {
+    const initial = createInitialState();
+    const state = reduceCookbookAction(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 },
+    });
+    const customer = {
+      id: 'c1', partyId: 'p1', tableId: 't1', state: 'seated',
+      archetype: 'regular', spendingTier: 'budget', spendingBudget: 18,
+    };
+    const rolls = [0, 0, 0.9];
+    const result = createCustomerOrder(state, customer, () => rolls.shift());
+
+    expect(result.customer).toMatchObject({
+      state: 'waiting_for_party', menuOutcome: 'poor_value', dishId: null, drinkId: null,
+      dishPriceAtOrder: null, drinkPriceAtOrder: null, orderSubtotal: null,
+      orderedServiceItemIds: [], consumedServiceItemIds: [],
+      foodOrderedAt: null, foodPatienceBudget: null, foodDeadlineAt: null,
+      foodOutcome: null, foodCancelledAt: null, cancelledServiceItemIds: [],
+    });
+    expect(result.customer).not.toHaveProperty('dishOrderSnapshot');
+    expect(result.customer).not.toHaveProperty('tipAmount');
+    expect(result.serviceItems).toEqual(state.serviceItems);
+    expect(rolls).toEqual([]);
+  });
+
   it('does not start a food timer for a valid drinks-only order', () => {
     const result = createCustomerOrder({
       restaurant: { gameTime: 42, reputation: 3 },
-      dishes: [{ id: 'too-expensive', price: 100, quality: 1, popularity: 50 }],
+      dishes: [],
       unlockedDrinkIds: ['water'], drinkOverrides: {}, serviceItems: [],
     }, {
       id: 'c1', tableId: 't1', state: 'seated', patienceMax: 120,
@@ -124,10 +152,11 @@ describe('service item orders', () => {
   });
 
   it('creates one scalar-owned item per selected kind', () => {
-    const state = {
-      dishes: [{ id: 'toast', popularity: 50, quality: 1, price: 12 }],
+    const state = withOwnedAuthoredDishes({
+      restaurant: { gameTime: 42 },
+      dishes: [{ id: 'toast', cookbookId: 'toast', quality: 1, price: 12 }],
       unlockedDrinkIds: ['water'], serviceItems: [],
-    };
+    });
     const customer = {
       id: 'c1', tableId: 't1', state: 'seated',
       spendingTier: 'value', spendingBudget: 20,
@@ -153,11 +182,11 @@ describe('service item orders', () => {
   it('allocates stable IDs and initialises every service-item field', () => {
     const rolls = [0.8, 0];
     const existing = [{ id: 'service-item-4', kind: 'dish', customerId: 'other' }];
-    const result = createCustomerOrder({
-      dishes: [{ id: 'toast', popularity: 50, quality: 1, price: 12 }],
+    const result = createCustomerOrder(withOwnedAuthoredDishes({
+      dishes: [{ id: 'toast', cookbookId: 'toast', quality: 1, price: 12 }],
       unlockedDrinkIds: ['water'], serviceItems: existing,
       restaurant: { gameTime: 42 },
-    }, {
+    }), {
       id: 'c1', tableId: 't1', state: 'seated', orderTime: null,
       spendingTier: 'value', spendingBudget: 20,
     }, () => rolls.shift());
@@ -199,10 +228,10 @@ describe('service item orders', () => {
       id: 'c1', tableId: 't1', state: 'seated',
       spendingTier: 'value', spendingBudget: 20,
     };
-    const result = createCustomerOrder({
-      dishes: [{ id: 'toast', popularity: 50, quality: 1, price: 12 }],
+    const result = createCustomerOrder(withOwnedAuthoredDishes({
+      dishes: [{ id: 'toast', cookbookId: 'toast', quality: 1, price: 12 }],
       unlockedDrinkIds: [], serviceItems: existing,
-    }, customer, () => 0.2);
+    }), customer, () => 0.2);
 
     expect(result).toEqual({ customer, serviceItems: existing });
   });
@@ -905,14 +934,11 @@ describe('service item orders', () => {
 });
 
 describe('menu suspension order safety', () => {
-  const orderState = {
+  const orderState = withOwnedAuthoredDishes({
     restaurant: { reputation: 3, gameTime: 42 },
-    dishes: [{
-      id: 'toast', name: 'Toast', base: 'Bread', method: 'Toasted', cuisine: 'generic',
-      requiredEquipmentId: null, price: 12, quality: 1, popularity: 50, prepTime: 120,
-    }],
+    dishes: [{ id: 'toast', cookbookId: 'toast', name: 'Toast', price: 12, quality: 1 }],
     unlockedDrinkIds: ['water'], drinkOverrides: {}, serviceItems: [],
-  };
+  });
   const suspendedState = {
     ...orderState,
     restaurant: {
@@ -945,7 +971,7 @@ describe('menu suspension order safety', () => {
       dishPriceAtOrder: 12, drinkPriceAtOrder: 2, orderSubtotal: 14,
     });
     expect(ordered.customer.dishOrderSnapshot)
-      .toMatchObject({ menuItemId: 'toast', price: 12, quality: 1, prepTime: 120, popularity: 50 });
+      .toMatchObject({ menuItemId: 'toast', price: 12, quality: 1, prepTime: 60, popularity: 50 });
     expect(ordered.serviceItems).toMatchObject([
       { kind: 'dish', menuItemId: 'toast', state: 'ordered' },
       { kind: 'drink', menuItemId: 'water', state: 'ordered' },

@@ -16,6 +16,7 @@ import { STAFF_WELLBEING_CONSTANTS } from './staffWellbeing';
 import * as foodPatienceDomain from './foodPatience';
 import * as wellbeingDomain from './staffWellbeing';
 import { findPreparationTarget } from './preparationPosition';
+import { createDishOrderSnapshot, getResolvedDish } from './cookbook';
 
 const emptyState = {
   restaurant: { funds: 500, gameTime: 100, day: 1, openHour: 10, closeHour: 22, totalServed: 0, reputation: 2.0 },
@@ -78,6 +79,7 @@ function scheduleWith(entries) {
 }
 
 function preparationArrivalState(kind, resumed) {
+  const initial = createInitialState();
   const isDrink = kind === 'drink';
   const isBatch = kind === 'batch';
   const station = isDrink
@@ -92,33 +94,44 @@ function preparationArrivalState(kind, resumed) {
         : []),
     ];
   const itemIds = isBatch ? ['i1', 'i2'] : ['i1'];
-  const serviceItems = itemIds.map((id, index) => ({
-    id,
-    kind: isDrink ? 'drink' : 'dish',
-    menuItemId: isDrink ? 'water' : 'starter-toast',
-    customerId: `c${index + 1}`,
-    tableId: `t${index + 1}`,
-    state: resumed ? 'preparing' : 'ordered',
-    stationId: station.id,
-    assignedStaffId: 'cook',
-    ...(isDrink ? { serviceTableId: 'st1', serviceSlotIndex: 0 } : {}),
-    ...(isBatch ? { batchId: 'batch' } : {}),
-    ...(resumed ? {
-      preparationStartedAt: 0,
-      accumulatedWork: 20 + index,
-      lastProgressAt: 0,
-    } : {
-      preparationStartedAt: null,
-      readyAt: null,
+  const serviceItems = itemIds.map((id, index) => {
+    const dishOrderSnapshot = isDrink ? null : createDishOrderSnapshot(
+      getResolvedDish(initial, 'starter-toast'), { serviceItemId: id, orderedAt: 0 },
+    );
+    return {
+      id,
+      kind: isDrink ? 'drink' : 'dish',
+      menuItemId: isDrink ? 'water' : 'starter-toast',
+      customerId: `c${index + 1}`,
+      tableId: `t${index + 1}`,
+      state: resumed ? 'preparing' : 'ordered',
+      stationId: station.id,
+      assignedStaffId: 'cook',
+      ...(dishOrderSnapshot ? { dishOrderSnapshot } : {}),
+      ...(isDrink ? { serviceTableId: 'st1', serviceSlotIndex: 0 } : {}),
+      ...(isBatch ? { batchId: 'batch' } : {}),
+      ...(resumed ? {
+        preparationStartedAt: 0,
+        accumulatedWork: 20 + index,
+        lastProgressAt: 0,
+      } : {
+        preparationStartedAt: null,
+        readyAt: null,
+      }),
+    };
+  });
+  const customersWithSnapshots = customers.map((customer, index) => ({
+    ...customer,
+    ...(isDrink ? {} : {
+      dishOrderSnapshot: { ...serviceItems[index].dishOrderSnapshot },
     }),
   }));
   return isolatedRunState({
     kitchenStations: [station],
     serviceTables: [{ id: 'st1', x: 300, y: 100 }],
-    customers,
-    dishes: isDrink ? [] : [{
-      id: 'starter-toast', prepTime: 60, requiredEquipmentId: 'eq1', quality: 1,
-    }],
+    customers: customersWithSnapshots,
+    cookbook: initial.cookbook,
+    dishes: isDrink ? [] : initial.dishes,
     equipment: isDrink ? [] : [{ id: 'eq1', owned: true, speedMultiplier: 1 }],
     staff: [{
       id: 'cook', role: 'cook', skill: isBatch ? 5 : 3, morale: 80,
@@ -2111,7 +2124,7 @@ describe('runTick', () => {
     expect(state.partyReviewHistory).toEqual([
       expect.objectContaining({
         partyId: 'mixed-party', score: -5, memberCount: 2, paidCount: 1,
-        unaffordableCount: 1,
+        unaffordableCount: 1, poorValueCount: 0,
       }),
     ]);
     // Perfect paid review (100 / 4000) plus the unaffordable penalty (-110 / 5000).

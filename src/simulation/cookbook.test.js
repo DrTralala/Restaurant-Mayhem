@@ -29,6 +29,10 @@ function outcome(sequence, overrides = {}) {
 }
 
 function pay(state, count, cookbookId = 'toast') {
+  const entry = state.cookbook.entries[cookbookId];
+  if (entry?.discovered && !entry.owned) {
+    state = buy(state, cookbookId);
+  }
   for (let i = 0; i < count; i += 1) {
     const event = outcome(state.paidVisitSequence + 1);
     event.dish.cookbookId = cookbookId;
@@ -36,6 +40,16 @@ function pay(state, count, cookbookId = 'toast') {
     state = { ...state, cookbook: reconcileCookbookDiscoveries(state) };
   }
   return state;
+}
+
+function buy(state, cookbookId, overrides = {}) {
+  const next = reduceCookbookAction(state, { type: 'BUY_COOKBOOK_RECIPE', cookbookId, ...overrides });
+  return next ?? state;
+}
+
+function addCookbookDish(state, cookbookId) {
+  state = buy(state, cookbookId);
+  return reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId });
 }
 
 function freeze(value) {
@@ -54,7 +68,9 @@ describe('cookbook discovery and mastery', () => {
     state = pay(freeze(state), 2);
     expect(state.cookbook.entries['cheese-toast'].discovered).toBe(false);
     state = pay(freeze(state), 1);
-    expect(getCookbookEntryStatus(state, 'cheese-toast')).toMatchObject({ discovered: true, canAdd: true });
+    expect(getCookbookEntryStatus(state, 'cheese-toast')).toMatchObject({
+      discovered: true, owned: false, purchaseCost: 75, canAfford: true, canBuy: true, canAdd: false,
+    });
     expect(state.restaurant.funds).toBe(600);
     expect(state.recipeSlots).toBe(1);
     expect(state.dishes).toHaveLength(1);
@@ -74,7 +90,9 @@ describe('cookbook discovery and mastery', () => {
       expect(state.cookbook.entries[second].discovered).toBe(true);
       state.equipment = [];
       state.cookbook = reconcileCookbookDiscoveries(state);
-      expect(getCookbookEntryStatus(state, second)).toMatchObject({ discovered: true, equipmentOwned: false, canAdd: false });
+      expect(getCookbookEntryStatus(state, second)).toMatchObject({
+        discovered: true, owned: false, equipmentOwned: false, canBuy: false, canAdd: false,
+      });
     },
   );
 
@@ -104,6 +122,127 @@ describe('cookbook discovery and mastery', () => {
     });
     expect(getResolvedDish(state, 'starter-toast')).toMatchObject({ prepTime: 60, popularity: 60, quality: 1 });
   });
+
+  it('buys a discovered recipe at its canonical cost and ignores forged price or ownership fields', () => {
+    const paid = pay(fixture(), 3);
+    expect(getCookbookEntryStatus(paid, 'cheese-toast')).toMatchObject({
+      discovered: true, owned: false, purchaseCost: 75, canAfford: true, canBuy: true, canAdd: false,
+    });
+
+    const bought = buy(paid, 'cheese-toast', { cost: 0, owned: true, purchaseCost: 0 });
+    expect(bought.restaurant.funds).toBe(525);
+    expect(bought.dishes).toBe(paid.dishes);
+    expect(bought.cookbook.entries['cheese-toast'].owned).toBe(true);
+    expect(getCookbookEntryStatus(bought, 'cheese-toast')).toMatchObject({
+      discovered: true, owned: true, canBuy: false, canAdd: true,
+    });
+    expect(buy(bought, 'cheese-toast')).toBe(bought);
+  });
+
+  it('allows a purchase with exactly the canonical funds and rejects a single dollar short', () => {
+    const discovered = pay(fixture(), 3);
+    const exact = { ...discovered, restaurant: { funds: 75 } };
+    expect(getCookbookEntryStatus(exact, 'cheese-toast')).toMatchObject({ canAfford: true, canBuy: true });
+    const bought = buy(exact, 'cheese-toast');
+    expect(bought.restaurant.funds).toBe(0);
+    expect(bought.cookbook.entries['cheese-toast'].owned).toBe(true);
+
+    const oneShort = { ...discovered, restaurant: { funds: 74 } };
+    expect(getCookbookEntryStatus(oneShort, 'cheese-toast')).toMatchObject({ canAfford: false, canBuy: false });
+    expect(reduceCookbookAction(oneShort, { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'cheese-toast' })).toBe(oneShort);
+  });
+
+  it.each([
+    ['toast', 0], ['cheese-toast', 75], ['roast-vegetables', 150], ['baked-eggs', 175],
+    ['baked-potato', 250], ['fries', 100], ['fried-chicken', 250], ['gazpacho', 125], ['fish-bisque', 225],
+  ])('uses the canonical purchase cost for %s', (cookbookId, purchaseCost) => {
+    const state = fixture();
+    state.cookbook = {
+      ...state.cookbook,
+      entries: { ...state.cookbook.entries,
+        [cookbookId]: { ...state.cookbook.entries[cookbookId], discovered: true } },
+    };
+    const recipe = { toast: 'eq1', 'cheese-toast': 'eq1', 'roast-vegetables': 'eq2', 'baked-eggs': 'eq2',
+      'baked-potato': 'eq2', fries: 'eq3', 'fried-chicken': 'eq3', gazpacho: 'eq4', 'fish-bisque': 'eq4' }[cookbookId];
+    state.equipment = [...state.equipment, ...['eq1', 'eq2', 'eq3', 'eq4']
+      .filter(id => id === recipe && !state.equipment.some(item => item.id === id))
+      .map(id => ({ id, owned: true }))];
+    expect(getCookbookEntryStatus(state, cookbookId).purchaseCost).toBe(purchaseCost);
+  });
+
+  it.each([74, Number.NaN, Number.POSITIVE_INFINITY])('rejects an unaffordable or invalid-funds purchase (%s)', funds => {
+    const state = { ...pay(fixture(), 3), restaurant: { funds } };
+    expect(getCookbookEntryStatus(state, 'cheese-toast')).toMatchObject({ canAfford: false, canBuy: false });
+    expect(buy(state, 'cheese-toast')).toBe(state);
+  });
+
+  it('does not buy undiscovered, unknown or unequipped recipes and retains entitlement after equipment is sold', () => {
+    const undiscovered = fixture();
+    expect(buy(undiscovered, 'cheese-toast')).toBe(undiscovered);
+    expect(buy(undiscovered, 'unknown')).toBe(undiscovered);
+
+    let discovered = { ...pay(fixture(), 3), equipment: [] };
+    expect(getCookbookEntryStatus(discovered, 'cheese-toast')).toMatchObject({
+      discovered: true, equipmentOwned: false, canBuy: false, canAdd: false,
+    });
+    expect(buy(discovered, 'cheese-toast')).toBe(discovered);
+
+    discovered = addCookbookDish(pay(fixture(), 3), 'cheese-toast');
+    discovered = { ...discovered, equipment: [] };
+    expect(getCookbookEntryStatus(discovered, 'cheese-toast')).toMatchObject({
+      discovered: true, owned: true, equipmentOwned: false, canBuy: false, canAdd: false,
+    });
+    discovered = reduceCookbookAction(discovered, { type: 'REMOVE_DISH', id: 'cookbook:cheese-toast' });
+    expect(discovered.cookbook.entries['cheese-toast'].owned).toBe(true);
+    expect(reduceCookbookAction(discovered, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'cheese-toast' })).toBe(discovered);
+  });
+
+  it('only credits paid progress for a recipe the restaurant owns', () => {
+    const cookbook = createCookbookState();
+    const paidCheese = outcome(1);
+    paidCheese.dish.cookbookId = 'cheese-toast';
+    paidCheese.dish.menuItemId = 'cookbook:cheese-toast';
+    const next = applyCookbookPaidVisit(cookbook, paidCheese);
+    expect(next.entries['cheese-toast'].paidPortions).toBe(0);
+    expect(next.lastAppliedPaidVisitSequence).toBe(1);
+  });
+
+  it('retains purchase ownership, edits, mastery and progress across removal and re-add without charging again', () => {
+    let state = addCookbookDish(pay(fixture(), 3), 'cheese-toast');
+    state = reduceCookbookAction(pay(state, 15, 'cheese-toast'), {
+      type: 'CHOOSE_DISH_MASTERY', cookbookId: 'cheese-toast', perk: 'appeal',
+    });
+    state = reduceCookbookAction(state, { type: 'UPDATE_DISH', id: 'cookbook:cheese-toast',
+      changes: { name: 'House Cheese Toast', price: 18 } });
+    expect(state.cookbook.entries['cheese-toast']).toMatchObject({ owned: true, paidPortions: 15, perk: 'appeal' });
+    const funds = state.restaurant.funds;
+    state = reduceCookbookAction(state, { type: 'REMOVE_DISH', id: 'cookbook:cheese-toast' });
+    state = reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'cheese-toast' });
+    expect(getResolvedDish(state, 'cookbook:cheese-toast')).toMatchObject({
+      name: 'House Cheese Toast', price: 17, popularity: 75, quality: 1,
+    });
+    expect(state.cookbook.entries['cheese-toast']).toMatchObject({ owned: true, paidPortions: 15, perk: 'appeal' });
+    expect(state.restaurant.funds).toBe(funds);
+  });
+
+  it('does not resolve an authored menu record until its cookbook entry is owned', () => {
+    const state = fixture();
+    state.cookbook = { ...state.cookbook,
+      entries: { ...state.cookbook.entries, 'cheese-toast': {
+        ...state.cookbook.entries['cheese-toast'], discovered: true,
+      } },
+    };
+    const cheese = { id: 'cookbook:cheese-toast', cookbookId: 'cheese-toast', name: 'Cheese Toast',
+      base: 'Cheese', method: 'Toasted', cuisine: 'generic', requiredEquipmentId: 'eq1',
+      price: 14, quality: 1, prepTime: 90, popularity: 65, unlocked: true };
+    state.dishes.push(cheese);
+    expect(getResolvedDish(state, cheese.id)).toBeNull();
+    state.cookbook.entries['cheese-toast'].owned = true;
+    const resolved = getResolvedDish(state, cheese.id);
+    expect(resolved).toMatchObject({ id: cheese.id, cookbookId: 'cheese-toast', name: 'Cheese Toast' });
+    expect(resolved).not.toHaveProperty('purchaseCost');
+    expect(resolved).not.toHaveProperty('requirements');
+  });
 });
 
 describe('Blender recipe', () => {
@@ -114,15 +253,15 @@ describe('Blender recipe', () => {
     return state;
   }
 
-  it('constructs schema 2 with undiscovered default Oven and Blender recipe entries', () => {
+  it('constructs schema 3 with undiscovered default Oven and Blender recipe entries', () => {
     const cookbook = createCookbookState(3);
-    expect(cookbook).toMatchObject({ schemaVersion: 2, lastAppliedPaidVisitSequence: 3 });
+    expect(cookbook).toMatchObject({ schemaVersion: 3, lastAppliedPaidVisitSequence: 3 });
     expect(Object.keys(cookbook.entries)).toHaveLength(9);
-    expect(cookbook.entries.gazpacho).toEqual({ discovered: false, paidPortions: 0, perk: null,
+    expect(cookbook.entries.gazpacho).toEqual({ discovered: false, owned: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Gazpacho', price: 16, quality: 1 } });
-    expect(cookbook.entries['fish-bisque']).toEqual({ discovered: false, paidPortions: 0, perk: null,
+    expect(cookbook.entries['fish-bisque']).toEqual({ discovered: false, owned: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Fish Bisque', price: 20, quality: 1 } });
-    expect(cookbook.entries['baked-eggs']).toEqual({ discovered: false, paidPortions: 0, perk: null,
+    expect(cookbook.entries['baked-eggs']).toEqual({ discovered: false, owned: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Baked Eggs', price: 15, quality: 1 } });
     expect(() => validateCookbookState({ ...fixture(), cookbook, paidVisitSequence: 3 })).not.toThrow();
   });
@@ -130,7 +269,8 @@ describe('Blender recipe', () => {
   it('discovers Gazpacho from owning the Blender, without requiring a placed station', () => {
     const state = blenderFixture();
     expect(getCookbookEntryStatus(state, 'gazpacho')).toMatchObject({
-      discovered: true, equipmentOwned: true, stationAvailable: false, canAdd: true,
+      discovered: true, owned: false, equipmentOwned: true, stationAvailable: false,
+      canBuy: true, canAdd: false,
     });
   });
 
@@ -143,7 +283,7 @@ describe('Blender recipe', () => {
   });
 
   it('adds Gazpacho explicitly, guards duplicates and retains settings through removal', () => {
-    let state = reduceCookbookAction(blenderFixture(), { type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
+    let state = addCookbookDish(blenderFixture(), 'gazpacho');
     expect(state.dishes.at(-1)).toMatchObject({ id: 'cookbook:gazpacho', cookbookId: 'gazpacho',
       name: 'Gazpacho', base: 'Vegetables', method: 'Blended', requiredEquipmentId: 'eq4',
       cuisine: 'generic', price: 16, quality: 1, prepTime: 75, popularity: 55, unlocked: true });
@@ -153,11 +293,11 @@ describe('Blender recipe', () => {
     state = reduceCookbookAction(state, { type: 'REMOVE_DISH', id: 'cookbook:gazpacho' });
     expect(state.dishes.some(candidate => candidate.cookbookId === 'gazpacho')).toBe(false);
     state = reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
-    expect(getResolvedDish(state, 'cookbook:gazpacho')).toMatchObject({ name: 'House Gazpacho', price: 21 });
+    expect(getResolvedDish(state, 'cookbook:gazpacho')).toMatchObject({ name: 'House Gazpacho', price: 20 });
   });
 
   it('offers speed 64 seconds or appeal 65 popularity at 15 paid Gazpacho portions', () => {
-    let state = reduceCookbookAction(blenderFixture(), { type: 'ADD_COOKBOOK_DISH', cookbookId: 'gazpacho' });
+    let state = addCookbookDish(blenderFixture(), 'gazpacho');
     state = pay(state, 15, 'gazpacho');
     expect(getCookbookEntryStatus(state, 'gazpacho')).toMatchObject({ paidPortions: 15, canChoosePerk: true });
     const speed = reduceCookbookAction(state, { type: 'CHOOSE_DISH_MASTERY', cookbookId: 'gazpacho', perk: 'speed' });
@@ -223,7 +363,7 @@ describe('canonicalCookbookOutcomes', () => {
 });
 
 describe('canonical identity and reducer ownership', () => {
-  it('preserves renamed, upgraded settings and mastery through removal, normalisation and re-add', () => {
+  it('preserves paid entitlement, renamed settings, upgrades and mastery through removal and re-add', () => {
     let state = reduceCookbookAction(pay(fixture(), 15), { type: 'CHOOSE_DISH_MASTERY', cookbookId: 'toast', perk: 'speed' });
     state = reduceCookbookAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: {
       name: '  House Toast  ', price: 23.6, quality: 10, prepTime: 1, popularity: 100,
@@ -231,12 +371,12 @@ describe('canonical identity and reducer ownership', () => {
     } });
     state = reduceCookbookAction(state, { type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast', cost: 0, quality: 10 });
     expect(state.restaurant.funds).toBe(550);
-    expect(state.dishes[0]).toMatchObject({ id: 'starter-toast', cookbookId: 'toast', name: 'House Toast', price: 24, quality: 2, prepTime: 60, method: 'Toasted' });
+    expect(state.dishes[0]).toMatchObject({ id: 'starter-toast', cookbookId: 'toast', name: 'House Toast', price: 15, quality: 2, prepTime: 60, method: 'Toasted' });
     state = reduceCookbookAction(state, { type: 'REMOVE_DISH', id: 'starter-toast' });
     expect(state.dishes).toEqual([]);
     state = { ...state, ...normaliseCookbookState(state, { legacy: false, lastPaidVisitSequence: 15 }) };
     state = reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast', id: 'fake', quality: 10 });
-    expect(getResolvedDish(state, 'cookbook:toast')).toMatchObject({ name: 'House Toast', price: 24, quality: 2, prepTime: 51 });
+    expect(getResolvedDish(state, 'cookbook:toast')).toMatchObject({ name: 'House Toast', price: 15, quality: 2, prepTime: 51 });
     expect(state.cookbook.entries.toast).toMatchObject({ paidPortions: 15, perk: 'speed' });
     expect(reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' })).toBe(state);
     expect(state.restaurant.funds).toBe(550);
@@ -248,7 +388,7 @@ describe('canonical identity and reducer ownership', () => {
     state = reduceCookbookAction(state, { type: 'REMOVE_DISH', id: 'starter-toast' });
     expect(state.dishes).toEqual([]);
     state = reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' });
-    expect(getResolvedDish(state, 'cookbook:toast')).toMatchObject({ name: 'House Toast', price: 27 });
+    expect(getResolvedDish(state, 'cookbook:toast')).toMatchObject({ name: 'House Toast', price: 15 });
   });
 
   it('allocates the smallest free menu ID avoiding live dishes and both retained snapshot locations', () => {
@@ -263,10 +403,11 @@ describe('canonical identity and reducer ownership', () => {
   it('keeps custom operations unowned, with no mastery resolution or recipe-slot restriction', () => {
     const state = fixture();
     state.dishes = Array.from({ length: 8 }, (_, i) => ({ ...state.dishes[0], id: `custom-${i}`, cookbookId: null, masteryPerk: 'speed', prepTime: 150 }));
-    expect(getResolvedDish(state, 'custom-0')).toMatchObject({ cookbookId: null, masteryPerk: null, prepTime: 150 });
-    for (const type of ['ADD_DISH', 'UPDATE_DISH', 'REMOVE_DISH', 'UPGRADE_DISH_QUALITY', 'UNKNOWN']) {
-      expect(reduceCookbookAction(state, { type, id: 'custom-0' })).toBeNull();
+    expect(getResolvedDish(state, 'custom-0')).toBeNull();
+    for (const type of ['ADD_DISH', 'UPDATE_DISH', 'REMOVE_DISH', 'UPGRADE_DISH_QUALITY']) {
+      expect(reduceCookbookAction(state, { type, id: 'custom-0' })).toBe(state);
     }
+    expect(reduceCookbookAction(state, { type: 'UNKNOWN' })).toBeNull();
     expect(reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'toast' }).dishes).toHaveLength(9);
   });
 
@@ -286,11 +427,13 @@ describe('canonical identity and reducer ownership', () => {
     let state = fixture();
     expect(reduceCookbookAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { name: ' ', price: NaN } })).toBe(state);
     state = reduceCookbookAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 1000 } });
-    expect(state.dishes[0].price).toBe(100);
+    expect(state.dishes[0].price).toBe(15);
     state = reduceCookbookAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: -1 } });
-    expect(state.dishes[0].price).toBe(1);
+    expect(state.dishes[0].price).toBe(9);
     for (let i = 0; i < 9; i += 1) state = reduceCookbookAction(state, { type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast' });
     expect(state.dishes[0].quality).toBe(10);
+    state = reduceCookbookAction(state, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 1000 } });
+    expect(state.dishes[0].price).toBe(25);
     expect(state.restaurant.funds).toBe(150);
     expect(reduceCookbookAction(state, { type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast' })).toBe(state);
     const poor = { ...fixture(), restaurant: { funds: 49 } };
@@ -355,24 +498,27 @@ describe('immutable snapshots and conservative legacy resolution', () => {
     expect(() => validateDishOrderSnapshots(state)).not.toThrow();
   });
 
-  it('custom snapshots preserve committed stats and always have null mastery identity', () => {
+  it('authored snapshots preserve committed stats and validate price using their own quality', () => {
     const state = fixture();
-    Object.assign(state.dishes[0], { cookbookId: null, prepTime: 213, popularity: 47 });
-    const snapshot = createDishOrderSnapshot(getResolvedDish(state, 'starter-toast'), { serviceItemId: 'i1', orderedAt: 36000 });
-    expect(snapshot).toMatchObject({ cookbookId: null, masteryPerk: null, prepTime: 213, popularity: 47 });
-    expect(() => validateDishOrderSnapshot({ ...snapshot, masteryPerk: 'speed' })).toThrow();
+    let upgraded = reduceCookbookAction(state, { type: 'UPGRADE_DISH_QUALITY', id: 'starter-toast' });
+    upgraded = reduceCookbookAction(upgraded, { type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 16 } });
+    const snapshot = createDishOrderSnapshot(getResolvedDish(upgraded, 'starter-toast'), { serviceItemId: 'i1', orderedAt: 36000 });
+    expect(snapshot).toMatchObject({ cookbookId: 'toast', masteryPerk: null, quality: 2, price: 16 });
+    expect(() => validateDishOrderSnapshot(snapshot)).not.toThrow();
+    expect(() => validateDishOrderSnapshot({ ...snapshot, price: 17 })).toThrow();
+    expect(() => validateDishOrderSnapshot({ ...snapshot, quality: 1 })).toThrow();
+    expect(() => validateDishOrderSnapshot({ ...snapshot, cookbookId: 'custom' })).toThrow();
+    expect(() => validateDishOrderSnapshot({ ...snapshot, cookbookId: null })).toThrow();
   });
 
-  it('resolves a committed custom dish snapshot after the custom dish is removed from the menu', () => {
+  it('resolves a committed authored dish snapshot after the dish is removed from the menu', () => {
     const state = fixture();
-    state.dishes[0] = { ...state.dishes[0], id: 'custom-toast', cookbookId: null,
-      name: 'Custom Toast', prepTime: 213, popularity: 47 };
-    const snapshot = createDishOrderSnapshot(getResolvedDish(state, 'custom-toast'), { serviceItemId: 'i1', orderedAt: 36000 });
-    const removed = { ...state, dishes: state.dishes.filter(dish => dish.id !== 'custom-toast') };
+    const snapshot = createDishOrderSnapshot(getResolvedDish(state, 'starter-toast'), { serviceItemId: 'i1', orderedAt: 36000 });
+    const removed = { ...state, dishes: [] };
     expect(removed.dishes).toEqual([]);
-    expect(getDishForServiceItem(removed, { id: 'i1', kind: 'dish', menuItemId: 'custom-toast',
-      dishOrderSnapshot: snapshot })).toMatchObject({ id: 'custom-toast', cookbookId: null, masteryPerk: null,
-      name: 'Custom Toast', price: 12, quality: 1, prepTime: 213, popularity: 47 });
+    expect(getDishForServiceItem(removed, { id: 'i1', kind: 'dish', menuItemId: 'starter-toast',
+      dishOrderSnapshot: snapshot })).toMatchObject({ id: 'starter-toast', cookbookId: 'toast', masteryPerk: null,
+      name: 'Toasted Bread', price: 12, quality: 1, prepTime: 60, popularity: 50 });
   });
 
   it('validates snapshot copies, ownership and cancelled retained history without requiring a plate', () => {
@@ -408,9 +554,9 @@ describe('immutable snapshots and conservative legacy resolution', () => {
     expect(getDishForServiceItem(state, item)).toMatchObject({ id: 'starter-toast', prepTime: 60, price: 12, quality: 1, masteryPerk: null });
   });
 
-  it('legacy fallback uses raw unbuffed stats and removes canonical provenance', () => {
+  it('does not resolve a partial legacy dish without an immutable snapshot', () => {
     const state = reduceCookbookAction(pay(fixture(), 15), { type: 'CHOOSE_DISH_MASTERY', cookbookId: 'toast', perk: 'speed' });
-    expect(getDishForServiceItem(state, { kind: 'dish', menuItemId: 'starter-toast' })).toMatchObject({ prepTime: 60, cookbookId: null, masteryPerk: null });
+    expect(getDishForServiceItem(state, { kind: 'dish', menuItemId: 'starter-toast' })).toBeNull();
     expect(getDishForServiceItem(state, { kind: 'dish', menuItemId: 'missing' })).toBeNull();
     expect(getDishForServiceItem(state, { kind: 'drink', menuItemId: 'starter-toast' })).toBeNull();
   });
@@ -433,36 +579,24 @@ describe('immutable snapshots and conservative legacy resolution', () => {
 });
 
 describe('legacy adoption and strict validation', () => {
-  it('adopts only a canonical legacy starter, retaining edited settings without historical portions', () => {
+  it('does not adopt missing legacy cookbook data', () => {
     const state = fixture();
     delete state.cookbook;
     delete state.dishes[0].cookbookId;
     Object.assign(state.dishes[0], { name: 'My Toast', price: 22, quality: 4 });
-    state.restaurant.totalServed = 10000;
-    state.equipment.forEach(e => { e.owned = true; });
-    const result = normaliseCookbookState(freeze(state), { legacy: true, lastPaidVisitSequence: 9 });
-    expect(result.dishes[0]).toMatchObject({ id: 'starter-toast', cookbookId: 'toast', name: 'My Toast', price: 22, quality: 4 });
-    expect(result.cookbook.entries.toast).toMatchObject({ paidPortions: 0, perk: null, menuSettings: { name: 'My Toast', price: 22, quality: 4 } });
-    expect(result.cookbook.lastAppliedPaidVisitSequence).toBe(9);
-    expect(result.cookbook.entries.fries.discovered).toBe(true);
-    expect(result.cookbook.entries['baked-potato'].discovered).toBe(false);
-    const hydrated = { ...state, ...result, paidVisitSequence: 9 };
-    expect(normaliseCookbookState(hydrated, { legacy: false, lastPaidVisitSequence: 9 })).toEqual(result);
+    expect(() => validateCookbookState(state)).toThrow();
+    expect(() => normaliseCookbookState(freeze(state), { legacy: true, lastPaidVisitSequence: 9 })).toThrow();
   });
 
-  it('does not resurrect removed toast or adopt a noncanonical starter/custom copy', () => {
+  it('does not fill in a missing cookbook, even if no menu dishes remain', () => {
     const state = fixture();
     delete state.cookbook;
-    delete state.dishes[0].cookbookId;
-    const copy = { ...state.dishes[0], id: 'custom' };
-    state.dishes[0].prepTime = 123;
-    state.dishes.push(copy);
-    expect(normaliseCookbookState(state, { legacy: true }).dishes).toEqual(state.dishes);
-    expect(normaliseCookbookState({ ...state, dishes: [] }, { legacy: true }).dishes).toEqual([]);
+    expect(() => normaliseCookbookState(state, { legacy: true })).toThrow();
+    expect(() => normaliseCookbookState({ ...state, dishes: [] }, { legacy: true })).toThrow();
   });
 
-  it('accepts absent legacy cookbook but rejects null or partially present new data', () => {
-    expect(() => validateCookbookState({ dishes: [] })).not.toThrow();
+  it('rejects absent, null or partially present cookbook data', () => {
+    expect(() => validateCookbookState({ dishes: [] })).toThrow();
     expect(() => validateCookbookState({ ...fixture(), cookbook: null })).toThrow();
     const state = fixture();
     delete state.cookbook.entries.fries;
@@ -477,7 +611,7 @@ describe('legacy adoption and strict validation', () => {
   });
 
   it.each([
-    state => { state.cookbook.schemaVersion = 1; },
+    state => { state.cookbook.schemaVersion = 2; },
     state => { delete state.cookbook.entries.gazpacho; },
     state => { state.cookbook.entries.fake = state.cookbook.entries.toast; },
     state => { state.cookbook.entries.toast.paidPortions = -1; },
@@ -486,13 +620,21 @@ describe('legacy adoption and strict validation', () => {
     state => { state.cookbook.entries.toast.perk = 'speed'; },
     state => { state.cookbook.entries.toast.perk = 'fake'; },
     state => { state.cookbook.entries.toast.discovered = false; },
+    state => { state.cookbook.entries.toast.owned = false; },
+    state => { delete state.cookbook.entries.toast.owned; },
+    state => { state.cookbook.entries.toast.owned = 'yes'; },
     state => { state.cookbook.lastAppliedPaidVisitSequence = 1; },
     state => { state.cookbook.entries.toast.menuSettings.price = 0; },
     state => { state.cookbook.entries.toast.menuSettings.name = ' '; },
     state => { state.cookbook.entries.fries.paidPortions = 1; },
+    state => { state.cookbook.entries.fries.perk = 'speed'; },
+    state => { state.cookbook.entries.fries.owned = true; },
     state => { state.dishes.push({ ...state.dishes[0], id: 'duplicate' }); },
+    state => { state.dishes.push({ ...state.dishes[0], id: 'custom', cookbookId: null }); },
+    state => { state.dishes.push({ ...state.dishes[0], id: 'duplicate-id' }); state.dishes.push({ ...state.dishes[0], id: 'duplicate-id' }); },
     state => { state.dishes[0].cookbookId = 'fake'; },
     state => { state.dishes[0].price = 30; },
+    state => { state.cookbook.entries.toast.menuSettings.price = 16; },
     state => { state.dishes[0].prepTime = 51; },
     state => { state.dishes[0].method = 'Fried'; },
   ])('rejects corrupt canonical state %#', corrupt => {

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { estimateMenuDemand, getMenuAnalysis } from './menuEconomy';
+import { withOwnedAuthoredDishes } from './menuTestFixtures';
+import { getCookbookRecipe } from '../data/cookbook';
 
 const REFERENCE_TIERS = Object.freeze([
   { name: 'budget', minimum: 6, maximum: 18 },
@@ -86,7 +88,15 @@ function referenceExpectedGrossPer100({ reputation, dishes, drinks }) {
           const kindShare = budgetProbability * archetype.weight
             * REFERENCE_KIND_WEIGHTS[kind] / kindTotal;
           group.forEach((basket, index) => {
-            expectedGross += kindShare * basketWeights[index] / basketTotal * basket.price;
+            const selectionProbability = kindShare * basketWeights[index] / basketTotal;
+            const recipe = basket.dish ? getCookbookRecipe(basket.dish.cookbookId) : null;
+            const referenceValue = recipe
+              ? recipe.price * (100 + 8 * (basket.dish.quality - 1)) / 100
+              : null;
+            const sensitivity = { budget: 2, value: 1, premium: 0.25 }[tier.name];
+            const acceptance = !basket.dish || basket.dish.price <= referenceValue
+              ? 1 : (referenceValue / basket.dish.price) ** sensitivity;
+            expectedGross += selectionProbability * acceptance * basket.price;
           });
         }
       }
@@ -106,18 +116,27 @@ function deepFreeze(value) {
 
 describe('whole-menu gross price preview', () => {
   it('adds a dish price override without changing the source state', () => {
-    const state = {
+    const state = withOwnedAuthoredDishes({
       restaurant: { reputation: 1 },
       dishes: [{
-        id: 'meal', name: 'Meal', price: 6, quality: 2, popularity: 50, prepTime: 60,
+        id: 'meal', cookbookId: 'toast', name: 'Meal', price: 12, quality: 1,
       }],
       unlockedDrinkIds: [],
-    };
+    });
     const before = structuredClone(state);
+    const reference = {
+      reputation: 1,
+      dishes: [{ id: 'meal', cookbookId: 'toast', price: 12, quality: 1, popularity: 50, prepTime: 60 }],
+      drinks: [],
+    };
 
-    expect(getMenuAnalysis(state).expectedGrossPer100).toBeCloseTo(600, 8);
+    expect(getMenuAnalysis(state).expectedGrossPer100)
+      .toBeCloseTo(referenceExpectedGrossPer100(reference), 12);
     expect(getMenuAnalysis(state, { kind: 'dish', id: 'meal', price: 100 }).expectedGrossPer100)
-      .toBeCloseTo(100 * 100 * 0.05 * 21 / 86, 8);
+      .toBeCloseTo(referenceExpectedGrossPer100({
+        ...reference,
+        dishes: reference.dishes.map(dish => ({ ...dish, price: 15 })),
+      }), 12);
     expect(state).toEqual(before);
   });
 
@@ -125,55 +144,71 @@ describe('whole-menu gross price preview', () => {
     expect(getMenuAnalysis({
       restaurant: { reputation: 3 }, dishes: [], unlockedDrinkIds: [],
     }).expectedGrossPer100).toBe(0);
-    expect(getMenuAnalysis({
+    const expensive = withOwnedAuthoredDishes({
       restaurant: { reputation: 1 },
-      dishes: [{ id: 'too-costly', price: 150, quality: 8, popularity: 90, prepTime: 30 }],
+      dishes: [{ id: 'too-costly', cookbookId: 'baked-potato', price: 47, quality: 10 }],
       unlockedDrinkIds: [],
-    }).expectedGrossPer100).toBe(0);
+    });
+    expect(getMenuAnalysis(expensive).expectedGrossPer100)
+      .toBeCloseTo(referenceExpectedGrossPer100({
+        reputation: 1,
+        dishes: [{ id: 'too-costly', cookbookId: 'baked-potato', price: 47, quality: 10,
+          popularity: 82, prepTime: 210 }],
+        drinks: [],
+      }), 12);
+  });
+
+  it('reduces expected gross above reference despite unchanged premium-tier budget fit', () => {
+    const state = withOwnedAuthoredDishes({
+      restaurant: { reputation: 3 },
+      dishes: [{ id: 'toast', cookbookId: 'toast', price: 12, quality: 1 }],
+      unlockedDrinkIds: [],
+    });
+    const atReference = getMenuAnalysis(state, { kind: 'dish', id: 'toast', price: 12 });
+    const aboveReference = getMenuAnalysis(state, { kind: 'dish', id: 'toast', price: 15 });
+
+    expect(atReference.affordabilityByTier.premium.dishShare).toBe(1);
+    expect(aboveReference.affordabilityByTier.premium.dishShare).toBe(1);
+    expect(aboveReference.expectedGrossPer100).toBeLessThan(atReference.expectedGrossPer100);
+    expect(aboveReference.expectedGrossPer100).toBeCloseTo(referenceExpectedGrossPer100({
+      reputation: 3,
+      dishes: [{ id: 'toast', cookbookId: 'toast', price: 15, quality: 1,
+        popularity: 50, prepTime: 60 }],
+      drinks: [],
+    }), 12);
   });
 
   it('matches an independent exhaustive oracle for resolved dishes and unlocked drinks', () => {
-    const state = deepFreeze({
+    const state = deepFreeze(withOwnedAuthoredDishes({
       restaurant: {
         reputation: 3,
         suspendedDishIds: ['suspended-dish'],
         suspendedDrinkIds: ['coffee'],
       },
       dishes: [
-        { id: 'toast-menu-id', cookbookId: 'toast', price: 99, quality: 10 },
-        { id: 'soup', name: 'Soup', price: 15, quality: 6, popularity: 72, prepTime: 95 },
-        { id: 'suspended-dish', name: 'Suspended', price: 8, quality: 10, popularity: 100, prepTime: 30 },
+        { id: 'toast-menu-id', cookbookId: 'toast', price: 13, quality: 3 },
+        { id: 'soup', cookbookId: 'roast-vegetables', name: 'Soup', price: 15, quality: 6 },
+        { id: 'suspended-dish', cookbookId: 'fries', name: 'Suspended', price: 8, quality: 1 },
       ],
-      cookbook: {
-        schemaVersion: 2,
-        entries: {
-          toast: {
-            discovered: true,
-            paidPortions: 0,
-            perk: null,
-            menuSettings: { name: 'Toast', price: 13, quality: 3 },
-          },
-        },
-      },
       unlockedDrinkIds: ['water', 'coffee'],
       drinkOverrides: {
         water: { price: 9, quality: 4 },
         coffee: { price: 7 },
       },
-    });
+    }));
     const resolvedMenu = {
       reputation: 3,
       dishes: [
-        { id: 'toast-menu-id', price: 13, quality: 3, popularity: 50, prepTime: 60 },
-        { id: 'soup', price: 15, quality: 6, popularity: 72, prepTime: 95 },
+        { id: 'toast-menu-id', cookbookId: 'toast', price: 13, quality: 3, popularity: 50, prepTime: 60 },
+        { id: 'soup', cookbookId: 'roast-vegetables', price: 15, quality: 6, popularity: 70, prepTime: 150 },
       ],
       drinks: [{ id: 'water', price: 9, quality: 4, popularity: 50, prepTime: 120 }],
     };
     const ordinaryGross = referenceExpectedGrossPer100(resolvedMenu);
-    const expectedDishPriceGross = referenceExpectedGrossPer100({
-      ...resolvedMenu,
-      dishes: resolvedMenu.dishes.map(dish => dish.id === 'toast-menu-id'
-        ? { ...dish, price: 20 }
+      const expectedDishPriceGross = referenceExpectedGrossPer100({
+        ...resolvedMenu,
+        dishes: resolvedMenu.dishes.map(dish => dish.id === 'toast-menu-id'
+        ? { ...dish, price: 17 }
         : dish),
     });
     const expectedDrinkPriceGross = referenceExpectedGrossPer100({
@@ -209,25 +244,23 @@ describe('whole-menu gross price preview', () => {
       random.mockRestore();
     }
 
-    expect(state.dishes[0].price).toBe(99);
+    expect(state.dishes[0].price).toBe(13);
     expect(state.drinkOverrides.water.price).toBe(9);
   });
 
   it('leaves ordinary analysis unchanged for malformed price overrides', () => {
-    const state = {
+    const state = withOwnedAuthoredDishes({
       restaurant: { reputation: 1 },
-      dishes: [{ id: 'meal', price: 12, quality: 5, popularity: 60, prepTime: 90 }],
+      dishes: [{ id: 'meal', cookbookId: 'toast', price: 12, quality: 5 }],
       unlockedDrinkIds: ['water'],
-    };
+    });
     const ordinary = getMenuAnalysis(state);
     const invalidOverrides = [
       { kind: 'side', id: 'meal', price: 20 },
       { kind: 'dish', id: '', price: 20 },
       { kind: 'dish', id: 12, price: 20 },
-      { kind: 'dish', id: 'meal', price: 0 },
-      { kind: 'dish', id: 'meal', price: 101 },
-      { kind: 'dish', id: 'meal', price: 12.5 },
       { kind: 'dish', id: 'meal', price: '20' },
+      { kind: 'dish', id: 'meal', price: Number.POSITIVE_INFINITY },
       { kind: 'dish', price: 20 },
       'not an override',
     ];
@@ -237,22 +270,43 @@ describe('whole-menu gross price preview', () => {
     }
   });
 
-  it('keeps demand projection shape and default demand independent of price previews', () => {
-    const state = {
-      restaurant: { reputation: 3 },
-      dishes: [{ id: 'meal', price: 12, quality: 5, popularity: 60, prepTime: 90 }],
-      unlockedDrinkIds: ['water'],
-    };
-    const demand = estimateMenuDemand(state);
-    const expectedDemand = {
-      dishes: new Map([['meal', 76]]),
-      drinks: new Map([['water', 38]]),
+  it('rounds and clamps a fractional or out-of-range authored dish draft', () => {
+    const state = withOwnedAuthoredDishes({
+      restaurant: { reputation: 1 },
+      dishes: [{ id: 'meal', cookbookId: 'toast', price: 12, quality: 5 }],
+      unlockedDrinkIds: [],
+    });
+    const reference = {
+      reputation: 1,
+      drinks: [],
+      dishes: [{ id: 'meal', cookbookId: 'toast', price: 13, quality: 5, popularity: 50, prepTime: 60 }],
     };
 
+    expect(getMenuAnalysis(state, { kind: 'dish', id: 'meal', price: 12.5 }).expectedGrossPer100)
+      .toBeCloseTo(referenceExpectedGrossPer100(reference), 12);
+    expect(getMenuAnalysis(state, { kind: 'dish', id: 'meal', price: 0 }).expectedGrossPer100)
+      .toBeCloseTo(referenceExpectedGrossPer100({
+        ...reference,
+        dishes: reference.dishes.map(dish => ({ ...dish, price: 9 })),
+      }), 12);
+    expect(getMenuAnalysis(state, { kind: 'dish', id: 'meal', price: 101 }).expectedGrossPer100)
+      .toBeCloseTo(referenceExpectedGrossPer100({
+        ...reference,
+        dishes: reference.dishes.map(dish => ({ ...dish, price: 19 })),
+      }), 12);
+  });
+
+  it('keeps demand projection shape and default demand independent of price previews', () => {
+    const state = withOwnedAuthoredDishes({
+      restaurant: { reputation: 3 },
+      dishes: [{ id: 'meal', cookbookId: 'toast', price: 12, quality: 1 }],
+      unlockedDrinkIds: ['water'],
+    });
+    const demand = estimateMenuDemand(state);
+
     expect(Object.keys(demand).sort()).toEqual(['dishes', 'drinks']);
-    expect(demand).toEqual(expectedDemand);
-    expect(getMenuAnalysis(state).demand).toEqual(expectedDemand);
+    expect(getMenuAnalysis(state).demand).toEqual(demand);
     getMenuAnalysis(state, { kind: 'dish', id: 'meal', price: 30 });
-    expect(estimateMenuDemand(state)).toEqual(expectedDemand);
+    expect(estimateMenuDemand(state)).toEqual(demand);
   });
 });

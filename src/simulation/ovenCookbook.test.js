@@ -75,11 +75,15 @@ function applyVisit(state, options) {
 }
 
 function payRecipe(state, cookbookId, count) {
+  if (state.cookbook.entries[cookbookId]?.discovered && !state.cookbook.entries[cookbookId].owned) {
+    state = reduceCookbookAction(state, { type: 'BUY_COOKBOOK_RECIPE', cookbookId }) ?? state;
+  }
   for (let index = 0; index < count; index += 1) state = applyVisit(state, { cookbookId });
   return state;
 }
 
 function addBakedEggs(state) {
+  state = reduceCookbookAction(state, { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'baked-eggs' }) ?? state;
   return reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'baked-eggs' });
 }
 
@@ -95,9 +99,12 @@ function cashierReady(state) {
 
 describe('Oven recipe gameplay', () => {
   it('discovers Baked Eggs only after three paid Roast Vegetables portions without changing menu or funds', () => {
-    let state = baseState();
+    let state = reduceCookbookAction(baseState(), {
+      type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'roast-vegetables',
+    });
+    state ??= baseState();
     expect(getCookbookEntryStatus(state, 'baked-eggs')).toMatchObject({
-      discovered: false, equipmentOwned: true, stationAvailable: false, canAdd: false,
+      discovered: false, owned: false, equipmentOwned: true, stationAvailable: false, canBuy: false, canAdd: false,
       requirements: [
         { type: 'equipment', id: 'eq2', current: 1, required: 1, met: true },
         { type: 'paidPortions', id: 'roast-vegetables', current: 0, required: 3, met: false },
@@ -109,7 +116,7 @@ describe('Oven recipe gameplay', () => {
       requirements: [{ type: 'equipment', met: true }, { type: 'paidPortions', current: 2, required: 3, met: false }] });
     state = applyVisit(state, { cookbookId: 'roast-vegetables' });
     expect(getCookbookEntryStatus(state, 'baked-eggs')).toMatchObject({ discovered: true,
-      equipmentOwned: true, stationAvailable: false, canAdd: true,
+      owned: false, equipmentOwned: true, stationAvailable: false, canBuy: true, canAdd: false,
       requirements: [{ type: 'equipment', met: true }, { type: 'paidPortions', current: 3, required: 3, met: true }] });
     expect(state.dishes).toEqual([]);
     expect(state.restaurant.funds).toBe(funds);
@@ -132,20 +139,20 @@ describe('Oven recipe gameplay', () => {
       ] });
   });
 
-  it('adds Baked Eggs explicitly for free and retains edited menu settings after removal', () => {
+  it('purchases Baked Eggs and retains edited menu settings after removal', () => {
     let state = payRecipe(baseState(), 'roast-vegetables', 3);
     const funds = state.restaurant.funds;
     state = addBakedEggs(state);
     expect(state.dishes.at(-1)).toMatchObject({ id: 'cookbook:baked-eggs', cookbookId: 'baked-eggs',
       name: 'Baked Eggs', base: 'Eggs', method: 'Baked', requiredEquipmentId: 'eq2', cuisine: 'generic',
       price: 15, quality: 1, prepTime: 120, popularity: 60, unlocked: true });
-    expect(state.restaurant.funds).toBe(funds);
+    expect(state.restaurant.funds).toBe(funds - 175);
     expect(reduceCookbookAction(state, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'baked-eggs' })).toBe(state);
     state = reduceCookbookAction(state, { type: 'UPDATE_DISH', id: 'cookbook:baked-eggs',
       changes: { name: 'House Baked Eggs', price: 19 } });
     state = reduceCookbookAction(state, { type: 'REMOVE_DISH', id: 'cookbook:baked-eggs' });
     state = addBakedEggs(state);
-    expect(getResolvedDish(state, 'cookbook:baked-eggs')).toMatchObject({ name: 'House Baked Eggs', price: 19 });
+    expect(getResolvedDish(state, 'cookbook:baked-eggs')).toMatchObject({ name: 'House Baked Eggs', price: 18 });
   });
 
   it('orders Baked Eggs only for a matching owned Oven and applies the authored 120-second prep time', () => {
@@ -174,9 +181,14 @@ describe('Oven recipe gameplay', () => {
   it('is ready sooner than Roast Vegetables under the same actual kitchen conditions', () => {
     const ovenState = withStation(addBakedEggs(payRecipe(baseState(), 'roast-vegetables', 3)), 'k2', 'eq2');
     let eggs = preparing(order(ovenState), 'k2');
-    let roast = preparing(order(withStation(reduceCookbookAction(baseState(), {
+    let roastState = baseState();
+    roastState = reduceCookbookAction(roastState, {
+      type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'roast-vegetables',
+    });
+    roastState = reduceCookbookAction(roastState, {
       type: 'ADD_COOKBOOK_DISH', cookbookId: 'roast-vegetables',
-    }), 'k2', 'eq2')), 'k2');
+    });
+    let roast = preparing(order(withStation(roastState, 'k2', 'eq2')), 'k2');
 
     eggs = processKitchen({ ...eggs, restaurant: { ...eggs.restaurant, gameTime: 36120 } });
     roast = processKitchen({ ...roast, restaurant: { ...roast.restaurant, gameTime: 36149 } });
@@ -230,7 +242,7 @@ describe('Oven recipe gameplay', () => {
       name: 'Baked Eggs', price: 15, prepTime, popularity, masteryPerk: perk,
     });
     expect(getResolvedDish(state, 'cookbook:baked-eggs')).toMatchObject({
-      name: 'Edited Baked Eggs', price: 31, prepTime, popularity,
+      name: 'Edited Baked Eggs', price: 18, prepTime, popularity,
     });
   });
 
@@ -251,7 +263,7 @@ describe('Oven recipe gameplay', () => {
       name: 'Baked Eggs', price: 15, prepTime: 120, popularity: 60, masteryPerk: null,
     });
     expect(getResolvedDish(state, 'cookbook:baked-eggs')).toMatchObject({
-      name: 'Edited Baked Eggs', price: 31, prepTime: 102, popularity: 60, masteryPerk: 'speed',
+      name: 'Edited Baked Eggs', price: 18, prepTime: 102, popularity: 60, masteryPerk: 'speed',
     });
   });
 });

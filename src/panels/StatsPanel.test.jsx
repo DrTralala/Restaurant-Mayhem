@@ -4,6 +4,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import StatsPanel from './StatsPanel';
 import { DIRT_REPUTATION_THRESHOLD } from '../simulation/dirt';
 import { getCanvasFont } from '../typography';
+import { withOwnedAuthoredDishes } from '../simulation/menuTestFixtures';
+import { createDishOrderSnapshot, getResolvedDish } from '../simulation/cookbook';
 
 const { mockUseGameState, mockUseDispatch, requestNewSandboxMock } = vi.hoisted(() => ({
   mockUseGameState: vi.fn(),
@@ -147,13 +149,15 @@ it('shows aggregates and only the latest ten reviews newest first', () => {
   const scores = [-50, -5, 0, 10, 20, 30, 40, 50, 60, 70, 80, 90];
   const partyReviewHistory = scores.map((score, index) => {
     const unaffordableCount = index % 3 === 0 ? 1 : 0;
+    const poorValueCount = index % 4 === 0 && unaffordableCount === 0 ? 1 : 0;
     return {
       partyId: `p${index + 1}`,
       day: index + 1,
       score,
       memberCount: 2,
-      paidCount: 2 - unaffordableCount,
+      paidCount: 2 - unaffordableCount - poorValueCount,
       unaffordableCount,
+      poorValueCount,
       reputationDelta: score * 2 / 5000,
     };
   });
@@ -166,11 +170,12 @@ it('shows aggregates and only the latest ten reviews newest first', () => {
   expect(screen.getByText('Average party review: 32.9')).toBeInTheDocument();
   expect(screen.getByText('Completed reviews: 12')).toBeInTheDocument();
   expect(screen.getByText('Reviews with unaffordable members: 4 (33%)')).toBeInTheDocument();
+  expect(screen.getByText('Reviews with poor-value members: 2 (17%)')).toBeInTheDocument();
   const rows = screen.getAllByTestId('party-review-row');
   expect(rows).toHaveLength(10);
   expect(rows[0]).toHaveTextContent('Day 12 · p12');
   expect(rows[0]).toHaveTextContent('Score: 90.0');
-  expect(rows[0]).toHaveTextContent('Party: 2 · Paid: 2 · Unaffordable: 0');
+  expect(rows[0]).toHaveTextContent('Party: 2 · Paid: 2 · Unaffordable: 0 · Poor value: 0');
   expect(rows[0]).toHaveTextContent('Reputation: +0.036');
   expect(rows.at(-1)).toHaveTextContent('Day 3 · p3');
   expect(screen.queryByText(/p1$/)).not.toBeInTheDocument();
@@ -196,19 +201,19 @@ describe('Retained review day trend', () => {
       .toBeInTheDocument();
   });
 
-  it('shows sparse day rows, equal-party means, unaffordable-party shares, and a seven-day cutoff', () => {
+  it('shows sparse day rows, equal-party means, separate refusal shares, and a seven-day cutoff', () => {
     const partyReviewHistory = [
-      { partyId: 'day-3', day: 3, score: 30, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-25-small', day: 25, score: 80, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-9', day: 9, score: 9, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-5', day: 5, score: 5, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-20', day: 20, score: 20, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-8', day: 8, score: 8, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-15', day: 15, score: 15, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-12', day: 12, score: 12, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-21', day: 21, score: 21, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-24', day: 24, score: 24, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0 },
-      { partyId: 'day-25-large', day: 25, score: 20, memberCount: 4, paidCount: 2, unaffordableCount: 2, reputationDelta: 0 },
+      { partyId: 'day-3', day: 3, score: 30, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-25-small', day: 25, score: 80, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-9', day: 9, score: 9, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-5', day: 5, score: 5, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-20', day: 20, score: 20, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-8', day: 8, score: 8, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-15', day: 15, score: 15, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-12', day: 12, score: 12, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-21', day: 21, score: 21, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-24', day: 24, score: 24, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0 },
+      { partyId: 'day-25-large', day: 25, score: 20, memberCount: 4, paidCount: 1, unaffordableCount: 1, poorValueCount: 2, reputationDelta: 0 },
     ];
     mockUseGameState.mockReturnValue({ ...baseState, partyReviewHistory });
     render(<StatsPanel />);
@@ -218,23 +223,23 @@ describe('Retained review day trend', () => {
     const rows = within(list).getAllByRole('listitem');
     expect(rows).toHaveLength(7);
     expect(rows.map(row => row.textContent)).toEqual([
-      'Day 25 · 2 party reviews · Mean score 50.0 · Parties with unaffordable members: 1 of 2 (50%)',
-      'Day 24 · 1 party reviews · Mean score 24.0 · Parties with unaffordable members: 0 of 1 (0%)',
-      'Day 21 · 1 party reviews · Mean score 21.0 · Parties with unaffordable members: 0 of 1 (0%)',
-      'Day 20 · 1 party reviews · Mean score 20.0 · Parties with unaffordable members: 0 of 1 (0%)',
-      'Day 15 · 1 party reviews · Mean score 15.0 · Parties with unaffordable members: 0 of 1 (0%)',
-      'Day 12 · 1 party reviews · Mean score 12.0 · Parties with unaffordable members: 0 of 1 (0%)',
-      'Day 9 · 1 party reviews · Mean score 9.0 · Parties with unaffordable members: 0 of 1 (0%)',
+      'Day 25 · 2 party reviews · Mean score 50.0 · Parties with unaffordable members: 1 of 2 (50%) · Parties with poor-value members: 1 of 2 (50%)',
+      'Day 24 · 1 party reviews · Mean score 24.0 · Parties with unaffordable members: 0 of 1 (0%) · Parties with poor-value members: 0 of 1 (0%)',
+      'Day 21 · 1 party reviews · Mean score 21.0 · Parties with unaffordable members: 0 of 1 (0%) · Parties with poor-value members: 0 of 1 (0%)',
+      'Day 20 · 1 party reviews · Mean score 20.0 · Parties with unaffordable members: 0 of 1 (0%) · Parties with poor-value members: 0 of 1 (0%)',
+      'Day 15 · 1 party reviews · Mean score 15.0 · Parties with unaffordable members: 0 of 1 (0%) · Parties with poor-value members: 0 of 1 (0%)',
+      'Day 12 · 1 party reviews · Mean score 12.0 · Parties with unaffordable members: 0 of 1 (0%) · Parties with poor-value members: 0 of 1 (0%)',
+      'Day 9 · 1 party reviews · Mean score 9.0 · Parties with unaffordable members: 0 of 1 (0%) · Parties with poor-value members: 0 of 1 (0%)',
     ]);
   });
 
   it('shows unavailable for a non-finite aggregate and rerenders without dispatch while a career decision is pending', () => {
     const firstHistory = [{
       partyId: 'large-one', day: 1, score: Number.MAX_VALUE, memberCount: 1,
-      paidCount: 1, unaffordableCount: 0, reputationDelta: 0,
+      paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0,
     }, {
       partyId: 'large-two', day: 1, score: Number.MAX_VALUE, memberCount: 1,
-      paidCount: 1, unaffordableCount: 0, reputationDelta: 0,
+      paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0,
     }];
     mockUseGameState.mockReturnValue({
       ...baseState,
@@ -252,7 +257,7 @@ describe('Retained review day trend', () => {
       careerRun: { needsDecision: true },
       partyReviewHistory: [{
         partyId: 'new-day', day: 3, score: 30, memberCount: 1,
-        paidCount: 1, unaffordableCount: 0, reputationDelta: 0,
+        paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0,
       }],
     });
     rerender(<StatsPanel />);
@@ -566,7 +571,7 @@ it('keeps party reviews and Service now alongside the queue patience list', () =
     queue: [{ partyId: 'p1', members: [queuedMember(10, 20)] }],
     partyReviewHistory: [{
       partyId: 'p1', day: 2, score: 80, memberCount: 2, paidCount: 2,
-      unaffordableCount: 0, reputationDelta: 0.032,
+      unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0.032,
     }],
   });
   render(<StatsPanel />);
@@ -1454,16 +1459,23 @@ it('shows ordered-dish blockers as overlapping structural counts and updates imm
     .toBeInTheDocument();
   expect(within(section).queryByRole('list', { name: 'Blocked dishes' })).not.toBeInTheDocument();
 
-  mockUseGameState.mockReturnValue({
+  const authored = withOwnedAuthoredDishes({
     ...baseState,
-    customers: [{ id: 'customer-1', state: 'seated', foodOutcome: 'pending' }],
-    serviceItems: [{
-      id: 'item-1', customerId: 'customer-1', kind: 'dish', menuItemId: 'toast',
-      state: 'ordered', assignedStaffId: null,
-    }],
-    dishes: [{ id: 'toast', requiredEquipmentId: 'eq1' }],
+    customers: [{ id: 'customer-1', state: 'waiting_for_items', dishId: 'toast',
+      menuOutcome: 'ordered', foodOutcome: 'pending' }],
+    serviceItems: [],
+    dishes: [{ id: 'toast', cookbookId: 'toast', price: 12, quality: 1 }],
     staff: [],
     kitchenStations: [],
+  });
+  const snapshot = createDishOrderSnapshot(getResolvedDish(authored, 'toast'), {
+    serviceItemId: 'item-1', orderedAt: 0,
+  });
+  mockUseGameState.mockReturnValue({
+    ...authored,
+    customers: [{ ...authored.customers[0], dishOrderSnapshot: { ...snapshot } }],
+    serviceItems: [{ id: 'item-1', customerId: 'customer-1', kind: 'dish', menuItemId: 'toast',
+      state: 'ordered', assignedStaffId: null, dishOrderSnapshot: snapshot }],
   });
   rerender(<StatsPanel />);
 
@@ -1478,7 +1490,7 @@ it('shows ordered-dish blockers as overlapping structural counts and updates imm
     .toHaveTextContent(/guarantees of order arrival or preparation/);
   const details = within(section).getByRole('list', { name: 'Blocked dishes' });
   expect(within(details).getByRole('listitem')).toHaveTextContent(
-    'Dish toast (toast): no employed cook: 1; no compatible station: 1',
+    'Toasted Bread (toast): no employed cook: 1; no compatible station: 1',
   );
   mockUseGameState.mockReturnValue(baseState);
   rerender(<StatsPanel />);

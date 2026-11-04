@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { saveState, loadState, hydrateState } from './persistence';
+import { saveState, loadState, loadStateResult, hydrateState } from './persistence';
 import { saveRepositoryState } from './repositorySaves';
 import { createInitialState } from './initialState';
 import { processKitchen } from '../simulation/kitchen';
@@ -14,7 +14,7 @@ import { createGrid } from '../simulation/navigation/grid';
 import { isAtPreparationPosition } from '../simulation/preparationPosition';
 import { findAvailableServiceSlot } from '../simulation/serviceItems';
 import { validateSavedState } from './saveValidation';
-import { createCookbookState } from '../simulation/cookbook';
+import { createCookbookState, createDishOrderSnapshot, getResolvedDish } from '../simulation/cookbook';
 import { createServiceContractsState } from '../simulation/serviceContracts';
 
 beforeEach(() => {
@@ -60,23 +60,36 @@ it('hydrates a partly delivered order into independent consumption without timin
 it('normalises a saved cook out of a blocked station cell before preparation resumes', () => {
   const fresh = createInitialState();
   const station = fresh.kitchenStations.find(candidate => candidate.id === 'k1');
+  const snapshot = (serviceItemId, orderedAt) => createDishOrderSnapshot(
+    getResolvedDish(fresh, 'starter-toast'), { serviceItemId, orderedAt },
+  );
+  const firstSnapshot = snapshot('dish', 20);
+  const secondSnapshot = snapshot('dish-2', 20);
   const saved = {
     ...fresh,
     restaurant: { ...fresh.restaurant, gameTime: 100 },
     customers: [
-      { id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast' },
-      { id: 'c2', state: 'waiting_for_items', dishId: 'starter-toast' },
+      { id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast', menuOutcome: 'ordered',
+        dishPriceAtOrder: 12, drinkPriceAtOrder: null, orderSubtotal: 12,
+        orderedServiceItemIds: ['dish'], consumedServiceItemIds: [],
+        dishOrderSnapshot: firstSnapshot },
+      { id: 'c2', state: 'waiting_for_items', dishId: 'starter-toast', menuOutcome: 'ordered',
+        dishPriceAtOrder: 12, drinkPriceAtOrder: null, orderSubtotal: 12,
+        orderedServiceItemIds: ['dish-2'], consumedServiceItemIds: [],
+        dishOrderSnapshot: secondSnapshot },
     ],
     serviceItems: [
       {
         id: 'dish', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', batchId: 'batch-1',
         state: 'preparing', stationId: station.id, assignedStaffId: 'starter-cook',
         preparationStartedAt: 20, accumulatedWork: 12, lastProgressAt: 20,
+        dishOrderSnapshot: { ...firstSnapshot },
       },
       {
         id: 'dish-2', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c2', batchId: 'batch-1',
         state: 'preparing', stationId: station.id, assignedStaffId: 'starter-cook',
         preparationStartedAt: 20, accumulatedWork: 18, lastProgressAt: 20,
+        dishOrderSnapshot: { ...secondSnapshot },
       },
     ],
     cookingBatches: [{
@@ -177,6 +190,7 @@ function savedRecoveryState(fresh) {
     restaurant: {
       ...fresh.restaurant, funds: 87.06, gameTime: 168306, day: 2, totalServed: 119,
     },
+    menuSales: { day: 2, dishes: [], drinks: [] },
     tables: [table],
     chairs: [chair],
     doors: [
@@ -293,8 +307,7 @@ describe('loadState', () => {
       ...fresh,
       version: SAVE_VERSION,
       kitchenStations: [],
-      customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'recipe' }],
-      dishes: [{ id: 'recipe', prepTime: 60 }],
+      customers: [{ id: 'c1', state: 'waiting_for_items', dishId: 'starter-toast' }],
       staff: [{
         ...fresh.staff.find(worker => worker.role === 'cook'),
         id: 'cook', role: 'cook', skill: 5, morale: 80, x: 200, y: 200,
@@ -304,7 +317,7 @@ describe('loadState', () => {
         },
       }],
       serviceItems: [{
-        id: 'i1', kind: 'dish', menuItemId: 'recipe', customerId: 'c1',
+        id: 'i1', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1',
         state: 'preparing', batchId: 'batch-1', stationId: 'missing-station',
         assignedStaffId: 'cook', preparationStartedAt: 50,
       }],
@@ -326,6 +339,9 @@ describe('loadState', () => {
 
   it('hydrates an explicit empty batch ledger from its matching task member', () => {
     const fresh = createInitialState();
+    const snapshot = createDishOrderSnapshot(getResolvedDish(fresh, 'starter-toast'), {
+      serviceItemId: 'i1', orderedAt: 50,
+    });
     const cook = {
       ...fresh.staff.find(worker => worker.id === 'starter-cook'),
       x: 80,
@@ -342,11 +358,15 @@ describe('loadState', () => {
       staff: [cook],
       customers: [{
         id: 'c1', state: 'waiting_for_items', tableId: 't1', dishId: 'starter-toast',
+        menuOutcome: 'ordered', dishPriceAtOrder: 12, drinkPriceAtOrder: null,
+        orderSubtotal: 12, orderedServiceItemIds: ['i1'], consumedServiceItemIds: [],
+        dishOrderSnapshot: snapshot,
       }],
       serviceItems: [{
         id: 'i1', kind: 'dish', menuItemId: 'starter-toast', customerId: 'c1', tableId: 't1',
         state: 'preparing', stationId: null, assignedStaffId: null,
         preparationStartedAt: 50, readyAt: null,
+        dishOrderSnapshot: { ...snapshot },
       }],
       cookingBatches: [{
         id: 'batch-1', cookId: 'starter-cook', stationId: 'k1', serviceItemIds: [],
@@ -380,7 +400,7 @@ describe('loadState', () => {
       warning.mockRestore();
     }
   });
-  it.each([1, 2, 3, 4, 5, 6, 7, 8])('rejects obsolete version %s local saves without deleting evidence or attempting migration', version => {
+  it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])('rejects obsolete version %s local saves without deleting evidence or attempting migration', version => {
     localStorage.setItem('restaurant-sim-save', JSON.stringify({ version, restaurant: { funds: 999 } }));
     expect(loadState()).toBeNull();
     expect(JSON.parse(localStorage.getItem('restaurant-sim-save')).version).toBe(version);
@@ -396,12 +416,27 @@ describe('loadState', () => {
     expect(loadState()).toBeNull();
   });
 
+  it('returns a structured missing result when no autosave exists', () => {
+    expect(loadStateResult()).toEqual({ state: null, reason: 'missing' });
+  });
+
   it('returns parsed state when save exists', () => {
     const fresh = createInitialState();
     const { movementCoordinator: _movementCoordinator, ...withoutRuntime } = fresh;
     const state = { ...withoutRuntime, restaurant: { ...fresh.restaurant, funds: 500 } };
     localStorage.setItem('restaurant-sim-save', JSON.stringify(state));
     expect(loadState()).toEqual(state);
+  });
+
+  it('returns a validated current save with a null failure reason', () => {
+    const fresh = createInitialState();
+    saveState(fresh);
+
+    const result = loadStateResult();
+
+    expect(result.reason).toBeNull();
+    expect(result.state).toMatchObject({ version: SAVE_VERSION, cookbook: fresh.cookbook });
+    expect(result.state).not.toHaveProperty('movementCoordinator');
   });
 
   it('preserves the layout of a prior saved empty kitchen station', () => {
@@ -527,7 +562,7 @@ describe('hydrateState', () => {
       ],
     };
 
-    expect(() => hydrateState(saved, fresh)).toThrow(/service-item inventory/i);
+    expect(() => hydrateState(saved, fresh)).toThrow(/duplicate item ID/i);
   });
 
   it('rejects same-customer same-kind duplicates while preserving a legitimate dish and drink pair', () => {
@@ -828,7 +863,7 @@ describe('hydrateState', () => {
       ],
     };
 
-    expect(() => hydrateState(saved, fresh)).toThrow(/service-item inventory/i);
+    expect(() => hydrateState(saved, fresh)).toThrow(/carrying capacity|service-item inventory/i);
   });
 
   it('rejects malformed inventory through loadState without deleting the saved JSON', () => {
@@ -1109,11 +1144,12 @@ describe('hydrateState', () => {
       ...fresh,
       restaurant: { ...fresh.restaurant, openHour: 10, closeHour: 22 },
     };
-    const missing = hydrateState({ ...fresh, restaurant: { funds: 900 } }, fallbackFresh);
-    const malformed = hydrateState({
+    const missing = hydrateState({ ...fresh,
+      restaurant: { ...fresh.restaurant, openHour: undefined, closeHour: undefined } }, fallbackFresh);
+    const malformed = {
       ...fresh,
       restaurant: { ...fresh.restaurant, openHour: 10.25, closeHour: '22' },
-    }, fallbackFresh);
+    };
     const daytime = hydrateState({
       ...fresh,
       restaurant: { ...fresh.restaurant, openHour: 10, closeHour: 22 },
@@ -1122,57 +1158,23 @@ describe('hydrateState', () => {
       ...fresh,
       restaurant: { ...fresh.restaurant, openHour: 18, closeHour: 2 },
     }, fallbackFresh);
-    const legacy = hydrateState({
+    const legacy = {
       ...fresh,
       restaurant: { ...fresh.restaurant, openHour: 0, closeHour: 24 },
-    }, fallbackFresh);
+    };
 
     expect(missing.restaurant).toMatchObject({ openHour: 0, closeHour: 0 });
-    expect(malformed.restaurant).toMatchObject({ openHour: 0, closeHour: 0 });
+    expect(() => hydrateState(malformed, fallbackFresh)).toThrow();
     expect(daytime.restaurant).toMatchObject({ openHour: 10, closeHour: 22 });
     expect(overnight.restaurant).toMatchObject({ openHour: 18, closeHour: 2 });
-    expect(legacy.restaurant).toMatchObject({ openHour: 0, closeHour: 0 });
+    expect(hydrateState(legacy, fallbackFresh).restaurant).toMatchObject({ openHour: 0, closeHour: 0 });
   });
 
-  it('fills fields added after an existing same-version save was created', () => {
-    const fresh = {
-      version: SAVE_VERSION,
-      restaurant: { funds: 500, totalServed: 0 },
-      staff: [{ id: 'starter-cook' }],
-      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
-      serviceItems: [],
-      floorDirt: [],
-      washStations: [],
-    };
-    const saved = {
-      restaurant: { funds: 999 },
-      staff: [{ id: 'custom-cook' }],
-    };
+  it('rejects incomplete versionless imports rather than filling them from fresh defaults', () => {
+    const fresh = createInitialState();
+    const saved = { restaurant: { funds: 999 }, staff: [{ id: 'custom-cook' }] };
 
-    expect(hydrateState(saved, fresh)).toEqual({
-      version: SAVE_VERSION,
-      careerRun: null,
-      paidVisitSequence: 0,
-      menuSales: { day: 1, dishes: [], drinks: [] },
-      cookbook: createCookbookState(),
-      serviceContracts: createServiceContractsState(),
-      dishes: [],
-      movementCoordinator: createMovementCoordinator(),
-      restaurant: { funds: 999, totalServed: 0, openHour: 0, closeHour: 0 },
-      staff: [{ id: 'custom-cook', gender: 'male', carryingServiceItemIds: [] }],
-      serviceTables: [{ id: 'st1', x: 140, y: 120 }],
-      serviceItems: [],
-      customers: [],
-      queue: [],
-      queueSlots: [],
-      queueDepartures: [],
-      queueAdmissionGate: null,
-      pendingPartyReviews: [],
-      partyReviewHistory: [],
-      drinkOverrides: {},
-      floorDirt: [],
-      washStations: [],
-    });
+    expect(() => hydrateState(saved, fresh)).toThrow(/incompatible/i);
   });
 
   function reservedPartySave() {
@@ -1272,30 +1274,21 @@ describe('hydrateState', () => {
     expect(table).toMatchObject({ id: 't1', status: 'occupied', diningPartyId: 'party-a' });
   });
 
-  it('hydrates missing wash collections from fresh state and preserves populated saves', () => {
+  it('rejects missing collections in a current-version save instead of filling them', () => {
     const fresh = createInitialState();
-    const missing = hydrateState({ ...fresh, version: undefined, floorDirt: undefined, washStations: undefined }, fresh);
-    const saved = [{ id: 'd1' }];
-    const stations = [{ id: 'wash9', type: 'automatic', x: 500, y: 300, w: 40, h: 40 }];
-    const populated = hydrateState({ ...fresh, floorDirt: saved, washStations: stations }, fresh);
+    const missing = { ...fresh };
+    delete missing.floorDirt;
 
-    expect(missing.floorDirt).toEqual([]);
-    expect(missing.washStations).toEqual(fresh.washStations);
-    expect(populated.floorDirt).toEqual(saved);
-    expect(populated.washStations).toEqual(stations);
+    expect(() => hydrateState(missing, fresh)).toThrow(/floorDirt.*required/i);
   });
 
-  it('adds stable genders to same-version character records with missing fields', () => {
-    const fresh = {
-      version: SAVE_VERSION,
-      restaurant: { funds: 500 },
-      staff: [], customers: [], queue: [],
-    };
+  it('adds stable genders to valid current-version character records missing only gender', () => {
+    const fresh = createInitialState();
     const saved = {
-      restaurant: { funds: 900 },
-      staff: [{ id: 's1', name: 'Sofia' }],
+      ...fresh,
+      staff: [{ ...fresh.staff[0], id: 's1', name: 'Sofia', gender: undefined }],
       customers: [{ id: 'c1' }],
-      queue: [{ id: 'c2' }],
+      queue: [{ partyId: 'party-c2', members: [{ id: 'c2', partyId: 'party-c2' }] }],
     };
 
     const hydrated = hydrateState(saved, fresh);
@@ -1396,19 +1389,13 @@ describe('hydrateState', () => {
   it('normalises equipment multipliers from saved levels', () => {
     const fresh = {
       version: SAVE_VERSION,
-      restaurant: { funds: 500 },
-      staff: [], customers: [], queue: [],
-      equipment: [
-        { id: 'eq1', level: 1, speedMultiplier: 1, qualityBonus: 0, owned: true },
-        { id: 'eq2', level: 1, speedMultiplier: 1, qualityBonus: 0, owned: false },
-      ],
+      ...createInitialState(),
     };
     const saved = {
-      restaurant: { funds: 900 },
-      equipment: [
-        { id: 'eq1', level: 4, speedMultiplier: 0.85, qualityBonus: null, owned: true },
-        { id: 'eq2', level: 'bad', owned: false },
-      ],
+      ...fresh,
+      equipment: fresh.equipment.map(equipment => equipment.id === 'eq1'
+        ? { ...equipment, level: 4, speedMultiplier: 0.85, qualityBonus: null }
+        : equipment),
     };
 
     const hydrated = hydrateState(saved, fresh);
@@ -1424,44 +1411,24 @@ describe('hydrateState', () => {
     });
   });
 
-  it('normalises malformed dish prices while preserving valid dish data', () => {
+  it('rejects an authored dish price that disagrees with strict cookbook settings', () => {
     const fresh = createInitialState();
     const saved = {
       ...fresh,
       version: SAVE_VERSION,
-      dishes: [
-        { id: 'valid', name: 'Valid', price: 37, marker: 'preserved' },
-        { id: 'rounded', name: 'Rounded', price: 37.6 },
-        { id: 'low', name: 'Low', price: -20 },
-        { id: 'high', name: 'High', price: 101 },
-        { ...fresh.dishes[0], cookbookId: null, price: Number.POSITIVE_INFINITY },
-        { id: 'nan', name: 'NaN', price: Number.NaN },
-        { id: 'null', name: 'Null', price: null },
-        { id: 'string', name: 'String', price: '12' },
-      ],
+      dishes: fresh.dishes.map(dish => ({ ...dish, price: 26 })),
     };
 
-    const hydrated = hydrateState(saved, fresh);
-
-    expect(hydrated.version).toBe(SAVE_VERSION);
-    expect(hydrated.dishes.map(dish => dish.price)).toEqual([37, 38, 1, 100, 12, 1, 1, 1]);
-    expect(hydrated.dishes[0]).toMatchObject({ name: 'Valid', marker: 'preserved' });
+    expect(() => hydrateState(saved, fresh)).toThrow(/Invalid cookbook/);
   });
 
-  it('ignores legacy staff capacity values during hydration', () => {
+  it('ignores legacy staff capacity values on a complete current-version save', () => {
     const fresh = createInitialState();
     const legacy = hydrateState({ ...fresh, staffSlots: 3 }, fresh);
-    const crowdedStaff = [...fresh.staff, ...Array.from({ length: 3 }, (_, index) => ({
-      id: `extra-${index}`,
-      name: `Extra ${index}`,
-    }))];
-    const crowded = hydrateState({ ...fresh, version: undefined, staff: crowdedStaff, staffSlots: 3 }, fresh);
     const expanded = hydrateState({ ...fresh, staffSlots: 9 }, fresh);
 
     expect(legacy).not.toHaveProperty('staffSlots');
-    expect(crowded).not.toHaveProperty('staffSlots');
     expect(expanded).not.toHaveProperty('staffSlots');
-    expect(crowded.staff).toHaveLength(8);
     expect(legacy.version).toBe(SAVE_VERSION);
   });
 
@@ -1549,18 +1516,20 @@ describe('hydrateState', () => {
   });
 
   it('normalises drink overrides and defaults missing state', () => {
+    const fresh = createInitialState();
     const hydrated = hydrateState({
+      ...fresh,
       drinkOverrides: {
         water: { price: -10, quality: 22, popularity: 99 },
         tea: { price: 9.7, quality: 3 },
         missing: { price: 20 },
       },
-    }, createInitialState());
+    }, fresh);
     expect(hydrated.drinkOverrides).toEqual({
       water: { price: 1, quality: 10 },
       tea: { price: 10, quality: 3 },
     });
-    expect(hydrateState({}, createInitialState()).drinkOverrides).toEqual({});
+    expect(hydrateState({ ...fresh, drinkOverrides: undefined }, fresh).drinkOverrides).toEqual({});
   });
 
   it('round-trips valid sparse drink overrides', () => {
@@ -1571,43 +1540,20 @@ describe('hydrateState', () => {
     });
   });
 
-  it('preserves valid profiles and snapshots while removing invalid economy fields', () => {
+  it('rejects a current-version poor-value outcome with a forged order bill before normalisation', () => {
     const fresh = createInitialState();
-    const valid = {
-      id: 'valid', gender: 'female', spendingTier: 'value', spendingBudget: 30,
-      menuOutcome: 'ordered', dishPriceAtOrder: 12, drinkPriceAtOrder: null,
-      orderSubtotal: 12,
+    const refusal = {
+      id: 'refused', state: 'waiting_for_party', menuOutcome: 'poor_value',
+      dishId: null, drinkId: null, dishPriceAtOrder: 12, drinkPriceAtOrder: null,
+      orderSubtotal: 12, orderedServiceItemIds: [], consumedServiceItemIds: [],
     };
-    const invalid = {
-      id: 'invalid', gender: 'male', spendingTier: 'budget', spendingBudget: 99,
-      menuOutcome: 'forged', dishPriceAtOrder: -1,
-      drinkPriceAtOrder: '2', orderSubtotal: Number.NaN,
-    };
-    const queuedValid = {
-      id: 'queued-valid', partyId: 'queued-party', gender: 'female',
-      spendingTier: 'premium', spendingBudget: 120,
-    };
-    const queuedInvalid = {
-      id: 'queued-invalid', partyId: 'queued-party', gender: 'male',
-      spendingTier: 'premium', spendingBudget: 121,
-    };
-    const hydrated = hydrateState({
-      ...fresh,
-      customers: [valid, invalid],
-      queue: [{ partyId: 'queued-party', members: [queuedValid, queuedInvalid] }],
-    }, fresh);
 
-    expect(hydrated.customers[0]).toMatchObject(valid);
-    expect(hydrated.customers[1]).toEqual({ id: 'invalid', gender: 'male' });
-    expect(hydrated.queue[0].members[0]).toMatchObject(queuedValid);
-    expect(hydrated.queue[0].members[1]).toEqual({
-      id: 'queued-invalid', partyId: 'queued-party', gender: 'male',
-    });
+    expect(() => hydrateState({ ...fresh, customers: [refusal] }, fresh)).toThrow(/refusal|no.order/i);
   });
 
   it('defaults missing party review state in the current save version', () => {
     const fresh = createInitialState();
-    const hydrated = hydrateState({}, fresh);
+    const hydrated = hydrateState({ ...fresh, pendingPartyReviews: undefined, partyReviewHistory: undefined }, fresh);
     expect(hydrated.pendingPartyReviews).toEqual([]);
     expect(hydrated.partyReviewHistory).toEqual([]);
   });
@@ -1616,11 +1562,11 @@ describe('hydrateState', () => {
     const fresh = createInitialState();
     const pendingPartyReviews = [{
       partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
-      unaffordableMemberIds: ['b'], paidReviews: [],
+      unaffordableMemberIds: ['b'], poorValueMemberIds: [], paidReviews: [],
     }];
     const partyReviewHistory = [{
       partyId: 'old', day: 2, score: -5, memberCount: 2,
-      paidCount: 1, unaffordableCount: 1, reputationDelta: -0.002,
+      paidCount: 1, unaffordableCount: 1, poorValueCount: 0, reputationDelta: -0.002,
     }];
     saveState({ ...fresh, pendingPartyReviews, partyReviewHistory });
     const hydrated = hydrateState(loadState(), fresh);
@@ -1632,7 +1578,7 @@ describe('hydrateState', () => {
     const fresh = createInitialState();
     const completedReview = {
       partyId: 'p1', day: 2, score: 80, memberCount: 1,
-      paidCount: 1, unaffordableCount: 0, reputationDelta: 0.016,
+      paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0.016,
     };
     const completedPayment = { customerId: 'c1', revenue: 12 };
     const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
@@ -1647,7 +1593,8 @@ describe('hydrateState', () => {
       completedCustomers: [completedPayment, { ...completedPayment, revenue: 99 }],
       pendingPartyReviews: [{
         partyId: 'p1', memberIds: ['c1'], orderedMemberIds: ['c1'],
-        unaffordableMemberIds: [], paidReviews: [{ customerId: 'c1', score: 80 }],
+        unaffordableMemberIds: [], poorValueMemberIds: [],
+        paidReviews: [{ customerId: 'c1', score: 80 }],
       }],
       partyReviewHistory: [completedReview],
     }, fresh);
@@ -1770,7 +1717,7 @@ describe('hydrateState', () => {
     };
     const saved = {
       ...fresh,
-      version: undefined,
+      version: SAVE_VERSION,
       cashierStations: [legacyStation],
       staff: [cashier],
       customers: [customer, departing],
@@ -2035,23 +1982,81 @@ describe('queue slot lease persistence across both transports', () => {
   });
 });
 
-describe('version ten lifecycle save validation', () => {
+describe('version eleven lifecycle save validation', () => {
   function currentSave(overrides = {}) {
     const fresh = createInitialState();
     return { ...fresh, ...overrides, version: SAVE_VERSION };
   }
 
   it('increments the shared save version exactly once from the previous format', () => {
-    expect(SAVE_VERSION).toBe(10);
-    expect(createInitialState().version).toBe(10);
+    expect(SAVE_VERSION).toBe(11);
+    expect(createInitialState().version).toBe(11);
   });
 
   it('rejects an old autosave without deleting the evidence', () => {
-    const old = JSON.stringify({ version: 9, restaurant: { funds: 999 } });
+    const old = JSON.stringify({ version: 10, restaurant: { funds: 999 } });
     localStorage.setItem('restaurant-sim-save', old);
 
     expect(loadState()).toBeNull();
     expect(localStorage.getItem('restaurant-sim-save')).toBe(old);
+  });
+
+  it.each([10, 12])('classifies a root version mismatch (%s) as incompatible without changing storage', version => {
+    const serialized = JSON.stringify({ ...createInitialState(), version });
+    localStorage.setItem('restaurant-sim-save', serialized);
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'incompatible' });
+    expect(loadState()).toBeNull();
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
+  });
+
+  it('classifies malformed JSON as invalid without changing storage', () => {
+    const serialized = '{not-json';
+    localStorage.setItem('restaurant-sim-save', serialized);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
+  });
+
+  it('classifies storage read failures as unavailable', () => {
+    vi.spyOn(localStorage, 'getItem').mockImplementation(() => { throw new Error('storage disabled'); });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'unavailable' });
+  });
+
+  it('rejects a current-version save missing the cookbook instead of adopting fresh defaults', () => {
+    const saved = createInitialState();
+    delete saved.cookbook;
+    const serialized = JSON.stringify(saved);
+    localStorage.setItem('restaurant-sim-save', serialized);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
+    expect(loadState()).toBeNull();
+    expect(() => hydrateState(saved, createInitialState())).toThrow(/Invalid cookbook: missing cookbook/);
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
+  });
+
+  it('rejects a current-version cookbook missing the starter ownership marker', () => {
+    const saved = createInitialState();
+    delete saved.cookbook.entries.toast.owned;
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
+    expect(() => hydrateState(saved, createInitialState())).toThrow(/Invalid cookbook/);
+  });
+
+  it('rejects current-version cookbook schema 2 rather than migrating it', () => {
+    const saved = createInitialState();
+    saved.cookbook.schemaVersion = 2;
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(saved));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
+    expect(() => hydrateState(saved, createInitialState())).toThrow(/Invalid cookbook/);
   });
 
   it.each([0, 11, 1.5, '2', null])(

@@ -45,8 +45,28 @@ describe('pending party reviews', () => {
     records = recordPartyOrderOutcome(records, party, party[1], 'unaffordable');
     expect(records).toEqual([{
       partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
-      unaffordableMemberIds: ['b'], paidReviews: [],
+      unaffordableMemberIds: ['b'], poorValueMemberIds: [], paidReviews: [],
     }]);
+  });
+
+  it('keeps poor-value outcomes separate from unaffordable outcomes and paid members', () => {
+    const three = [...party, { id: 'c', partyId: 'p1' }];
+    let records = recordPartyOrderOutcome([], three, three[0], 'ordered');
+    records = recordPartyOrderOutcome(records, three, three[1], 'unaffordable');
+    records = recordPartyOrderOutcome(records, three, three[2], 'poor_value');
+    records = recordPartyPayment(records, three[0], 80);
+
+    expect(records).toEqual([{
+      partyId: 'p1', memberIds: ['a', 'b', 'c'], orderedMemberIds: ['a'],
+      unaffordableMemberIds: ['b'], poorValueMemberIds: ['c'],
+      paidReviews: [{ customerId: 'a', score: 80 }],
+    }]);
+    const settled = settlePartyReview({ ...baseSettlement, pendingPartyReviews: records }, 'p1');
+    expect(settled.review).toMatchObject({
+      score: -46.666666666666664, paidCount: 1, unaffordableCount: 1,
+      poorValueCount: 1,
+    });
+    expect(settled.review.reputationDelta).toBeCloseTo(-0.024, 12);
   });
 
   it('records a fixed positive paid contribution once and keeps raw score separate', () => {
@@ -64,7 +84,8 @@ describe('pending party reviews', () => {
   it('records and settles the supplied happiness score without changing saved contributions', () => {
     let records = normalisePendingPartyReviews([{
       partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a', 'b'],
-      unaffordableMemberIds: [], paidReviews: [{ customerId: 'a', score: 70 }],
+      unaffordableMemberIds: [], poorValueMemberIds: [],
+      paidReviews: [{ customerId: 'a', score: 70 }],
     }]);
     records = recordPartyPayment(records, party[1], 64);
 
@@ -155,14 +176,14 @@ describe('pending party reviews', () => {
     const forged = { id: 'forged', partyId: 'p1' };
     const pending = [{
       partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
-      unaffordableMemberIds: [], paidReviews: [],
+      unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
     }];
     expect(recordPartyOrderOutcome(pending, [...party, forged], forged, 'ordered'))
       .toEqual(pending);
 
     const malformed = [{
       partyId: 'p1', memberIds: ['a'], orderedMemberIds: ['forged'],
-      unaffordableMemberIds: [], paidReviews: [],
+      unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
     }];
     expect(recordPartyPayment(malformed, forged)).toEqual(malformed);
   });
@@ -182,7 +203,7 @@ describe('settled party reviews', () => {
     const result = settlePartyReview({ ...baseSettlement, pendingPartyReviews: pending }, 'p1');
     expect(result.review).toMatchObject({
       partyId: 'p1', score: -5, memberCount: 2, paidCount: 1,
-      unaffordableCount: 1,
+      unaffordableCount: 1, poorValueCount: 0,
     });
     expect(result.review.reputationDelta).toBeCloseTo(0.003);
     expect(result.restaurant.reputation).toBeCloseTo(3.003);
@@ -243,7 +264,7 @@ describe('settled party reviews', () => {
     pending = recordPartyPayment(pending, party[1]);
     const completed = {
       partyId: 'p1', day: 1, score: 60, memberCount: 2,
-      paidCount: 2, unaffordableCount: 0, reputationDelta: 0.024,
+      paidCount: 2, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0.024,
     };
 
     const result = settlePartyReview({
@@ -263,7 +284,7 @@ describe('settled party reviews', () => {
     const pending = recordPartyOrderOutcome([], solo, solo[0], 'unaffordable');
     const history = Array.from({ length: 30 }, (_, index) => ({
       partyId: `old-${index}`, day: 1, score: 50, memberCount: 1,
-      paidCount: 1, unaffordableCount: 0, reputationDelta: 0.01,
+      paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0.01,
     }));
     const result = settlePartyReview({
       ...baseSettlement, pendingPartyReviews: pending, partyReviewHistory: history,
@@ -284,7 +305,7 @@ describe('settled party reviews', () => {
     for (const paidReviews of paymentVariants) {
       const pendingPartyReviews = [{
         partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
-        unaffordableMemberIds: ['b'], paidReviews,
+        unaffordableMemberIds: ['b'], poorValueMemberIds: [], paidReviews,
       }];
       const result = settlePartyReview({
         ...baseSettlement, pendingPartyReviews,
@@ -299,12 +320,31 @@ describe('settled party reviews', () => {
 });
 
 describe('party review hydration', () => {
+  it('drops pending review records with no outcome while retaining a non-empty partial record', () => {
+    const empty = {
+      partyId: 'empty-outcomes', memberIds: ['a', 'b'], orderedMemberIds: [],
+      unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
+    };
+    const partial = {
+      partyId: 'partial-outcomes', memberIds: ['c', 'd'], orderedMemberIds: ['c'],
+      unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
+    };
+
+    expect(normalisePendingPartyReviews([empty, partial])).toEqual([partial]);
+    const unsettled = settlePartyReview({
+      ...baseSettlement, pendingPartyReviews: [empty],
+    }, empty.partyId);
+    expect(unsettled.review).toBeNull();
+    expect(unsettled.pendingPartyReviews).toEqual([empty]);
+  });
+
   it('deduplicates pending IDs and keeps payments only for ordered members', () => {
     expect(normalisePendingPartyReviews([{
       partyId: 'p1',
       memberIds: ['a', 'a', 'b', null],
       orderedMemberIds: ['a', 'a', 'missing'],
       unaffordableMemberIds: ['a', 'b', 'b'],
+      poorValueMemberIds: ['b', 'b'],
       paidReviews: [
         { customerId: 'a', score: 120 },
         { customerId: 'a', score: 80 },
@@ -314,6 +354,7 @@ describe('party review hydration', () => {
     }, { partyId: 'empty', memberIds: [] }])).toEqual([{
       partyId: 'p1', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
       unaffordableMemberIds: ['b'],
+      poorValueMemberIds: [],
       paidReviews: [{ customerId: 'a', score: 100 }],
     }]);
   });
@@ -321,12 +362,12 @@ describe('party review hydration', () => {
   it('rejects malformed history and keeps the latest thirty valid records', () => {
     const valid = Array.from({ length: 32 }, (_, index) => ({
       partyId: `p${index}`, day: index + 1, score: index - 5,
-      memberCount: 2, paidCount: 1, unaffordableCount: 1,
+      memberCount: 2, paidCount: 1, unaffordableCount: 1, poorValueCount: 0,
       reputationDelta: (index - 5) / 5000,
     }));
     const result = normalisePartyReviewHistory([
-      { partyId: '', day: 1, score: 20, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0.01 },
-      { partyId: 'broken', day: 1, score: Number.NaN, memberCount: 1, paidCount: 1, unaffordableCount: 0, reputationDelta: 0.01 },
+      { partyId: '', day: 1, score: 20, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0.01 },
+      { partyId: 'broken', day: 1, score: Number.NaN, memberCount: 1, paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0.01 },
       ...valid,
     ]);
     expect(result).toHaveLength(30);
@@ -337,11 +378,12 @@ describe('party review hydration', () => {
   it('rejects pending records with wrong-typed outcome or payment containers', () => {
     const valid = {
       partyId: 'valid', memberIds: ['a', 'b'], orderedMemberIds: ['a'],
-      unaffordableMemberIds: ['b'], paidReviews: [],
+      unaffordableMemberIds: ['b'], poorValueMemberIds: [], paidReviews: [],
     };
     expect(normalisePendingPartyReviews([
       { ...valid, partyId: 'bad-ordered', orderedMemberIds: 'a' },
       { ...valid, partyId: 'bad-unaffordable', unaffordableMemberIds: 'b' },
+      { ...valid, partyId: 'bad-poor-value', poorValueMemberIds: 'b' },
       { ...valid, partyId: 'bad-payments', paidReviews: {} },
       valid,
     ])).toEqual([valid]);
@@ -350,15 +392,15 @@ describe('party review hydration', () => {
   it('keeps the first pending record for each party ID', () => {
     const first = {
       partyId: 'p1', memberIds: ['a'], orderedMemberIds: ['a'],
-      unaffordableMemberIds: [], paidReviews: [],
+      unaffordableMemberIds: [], poorValueMemberIds: [], paidReviews: [],
     };
     const duplicate = {
       partyId: 'p1', memberIds: ['b'], orderedMemberIds: [],
-      unaffordableMemberIds: ['b'], paidReviews: [],
+      unaffordableMemberIds: ['b'], poorValueMemberIds: [], paidReviews: [],
     };
     const other = {
       partyId: 'p2', memberIds: ['c'], orderedMemberIds: [],
-      unaffordableMemberIds: ['c'], paidReviews: [],
+      unaffordableMemberIds: ['c'], poorValueMemberIds: [], paidReviews: [],
     };
 
     expect(normalisePendingPartyReviews([first, duplicate, other])).toEqual([first, other]);
@@ -370,11 +412,11 @@ describe('party review hydration', () => {
     const history = [
       ...Array.from({ length: 30 }, (_, index) => ({
         partyId: `old-${index}`, day: 1, score: 50, memberCount: 1,
-        paidCount: 1, unaffordableCount: 0, reputationDelta: 0.01,
+        paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0.01,
       })),
       {
         partyId: 'bad', day: 1, score: Number.NaN, memberCount: 1,
-        paidCount: 1, unaffordableCount: 0, reputationDelta: 0.01,
+        paidCount: 1, unaffordableCount: 0, poorValueCount: 0, reputationDelta: 0.01,
       },
     ];
     const result = settlePartyReview({
