@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { getServiceContractTemplate } from '../data/serviceContracts';
+import serviceContractEvidence from '../data/serviceContractsV6Evidence.json';
 import {
   CONTRACT_BALANCE_STUDY,
   applyContractBalanceCandidate,
@@ -17,7 +16,31 @@ import {
 } from './contractBalanceStudy.testSupport';
 
 const unitPreparation = Object.freeze({ id: 'unit-preparation', actions: Object.freeze([]) });
-const developmentArtifactPath = resolve(process.cwd(), 'docs/superpowers/reports/2026-11-02-contract-balance-development.json');
+const developmentEvidenceSeeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+  11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+
+const frozenSelectionCases = [
+  { templateId: 'office-lunch', candidateId: 'office-lunch-candidate-1', preparationId: 'office-starter',
+    candidate: { id: 'office-lunch-candidate-1', templateId: 'office-lunch', dimension: 'meal-target', change: 2 },
+    target: 2, reward: 90, serviceDuration: 5250, tier: { tier: 'introductory', minimum: 16 },
+    successes: 17, controlSuccesses: 9, preparationCost: 0, fundsBeforeAcceptance: 600,
+    preparationActionTypes: [] },
+  { templateId: 'family-service', candidateId: 'baseline', preparationId: 'family-layout',
+    candidate: { id: 'baseline', templateId: 'family-service', dimension: null, change: null },
+    target: 4, reward: 120, serviceDuration: 7500, tier: { tier: 'standard', minimum: 15 },
+    successes: 16, controlSuccesses: 16, preparationCost: 0, fundsBeforeAcceptance: 600,
+    preparationActionTypes: [] },
+  { templateId: 'tasting-service', candidateId: 'tasting-service-candidate-1', preparationId: 'tasting-layout',
+    candidate: { id: 'tasting-service-candidate-1', templateId: 'tasting-service', dimension: 'meal-target', change: 2 },
+    target: 2, reward: 100, serviceDuration: 5250, tier: { tier: 'advanced', minimum: 15 },
+    successes: 16, controlSuccesses: 10, preparationCost: 0, fundsBeforeAcceptance: 600,
+    preparationActionTypes: ['MOVE_FIXTURES'] },
+  { templateId: 'party-rush', candidateId: 'party-rush-candidate-1', preparationId: 'rush-combined',
+    candidate: { id: 'party-rush-candidate-1', templateId: 'party-rush', dimension: 'meal-target', change: 3 },
+    target: 3, reward: 180, serviceDuration: 7500, tier: { tier: 'expert', minimum: 14 },
+    successes: 17, controlSuccesses: 9, preparationCost: 300, fundsBeforeAcceptance: 300,
+    preparationActionTypes: ['PLACE_ITEM', 'PLACE_ITEM', 'PLACE_ITEM', 'PLACE_ITEM', 'UPGRADE_EQUIPMENT'] },
+];
 
 function candidateRow(dimension, change, id = 'office-lunch-candidate-1') {
   return { id, templateId: 'office-lunch', dimension, change };
@@ -188,15 +211,64 @@ describe('durable recorded development cases', () => {
       && record.rationale.length > 0)).toBe(true);
   });
 
-  it('loads frozen development selections with retained evidence in a fresh registry process', () => {
-    const office = getRecordedContractBalanceSelection({ templateId: 'office-lunch',
-      candidateId: 'office-lunch-candidate-1', preparationId: 'office-starter' });
+  it.each(frozenSelectionCases.map(expected => [expected.templateId, expected]))(
+    'loads the tracked %s selection with its recorded case and evidence without an ignored local report',
+    (_templateId, expected) => {
+      const selector = { templateId: expected.templateId, candidateId: expected.candidateId,
+        preparationId: expected.preparationId };
+      const recordedCase = getRecordedContractBalanceCase(selector);
+      const selection = getRecordedContractBalanceSelection(selector);
+      const evidenceOffer = serviceContractEvidence.selectedOffers.find(offer => offer.templateId === expected.templateId);
+      const evidenceRows = selection.development.evidenceRows;
+      const catalogueKeys = ['title', 'guestLabel', 'profile', 'parties', 'serviceDuration', 'target', 'reward'];
 
-    expect(office).toMatchObject({ candidateId: 'office-lunch-candidate-1', dimension: 'meal-target', change: 2,
-      rulesVersion: 5, development: { passed: true, successes: 17, minimum: 16 } });
-    expect(office.development.evidenceRows).toHaveLength(20);
-    expect(office.preparation).toMatchObject({ id: 'office-starter', cost: 0, fundsBeforeAcceptance: 600 });
-  });
+      expect(evidenceOffer).toBeDefined();
+      expect(recordedCase.candidate).toEqual(expected.candidate);
+      expect(recordedCase.preparation).toEqual({ id: expected.preparationId,
+        actions: evidenceOffer.preparation.actions });
+      expect(recordedCase.rationale).toBe(evidenceOffer.rationale);
+      expect(recordedCase.tier).toEqual(expected.tier);
+      expect(recordedCase.screening).toBeNull();
+      expect(selection).toMatchObject({ schemaVersion: 1, rulesVersion: 5,
+        templateId: expected.templateId, candidateId: expected.candidateId,
+        dimension: expected.candidate.dimension, change: expected.candidate.change,
+        development: { expectedSeeds: developmentEvidenceSeeds, passed: true,
+          successes: expected.successes, minimum: expected.tier.minimum } });
+      expect(selection.rationale).toBe(evidenceOffer.rationale);
+      expect(selection.preparation).toEqual(evidenceOffer.preparation);
+      expect(selection.preparation).toMatchObject({ id: expected.preparationId,
+        cost: expected.preparationCost, startingFunds: 600,
+        fundsBeforeAcceptance: expected.fundsBeforeAcceptance });
+      expect(selection.preparation.actions.map(action => action.type)).toEqual(expected.preparationActionTypes);
+      expect(selection.selectedCatalogueValues).toEqual(Object.fromEntries(
+        catalogueKeys.map(key => [key, evidenceOffer.v6Offer[key]])));
+      expect(selection.tier).toEqual(expected.tier);
+      expect(selection.declaredTierMinimums).toEqual({ office: 16, family: 15, tasting: 15, rush: 14 });
+      expect(evidenceOffer.development.gate).toMatchObject({ successes: expected.successes,
+        minimum: expected.tier.minimum, passed: true });
+      expect(evidenceRows).toHaveLength(20);
+      expect(evidenceRows.map(row => row.seed)).toEqual(developmentEvidenceSeeds);
+      expect(evidenceRows.every(row => row.fixtureId === `${expected.templateId}:${expected.preparationId}`
+        && row.templateId === expected.templateId && row.candidateId === expected.candidateId
+        && row.preparationId === expected.preparationId && row.dimension === expected.candidate.dimension
+        && row.rulesVersion === 5 && row.gameStep === 8
+        && row.candidate.reportCandidateId === expected.candidateId
+        && row.control.reportCandidateId === 'baseline')).toBe(true);
+      expect(evidenceRows.filter(row => row.candidate.success)).toHaveLength(expected.successes);
+      expect(evidenceRows.filter(row => row.control.success)).toHaveLength(expected.controlSuccesses);
+      expect(evidenceRows.map(row => [row.seed,
+        [row.candidate.success, row.candidate.fulfilled, row.candidate.target],
+        [row.control.success, row.control.fulfilled, row.control.target]])).toEqual(
+        evidenceOffer.development.rows.map(([seed, candidate, control]) => [seed,
+          candidate.slice(0, 3), control.slice(0, 3)]));
+      expect(evidenceRows.map(row => [row.seed,
+        serviceContractEvidence.rowSchema.paymentColumns.map(column => row.candidate.paymentTotals[column]),
+        serviceContractEvidence.rowSchema.paymentColumns.map(column => row.control.paymentTotals[column])]))
+        .toEqual(evidenceOffer.development.rows.map(([seed, candidate, control]) => [
+          seed, candidate[3], control[3],
+        ]));
+    },
+  );
 });
 
 describe('one-dimension v5 candidate validation', () => {

@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import * as schedules from './staffSchedules';
 import { advanceStaffWellbeing } from './staffWellbeing';
 import wellbeingSource from './staffWellbeing.js?raw';
-import { getStaffAmenityDefinition } from '../data/staffAmenities';
+import {
+  getStaffAmenityDefinition,
+  isStaffAmenityEligibleForDuty,
+  STAFF_REST_AMENITY_PREFERENCES,
+  STAFF_REST_AMENITY_TYPES,
+} from '../data/staffAmenities';
 import { createInitialState } from '../state/initialState';
 import { runTick } from './gameLoop';
 import * as wellbeing from './staffWellbeing';
@@ -158,9 +163,12 @@ it('retains the already-owned settled worker when availability needs no change',
     .replace(/\bexport /g, '')
     .replace('let next = { ...state, staff };', 'capture(staff); let next = { ...state, staff };');
   const advance = new Function('createStaffDutyDefaults', 'getScheduledDuty', 'validateStaffSchedule',
-    'getOwnedStaffSchedule', 'getNormalisedStaffSchedule', 'getStaffAmenityDefinition', 'capture', '"use strict";\n' + source + '\nreturn advanceStaffWellbeing;')(
+    'getOwnedStaffSchedule', 'getNormalisedStaffSchedule', 'getStaffAmenityDefinition',
+    'STAFF_REST_AMENITY_TYPES', 'STAFF_REST_AMENITY_PREFERENCES', 'isStaffAmenityEligibleForDuty',
+    'capture', '"use strict";\n' + source + '\nreturn advanceStaffWellbeing;')(
     schedules.createStaffDutyDefaults, schedules.getScheduledDuty, schedules.validateStaffSchedule,
     schedules.getOwnedStaffSchedule, schedules.getNormalisedStaffSchedule, getStaffAmenityDefinition,
+    STAFF_REST_AMENITY_TYPES, STAFF_REST_AMENITY_PREFERENCES, isStaffAmenityEligibleForDuty,
     staff => settled.push(...staff),
   );
   const worker = Object.freeze({ id: 'owned-worker', role: 'waiter', morale: 80, ...schedules.createStaffDutyDefaults() });

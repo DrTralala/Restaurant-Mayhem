@@ -1,8 +1,9 @@
 import { getServiceContractTemplate } from '../data/serviceContracts';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { REFERENCE_SERVICE_PREPARATIONS } from './realServiceHarness.testSupport';
 import durableStudyCases from './contractBalanceStudyCases.testSupport.json';
+import durableStudySelections from './contractBalanceStudySelections.testSupport.json';
 
 const tierMinimums = {
   'office-lunch': Object.freeze({ tier: 'introductory', minimum: 16 }),
@@ -385,13 +386,22 @@ function registerDurableStudyCases() {
 registerDurableStudyCases();
 
 function registerDurableStudySelections() {
-  const reportPath = resolve(process.cwd(), 'docs/superpowers/reports/2026-11-02-contract-balance-development.json');
-  if (!existsSync(reportPath)) return;
-  const report = JSON.parse(readFileSync(reportPath, 'utf8'));
-  if (report.schemaVersion !== 1 || !Array.isArray(report.selections ?? [])) {
-    throw new Error('Durable development report has an unsupported frozen-selection shape');
+  const { provenance, selectionGzipBase64Chunks, schemaVersion } = durableStudySelections;
+  if (schemaVersion !== 1 || !Array.isArray(selectionGzipBase64Chunks)
+    || typeof provenance?.selectionArraySha256 !== 'string'
+    || !Number.isSafeInteger(provenance?.selectionCount)) {
+    throw new Error('Durable contract-balance selection fixture has an unsupported shape');
   }
-  for (const selection of report.selections ?? []) {
+  const selectionBytes = gunzipSync(Buffer.from(selectionGzipBase64Chunks.join(''), 'base64'));
+  const fingerprint = createHash('sha256').update(selectionBytes).digest('hex');
+  if (fingerprint !== provenance.selectionArraySha256) {
+    throw new Error('Durable contract-balance selection fixture failed its integrity check');
+  }
+  const selections = JSON.parse(selectionBytes.toString('utf8'));
+  if (!Array.isArray(selections) || selections.length !== provenance.selectionCount) {
+    throw new Error('Durable contract-balance selection count differs from its provenance');
+  }
+  for (const selection of selections) {
     CONTRACT_BALANCE_STUDY_REGISTRY.registerSelection(selection);
   }
 }
