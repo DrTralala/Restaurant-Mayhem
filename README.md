@@ -1,17 +1,15 @@
 # Restaurant Mayhem
 
-Restaurant Mayhem is a browser-based restaurant management simulation. Build and rearrange your restaurant, manage staff and menus, and watch customers move through seating, ordering, dining and checkout.
+Manage a restaurant in your browser: design the floor, set menus and staffing, and guide customers from arrival through checkout.
+
+There is no published release yet. Run the app from source:
 
 ## Quick start
 
-### Requirements
+You need Git, Node.js with npm, and a modern browser. The CI workflow uses Node.js 24.
 
-- Node.js and npm (development checks have been run with Node.js 24 and npm 11)
-- A modern browser
-
-### Install and run
-
-No account or application configuration is required for local play.
+> [!WARNING]
+> Keep the Vite development server local. Its repository-save API has no authentication and can read the latest save from, or write a save into, the checkout's `saves/` directory.
 
 ```sh
 git clone https://github.com/DrTralala/Restaurant-Mayhem.git
@@ -20,30 +18,29 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Vite. A successful start shows the restaurant canvas with its management, menu and settings controls. Keep the development server local: its save API is intended for trusted local use and has no authentication.
+Open the local URL printed by Vite. The game starts with a restaurant ready to manage.
 
-## What you can manage
+## Play
 
-- **Restaurant layout**: place, move and copy fixtures, arrange seating and equipment, and configure entrances and exits.
-- **Staff**: manage roles, training and progression, with skills affecting work and carrying capacity.
-- **Food and drink**: configure the menu and manage kitchen equipment and cooking batches.
-- **Customer flow**: handle queues, self-seating, service, checkout and table turnover.
-- **Business progression**: track funds, reputation, statistics and milestones, buy upgrades, and set operating hours.
+> [!CAUTION]
+> Starting Opening Week replaces the current restaurant and its browser autosave. It does not create a backup. To keep a separate copy, use **Settings → Save game** while running the development server before starting the challenge.
 
-Use the management book for upgrades, items, staff, milestones, statistics and hours. The menu control opens menu management; Settings provides save, load and new-game actions.
+- **Design and equip the restaurant:** place and rearrange furniture, seating, entrances, kitchen equipment and service stations.
+- **Run the operation:** manage staff, training, assignments, operating hours, menu prices, upgrades, milestones and service contracts.
+- **Follow the simulation:** watch customers queue, order, dine and pay; review funds, reputation, statistics and progress as the restaurant runs.
 
-Pause or resume with the pause control or **Space** when not interacting with a form control. Choose **1x**, **2x** or **4x** simulation speed, and use **Fit** to frame the restaurant.
+Open the management book for restaurant controls, the menu button to change food and drink, and **Settings** for save, load and new-game actions. Pause or resume with **Space** when focus is not in a form control; choose **1x**, **2x** or **4x** speed, or use **Fit** to frame the restaurant.
+
+To try Opening Week, choose it from the management book after saving any restaurant you want to keep.
 
 ## Saves
 
-- Automatic saves use the browser's local storage. They belong to that browser profile and site origin; clearing site data removes them.
-- **Settings → Save game** writes a JSON snapshot into the checkout's `saves/` directory through the Vite development server.
-- **Settings → Load game** loads the most recently modified JSON save from that directory. Incompatible save versions are rejected.
-- `saves/` is excluded from Git. Back up any saves you want to keep separately.
+- The game automatically saves to the browser's local storage for this site origin. Clearing the browser's site data removes that save.
+- **Settings → Save game** writes a JSON snapshot to the checkout's `saves/` directory. **Settings → Load game** loads the most recently modified JSON save and asks before replacing the current session; incompatible saves are rejected.
+- File-based save and load require `npm run dev`. They are unavailable with a static deployment or `npm run preview`; browser autosaving remains separate.
+- `saves/` is excluded from Git. Back up any snapshots you want to keep.
 
-The file-based save API is available with `npm run dev`, not with a static deployment or `npm run preview`. Browser-local saving remains separate from these file-based actions.
-
-## Development checks
+## Development
 
 ```sh
 # Run the test suite
@@ -59,25 +56,16 @@ npm run build
 npm run preview
 ```
 
-The production build is written to `dist/`, which is generated locally and excluded from Git. The application uses Vitest, jsdom and React Testing Library for tests.
+The CI workflow runs the tests and production build. `npm run build` writes generated output to `dist/`; the development save API is not available in the preview server.
 
-## Project structure
-
-| Path | Responsibility |
+| Path | Purpose |
 |---|---|
 | `src/canvas/` | Restaurant rendering and spatial interaction |
 | `src/components/`, `src/panels/` | Game controls and management interfaces |
 | `src/data/` | Menu, equipment, placeable items and progression data |
 | `src/simulation/` | Customer flow, staff tasks, cooking, movement and business simulation |
-| `src/state/` | Game state, simulation runtime, persistence and save recovery |
-| `scripts/` | Development and performance-analysis utilities |
+| `src/state/` | Game state, persistence, save validation and recovery |
 | `devSavePlugin.js` | Local development-server save API |
-
-## Technology
-
-- React 18 and JavaScript modules
-- Vite 6
-- Vitest 2, jsdom and React Testing Library
 
 ## Licence
 
