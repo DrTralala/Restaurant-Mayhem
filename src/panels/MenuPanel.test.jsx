@@ -5,7 +5,7 @@ import MenuPanel from './MenuPanel';
 import { useDispatch, useGameState, gameReducer } from '../state/GameContext';
 import { createInitialState } from '../state/initialState';
 import { getResolvedDish, normaliseCookbookState,
-  reconcileCookbookDiscoveries } from '../simulation/cookbook';
+  applyCookbookPaidVisit, reconcileCookbookDiscoveries } from '../simulation/cookbook';
 import { getCookbookRecipe } from '../data/cookbook';
 import { estimateMenuDemand, getMenuAnalysis } from '../simulation/menuEconomy';
 import { withOwnedAuthoredDishes } from '../simulation/menuTestFixtures';
@@ -2331,5 +2331,78 @@ describe('MenuPanel estimated base cook work', () => {
     });
     expect(region).toHaveTextContent('No dish cook work: 0.0 minutes');
     expect(region).not.toHaveTextContent('Water:');
+  });
+});
+
+describe('MenuPanel next recipe discovery', () => {
+  it('shows Cheese Toast one paid Toast portion away from the two-of-three requirement', () => {
+    const state = createInitialState();
+    state.paidVisitSequence = 2;
+    state.cookbook.lastAppliedPaidVisitSequence = 2;
+    state.cookbook.entries.toast = { ...state.cookbook.entries.toast, paidPortions: 2 };
+    useGameState.mockReturnValue(state);
+    useDispatch.mockReturnValue(vi.fn());
+    render(<MenuPanel />);
+
+    const toastCard = within(screen.getByRole('article', { name: 'Toasted Bread menu item' }));
+    expect(toastCard.getByText('Next discovery: Cheese Toast after 1 more paid portion.'))
+      .toBeInTheDocument();
+    expect(toastCard.getByText('Paid today: 0')).toBeInTheDocument();
+  });
+
+  it('shows cumulative remaining paid portions and removes the target after the third Cheese Toast', () => {
+    const menu = withOwnedAuthoredDishes(createInitialState(), [
+      { id: 'menu-cheese-toast', cookbookId: 'cheese-toast', price: 14, quality: 1 },
+    ]);
+    const cheeseEntry = menu.cookbook.entries['cheese-toast'];
+    let state = {
+      ...menu,
+      paidVisitSequence: 2,
+      cookbook: { ...menu.cookbook, lastAppliedPaidVisitSequence: 2, entries: {
+        ...menu.cookbook.entries,
+        'cheese-toast': { ...cheeseEntry, paidPortions: 2 },
+      } },
+    };
+    useGameState.mockReturnValue(state);
+    useDispatch.mockReturnValue(vi.fn());
+    const view = render(<MenuPanel />);
+
+    const cheeseCard = () => within(screen.getByRole('article', { name: 'Cheese Toast menu item' }));
+    expect(cheeseCard().getByText('Next discovery: Cinnamon Toast after 1 more paid portion.'))
+      .toBeInTheDocument();
+    expect(cheeseCard().getByText('Paid today: 0')).toBeInTheDocument();
+
+    const sequence = 3;
+    const paidVisit = {
+      schemaVersion: 1, sequence, customerId: 'customer-3', partyId: 'party-3', paidAt: 36003,
+      menuOutcome: 'ordered', foodOutcome: 'delivered', serviceContractId: null,
+      serviceContractGuestId: null, subtotal: 14, tip: 2, totalPaid: 16,
+      dish: { serviceItemId: 'service-3', menuItemId: 'menu-cheese-toast', cookbookId: 'cheese-toast',
+        priceAtOrder: 14, chargedAmount: 14, fulfilled: true, paid: true },
+    };
+    state = { ...state, paidVisitSequence: sequence };
+    state.cookbook = applyCookbookPaidVisit(state.cookbook, paidVisit);
+    state.cookbook = reconcileCookbookDiscoveries(state);
+    useGameState.mockReturnValue(state);
+    view.rerender(<MenuPanel />);
+
+    expect(state.cookbook.entries['cheese-toast'].paidPortions).toBe(3);
+    expect(state.cookbook.entries['cinnamon-toast'].discovered).toBe(true);
+    expect(cheeseCard().queryByText(/Next discovery:/)).not.toBeInTheDocument();
+  });
+
+  it('does not promise a next discovery while the recipe still needs another prerequisite', () => {
+    const menu = withOwnedAuthoredDishes(createInitialState(), [
+      { id: 'menu-roast-vegetables', cookbookId: 'roast-vegetables', price: 18, quality: 1 },
+    ]);
+    menu.cookbook.entries['roast-vegetables'] = {
+      ...menu.cookbook.entries['roast-vegetables'], paidPortions: 2,
+    };
+    useGameState.mockReturnValue(menu);
+    useDispatch.mockReturnValue(vi.fn());
+    render(<MenuPanel />);
+
+    const roastCard = within(screen.getByRole('article', { name: 'Roast Vegetables menu item' }));
+    expect(roastCard.queryByText(/Next discovery:/)).not.toBeInTheDocument();
   });
 });

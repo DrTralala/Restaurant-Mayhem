@@ -60,6 +60,28 @@ function requirementsFor(state, recipe) {
   });
 }
 
+export function getNextCookbookDiscovery(state, sourceCookbookId, recipes = COOKBOOK_RECIPES) {
+  if (!getCookbookRecipe(sourceCookbookId) || !state?.cookbook?.entries || !Array.isArray(recipes)) return null;
+
+  let closest = null;
+  for (const recipe of recipes) {
+    if (!recipe?.id || state.cookbook.entries[recipe.id]?.discovered) continue;
+
+    const requirements = requirementsFor(state, recipe);
+    const sourceRequirement = requirements.find(requirement =>
+      requirement.type === 'paidPortions' && requirement.id === sourceCookbookId);
+    if (!sourceRequirement || sourceRequirement.met
+      || requirements.some(requirement => requirement !== sourceRequirement && !requirement.met)) continue;
+
+    const remainingPortions = sourceRequirement.required - sourceRequirement.current;
+    // Iterating in catalogue order and replacing only for a strictly closer target makes ties deterministic.
+    if (!closest || remainingPortions < closest.remainingPortions) {
+      closest = { recipe, remainingPortions };
+    }
+  }
+  return closest;
+}
+
 export function reconcileCookbookDiscoveries(state) {
   let cookbook = state.cookbook;
   if (!cookbook) return cookbook;

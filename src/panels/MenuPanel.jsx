@@ -14,7 +14,7 @@ import {
 } from '../simulation/menuEconomy';
 import { getMenuSalesCount, getMenuSalesGross } from '../simulation/menuSales';
 import { getMenuRefusal } from '../simulation/menuRefusals';
-import { getCookbookEntryStatus, getResolvedDish } from '../simulation/cookbook';
+import { getCookbookEntryStatus, getNextCookbookDiscovery, getResolvedDish } from '../simulation/cookbook';
 import { isDishCompatibleWithStation } from '../simulation/cookingBatches';
 import { TYPOGRAPHY } from '../typography';
 import RecipeCreator from './RecipeCreator';
@@ -291,6 +291,9 @@ export default function MenuPanel({ readOnly = false }) {
         const mastery = dish.cookbookId
           ? getCookbookEntryStatus(state, dish.cookbookId)
           : null;
+        const nextDiscovery = dish.cookbookId
+          ? getNextCookbookDiscovery(state, dish.cookbookId)
+          : null;
         const removalPending = pendingRemoval !== null && pendingRemoval.id === dish.id
           && pendingRemoval.dish === rawDish && !blocked;
         return (
@@ -344,6 +347,11 @@ export default function MenuPanel({ readOnly = false }) {
             <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
               Mastery progress: {mastery.paidPortions}/{MASTERY_PORTION_THRESHOLD} paid portions (cumulative)
               {mastery.canChoosePerk && <span> · Signature choice available in Cookbook</span>}
+            </div>
+          )}
+          {nextDiscovery && (
+            <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
+              Next discovery: {nextDiscovery.recipe.name} after {nextDiscovery.remainingPortions} more paid portion{nextDiscovery.remainingPortions === 1 ? '' : 's'}.
             </div>
           )}
           <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>

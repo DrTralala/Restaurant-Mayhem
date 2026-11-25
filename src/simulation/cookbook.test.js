@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyCookbookPaidVisit, createCookbookState, createDishOrderSnapshot,
-  effectiveStats, getCookbookEntryStatus, getDishForServiceItem, getResolvedDish, normaliseCookbookState,
+  effectiveStats, getCookbookEntryStatus, getDishForServiceItem, getNextCookbookDiscovery,
+  getResolvedDish, normaliseCookbookState,
   reconcileCookbookDiscoveries, reduceCookbookAction, validateCookbookState,
   validateDishOrderSnapshot, validateDishOrderSnapshots,
 } from './cookbook';
@@ -248,6 +249,53 @@ describe('cookbook discovery and mastery', () => {
       discovered: true, owned: false, purchaseCost: 150,
       requirements: [{ type: 'paidPortions', id: 'cheese-toast', current: 3, required: 3, met: true }],
     });
+  });
+
+  it('suggests the closest undiscovered recipe and uses catalogue order to break ties', () => {
+    const state = fixture();
+    state.cookbook.entries.toast.paidPortions = 2;
+    expect(getNextCookbookDiscovery(state, 'toast')).toMatchObject({
+      recipe: { id: 'cheese-toast' }, remainingPortions: 1,
+    });
+
+    const tiedTargets = [
+      { id: 'first-target', requirements: [{ type: 'paidPortions', cookbookId: 'toast', count: 3 }] },
+      { id: 'second-target', requirements: [{ type: 'paidPortions', cookbookId: 'toast', count: 3 }] },
+    ];
+    expect(getNextCookbookDiscovery(state, 'toast', tiedTargets)).toMatchObject({
+      recipe: tiedTargets[0], remainingPortions: 1,
+    });
+  });
+
+  it('keeps next-discovery progress on cumulative paid portions and omits completed targets', () => {
+    let state = addCookbookDish(pay(fixture(), 3), 'cheese-toast');
+    state = pay(state, 2, 'cheese-toast');
+    expect(getNextCookbookDiscovery(state, 'cheese-toast')).toMatchObject({
+      recipe: { id: 'cinnamon-toast' }, remainingPortions: 1,
+    });
+
+    const sequence = state.paidVisitSequence + 1;
+    const unpaid = outcome(sequence, {
+      foodOutcome: 'pending', subtotal: 0, tip: 0, totalPaid: 0,
+      dish: { ...outcome(sequence).dish, menuItemId: 'cookbook:cheese-toast',
+        cookbookId: 'cheese-toast', priceAtOrder: 14, chargedAmount: 0, fulfilled: false, paid: false },
+    });
+    state = { ...state, paidVisitSequence: sequence,
+      cookbook: applyCookbookPaidVisit(state.cookbook, unpaid) };
+    expect(state.cookbook.entries['cheese-toast'].paidPortions).toBe(2);
+    expect(getNextCookbookDiscovery(state, 'cheese-toast')).toMatchObject({ remainingPortions: 1 });
+
+    state = pay(state, 1, 'cheese-toast');
+    expect(state.cookbook.entries['cinnamon-toast'].discovered).toBe(true);
+    expect(getNextCookbookDiscovery(state, 'cheese-toast')).toBeNull();
+  });
+
+  it('does not suggest an unlock while another discovery requirement is outstanding', () => {
+    const state = fixture();
+    state.cookbook.entries['roast-vegetables'] = {
+      ...state.cookbook.entries['roast-vegetables'], discovered: true, owned: true, paidPortions: 2,
+    };
+    expect(getNextCookbookDiscovery(state, 'roast-vegetables')).toBeNull();
   });
 
   it('requires the canonical Cinnamon Toast purchase before it is available to order', () => {
