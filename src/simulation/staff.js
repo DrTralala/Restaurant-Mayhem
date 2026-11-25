@@ -75,6 +75,7 @@ import {
 import { commitPaidVisit, getCheckoutBill } from './paidVisits';
 import { buildPaymentReceipt } from './paymentReceipt';
 import { getDishForServiceItem } from './cookbook';
+import { getRushableDish } from './dishRush';
 import { isCareerDecisionPending } from './careerRun';
 import { getDishwasherStats } from './dishwasherProgression';
 import { findPreparationTarget, isAtPreparationPosition } from './preparationPosition';
@@ -860,6 +861,14 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
     if (resumed) return resumed;
 
     const occupiedStationIds = occupiedPreparationStationIds(state, staff.id);
+    const rushedDish = state.restaurant?.rushedDishId == null
+      ? null
+      : getRushableDish({
+        ...state,
+        staff: allStaff || state.staff,
+        serviceItems,
+        __staffClaimedServiceItemIds: [...(claimedServiceItemIds || [])],
+      }, state.restaurant.rushedDishId);
 
     const preparationCandidates = (state.serviceItems || [])
       .map((item, index) => ({ item, index }))
@@ -880,7 +889,9 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
           && leftCustomer?.serviceContractId != null;
         const rightContractDish = right.item.kind === 'dish'
           && rightCustomer?.serviceContractId != null;
-        return Number(rightContractDish) - Number(leftContractDish)
+        return Number(sameId(right.item.id, rushedDish?.id))
+          - Number(sameId(left.item.id, rushedDish?.id))
+          || Number(rightContractDish) - Number(leftContractDish)
           || leftOrderTime - rightOrderTime
           || left.index - right.index
           || String(left.item.id).localeCompare(String(right.item.id));
@@ -986,6 +997,8 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
           serviceItems: reservedServiceItems,
           cookingBatches: batchState.cookingBatches,
           claimedServiceItemIds: batchItems.map(item => item.id),
+          rushedDishIdClaimed: batchItems.some(item =>
+            sameId(item.id, state.restaurant?.rushedDishId)),
         };
       }
     }
@@ -3810,6 +3823,10 @@ export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
       if (result.tables) tables = result.tables;
       if (result.serviceItems) serviceItems = result.serviceItems;
       if (result.cookingBatches) cookingBatches = result.cookingBatches;
+      if (result.rushedDishIdClaimed && restaurant?.rushedDishId != null) {
+        const { rushedDishId: _rushedDishId, ...withoutRushedDish } = restaurant;
+        restaurant = withoutRushedDish;
+      }
       if (Object.hasOwn(result, 'queueAdmissionGate')) {
         queueAdmissionGate = result.queueAdmissionGate;
       }

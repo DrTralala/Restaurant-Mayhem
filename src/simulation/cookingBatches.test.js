@@ -40,18 +40,22 @@ function withAuthoredDishOrderSnapshots(state) {
 }
 
 function kitchenState({ skill = 3, gameTime = 0, serviceItems = [], customers = [], staffTask = null,
-  serviceTables = [{ id: 'st1', x: 140, y: 120 }], counterItems = [] } = {}) {
+  serviceTables = [{ id: 'st1', x: 140, y: 120 }], counterItems = [],
+  dishes = [
+    { id: 'toast', cookbookId: 'toast' },
+    { id: 'pie', cookbookId: 'cheese-toast' },
+  ],
+  equipment = [{ id: 'eq1', owned: true, speedMultiplier: 1 }],
+  kitchenStations = [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
+} = {}) {
   return withAuthoredDishOrderSnapshots({
     restaurant: { gameTime, expansionLevel: 1 },
     staff: [{ id: 'cook', role: 'cook', skill, morale: 50, x: 90, y: 130, task: staffTask }],
     customers,
     serviceItems: [...counterItems, ...serviceItems],
-    dishes: [
-      { id: 'toast', cookbookId: 'toast' },
-      { id: 'pie', cookbookId: 'cheese-toast' },
-    ],
-    equipment: [{ id: 'eq1', owned: true, speedMultiplier: 1 }],
-    kitchenStations: [{ id: 'k1', equipmentId: 'eq1', x: 100, y: 120 }],
+    dishes,
+    equipment,
+    kitchenStations,
     serviceTables,
     tables: [],
     chairs: [],
@@ -107,6 +111,113 @@ describe('cooking batches', () => {
       type: 'prepare_dish', batchId: assigned.cookingBatches[0].id,
       serviceItemIds: ['i1', 'i2'], stationId: 'k1',
     });
+  });
+
+  it('rushes a marked eligible dish to the front of a new batch and clears it on reservation', () => {
+    const customers = [
+      waitingCustomer('c1', 10),
+      waitingCustomer('c2', 20),
+      {
+        ...waitingCustomer('c3', 30),
+        foodOutcome: 'pending', foodDeadlineAt: 200, foodPatienceBudget: 30,
+      },
+    ];
+    const state = kitchenState({
+      skill: 5,
+      customers,
+      serviceItems: [orderedDish('i1', 'c1'), orderedDish('i2', 'c2'), orderedDish('i3', 'c3')],
+    });
+
+    const ordinary = updateStaff(state, { gameDt: 0, movementDt: 0 });
+    expect(ordinary.cookingBatches[0].serviceItemIds).toEqual(['i1', 'i2']);
+
+    const rushed = updateStaff({
+      ...state,
+      restaurant: { ...state.restaurant, rushedDishId: 'i3' },
+    }, { gameDt: 0, movementDt: 0 });
+
+    expect(rushed.cookingBatches[0].serviceItemIds).toEqual(['i3', 'i1']);
+    expect(rushed.staff[0].task.serviceItemIds).toEqual(['i3', 'i1']);
+    expect(rushed.restaurant).not.toHaveProperty('rushedDishId');
+  });
+
+  it('keeps an infeasible rush mark and falls back to ordinary compatible work', () => {
+    const state = kitchenState({
+      skill: 5,
+      customers: [
+        waitingCustomer('c1', 10), waitingCustomer('c2', 20),
+        {
+          ...waitingCustomer('c3', 30),
+          dishId: 'vegetables', foodOutcome: 'pending',
+          foodDeadlineAt: 200, foodPatienceBudget: 30,
+        },
+      ],
+      serviceItems: [
+        orderedDish('i1', 'c1'), orderedDish('i2', 'c2'),
+        orderedDish('i3', 'c3', 'vegetables'),
+      ],
+      dishes: [
+        { id: 'toast', cookbookId: 'toast' },
+        { id: 'pie', cookbookId: 'cheese-toast' },
+        { id: 'vegetables', cookbookId: 'roast-vegetables' },
+      ],
+      equipment: [
+        { id: 'eq1', owned: true, speedMultiplier: 1 },
+        { id: 'eq2', owned: true, speedMultiplier: 1 },
+      ],
+    });
+
+    const result = updateStaff({
+      ...state,
+      restaurant: { ...state.restaurant, rushedDishId: 'i3' },
+    }, { gameDt: 0, movementDt: 0 });
+
+    expect(result.cookingBatches[0].serviceItemIds).toEqual(['i1', 'i2']);
+    expect(result.serviceItems.find(item => item.id === 'i3')).toMatchObject({
+      state: 'ordered', assignedStaffId: null, stationId: null,
+    });
+    expect(result.restaurant.rushedDishId).toBe('i3');
+  });
+
+  it('leaves an existing cook assignment untouched while a different dish is marked', () => {
+    const state = kitchenState({
+      skill: 5,
+      customers: [
+        waitingCustomer('c1', 10), waitingCustomer('c2', 20),
+        {
+          ...waitingCustomer('c3', 30),
+          foodOutcome: 'pending', foodDeadlineAt: 200, foodPatienceBudget: 30,
+        },
+      ],
+      serviceItems: [
+        {
+          ...orderedDish('i1', 'c1'), state: 'preparing', batchId: 'batch-1',
+          stationId: 'k1', assignedStaffId: 'cook', preparationStartedAt: 0,
+        },
+        orderedDish('i2', 'c2'), orderedDish('i3', 'c3'),
+      ],
+      staffTask: {
+        type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
+        serviceItemIds: ['i1'], stationId: 'k1', startedAt: 0,
+      },
+    });
+    const result = updateStaff({
+      ...state,
+      restaurant: { ...state.restaurant, rushedDishId: 'i3' },
+      cookingBatches: [{
+        id: 'batch-1', cookId: 'cook', stationId: 'k1', serviceItemIds: ['i1'],
+        status: 'preparing', startedAt: 0,
+      }],
+    }, { gameDt: 0, movementDt: 0 });
+
+    expect(result.staff[0].task).toMatchObject({
+      type: 'prepare_dish', batchId: 'batch-1', serviceItemId: 'i1',
+      serviceItemIds: ['i1'], stationId: 'k1',
+    });
+    expect(result.serviceItems.find(item => item.id === 'i3')).toMatchObject({
+      state: 'ordered', assignedStaffId: null, stationId: null,
+    });
+    expect(result.restaurant.rushedDishId).toBe('i3');
   });
 
   it('accepts different recipes requiring the same equipment and excludes drinks from a batch', () => {
