@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyCookbookPaidVisit, createCookbookState, createDishOrderSnapshot,
-  getCookbookEntryStatus, getDishForServiceItem, getResolvedDish, normaliseCookbookState,
+  effectiveStats, getCookbookEntryStatus, getDishForServiceItem, getResolvedDish, normaliseCookbookState,
   reconcileCookbookDiscoveries, reduceCookbookAction, validateCookbookState,
   validateDishOrderSnapshot, validateDishOrderSnapshots,
 } from './cookbook';
@@ -61,6 +61,13 @@ function freeze(value) {
 }
 
 describe('cookbook discovery and mastery', () => {
+  it('shares the rounded speed and capped appeal mastery stats', () => {
+    expect(effectiveStats({ prepTime: 90, popularity: 98 }, 'speed'))
+      .toEqual({ prepTime: 77, popularity: 98 });
+    expect(effectiveStats({ prepTime: 90, popularity: 98 }, 'appeal'))
+      .toEqual({ prepTime: 90, popularity: 100 });
+  });
+
   it('starterCookbookProgress: discovers Cheese Toast only on the third paid toast, without costs or slots', () => {
     let state = fixture();
     expect(getCookbookEntryStatus(state, 'cheese-toast')).toMatchObject({ discovered: false,

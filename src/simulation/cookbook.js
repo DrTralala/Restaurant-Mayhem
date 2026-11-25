@@ -18,7 +18,7 @@ function requireValid(condition, message) {
   if (!condition) throw new Error(`Invalid cookbook: ${message}`);
 }
 
-function effectiveStats(recipe, perk) {
+export function effectiveStats(recipe, perk) {
   return {
     prepTime: perk === 'speed' ? Math.max(1, Math.round(recipe.prepTime * 0.85)) : recipe.prepTime,
     popularity: perk === 'appeal' ? Math.min(100, recipe.popularity + 10) : recipe.popularity,

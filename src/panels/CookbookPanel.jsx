@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useGameState, useDispatch } from '../state/GameContext';
 import { COOKBOOK_RECIPES, getCookbookRecipe, MASTERY_PORTION_THRESHOLD } from '../data/cookbook';
 import { EQUIPMENT } from '../data/equipment';
-import { getCookbookEntryStatus, normaliseCookbookState } from '../simulation/cookbook';
+import { effectiveStats, getCookbookEntryStatus, normaliseCookbookState } from '../simulation/cookbook';
 import { TYPOGRAPHY } from '../typography';
 
 const buttonStyle = { ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555',
@@ -69,8 +69,7 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
         const pinned = recipe.id === pinnedId;
         const pendingPerk = confirmation?.cookbookId === recipe.id ? confirmation.perk : null;
         const previewPerk = pendingPerk || status.perk;
-        const prep = previewPerk === 'speed' ? Math.max(1, Math.round(recipe.prepTime * 0.85)) : recipe.prepTime;
-        const popularity = previewPerk === 'appeal' ? Math.min(100, recipe.popularity + 10) : recipe.popularity;
+        const stats = effectiveStats(recipe, previewPerk);
         return (
           <article key={recipe.id} aria-label={`${displayName} recipe`} style={{ background: '#1a1a2e',
             border: '1px solid #0f3460', borderRadius: 8, padding: 12, marginTop: 12 }}>
@@ -126,8 +125,8 @@ export default function CookbookPanel({ onClose, readOnly = false }) {
                   : status.canChoosePerk ? <p style={{ ...detailStyle, color: '#f0a500' }}>Signature choice available</p>
                     : <p style={detailStyle}>15 paid portions to choose a signature.</p>}
                 {previewPerk && <>
-                  <p style={detailStyle}>{recipe.prepTime} → {prep} seconds base cook work</p>
-                  <p style={detailStyle}>{recipe.popularity} → {popularity} popularity</p>
+                  <p style={detailStyle}>{recipe.prepTime} → {stats.prepTime} seconds base cook work</p>
+                  <p style={detailStyle}>{recipe.popularity} → {stats.popularity} popularity</p>
                   <p style={detailStyle}>Permanent for this recipe; applies to new orders only</p>
                 </>}
                 {pendingPerk && !status.perk ? (
