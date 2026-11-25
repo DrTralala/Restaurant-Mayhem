@@ -45,6 +45,14 @@ function toastMenuState({ name = 'Toast', price = 12, quality = 2, funds = 200, 
   return state;
 }
 
+function twoDishMenuState() {
+  const initial = createInitialState();
+  return withOwnedAuthoredDishes({ ...initial, unlockedDrinkIds: [] }, [
+    { id: 'featured-toast', cookbookId: 'toast', quality: 1 },
+    { id: 'other-fries', cookbookId: 'fries', quality: 1 },
+  ]);
+}
+
 function updateCookbookDishSettings(state, menuItemId, changes) {
   const dish = state.dishes.find(candidate => candidate.id === menuItemId);
   const entry = state.cookbook.entries[dish.cookbookId];
@@ -2170,5 +2178,95 @@ describe('MenuPanel kitchen equipment advice', () => {
 
     expect(starterDish().getByText('Suspended for walk-ins')).toBeVisible();
     expect(starterDish().getByText(/Toaster.*no compatible kitchen station/)).toBeVisible();
+  });
+});
+
+describe('MenuPanel featured dish', () => {
+  beforeEach(() => {
+    useGameState.mockReturnValue(createInitialState());
+    useDispatch.mockReturnValue(vi.fn());
+  });
+
+  it('exposes an accessible selection, replaces or clears it, and refreshes the forecast', () => {
+    const initial = twoDishMenuState();
+    const baselineDemand = getMenuAnalysis(initial).demand.dishes.get('featured-toast');
+    const actions = [];
+    useGameState.mockImplementation(() => statefulHarness.current.state);
+    useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+    render(<StatefulMenuPanel initial={initial} actions={actions} />);
+
+    const select = screen.getByRole('combobox', { name: 'Featured dish for new walk-ins' });
+    expect(select).toHaveValue('');
+    expect(screen.getByText(/Multiplies the selected dish's basket weight by 1.5/))
+      .toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: 'featured-toast' } });
+
+    expect(statefulHarness.current.state.restaurant.featuredDishId).toBe('featured-toast');
+    expect(screen.getByRole('combobox', { name: 'Featured dish for new walk-ins' }))
+      .toHaveValue('featured-toast');
+    expect(screen.getByText('Featured for new walk-ins')).toBeInTheDocument();
+    expect(getMenuAnalysis(statefulHarness.current.state).demand.dishes.get('featured-toast'))
+      .toBeGreaterThan(baselineDemand);
+
+    fireEvent.change(screen.getByRole('combobox', {
+      name: 'Featured dish for new walk-ins',
+    }), { target: { value: 'other-fries' } });
+    expect(statefulHarness.current.state.restaurant.featuredDishId).toBe('other-fries');
+
+    fireEvent.change(screen.getByRole('combobox', {
+      name: 'Featured dish for new walk-ins',
+    }), { target: { value: '' } });
+    expect(statefulHarness.current.state.restaurant).not.toHaveProperty('featuredDishId');
+    expect(actions).toEqual([
+      { type: 'SET_FEATURED_DISH', id: 'featured-toast' },
+      { type: 'SET_FEATURED_DISH', id: 'other-fries' },
+      { type: 'SET_FEATURED_DISH', id: null },
+    ]);
+  });
+
+  it('keeps suspended or thresholded featured dishes selected with a status announcement', () => {
+    const initial = twoDishMenuState();
+    const state = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant,
+        featuredDishId: 'featured-toast',
+        suspendedDishIds: ['featured-toast'],
+        menuSalesThresholds: [
+          { kind: 'dish', id: 'featured-toast', threshold: 1 },
+        ],
+      },
+      menuSales: {
+        day: 1, dishes: [{ key: 'featured-toast', count: 1 }], drinks: [],
+      },
+    };
+    useGameState.mockReturnValue(state);
+    render(<MenuPanel />);
+
+    expect(screen.getByRole('combobox', { name: 'Featured dish for new walk-ins' }))
+      .toHaveValue('featured-toast');
+    expect(within(screen.getByRole('region', { name: 'Featured dish' })).getByRole('status'))
+      .toHaveTextContent(
+        'Selected dish remains featured but is unavailable to new walk-ins because it is suspended and its paid-sales threshold has been reached.',
+      );
+  });
+
+  it.each([
+    ['read-only', true, false],
+    ['career decision', false, true],
+  ])('blocks featured dish controls during %s', (_label, readOnly, needsDecision) => {
+    const base = createInitialState();
+    useGameState.mockReturnValue(needsDecision
+      ? { ...base, careerRun: { needsDecision: true } }
+      : base);
+    const dispatch = vi.fn();
+    useDispatch.mockReturnValue(dispatch);
+    render(<MenuPanel readOnly={readOnly} />);
+
+    const select = screen.getByRole('combobox', { name: 'Featured dish for new walk-ins' });
+    expect(select).toBeDisabled();
+    fireEvent.change(select, { target: { value: 'starter-toast' } });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

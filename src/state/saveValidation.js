@@ -15,7 +15,9 @@ import { isStaffTaskRoleAllowed } from '../simulation/taskRoles';
 import { validateSavedNavigationGeometry } from './movementPersistence';
 import { SAVE_VERSION } from './saveVersion';
 import { validateHighTopCounters } from './highTopCounterValidation';
-import { validateCookbookState, validateDishOrderSnapshots } from '../simulation/cookbook';
+import {
+  getResolvedDish, validateCookbookState, validateDishOrderSnapshots,
+} from '../simulation/cookbook';
 import { validateServiceContractsState } from '../simulation/serviceContracts';
 import { getOrderSnapshotSubtotal } from '../simulation/menuEconomy';
 import { STAFF_CLEANING_FOCUS_VALUES } from '../simulation/cleaningFocus';
@@ -465,6 +467,15 @@ function validateRestaurant(state) {
   validateSuspendedMenuIds(restaurant, 'suspendedDishIds');
   validateSuspendedMenuIds(restaurant, 'suspendedDrinkIds');
   validateMenuSalesThresholds(restaurant);
+  if (has(restaurant, 'featuredDishId')) {
+    const id = restaurant.featuredDishId;
+    if (typeof id !== 'string' || id.length === 0) {
+      fail('restaurant.featuredDishId', 'must be a non-empty active dish ID');
+    }
+    if (!getResolvedDish(state, id)) {
+      fail('restaurant.featuredDishId', 'must identify an active dish');
+    }
+  }
 }
 
 function validateNavigationFields(record, path) {

@@ -4,6 +4,7 @@ import { createCareerInitialState, createInitialState } from './initialState';
 import { getCareerScenario } from '../data/careerScenarios';
 import { continueCareerAsSandbox, isCareerDecisionPending } from '../simulation/careerRun';
 import {
+  getResolvedDish,
   reconcileCookbookDiscoveries,
   reduceCookbookAction,
 } from '../simulation/cookbook';
@@ -136,6 +137,19 @@ function setMenuItemSalesThreshold(state, kind, id, threshold) {
   return { ...state, restaurant: { ...restaurant, menuSalesThresholds } };
 }
 
+function setFeaturedDish(state, id) {
+  const restaurant = state?.restaurant;
+  if (!restaurant || typeof restaurant !== 'object' || Array.isArray(restaurant)) return state;
+  if (id === null) {
+    if (!Object.hasOwn(restaurant, 'featuredDishId')) return state;
+    const { featuredDishId: _featuredDishId, ...withoutFeaturedDish } = restaurant;
+    return { ...state, restaurant: withoutFeaturedDish };
+  }
+  if (typeof id !== 'string' || id.length === 0 || !getResolvedDish(state, id)) return state;
+  if (restaurant.featuredDishId === id) return state;
+  return { ...state, restaurant: { ...restaurant, featuredDishId: id } };
+}
+
 function clearRemovedDishPolicies(state, candidate, dishId) {
   const removed = (state.dishes || []).some(dish => dish.id === dishId)
     && !(candidate.dishes || []).some(dish => dish.id === dishId);
@@ -150,17 +164,21 @@ function clearRemovedDishPolicies(state, candidate, dishId) {
     && menuSalesThresholds.some(policy => policy?.kind === 'dish' && policy.id === dishId)
     ? menuSalesThresholds.filter(policy => !(policy?.kind === 'dish' && policy.id === dishId))
     : menuSalesThresholds;
+  const clearFeaturedDish = candidate.restaurant?.featuredDishId === dishId;
   if (nextSuspendedDishIds === suspendedDishIds
-    && nextMenuSalesThresholds === menuSalesThresholds) return candidate;
+    && nextMenuSalesThresholds === menuSalesThresholds
+    && !clearFeaturedDish) return candidate;
+  const restaurant = {
+    ...candidate.restaurant,
+    ...(nextSuspendedDishIds !== suspendedDishIds
+      ? { suspendedDishIds: nextSuspendedDishIds } : {}),
+    ...(nextMenuSalesThresholds !== menuSalesThresholds
+      ? { menuSalesThresholds: nextMenuSalesThresholds } : {}),
+  };
+  if (clearFeaturedDish) delete restaurant.featuredDishId;
   return {
     ...candidate,
-    restaurant: {
-      ...candidate.restaurant,
-      ...(nextSuspendedDishIds !== suspendedDishIds
-        ? { suspendedDishIds: nextSuspendedDishIds } : {}),
-      ...(nextMenuSalesThresholds !== menuSalesThresholds
-        ? { menuSalesThresholds: nextMenuSalesThresholds } : {}),
-    },
+    restaurant,
   };
 }
 
@@ -667,6 +685,8 @@ function reduceGameAction(state, action) {
     }
     case 'SET_MENU_SALES_THRESHOLD':
       return setMenuItemSalesThreshold(state, action.kind, action.id, action.threshold);
+    case 'SET_FEATURED_DISH':
+      return setFeaturedDish(state, action.id);
     case 'UPDATE_DRINK': {
       const drink = getDrink(action.id);
       const unlockedDrinkIds = Array.isArray(state.unlockedDrinkIds)

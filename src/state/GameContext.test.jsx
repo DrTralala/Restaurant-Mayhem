@@ -9,6 +9,7 @@ import { createDishOrderSnapshot } from '../simulation/cookbook';
 import { getFixtureSaleExpectation, getSaleSelection } from './fixtureSales';
 import SettingsMenu from '../components/SettingsMenu';
 import { SAVE_VERSION } from './saveVersion';
+import { withOwnedAuthoredDishes } from '../simulation/menuTestFixtures';
 
 function StaffNameHarness() {
   const state = useGameState();
@@ -391,6 +392,75 @@ describe('GameProvider menu suspension action', () => {
     game.dispatch({ type: 'SET_MENU_ITEM_SUSPENDED', kind: 'dish', id: 'starter-toast', suspended: true });
 
     expect(game.state).toBe(before);
+  });
+});
+
+describe('gameReducer featured menu dish action', () => {
+  function twoDishState(overrides = {}) {
+    const initial = withOwnedAuthoredDishes(createInitialState(), [
+      { id: 'featured-toast', cookbookId: 'toast', quality: 1 },
+      { id: 'other-fries', cookbookId: 'fries', quality: 1 },
+    ]);
+    return {
+      ...initial,
+      ...overrides,
+      restaurant: { ...initial.restaurant, ...(overrides.restaurant || {}) },
+    };
+  }
+
+  it('selects, replaces and clears one active dish by identity', () => {
+    const initial = twoDishState();
+    const selected = gameReducer(initial, {
+      type: 'SET_FEATURED_DISH', id: 'featured-toast',
+    });
+    expect(selected.restaurant.featuredDishId).toBe('featured-toast');
+
+    const replaced = gameReducer(selected, {
+      type: 'SET_FEATURED_DISH', id: 'other-fries',
+    });
+    expect(replaced.restaurant.featuredDishId).toBe('other-fries');
+    expect(gameReducer(replaced, {
+      type: 'SET_FEATURED_DISH', id: 'other-fries',
+    })).toBe(replaced);
+
+    const cleared = gameReducer(replaced, { type: 'SET_FEATURED_DISH', id: null });
+    expect(cleared.restaurant).not.toHaveProperty('featuredDishId');
+  });
+
+  it.each([
+    ['missing dish', 'missing-dish'],
+    ['unlocked drink', 'water'],
+    ['empty ID', ''],
+    ['non-string ID', 42],
+    ['undefined ID', undefined],
+  ])('ignores a %s selection without changing state', (_label, id) => {
+    const initial = twoDishState();
+    expect(gameReducer(initial, { type: 'SET_FEATURED_DISH', id })).toBe(initial);
+  });
+
+  it('clears the featured identity when its selected dish is removed', () => {
+    const state = twoDishState({ restaurant: { featuredDishId: 'featured-toast' } });
+
+    const next = gameReducer(state, { type: 'REMOVE_DISH', id: 'featured-toast' });
+
+    expect(next.dishes.some(dish => dish.id === 'featured-toast')).toBe(false);
+    expect(next.restaurant).not.toHaveProperty('featuredDishId');
+  });
+
+  it('allows a suspended or thresholded dish to remain featured and blocks changes at career decision', () => {
+    const initial = twoDishState({
+      restaurant: {
+        suspendedDishIds: ['featured-toast'],
+        menuSalesThresholds: [{ kind: 'dish', id: 'featured-toast', threshold: 1 }],
+      },
+    });
+    const selected = gameReducer(initial, {
+      type: 'SET_FEATURED_DISH', id: 'featured-toast',
+    });
+    expect(selected.restaurant.featuredDishId).toBe('featured-toast');
+
+    const pending = { ...selected, careerRun: { needsDecision: true } };
+    expect(gameReducer(pending, { type: 'SET_FEATURED_DISH', id: 'other-fries' })).toBe(pending);
   });
 });
 

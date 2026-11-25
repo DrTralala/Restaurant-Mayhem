@@ -12,6 +12,7 @@ export const SPENDING_TIER_RANGES = Object.freeze({
 });
 
 const MAX_ROLL = 1 - Number.EPSILON;
+export const FEATURED_DISH_WEIGHT_MULTIPLIER = 1.5;
 
 function boundedRoll(random) {
   const value = Number(typeof random === 'function' ? random() : 0);
@@ -241,8 +242,13 @@ function groupBasketsByKind(baskets) {
   return groups;
 }
 
-function getBasketWeightDistribution(baskets, customer) {
-  return getWeightDistribution(baskets, basket => getBasketWeight(basket, customer));
+function getBasketWeightDistribution(baskets, customer, featuredDishId = null) {
+  return getWeightDistribution(baskets, basket => {
+    const weight = getBasketWeight(basket, customer);
+    return basket.dish?.id === featuredDishId
+      ? weight * FEATURED_DISH_WEIGHT_MULTIPLIER
+      : weight;
+  });
 }
 
 export function chooseAffordableBasket(state, customer, random = Math.random) {
@@ -255,6 +261,8 @@ export function chooseAffordableBasket(state, customer, random = Math.random) {
   if (!baskets.length) {
     return { customer: profiledCustomer, basket: null, menuOutcome: 'unaffordable' };
   }
+  const contractBypass = typeof profiledCustomer?.serviceContractId === 'string'
+    && profiledCustomer.serviceContractId.length > 0;
   const groups = groupBasketsByKind(baskets);
   const kinds = Object.keys(ORDER_KIND_WEIGHTS)
     .filter(kind => groups.has(kind));
@@ -264,10 +272,11 @@ export function chooseAffordableBasket(state, customer, random = Math.random) {
     boundedRoll(random),
   );
   const candidates = groups.get(kind);
-  const { weights, total } = getBasketWeightDistribution(candidates, profiledCustomer);
+  const featuredDishId = contractBypass ? null : state?.restaurant?.featuredDishId;
+  const { weights, total } = getBasketWeightDistribution(
+    candidates, profiledCustomer, featuredDishId,
+  );
   const basket = chooseByWeights(candidates, weights, total, boundedRoll(random));
-  const contractBypass = typeof profiledCustomer?.serviceContractId === 'string'
-    && profiledCustomer.serviceContractId.length > 0;
   const acceptance = contractBypass ? 1
     : getDishValueAcceptance(basket?.dish, profiledCustomer?.spendingTier);
   if (acceptance < 1 && boundedRoll(random) >= acceptance) {
@@ -303,7 +312,9 @@ function estimateDemandFromBaskets(state, baskets) {
       for (const [archetype, archetypeProbability] of Object.entries(WALK_IN_ARCHETYPE_MIX)) {
         const customer = { spendingTier, spendingBudget, archetype };
         for (const [kind, group] of groups) {
-          const { weights, total: basketWeightTotal } = getBasketWeightDistribution(group, customer);
+          const { weights, total: basketWeightTotal } = getBasketWeightDistribution(
+            group, customer, state?.restaurant?.featuredDishId,
+          );
           if (!(basketWeightTotal > 0)) continue;
           group.forEach((basket, index) => {
             const probability = tierProbability / (maximum - minimum + 1)

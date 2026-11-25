@@ -1072,6 +1072,39 @@ describe('strict feature persistence', () => {
       .toEqual(raw.restaurant.menuSalesThresholds);
   });
 
+  it('round-trips a featured dish in the current save format while keeping absence valid', () => {
+    const fresh = createInitialState();
+    expect(fresh.version).toBe(SAVE_VERSION);
+    expect(fresh.restaurant).not.toHaveProperty('featuredDishId');
+    expect(() => validateSavedState(fresh)).not.toThrow();
+    expect(hydrateState(fresh, createInitialState()).restaurant)
+      .not.toHaveProperty('featuredDishId');
+
+    const selected = {
+      ...fresh,
+      restaurant: { ...fresh.restaurant, featuredDishId: 'starter-toast' },
+    };
+    expect(saveState(selected)).toBe(true);
+    const loaded = loadState();
+    expect(loaded.version).toBe(SAVE_VERSION);
+    expect(loaded.restaurant.featuredDishId).toBe('starter-toast');
+    expect(hydrateState(loaded, createInitialState()).restaurant.featuredDishId)
+      .toBe('starter-toast');
+  });
+
+  it.each([
+    ['null', null],
+    ['empty', ''],
+    ['non-string', 12],
+    ['unknown active identity', 'removed-dish'],
+  ])('rejects a %s featured dish identity in saved data', (_label, featuredDishId) => {
+    const raw = createInitialState();
+    raw.restaurant = { ...raw.restaurant, featuredDishId };
+
+    expect(() => validateSavedState(raw)).toThrow(/featuredDishId/);
+    expect(() => hydrateState(raw, createInitialState())).toThrow(/featuredDishId/);
+  });
+
   it.each([
     ['non-array', null],
     ['non-array object', {}],

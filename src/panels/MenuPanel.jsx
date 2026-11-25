@@ -6,6 +6,7 @@ import { DRINKS, getResolvedDrink } from '../data/drinks';
 import { MENU_QUALITY_COST } from '../data/menuPricing';
 import { getDishPricing } from '../simulation/dishPricing';
 import {
+  FEATURED_DISH_WEIGHT_MULTIPLIER,
   getMenuAnalysis,
   getMenuItemSalesThreshold,
   isMenuItemSalesThresholdReached,
@@ -52,6 +53,14 @@ export default function MenuPanel({ readOnly = false }) {
   const returnFocusRef = useRef(null);
   const unlockedDrinkIds = state.unlockedDrinkIds || [];
   const blocked = readOnly || state.careerRun?.needsDecision === true;
+  const featuredDish = typeof state.restaurant?.featuredDishId === 'string'
+    ? getResolvedDish(state, state.restaurant.featuredDishId) : null;
+  const featuredDishId = featuredDish?.id ?? '';
+  const featuredUnavailableReasons = featuredDish ? [
+    isMenuItemSuspended(state, 'dish', featuredDish.id) ? 'it is suspended' : null,
+    isMenuItemSalesThresholdReached(state, 'dish', featuredDish.id)
+      ? 'its paid-sales threshold has been reached' : null,
+  ].filter(Boolean) : [];
   const editingDish = editingDishId == null ? null : getResolvedDish(state, editingDishId);
   const hasManualSuspensions = ['suspendedDishIds', 'suspendedDrinkIds'].some(key =>
     Array.isArray(state.restaurant?.[key]) && state.restaurant[key].length > 0);
@@ -168,6 +177,50 @@ export default function MenuPanel({ readOnly = false }) {
       <p style={TYPOGRAPHY.secondary}>Daily paid-sales thresholds stop offering an item to new walk-ins after that many paid checkout lines. Booked contract guests can still order thresholded items, and their paid lines count toward the threshold. Paid-sales counts reset automatically each new game day; thresholds remain in place and apply again. Orders already in progress are not cancelled, so paid sales can exceed the threshold. Threshold settings do not change manual suspension.</p>
       <p style={TYPOGRAPHY.secondary}>Paid today counts charged units from successful checkouts, including booked guests; free or cancelled lines do not count. It is not a demand percentage. Gross sales use recorded menu charges only, exclude tips and are not profit; legacy count-only data can show partial or unavailable gross. Sales from before this feature, including older saves, are not tracked, and removing a dish clears its paid count.</p>
       <p style={TYPOGRAPHY.secondary}>Equipment advice checks ownership and station compatibility, not access, workload or service completion.</p>
+      <section aria-label="Featured dish" style={{ marginBottom: 12 }}>
+        <h4 style={TYPOGRAPHY.subheading}>Featured dish for new walk-ins</h4>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+          <label htmlFor="featured-dish-select">Featured dish for new walk-ins</label>
+          <select
+            id="featured-dish-select"
+            aria-describedby="featured-dish-help"
+            value={featuredDishId}
+            disabled={blocked}
+            onChange={event => mutate({
+              type: 'SET_FEATURED_DISH', id: event.target.value || null,
+            })}
+            style={{ ...TYPOGRAPHY.control, background: '#111', color: '#ccc',
+              border: '1px solid #555', padding: '4px 8px', borderRadius: 4 }}
+          >
+            <option value="">None</option>
+            {(state.dishes || []).map(rawDish => getResolvedDish(state, rawDish.id))
+              .filter(Boolean)
+              .map(dish => <option key={dish.id} value={dish.id}>{dish.name}</option>)}
+          </select>
+          <button
+            type="button"
+            disabled={blocked || !featuredDishId}
+            onClick={() => mutate({ type: 'SET_FEATURED_DISH', id: null })}
+            style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc',
+              border: '1px solid #555', padding: '4px 10px', borderRadius: 4,
+              cursor: 'pointer' }}
+          >
+            Clear featured dish
+          </button>
+        </div>
+        <p id="featured-dish-help" style={TYPOGRAPHY.secondary}>
+          Multiplies the selected dish's basket weight by {FEATURED_DISH_WEIGHT_MULTIPLIER}
+          {' '}within its order kind for new walk-ins. This does not change order-kind odds,
+          prices, budgets, value acceptance or arrivals. Existing orders and booked contract
+          guests are unaffected.
+        </p>
+        {featuredUnavailableReasons.length > 0 && (
+          <p role="status" style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>
+            Selected dish remains featured but is unavailable to new walk-ins because{' '}
+            {featuredUnavailableReasons.join(' and ')}.
+          </p>
+        )}
+      </section>
       {!hasWalkInMenu && (
         <p style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>
           No items are available for new walk-in orders. Guests without an order may leave unhappy.
@@ -212,6 +265,11 @@ export default function MenuPanel({ readOnly = false }) {
         }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, justifyContent: 'space-between', marginBottom: 4 }}>
               <strong style={TYPOGRAPHY.subheading}>{dish.name}</strong>
+              {featuredDishId === dish.id && (
+                <span style={{ ...TYPOGRAPHY.secondary, color: '#f0a500' }}>
+                  Featured for new walk-ins
+                </span>
+              )}
               {dish.cookbookId != null && <button
                 type="button"
                 aria-label={`Edit ${dish.name} name`}

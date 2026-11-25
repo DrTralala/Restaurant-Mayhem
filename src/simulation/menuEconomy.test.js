@@ -400,6 +400,158 @@ describe('affordable weighted menu selection', () => {
       serviceContractId: 'contract-1',
     }).some(basket => basket.dish?.id === 'unowned')).toBe(false);
   });
+
+  it('multiplies the featured dish basket weight by 1.5 for a live walk-in choice', () => {
+    const state = withOwnedAuthoredDishes({
+      restaurant: { reputation: 3 }, dishes: [], unlockedDrinkIds: [], drinkOverrides: {},
+    }, [
+      { id: 'featured-toast', cookbookId: 'toast', quality: 1 },
+      { id: 'other-fries', cookbookId: 'fries', quality: 1 },
+    ]);
+    const customer = {
+      id: 'walk-in', archetype: 'regular', spendingTier: 'premium', spendingBudget: 120,
+    };
+    const baskets = buildAffordableBaskets(state, customer);
+    const featured = baskets.find(basket => basket.dish?.id === 'featured-toast');
+    const other = baskets.find(basket => basket.dish?.id === 'other-fries');
+    const featuredWeight = getBasketWeight(featured, customer);
+    const otherWeight = getBasketWeight(other, customer);
+    const ordinaryShare = featuredWeight / (featuredWeight + otherWeight);
+    const featuredShare = 1.5 * featuredWeight / (1.5 * featuredWeight + otherWeight);
+    const basketRoll = (ordinaryShare + featuredShare) / 2;
+    const choose = menu => {
+      const rolls = [0, basketRoll];
+      const result = chooseAffordableBasket(menu, customer, () => rolls.shift());
+      expect(rolls).toEqual([]);
+      return result.basket.dish.id;
+    };
+
+    expect(featuredShare).toBeGreaterThan(ordinaryShare);
+    expect(choose(state)).toBe('other-fries');
+    expect(choose({
+      ...state,
+      restaurant: { ...state.restaurant, featuredDishId: 'featured-toast' },
+    })).toBe('featured-toast');
+  });
+
+  it.each([
+    [0, 'dish'],
+    [0.85, 'dish_drink'],
+    [0.99, 'drink'],
+  ])('keeps order-kind odds unchanged with a featured dish at roll %s', (kindRoll, expectedKind) => {
+    const state = createInitialState();
+    const featured = {
+      ...state,
+      restaurant: { ...state.restaurant, featuredDishId: 'starter-toast' },
+    };
+    const customer = {
+      id: 'walk-in', archetype: 'regular', spendingTier: 'premium', spendingBudget: 120,
+    };
+    const chooseAt = menu => {
+      const rolls = [kindRoll, 0];
+      const choice = chooseAffordableBasket(menu, customer, () => rolls.shift());
+      expect(rolls).toEqual([]);
+      return choice.basket.kind;
+    };
+
+    expect(chooseAt(state)).toBe(expectedKind);
+    expect(chooseAt(featured)).toBe(expectedKind);
+  });
+
+  it('recomputes the walk-in forecast when featured dish identity changes', () => {
+    const state = withOwnedAuthoredDishes({
+      restaurant: { reputation: 3 }, dishes: [], unlockedDrinkIds: [], drinkOverrides: {},
+    }, [
+      { id: 'featured-toast', cookbookId: 'toast', quality: 1 },
+      { id: 'other-fries', cookbookId: 'fries', quality: 1 },
+    ]);
+    const baseline = getMenuAnalysis(state);
+    const selected = getMenuAnalysis({
+      ...state,
+      restaurant: { ...state.restaurant, featuredDishId: 'featured-toast' },
+    });
+
+    expect(selected.demandProbabilities.dishes.get('featured-toast'))
+      .toBeGreaterThan(baseline.demandProbabilities.dishes.get('featured-toast'));
+    expect(selected.demandProbabilities.dishes.get('other-fries'))
+      .toBeLessThan(baseline.demandProbabilities.dishes.get('other-fries'));
+    expect(selected.affordability).toEqual(baseline.affordability);
+  });
+
+  it.each(['suspended', 'thresholded'])(
+    'keeps a %s featured dish selected but unavailable to new walk-ins', restriction => {
+      const state = withOwnedAuthoredDishes({
+        restaurant: { reputation: 3 }, dishes: [], unlockedDrinkIds: [], drinkOverrides: {},
+      }, [
+        { id: 'featured-toast', cookbookId: 'toast', quality: 1 },
+        { id: 'other-fries', cookbookId: 'fries', quality: 1 },
+      ]);
+      state.restaurant.featuredDishId = 'featured-toast';
+      if (restriction === 'suspended') {
+        state.restaurant.suspendedDishIds = ['featured-toast'];
+      } else {
+        state.restaurant.menuSalesThresholds = [
+          { kind: 'dish', id: 'featured-toast', threshold: 1 },
+        ];
+        state.menuSales = {
+          day: 1, dishes: [{ key: 'featured-toast', count: 1 }], drinks: [],
+        };
+      }
+      const customer = {
+        id: 'walk-in', archetype: 'regular', spendingTier: 'premium', spendingBudget: 120,
+      };
+
+      expect(state.restaurant.featuredDishId).toBe('featured-toast');
+      expect(buildAffordableBaskets(state, customer)
+        .some(basket => basket.dish?.id === 'featured-toast')).toBe(false);
+      expect(estimateMenuDemand(state).dishes.has('featured-toast')).toBe(false);
+      expect(chooseAffordableBasket(state, customer, () => 0).basket.dish.id)
+        .toBe('other-fries');
+    },
+  );
+
+  it('does not feature-weight or hide the dish from a booked contract guest', () => {
+    const base = withOwnedAuthoredDishes({
+      restaurant: { reputation: 3 }, dishes: [], unlockedDrinkIds: [], drinkOverrides: {},
+    }, [
+      { id: 'featured-toast', cookbookId: 'toast', quality: 1 },
+      { id: 'other-fries', cookbookId: 'fries', quality: 1 },
+    ]);
+    const state = {
+      ...base,
+      restaurant: {
+        ...base.restaurant,
+        featuredDishId: 'featured-toast',
+        suspendedDishIds: ['featured-toast'],
+        menuSalesThresholds: [{ kind: 'dish', id: 'featured-toast', threshold: 1 }],
+      },
+      menuSales: { day: 1, dishes: [{ key: 'featured-toast', count: 1 }], drinks: [] },
+    };
+    const withoutFeature = {
+      ...state,
+      restaurant: { ...state.restaurant, featuredDishId: undefined },
+    };
+    const customer = {
+      id: 'booked-guest', archetype: 'regular', spendingTier: 'premium', spendingBudget: 120,
+      serviceContractId: 'contract-1',
+    };
+    const baskets = buildAffordableBaskets(state, customer);
+    expect(baskets.some(basket => basket.dish?.id === 'featured-toast')).toBe(true);
+
+    const baseWeights = baskets.map(basket => getBasketWeight(basket, customer));
+    const featuredIndex = baskets.findIndex(basket => basket.dish?.id === 'featured-toast');
+    const ordinaryShare = baseWeights[featuredIndex]
+      / baseWeights.reduce((sum, weight) => sum + weight, 0);
+    const basketRoll = (ordinaryShare + 1.5 * baseWeights[featuredIndex]
+      / (baseWeights.reduce((sum, weight) => sum + weight, 0) + 0.5 * baseWeights[featuredIndex])) / 2;
+    const choose = menu => chooseAffordableBasket(menu, customer, (() => {
+      const rolls = [0, basketRoll];
+      return () => rolls.shift();
+    })()).basket.dish.id;
+
+    expect(choose(state)).toBe('other-fries');
+    expect(choose(withoutFeature)).toBe('other-fries');
+  });
 });
 
 describe('estimated menu demand', () => {
