@@ -1,6 +1,7 @@
 import { useDispatch, useGameState } from '../state/GameContext';
 import { formatOperatingHour, secondsToGameTime } from '../simulation/clock';
 import { getRushSchedulePreview } from './rushSchedulePreview';
+import RushBreakSwap from './RushBreakSwap';
 import { TYPOGRAPHY } from '../typography';
 
 const HOUR_OPTIONS = Array.from({ length: 48 }, (_, index) => index / 2);
@@ -226,6 +227,7 @@ export default function HoursPanel() {
                     {period.staffingGaps.map(gap => (
                       <li key={`${gap.startHour}-${gap.endHour}-${gap.missingRoles.join('-')}`}>
                         {`${formatOperatingHour(gap.startHour)}–${formatOperatingHour(gap.endHour)}: No scheduled ${gap.missingRoles.join(' or ')}`}
+                        <RushBreakSwap gap={gap} staff={Array.isArray(state.staff) ? state.staff : []} dispatch={dispatch} />
                       </li>
                     ))}
                   </ul>

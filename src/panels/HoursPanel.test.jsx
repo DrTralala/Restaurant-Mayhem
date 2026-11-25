@@ -45,6 +45,36 @@ describe('HoursPanel', () => {
     });
   });
 
+  it('moves one half-hour of a lunch break only after preview and confirmation', () => {
+    const schedule = Array(48).fill('work').fill('pto', 0, 14).fill('rest', 24, 26);
+    mockState.staff = [{ id: 7, name: 'Alex', role: 'cook', schedule }];
+    const { rerender } = render(<HoursPanel />);
+    const lunch = within(screen.getByRole('list', { name: 'Lunch staffing gaps' }));
+    function propose() {
+      fireEvent.click(lunch.getByRole('button', { name: 'Move break' }));
+      const shift = lunch.getByLabelText('Cover rush slot');
+      fireEvent.change(shift, { target: { value: within(shift).getByRole('option', { name: /12:00 PM.*Alex/ }).value } });
+      fireEvent.change(lunch.getByLabelText('New break time'), { target: { value: '28' } });
+    }
+    propose();
+    expect(lunch.getByText(/12:00 PM: 0 → 1/)).toBeInTheDocument();
+    expect(lunch.getByText(/2:00 PM: 1 → 0/)).toBeInTheDocument();
+    fireEvent.click(lunch.getByRole('button', { name: 'Cancel' }));
+    expect(dispatch).not.toHaveBeenCalled();
+    propose();
+    fireEvent.click(lunch.getByRole('button', { name: 'Apply' }));
+    const expected = [...schedule];
+    expected[24] = 'work';
+    expected[28] = 'rest';
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({ type: 'SET_STAFF_SCHEDULE', id: 7, schedule: expected });
+    propose();
+    mockState.staff[0].schedule = [...schedule];
+    mockState.staff[0].schedule[28] = 'rest';
+    rerender(<HoursPanel />);
+    expect(lunch.getByRole('button', { name: 'Apply' })).toBeDisabled();
+  });
+
   it('preserves opening time when changing closing time', () => {
     mockState.restaurant.openHour = 18.5;
     render(<HoursPanel />);
