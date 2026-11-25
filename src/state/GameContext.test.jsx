@@ -1346,6 +1346,92 @@ describe('table admission holds', () => {
   });
 });
 
+describe('table minimum party sizes', () => {
+  const action = (id, minPartySize) => ({
+    type: 'SET_TABLE_MIN_PARTY_SIZE', id, minPartySize,
+  });
+
+  it('sets and clears a minimum without disturbing an existing reservation', () => {
+    const initial = createInitialState();
+    const reservation = {
+      ...initial.tables[2],
+      status: 'reserved',
+      minPartySize: 2,
+      diningPartyId: 'existing-party',
+      diningCustomerIds: ['one', 'two'],
+      seatingAssignments: [{ customerId: 'one', chairId: 'ch5' }, { customerId: 'two', chairId: 'ch6' }],
+    };
+    const tables = [reservation];
+    const chairs = initial.chairs.filter(chair => chair.tableId === reservation.id);
+    const customers = [{ id: 'one', partyId: 'existing-party', state: 'entering' }];
+    const state = { ...initial, tables, chairs, customers };
+
+    const changed = gameReducer(state, action(reservation.id, 4));
+
+    expect(changed.tables[0]).toMatchObject({
+      status: 'reserved', minPartySize: 4, diningPartyId: 'existing-party',
+      diningCustomerIds: ['one', 'two'],
+      seatingAssignments: reservation.seatingAssignments,
+    });
+    expect(changed.tables[0]).not.toBe(reservation);
+    expect(changed.chairs).toBe(chairs);
+    expect(changed.customers).toBe(customers);
+
+    const cleared = gameReducer(changed, action(reservation.id, 1));
+    expect(cleared.tables[0]).toMatchObject({
+      status: 'reserved', diningPartyId: 'existing-party',
+      diningCustomerIds: ['one', 'two'],
+    });
+    expect(cleared.tables[0]).not.toHaveProperty('minPartySize');
+  });
+
+  it.each([
+    ['missing table ID', { type: 'SET_TABLE_MIN_PARTY_SIZE', minPartySize: 2 }],
+    ['unknown table ID', { type: 'SET_TABLE_MIN_PARTY_SIZE', id: 'missing', minPartySize: 2 }],
+    ['empty table ID', { type: 'SET_TABLE_MIN_PARTY_SIZE', id: '', minPartySize: 2 }],
+    ['missing minimum', { type: 'SET_TABLE_MIN_PARTY_SIZE', id: 't3' }],
+    ['zero', { type: 'SET_TABLE_MIN_PARTY_SIZE', id: 't3', minPartySize: 0 }],
+    ['fractional minimum', { type: 'SET_TABLE_MIN_PARTY_SIZE', id: 't3', minPartySize: 2.5 }],
+    ['string minimum', { type: 'SET_TABLE_MIN_PARTY_SIZE', id: 't3', minPartySize: '3' }],
+    ['minimum above physical capacity', { type: 'SET_TABLE_MIN_PARTY_SIZE', id: 't1', minPartySize: 3 }],
+  ])('ignores a %s action', (_label, invalidAction) => {
+    const state = createInitialState();
+    expect(gameReducer(state, invalidAction)).toBe(state);
+  });
+
+  it('does nothing when table IDs are string-equivalent and ambiguous', () => {
+    const initial = createInitialState();
+    const state = {
+      ...initial,
+      tables: [
+        { ...initial.tables[0], id: 'same' },
+        { ...initial.tables[1], id: 'same' },
+      ],
+    };
+
+    expect(gameReducer(state, action('same', 2))).toBe(state);
+  });
+
+  it('does not expose counter child tables to minimum-size changes', () => {
+    const initial = createInitialState();
+    const table = {
+      id: 'counter-seat', x: 100, y: 100, seats: 4, status: 'empty',
+      highTopCounterId: 'counter',
+    };
+    const chairs = Array.from({ length: 4 }, (_value, index) => ({
+      id: `counter-chair-${index}`, tableId: table.id, x: 100 + index * 20, y: 100,
+    }));
+    const state = { ...initial, tables: [table], chairs };
+
+    expect(gameReducer(state, action(table.id, 2))).toBe(state);
+  });
+
+  it('blocks changes while a career decision is pending', () => {
+    const state = { ...createInitialState(), careerRun: { needsDecision: true } };
+    expect(gameReducer(state, action('t3', 3))).toBe(state);
+  });
+});
+
 describe('restaurant seating policy', () => {
   it('changes only the policy and preserves existing reservations', () => {
     const initial = createInitialState();

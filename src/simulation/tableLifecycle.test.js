@@ -33,6 +33,21 @@ describe('party-owned table reservation', () => {
       'p1', [assignment])).toMatchObject({ status: 'reserved', diningPartyId: 'p1' });
   });
 
+  it('requires enough assigned guests for the table minimum without changing that minimum', () => {
+    const table = { id: 't1', status: 'empty', minPartySize: 3 };
+    const assignments = Array.from({ length: 3 }, (_value, index) => ({
+      customerId: `guest-${index + 1}`,
+      chairId: `chair-${index + 1}`,
+    }));
+
+    expect(reserveTableForParty(table, 'pair', assignments.slice(0, 2))).toBeNull();
+    expect(reserveTableForParty(table, 'trio', assignments)).toMatchObject({
+      status: 'reserved', diningPartyId: 'trio', minPartySize: 3,
+      diningCustomerIds: ['guest-1', 'guest-2', 'guest-3'],
+    });
+    expect(table).toEqual({ id: 't1', status: 'empty', minPartySize: 3 });
+  });
+
   it('does not mutate the input table when reserving or occupying', () => {
     const table = { id: 't1', status: 'empty', reservationOwnerStaffId: 'guide', x: 200, y: 200 };
     const reserved = reserveTableForParty(table, 'new-party', [assignment]);

@@ -1,6 +1,7 @@
 import { useDispatch, useGameState } from '../state/GameContext';
 import { TYPOGRAPHY } from '../typography';
 import { isCareerDecisionPending } from '../simulation/careerRun';
+import { physicalTableCapacity } from '../simulation/tableFit';
 
 const holdRowStyle = {
   ...TYPOGRAPHY.secondary,
@@ -25,6 +26,7 @@ export default function TableSeatingHolds() {
   const pending = isCareerDecisionPending(state);
   const tables = Array.isArray(state?.tables) ? state.tables : [];
   const seatingPolicy = state?.restaurant?.seatingPolicy === 'best-fit' ? 'best-fit' : 'automatic';
+  const chairs = Array.isArray(state?.chairs) ? state.chairs : [];
   const actionTables = tables.filter(table => isValidTableId(table?.id)
     && hasUniqueReducerMatch(tables, table.id));
 
@@ -66,12 +68,63 @@ export default function TableSeatingHolds() {
             const disabled = pending || (!held && table.status !== 'empty');
             const status = typeof table.status === 'string' && table.status.length > 0
               ? table.status : 'unavailable';
+            const physicalCapacity = physicalTableCapacity(table, chairs);
+            const minPartySize = Number.isSafeInteger(table.minPartySize)
+              && table.minPartySize >= 2 ? table.minPartySize : 1;
+            const minimumExceedsCapacity = minPartySize > physicalCapacity;
+            const minimumOptions = Array.from(
+              { length: Math.max(0, physicalCapacity - 1) },
+              (_value, index) => index + 2,
+            );
+            if (minimumExceedsCapacity) minimumOptions.push(minPartySize);
+            const minimumId = `table-minimum-${String(table.id)}`;
+            const minimumWarningId = `${minimumId}-warning`;
 
             return (
               <li key={String(table.id)} style={holdRowStyle}>
                 <div>Table {table.id}</div>
                 <div>Status: {status}</div>
                 <div>Seating admission: {held ? 'held' : 'not held'}</div>
+                {table.highTopCounterId == null && (
+                  <div style={{ marginTop: 8 }}>
+                    <label htmlFor={minimumId} style={TYPOGRAPHY.secondary}>
+                      Minimum party size for table {table.id}
+                    </label>
+                    <select
+                      id={minimumId}
+                      value={String(minPartySize)}
+                      disabled={pending}
+                      aria-describedby={minimumExceedsCapacity ? minimumWarningId : undefined}
+                      onChange={event => {
+                        const nextMinimum = Number(event.target.value);
+                        if (pending || !Number.isSafeInteger(nextMinimum)) return;
+                        if (nextMinimum !== 1
+                          && (nextMinimum < 2 || nextMinimum > physicalCapacity)) return;
+                        dispatch({
+                          type: 'SET_TABLE_MIN_PARTY_SIZE', id: table.id,
+                          minPartySize: nextMinimum,
+                        });
+                      }}
+                      style={{ ...TYPOGRAPHY.control, marginLeft: 8, padding: '4px 6px' }}
+                    >
+                      <option value="1">Any</option>
+                      {minimumOptions.map(value => (
+                        <option key={value} value={value}>
+                          {value}+{value > physicalCapacity ? ' (current setting; exceeds capacity)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {minimumExceedsCapacity && (
+                      <p
+                        id={minimumWarningId}
+                        role="status"
+                        style={{ ...TYPOGRAPHY.secondary, color: '#f0a500', marginTop: 6 }}
+                      >
+                        Minimum party size {minPartySize}+ exceeds current physical capacity of {physicalCapacity} chairs. Reduce it or select Any.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   disabled={disabled}

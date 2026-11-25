@@ -402,8 +402,17 @@ function validateFixtureCollections(state) {
     validateRotation(record, `${key}[${index}]`);
   });
   validatePositioned(tables, 'tables');
-  tables.forEach((table, index) =>
-    validateOptionalBoolean(table, 'admissionHeld', `tables[${index}]`));
+  tables.forEach((table, index) => {
+    const path = `tables[${index}]`;
+    validateOptionalBoolean(table, 'admissionHeld', path);
+    if (!has(table, 'minPartySize')) return;
+    if (!Number.isSafeInteger(table.minPartySize) || table.minPartySize < 2) {
+      fail(`${path}.minPartySize`, 'must be a safe integer of at least 2');
+    }
+    if (Number.isFinite(table.seats) && table.minPartySize > table.seats) {
+      fail(`${path}.minPartySize`, 'must not exceed the rated table capacity');
+    }
+  });
   validatePositioned(chairs, 'chairs');
   validatePositioned(kitchenStations, 'kitchenStations');
   validatePositioned(serviceTables, 'serviceTables');

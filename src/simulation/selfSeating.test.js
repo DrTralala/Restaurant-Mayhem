@@ -670,6 +670,46 @@ describe('self seating admission', () => {
     expect(next.tables[0]).toMatchObject({ status: 'reserved', diningPartyId: 'p-small' });
   });
 
+  it.each(['automatic', 'best-fit'])(
+    'keeps a pair queued ahead of a four-person party at a 3+ table under %s seating',
+    seatingPolicy => {
+      const fresh = createInitialState();
+      const table = { ...fresh.tables.find(candidate => candidate.id === 't3'), minPartySize: 3 };
+      const pair = partyOf(2, 'pair');
+      const four = partyOf(4, 'four');
+      const state = queuedState({
+        restaurant: { ...fresh.restaurant, seatingPolicy },
+        tables: [table],
+        chairs: fresh.chairs.filter(chair => chair.tableId === table.id),
+        queue: [pair, four],
+      });
+
+      const pairOnly = captureNavigation(() => prepareSelfSeating({ ...state, queue: [pair] }));
+      expect(pairOnly.value.queue).toEqual([pair]);
+      expect(pairOnly.value.queue[0]).toBe(pair);
+      expect(pairOnly.value.tables[0]).toMatchObject({ status: 'empty', minPartySize: 3 });
+      expect(pairOnly.report.counters.routeStarts || 0).toBe(0);
+      expect(pairOnly.report.counters.routeExpansions || 0).toBe(0);
+
+      const admitted = prepareSelfSeating(state);
+      expect(admitted.customers.every(customer => customer.partyId === 'four')).toBe(true);
+      expect(admitted.queue).toEqual([pair]);
+      expect(admitted.queue[0]).toBe(pair);
+      expect(admitted.tables[0]).toMatchObject({
+        status: 'reserved', diningPartyId: 'four', minPartySize: 3,
+      });
+
+      const { minPartySize: _minPartySize, ...unrestrictedTable } = pairOnly.value.tables[0];
+      const reset = prepareSelfSeating({
+        ...pairOnly.value,
+        tables: [unrestrictedTable],
+      });
+      expect(reset.customers.map(customer => customer.partyId)).toEqual(['pair', 'pair']);
+      expect(reset.queue).toEqual([]);
+      expect(reset.tables[0]).toMatchObject({ status: 'reserved', diningPartyId: 'pair' });
+    },
+  );
+
   it('leaves an infeasible party outside with identity and leases intact', () => {
     const state = queuedState({ queue: [partyOf(4, 'p-big')] });
     state.tables = state.tables.map(table => ({ ...table, seats: 4 }));

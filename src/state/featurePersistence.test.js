@@ -923,6 +923,34 @@ describe('strict feature persistence', () => {
     expect(() => hydrateState(raw, createInitialState())).toThrow();
   });
 
+  it('round-trips an optional table minimum against rated capacity despite a chair shortfall', () => {
+    const raw = createInitialState();
+    raw.tables = raw.tables.map(table => table.id === 't1'
+      ? { ...table, minPartySize: 3 }
+      : table);
+    raw.chairs = raw.chairs.filter(chair => chair.tableId !== 't1' || chair.id === 'ch1');
+    expect(raw.tables[0].seats).toBe(4);
+    expect(raw.chairs.filter(chair => chair.tableId === 't1')).toHaveLength(1);
+    expect(() => validateSavedState(raw)).not.toThrow();
+
+    expect(saveState(raw)).toBe(true);
+    expect(loadState().tables[0].minPartySize).toBe(3);
+    const hydrated = hydrateState(loadState(), createInitialState());
+    expect(hydrated.tables[0].minPartySize).toBe(3);
+    expect(hydrated.tables[0].seats).toBe(4);
+    expect(hydrated.chairs.filter(chair => chair.tableId === 't1')).toHaveLength(1);
+  });
+
+  it.each([1, 0, 1.5, 5, null, '3', Number.MAX_SAFE_INTEGER + 1])(
+    'rejects malformed or over-rated persisted table minimum %s', minPartySize => {
+      const raw = createInitialState();
+      raw.tables[0] = { ...raw.tables[0], minPartySize };
+
+      expect(() => validateSavedState(raw)).toThrow(/minPartySize/);
+      expect(() => hydrateState(raw, createInitialState())).toThrow(/minPartySize/);
+    },
+  );
+
   it('round-trips the current logical queue order after a party is prioritised', () => {
     const raw = createInitialState();
     const originalQueue = [

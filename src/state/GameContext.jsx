@@ -31,6 +31,7 @@ import {
   validatePlacement,
 } from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
+import { physicalTableCapacity } from '../simulation/tableFit';
 import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
 import { normaliseOperatingHour, WALK_IN_PAUSE_DURATION_SECONDS } from '../simulation/clock';
 import { normaliseMenuSales } from '../simulation/menuSales';
@@ -982,6 +983,34 @@ function reduceGameAction(state, action) {
           : candidate),
       };
     }
+    case 'SET_TABLE_MIN_PARTY_SIZE': {
+      const validId = (typeof action.id === 'string' && action.id.length > 0)
+        || (Number.isSafeInteger(action.id) && action.id >= 0);
+      if (!validId || !Array.isArray(state.tables)) return state;
+      const matches = state.tables.filter(table => sameId(table?.id, action.id));
+      if (matches.length !== 1) return state;
+      const table = matches[0];
+      if (table.highTopCounterId != null) return state;
+
+      if (action.minPartySize === 1) {
+        if (!Object.hasOwn(table, 'minPartySize')) return state;
+        const { minPartySize: _minPartySize, ...unrestrictedTable } = table;
+        return {
+          ...state,
+          tables: state.tables.map(candidate => candidate === table ? unrestrictedTable : candidate),
+        };
+      }
+
+      if (!Number.isSafeInteger(action.minPartySize) || action.minPartySize < 2
+        || action.minPartySize > physicalTableCapacity(table, state.chairs)
+        || table.minPartySize === action.minPartySize) return state;
+      return {
+        ...state,
+        tables: state.tables.map(candidate => candidate === table
+          ? { ...candidate, minPartySize: action.minPartySize }
+          : candidate),
+      };
+    }
     case 'PLACE_ITEM':
       return placeItem(state, action);
     case 'MOVE_FIXTURES':
@@ -1100,6 +1129,7 @@ export function gameReducer(state, action) {
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE'
     || action.type === 'PRIORITISE_QUEUE_PARTY'
     || action.type === 'SET_TABLE_ADMISSION_HOLD'
+    || action.type === 'SET_TABLE_MIN_PARTY_SIZE'
     || action.type === 'SET_MENU_SALES_THRESHOLD'
     || action.type === 'RESUME_ALL_MENU_ITEMS'
     || action.type === 'SET_STAFF_REST_AMENITY_PREFERENCE'

@@ -426,6 +426,7 @@ function planForParty(state, party) {
     : candidates;
   for (const table of orderedCandidates) {
     if (table?.status !== 'empty' || table.admissionHeld === true) continue;
+    if (!(partySize >= (table.minPartySize ?? 1))) continue;
     // Wiping and dish collection can finish in either order; admission needs both.
     if ((state.serviceItems || []).some(item => item.tableId === table.id
       && item.state === 'dirty_at_table')) continue;

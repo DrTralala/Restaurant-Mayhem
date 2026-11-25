@@ -13,7 +13,8 @@ const chairCentre = chair => finitePoint(chair) ? { x: chair.x + 10, y: chair.y 
  */
 export function reserveTableForParty(table, partyId, assignments) {
   if (table?.status !== 'empty' || table.admissionHeld === true
-    || partyId == null || !assignments?.length) return null;
+    || partyId == null || !assignments?.length
+    || !(assignments.length >= (table.minPartySize ?? 1))) return null;
   const customerIds = assignments.map(assignment => assignment.customerId);
   const chairIds = assignments.map(assignment => assignment.chairId);
   if (customerIds.some(id => id == null) || chairIds.some(id => id == null)

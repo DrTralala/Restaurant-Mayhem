@@ -178,3 +178,76 @@ it('disables and guards seating policy changes during a pending career decision'
 
   expect(mockUseDispatch).not.toHaveBeenCalled();
 });
+
+it('offers accessible minimum choices up to physical capacity and dispatches the selected value', () => {
+  mockUseGameState.mockReturnValue({
+    tables: [{ id: 't1', seats: 4, status: 'empty', x: 100, y: 100 }],
+    chairs: [
+      { id: 'ch1', tableId: 't1', x: 100, y: 80 },
+      { id: 'ch2', tableId: 't1', x: 100, y: 120 },
+      { id: 'ch3', tableId: 'other', x: 100, y: 160 },
+    ],
+  });
+  render(<TableSeatingHolds />);
+
+  const selector = screen.getByRole('combobox', { name: 'Minimum party size for table t1' });
+  expect(selector).toHaveValue('1');
+  expect(within(selector).getAllByRole('option').map(option => option.value))
+    .toEqual(['1', '2']);
+  fireEvent.change(selector, { target: { value: '2' } });
+
+  expect(mockUseDispatch).toHaveBeenCalledWith({
+    type: 'SET_TABLE_MIN_PARTY_SIZE', id: 't1', minPartySize: 2,
+  });
+});
+
+it('shows a stale minimum and chair-shortfall warning while allowing reset to Any', () => {
+  mockUseGameState.mockReturnValue({
+    tables: [{ id: 't1', seats: 4, status: 'empty', minPartySize: 3, x: 100, y: 100 }],
+    chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }, { id: 'ch2', tableId: 't1', x: 100, y: 120 }],
+  });
+  render(<TableSeatingHolds />);
+
+  const selector = screen.getByRole('combobox', { name: 'Minimum party size for table t1' });
+  expect(selector).toHaveValue('3');
+  expect(within(selector).getAllByRole('option').map(option => option.value))
+    .toEqual(['1', '2', '3']);
+  expect(within(selector).getByRole('option', { name: /3\+.*current/i })).toBeInTheDocument();
+  expect(screen.getByText(/minimum party size 3\+ exceeds current physical capacity of 2/i))
+    .toBeInTheDocument();
+  fireEvent.change(selector, { target: { value: '1' } });
+
+  expect(mockUseDispatch).toHaveBeenCalledWith({
+    type: 'SET_TABLE_MIN_PARTY_SIZE', id: 't1', minPartySize: 1,
+  });
+});
+
+it('does not show a minimum selector for high-top counter children', () => {
+  mockUseGameState.mockReturnValue({
+    tables: [{
+      id: 'counter-seat', seats: 1, status: 'empty', x: 100, y: 100,
+      highTopCounterId: 'counter',
+    }],
+    chairs: [{ id: 'counter-chair', tableId: 'counter-seat', x: 100, y: 80 }],
+  });
+  render(<TableSeatingHolds />);
+
+  expect(screen.queryByRole('combobox', { name: 'Minimum party size for table counter-seat' }))
+    .not.toBeInTheDocument();
+});
+
+it('disables and guards minimum changes during a pending career decision', () => {
+  mockUseGameState.mockReturnValue({
+    careerRun: { needsDecision: true },
+    tables: [{ id: 't1', seats: 4, status: 'empty', x: 100, y: 100 }],
+    chairs: [{ id: 'ch1', tableId: 't1', x: 100, y: 80 }, { id: 'ch2', tableId: 't1', x: 100, y: 120 }],
+  });
+  render(<TableSeatingHolds />);
+
+  const selector = screen.getByRole('combobox', { name: 'Minimum party size for table t1' });
+  expect(selector).toBeDisabled();
+  selector.disabled = false;
+  fireEvent.change(selector, { target: { value: '2' } });
+
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+});
