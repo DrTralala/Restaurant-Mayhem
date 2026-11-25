@@ -272,7 +272,7 @@ describe('getFoodServiceTriage', () => {
     expect(result.orders[1].stage).toBe('carried');
     expect(result.orders[2]).toEqual({
       customerId: 'unknown', dishId: 'unknown-dish', tableId: 'unknown-table',
-      deadlineAt: null, remainingSeconds: null, stage: null,
+      deadlineAt: null, remainingSeconds: null, stage: null, rushableDishId: null,
     });
     expect(result.omittedCount).toBe(0);
   });
@@ -397,6 +397,38 @@ describe('getFoodServiceTriage', () => {
     expect(getFoodServiceTriage(state).orders[0].stage).toBe('ready');
   });
 
+  it('returns only unique pending ordered dish ticket IDs and withholds ineligible IDs', () => {
+    const customers = [
+      customer({ id: 'eligible', dishId: 'toast', foodOutcome: 'pending' }),
+      customer({ id: 'drink-only', dishId: 'toast', foodOutcome: 'pending' }),
+      customer({ id: 'stale-owner', dishId: 'toast', foodOutcome: 'pending' }),
+      customer({ id: 'ambiguous', dishId: 'toast', foodOutcome: 'pending' }),
+      customer({ id: 'claimed', dishId: 'toast', foodOutcome: 'pending' }),
+    ];
+    const state = {
+      ...stateWith(customers),
+      serviceItems: [
+        dishItem('ticket-41', 'eligible', 'toast'),
+        { id: 'drink-ticket', customerId: 'drink-only', kind: 'drink',
+          menuItemId: 'toast', state: 'ordered' },
+        dishItem('stale-ticket', 'missing-owner', 'toast'),
+        dishItem('ambiguous-ticket-a', 'ambiguous', 'toast'),
+        dishItem('ambiguous-ticket-b', 'ambiguous', 'toast'),
+        dishItem('claimed-ticket', 'claimed', 'toast'),
+      ],
+      __staffClaimedServiceItemIds: ['claimed-ticket'],
+    };
+
+    expect(getFoodServiceTriage(state).orders.map(({ customerId, rushableDishId }) =>
+      [customerId, rushableDishId])).toEqual([
+      ['eligible', 'ticket-41'],
+      ['drink-only', null],
+      ['stale-owner', null],
+      ['ambiguous', null],
+      ['claimed', null],
+    ]);
+  });
+
   it('withholds stages for ambiguous owner identities and duplicate dish matches', () => {
     const ambiguousOwners = getFoodServiceTriage({
       ...stateWith([
@@ -451,7 +483,7 @@ describe('getFoodServiceTriage', () => {
 
     expect(getFoodServiceTriage(state).orders[0]).toEqual({
       customerId: null, dishId: null, tableId: null,
-      deadlineAt: 120, remainingSeconds: 20, stage: null,
+      deadlineAt: 120, remainingSeconds: 20, stage: null, rushableDishId: null,
     });
     expect(JSON.stringify(state)).toBe(snapshot);
     expect(random).not.toHaveBeenCalled();
