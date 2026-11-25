@@ -588,6 +588,48 @@ describe('gameReducer rushed dish action', () => {
     expect(reconciled.serviceItems[0]).toMatchObject({ id: 'rush-ticket-a', state: 'preparing' });
     expect(reconciled.serviceItems[1]).toMatchObject({ id: 'rush-ticket-b', state: 'ordered' });
   });
+
+  it('clears a stale rush target when the ticket has entered a batch without mirrored staff assignment', () => {
+    const initial = rushableState();
+    const selected = gameReducer(initial, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-a',
+    });
+    const batched = {
+      ...selected,
+      serviceItems: selected.serviceItems.map(item => item.id === 'rush-ticket-a'
+        ? { ...item, batchId: 'batch-1' }
+        : item),
+    };
+
+    const reconciled = gameReducer(selected, { type: 'LOAD_STATE', state: batched });
+
+    expect(reconciled.restaurant).not.toHaveProperty('rushedDishId');
+    expect(reconciled.serviceItems[0]).toMatchObject({
+      id: 'rush-ticket-a', state: 'ordered', batchId: 'batch-1',
+    });
+    expect(reconciled.serviceItems[0].assignedStaffId).toBeUndefined();
+  });
+
+  it('clears a stale rush target when an active batch lists the ticket without an item batch marker', () => {
+    const initial = rushableState();
+    const selected = gameReducer(initial, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-a',
+    });
+    const batched = {
+      ...selected,
+      cookingBatches: [{
+        id: 'batch-1', serviceItemIds: ['rush-ticket-a'], status: 'reserved',
+      }],
+    };
+
+    const reconciled = gameReducer(selected, { type: 'LOAD_STATE', state: batched });
+
+    expect(reconciled.restaurant).not.toHaveProperty('rushedDishId');
+    expect(reconciled.serviceItems[0]).toMatchObject({
+      id: 'rush-ticket-a', state: 'ordered',
+    });
+    expect(reconciled.serviceItems[0]).not.toHaveProperty('batchId');
+  });
 });
 
 describe('GameProvider bulk menu resume action', () => {

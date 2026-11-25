@@ -965,6 +965,7 @@ function assignTask({ state, staff, allStaff, customers, queue, tables, serviceI
           station,
           pending,
           claimedServiceItemIds,
+          rushedDish?.id,
         );
         if (batchItems.length === 0) continue;
         const batchState = createCookingBatch(

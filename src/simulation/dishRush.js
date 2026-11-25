@@ -1,4 +1,5 @@
 import { getFoodPatienceFraction } from './foodPatience';
+import { getBatchServiceItemIds } from './cookingBatches';
 
 const PENDING_DISH_STAGES = new Set(['ordered', 'preparing', 'ready', 'on_service', 'carried']);
 
@@ -27,6 +28,7 @@ export function createDishRushIndex(state) {
   const customersById = new Map();
   const ownerCounts = new Map();
   const claimedServiceItemIds = new Set();
+  const cookingBatchServiceItemIds = new Set();
   const customers = Array.isArray(state?.customers) ? state.customers : [];
   const items = Array.isArray(state?.serviceItems) ? state.serviceItems : [];
 
@@ -45,6 +47,12 @@ export function createDishRushIndex(state) {
     const key = identityKey(id);
     if (key !== null) claimedServiceItemIds.add(key);
   }
+  for (const batch of Array.isArray(state?.cookingBatches) ? state.cookingBatches : []) {
+    for (const id of getBatchServiceItemIds(batch)) {
+      const key = identityKey(id);
+      if (key !== null) cookingBatchServiceItemIds.add(key);
+    }
+  }
   for (const worker of Array.isArray(state?.staff) ? state.staff : []) {
     const task = worker?.task;
     for (const id of [task?.serviceItemId,
@@ -54,7 +62,10 @@ export function createDishRushIndex(state) {
     }
   }
 
-  return { byOwner, byId, customersById, ownerCounts, claimedServiceItemIds };
+  return {
+    byOwner, byId, customersById, ownerCounts, claimedServiceItemIds,
+    cookingBatchServiceItemIds,
+  };
 }
 
 function hasCancelledServiceItem(customer, item) {
@@ -133,7 +144,9 @@ export function getRushableDishFromIndex(indexes, serviceItemId) {
   if (matches.length !== 1) return null;
   const item = matches[0];
   if (item?.kind !== 'dish' || item?.state !== 'ordered'
-    || item?.assignedStaffId != null || indexes.claimedServiceItemIds.has(itemKey)) return null;
+    || item?.assignedStaffId != null || item?.batchId != null
+    || indexes.claimedServiceItemIds.has(itemKey)
+    || indexes.cookingBatchServiceItemIds.has(itemKey)) return null;
 
   const ownerKey = identityKey(item?.customerId);
   if (ownerKey === null || indexes.ownerCounts.get(ownerKey) !== 1) return null;

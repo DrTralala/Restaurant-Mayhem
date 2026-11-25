@@ -25,6 +25,25 @@ describe('getRushableDish', () => {
   });
 
   it.each([
+    ['an assigned ticket', { serviceItems: [dishItem({ assignedStaffId: 'cook' })] }],
+    ['an item marked for a batch', { serviceItems: [dishItem({ batchId: 'batch-1' })] }],
+    ['a member of an active batch', {
+      serviceItems: [dishItem()],
+      cookingBatches: [{ id: 'batch-1', serviceItemIds: ['ticket-41'], status: 'reserved' }],
+    }],
+    ['a ticket in the primary staff task slot', {
+      serviceItems: [dishItem()],
+      staff: [{ id: 'cook', task: { type: 'prepare_dish', serviceItemId: 'ticket-41' } }],
+    }],
+    ['a ticket in staff task batch members', {
+      serviceItems: [dishItem()],
+      staff: [{ id: 'cook', task: { type: 'prepare_dish', serviceItemIds: ['ticket-41'] } }],
+    }],
+  ])('returns null for %s', (_label, overrides) => {
+    expect(getRushableDish({ customers: [customer()], ...overrides }, 'ticket-41')).toBeNull();
+  });
+
+  it.each([
     ['a drink', { serviceItems: [{ ...dishItem(), kind: 'drink' }] }],
     ['a stale owner', { serviceItems: [dishItem({ customerId: 'missing' })] }],
     ['a duplicate ticket ID', {

@@ -1164,6 +1164,18 @@ describe('strict feature persistence', () => {
     expect(() => hydrateState(noLongerRushable, createInitialState())).toThrow(/restaurant\.rushedDishId/);
   });
 
+  it('rejects a persisted rush target already listed in an active batch even if the item mirror is stale', () => {
+    const state = orderFixture();
+    state.restaurant = { ...state.restaurant, rushedDishId: 'dish-1' };
+    state.cookingBatches = [{
+      id: 'batch-1', cookId: 'starter-cook', stationId: 'k1', serviceItemIds: ['dish-1'],
+      status: 'reserved', startedAt: null, readyAt: null,
+    }];
+
+    expect(() => validateSavedState(state)).toThrow(/restaurant\.rushedDishId/);
+    expect(() => hydrateState(state, createInitialState())).toThrow(/restaurant\.rushedDishId/);
+  });
+
   it.each([
     ['non-array', null],
     ['non-array object', {}],

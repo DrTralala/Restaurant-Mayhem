@@ -141,6 +141,30 @@ describe('cooking batches', () => {
     expect(rushed.restaurant).not.toHaveProperty('rushedDishId');
   });
 
+  it('keeps FIFO batch membership for an unmarked contract-priority candidate, but lets an eligible rush lead', () => {
+    const state = kitchenState({
+      skill: 5,
+      customers: [
+        waitingCustomer('c1', 10),
+        waitingCustomer('c2', 20),
+        {
+          ...waitingCustomer('c3', 30), serviceContractId: 'contract-1',
+          foodOutcome: 'pending', foodDeadlineAt: 200, foodPatienceBudget: 30,
+        },
+      ],
+      serviceItems: [orderedDish('i1', 'c1'), orderedDish('i2', 'c2'), orderedDish('i3', 'c3')],
+    });
+
+    const ordinary = updateStaff(state, { gameDt: 0, movementDt: 0 });
+    expect(ordinary.cookingBatches[0].serviceItemIds).toEqual(['i1', 'i2']);
+
+    const rushed = updateStaff({
+      ...state,
+      restaurant: { ...state.restaurant, rushedDishId: 'i3' },
+    }, { gameDt: 0, movementDt: 0 });
+    expect(rushed.cookingBatches[0].serviceItemIds).toEqual(['i3', 'i1']);
+  });
+
   it('keeps an infeasible rush mark and falls back to ordinary compatible work', () => {
     const state = kitchenState({
       skill: 5,

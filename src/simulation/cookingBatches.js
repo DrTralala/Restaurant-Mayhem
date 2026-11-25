@@ -156,14 +156,19 @@ export function getEligibleCookingItems(state, cook, station, claimedServiceItem
 }
 
 /** Fill one cook/station batch from orders already present at assignment time. */
-export function selectCookingBatchItems(state, cook, station, firstItem, claimedServiceItemIds = new Set()) {
+export function selectCookingBatchItems(
+  state, cook, station, firstItem, claimedServiceItemIds = new Set(), rushServiceItemId = null,
+) {
   const eligible = getEligibleCookingItems(state, cook, station, claimedServiceItemIds);
   const first = eligible.find(item => sameId(item.id, firstItem?.id));
   const capacity = getCookingBatchCapacity(cook);
   if (!first || capacity <= 0) return [];
-  return [first, ...eligible
-    .filter(item => !sameId(item.id, first.id))
-    .slice(0, capacity - 1)];
+  if (rushServiceItemId != null && sameId(first.id, rushServiceItemId)) {
+    return [first, ...eligible
+      .filter(item => !sameId(item.id, first.id))
+      .slice(0, capacity - 1)];
+  }
+  return eligible.slice(0, capacity);
 }
 
 function withoutBatchId(item) {
