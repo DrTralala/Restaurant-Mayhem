@@ -22,6 +22,7 @@ import { validateServiceContractsState } from '../simulation/serviceContracts';
 import { getOrderSnapshotSubtotal } from '../simulation/menuEconomy';
 import { STAFF_CLEANING_FOCUS_VALUES } from '../simulation/cleaningFocus';
 import { getDrink } from '../data/drinks';
+import { getRushableDish } from '../simulation/dishRush';
 
 const STAFF_ROLES = new Set(['cook', 'waiter', 'janitor']);
 const STAFF_DUTIES = new Set(['work', 'rest', 'pto']);
@@ -483,6 +484,13 @@ function validateRestaurant(state) {
     }
     if (!getResolvedDish(state, id)) {
       fail('restaurant.featuredDishId', 'must identify an active dish');
+    }
+  }
+  if (has(restaurant, 'rushedDishId')) {
+    const id = restaurant.rushedDishId;
+    validateId(id, 'restaurant.rushedDishId');
+    if (!getRushableDish(state, id)) {
+      fail('restaurant.rushedDishId', 'must identify a currently rushable dish ticket');
     }
   }
 }

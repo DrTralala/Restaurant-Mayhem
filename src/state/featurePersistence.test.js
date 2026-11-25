@@ -17,7 +17,7 @@ import { prioritiseQueuedParty } from '../simulation/queuePriority';
 import { runTick } from '../simulation/gameLoop';
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
-function orderFixture() {
+function orderFixture({ serviceItemId = 'dish-1' } = {}) {
   const raw = createInitialState();
   const starter = raw.dishes[0];
   const entry = raw.cookbook.entries.toast;
@@ -25,7 +25,7 @@ function orderFixture() {
   raw.cookbook.entries.toast = { ...entry, menuSettings: priorSettings };
   raw.dishes[0] = { ...starter, ...priorSettings };
   const snapshot = createDishOrderSnapshot(getResolvedDish(raw, starter.id), {
-    serviceItemId: 'dish-1', orderedAt: 35990,
+    serviceItemId, orderedAt: 35990,
   });
   raw.cookbook.entries.toast = entry;
   raw.dishes[0] = starter;
@@ -33,9 +33,9 @@ function orderFixture() {
     dishId: starter.id, drinkId: null, menuOutcome: 'ordered', foodOutcome: 'pending',
     foodOrderedAt: 35990, foodPatienceBudget: 300, foodDeadlineAt: 36290,
     dishPriceAtOrder: snapshot.price, drinkPriceAtOrder: null, orderSubtotal: snapshot.price,
-    orderedServiceItemIds: ['dish-1'], consumedServiceItemIds: [], cancelledServiceItemIds: [],
+    orderedServiceItemIds: [serviceItemId], consumedServiceItemIds: [], cancelledServiceItemIds: [],
     dishOrderSnapshot: snapshot }];
-  raw.serviceItems = [{ id: 'dish-1', customerId: 'guest', menuItemId: starter.id,
+  raw.serviceItems = [{ id: serviceItemId, customerId: 'guest', menuItemId: starter.id,
     kind: 'dish', state: 'ordered', dishOrderSnapshot: { ...snapshot } }];
   return raw;
 }
@@ -1131,6 +1131,37 @@ describe('strict feature persistence', () => {
 
     expect(() => validateSavedState(raw)).toThrow(/featuredDishId/);
     expect(() => hydrateState(raw, createInitialState())).toThrow(/featuredDishId/);
+  });
+
+  it('round-trips an optional rush selection by its live service-item ID without adding a default', () => {
+    const fresh = createInitialState();
+    expect(fresh.restaurant).not.toHaveProperty('rushedDishId');
+    expect(() => validateSavedState(fresh)).not.toThrow();
+    expect(hydrateState(fresh, createInitialState()).restaurant)
+      .not.toHaveProperty('rushedDishId');
+
+    const raw = orderFixture({ serviceItemId: 'dish-B' });
+    raw.restaurant = { ...raw.restaurant, rushedDishId: 'dish-B' };
+
+    expect(saveState(raw)).toBe(true);
+    expect(loadState().restaurant.rushedDishId).toBe('dish-B');
+    expect(hydrateState(loadState(), createInitialState()).restaurant.rushedDishId)
+      .toBe('dish-B');
+  });
+
+  it('rejects a rush selection that is not backed by a currently rushable live ticket', () => {
+    const missingTicket = orderFixture();
+    missingTicket.restaurant = { ...missingTicket.restaurant, rushedDishId: 'missing-ticket' };
+    expect(() => validateSavedState(missingTicket)).toThrow(/restaurant\.rushedDishId/);
+    expect(() => hydrateState(missingTicket, createInitialState())).toThrow(/restaurant\.rushedDishId/);
+
+    const noLongerRushable = orderFixture();
+    noLongerRushable.restaurant = { ...noLongerRushable.restaurant, rushedDishId: 'dish-1' };
+    noLongerRushable.serviceItems = noLongerRushable.serviceItems.map(item => ({
+      ...item, state: 'preparing',
+    }));
+    expect(() => validateSavedState(noLongerRushable)).toThrow(/restaurant\.rushedDishId/);
+    expect(() => hydrateState(noLongerRushable, createInitialState())).toThrow(/restaurant\.rushedDishId/);
   });
 
   it.each([

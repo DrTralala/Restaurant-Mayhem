@@ -464,6 +464,86 @@ describe('gameReducer featured menu dish action', () => {
   });
 });
 
+describe('gameReducer rushed dish action', () => {
+  function rushableState() {
+    const initial = createInitialState();
+    const dishId = initial.dishes[0].id;
+    const serviceItemIds = ['rush-ticket-a', 'rush-ticket-b'];
+    return {
+      ...initial,
+      customers: serviceItemIds.map((serviceItemId, index) => ({
+        id: `rush-guest-${index}`,
+        dishId,
+        foodOutcome: 'pending',
+        foodDeadlineAt: 200,
+        foodPatienceBudget: 30,
+      })),
+      serviceItems: serviceItemIds.map((id, index) => ({
+        id,
+        customerId: `rush-guest-${index}`,
+        kind: 'dish',
+        menuItemId: dishId,
+        state: 'ordered',
+      })),
+    };
+  }
+
+  it('sets a rushable dish ticket by service-item identity', () => {
+    const initial = rushableState();
+
+    const selected = gameReducer(initial, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-a',
+    });
+
+    expect(selected.restaurant.rushedDishId).toBe('rush-ticket-a');
+  });
+
+  it('replaces the selected ticket with another rushable dish', () => {
+    const initial = rushableState();
+    const selected = gameReducer(initial, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-a',
+    });
+
+    const replaced = gameReducer(selected, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-b',
+    });
+
+    expect(replaced.restaurant.rushedDishId).toBe('rush-ticket-b');
+  });
+
+  it('keeps the current rush selection when a replacement is invalid', () => {
+    const initial = rushableState();
+    const selected = gameReducer(initial, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-b',
+    });
+
+    expect(gameReducer(selected, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'missing-ticket',
+    })).toBe(selected);
+  });
+
+  it('clears the optional rush selection with a null service-item ID', () => {
+    const initial = rushableState();
+    const selected = gameReducer(initial, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-a',
+    });
+
+    const cleared = gameReducer(selected, {
+      type: 'SET_RUSH_DISH', serviceItemId: null,
+    });
+
+    expect(cleared.restaurant).not.toHaveProperty('rushedDishId');
+  });
+
+  it('blocks rush changes while a career decision is pending', () => {
+    const state = { ...rushableState(), careerRun: { needsDecision: true } };
+
+    expect(gameReducer(state, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-a',
+    })).toBe(state);
+  });
+});
+
 describe('GameProvider bulk menu resume action', () => {
   it('clears both manual suspension lists atomically without changing menu policy or in-flight state', () => {
     const initial = createInitialState();

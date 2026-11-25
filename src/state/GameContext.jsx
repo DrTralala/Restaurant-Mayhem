@@ -59,6 +59,7 @@ import { getFixtureSaleEligibility, sellFixtures } from './fixtureSales';
 import { newSpatialIssues, quarantineNavigation } from '../simulation/navigation/occupancy';
 import { prioritiseQueuedParty } from '../simulation/queuePriority';
 import { STAFF_CLEANING_FOCUS_VALUES } from '../simulation/cleaningFocus';
+import { getRushableDish } from '../simulation/dishRush';
 
 function canAfford(state, cost) {
   return Number.isFinite(cost)
@@ -149,6 +150,19 @@ function setFeaturedDish(state, id) {
   if (typeof id !== 'string' || id.length === 0 || !getResolvedDish(state, id)) return state;
   if (restaurant.featuredDishId === id) return state;
   return { ...state, restaurant: { ...restaurant, featuredDishId: id } };
+}
+
+function setRushedDish(state, serviceItemId) {
+  const restaurant = state?.restaurant;
+  if (!restaurant || typeof restaurant !== 'object' || Array.isArray(restaurant)) return state;
+  if (serviceItemId === null) {
+    if (!Object.hasOwn(restaurant, 'rushedDishId')) return state;
+    const { rushedDishId: _rushedDishId, ...withoutRushedDish } = restaurant;
+    return { ...state, restaurant: withoutRushedDish };
+  }
+  const dish = getRushableDish(state, serviceItemId);
+  if (!dish || restaurant.rushedDishId === dish.id) return state;
+  return { ...state, restaurant: { ...restaurant, rushedDishId: dish.id } };
 }
 
 function clearRemovedDishPolicies(state, candidate, dishId) {
@@ -688,6 +702,8 @@ function reduceGameAction(state, action) {
       return setMenuItemSalesThreshold(state, action.kind, action.id, action.threshold);
     case 'SET_FEATURED_DISH':
       return setFeaturedDish(state, action.id);
+    case 'SET_RUSH_DISH':
+      return setRushedDish(state, action.serviceItemId);
     case 'UPDATE_DRINK': {
       const drink = getDrink(action.id);
       const unlockedDrinkIds = Array.isArray(state.unlockedDrinkIds)
