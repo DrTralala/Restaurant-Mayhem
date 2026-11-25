@@ -14,6 +14,7 @@ import { getRevenueChart } from './revenueChart';
 import { getRecentFinanceSummary } from './recentFinanceSummary';
 import { getPartyReviewDayTrend } from './partyReviewTrend';
 import { isCareerDecisionPending } from '../simulation/careerRun';
+import { getPartySizeFit } from '../simulation/tableFit';
 import TableSeatingHolds from './TableSeatingHolds';
 import { getTableLocatePoint } from '../canvas/tableLocatePoint';
 
@@ -348,30 +349,39 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
         <h5 style={{ ...TYPOGRAPHY.secondary, margin: '10px 0 8px' }}>Queue patience</h5>
         {queuePatience.length === 0 ? <p style={TYPOGRAPHY.secondary}>No parties waiting.</p> : (
           <ul aria-label="Queue patience" style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 8 }}>
-            {queuePatience.map((party, index) => (
-              <li key={party.partyId} style={statBox}>
-                <div>Party {index + 1}: {party.guestCount} {party.guestCount === 1 ? 'guest' : 'guests'}</div>
-                <div>{formatPatience(party)}</div>
-                <div>{formatPatienceEstimate(party, restaurantOpen)}</div>
-                <button
-                  type="button"
-                  disabled={index === 0 || careerDecisionPending}
-                  aria-describedby={queuePriorityHelpId}
-                  onClick={() => {
-                    if (index === 0 || careerDecisionPending) return;
-                    dispatch({ type: 'PRIORITISE_QUEUE_PARTY', partyId: party.partyId });
-                  }}
-                  style={{
-                    ...TYPOGRAPHY.control,
-                    marginTop: 8,
-                    padding: '6px 8px',
-                    cursor: index === 0 || careerDecisionPending ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  Prioritise party {party.partyId}
-                </button>
-              </li>
-            ))}
+            {queuePatience.map((party, index) => {
+              const fit = getPartySizeFit(state, party.guestCount);
+              return (
+                <li key={party.partyId} style={statBox}>
+                  <div>Party {index + 1}: {party.guestCount} {party.guestCount === 1 ? 'guest' : 'guests'}</div>
+                  <div>{formatPatience(party)}</div>
+                  <div>{formatPatienceEstimate(party, restaurantOpen)}</div>
+                  {fit === 'no-fit' && (
+                    <div>No placed table can physically fit this party.</div>
+                  )}
+                  {fit === 'below-minimum' && (
+                    <div>All physically fitting tables are set to a larger minimum party size.</div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={index === 0 || careerDecisionPending}
+                    aria-describedby={queuePriorityHelpId}
+                    onClick={() => {
+                      if (index === 0 || careerDecisionPending) return;
+                      dispatch({ type: 'PRIORITISE_QUEUE_PARTY', partyId: party.partyId });
+                    }}
+                    style={{
+                      ...TYPOGRAPHY.control,
+                      marginTop: 8,
+                      padding: '6px 8px',
+                      cursor: index === 0 || careerDecisionPending ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Prioritise party {party.partyId}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
         <p id={queuePriorityHelpId} style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>

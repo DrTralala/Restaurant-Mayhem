@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { physicalTableCapacity } from './tableFit';
+import { getPartySizeFit, physicalTableCapacity } from './tableFit';
 
 describe('physical table capacity', () => {
   const table = { id: 'a', x: 1, y: 1, seats: 2 };
@@ -25,5 +25,45 @@ describe('physical table capacity', () => {
 
   it('does not count associated chairs without placement coordinates', () => {
     expect(physicalTableCapacity(table, [chair('one'), chair('two', 'a', Number.NaN, 1)])).toBe(1);
+  });
+});
+
+describe('party size fit', () => {
+  const table = (id, seats, minPartySize, status = 'empty') => ({
+    id, x: 1, y: 1, seats, minPartySize, status,
+  });
+  const chairs = (tableId, count) => Array.from({ length: count }, (_, index) => ({
+    id: `${tableId}-chair-${index}`, tableId, x: index + 1, y: 1,
+  }));
+
+  it('reports no-fit when no placed table has enough physical capacity', () => {
+    const state = {
+      tables: [table('two-top', 2)],
+      chairs: chairs('two-top', 2),
+    };
+
+    expect(getPartySizeFit(state, 3)).toBe('no-fit');
+  });
+
+  it('reports below-minimum only when every physically fitting table excludes the party', () => {
+    const state = {
+      tables: [table('four-top', 4, 3), table('two-top', 2, 3), table('one-top', 1)],
+      chairs: [
+        ...chairs('four-top', 4),
+        ...chairs('two-top', 2),
+        ...chairs('one-top', 1),
+      ],
+    };
+
+    expect(getPartySizeFit(state, 2)).toBe('below-minimum');
+  });
+
+  it('allows a static fit without claiming availability for an occupied table', () => {
+    const state = {
+      tables: [table('occupied-four-top', 4, 2, 'occupied')],
+      chairs: chairs('occupied-four-top', 4),
+    };
+
+    expect(getPartySizeFit(state, 2)).toBe('allowed');
   });
 });

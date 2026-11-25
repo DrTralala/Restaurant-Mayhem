@@ -454,6 +454,70 @@ it('lists every queued party with logical ordinals and actual guest counts', () 
   expect(within(section).getByText('Entry queue: 2 parties · 3 guests')).toBeInTheDocument();
 });
 
+it('explains when no placed table can physically fit a queued party', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    queue: [{ partyId: 'too-large', members: [queuedMember(), queuedMember(), queuedMember()] }],
+    tables: [{ id: 'two-top', x: 100, y: 100, seats: 2, status: 'empty' }],
+    chairs: [
+      { id: 'chair-1', tableId: 'two-top', x: 90, y: 100 },
+      { id: 'chair-2', tableId: 'two-top', x: 110, y: 100 },
+    ],
+  });
+  render(<StatsPanel />);
+
+  const row = within(screen.getByRole('list', { name: 'Queue patience' })).getByRole('listitem');
+  expect(row).toHaveTextContent('No placed table can physically fit this party.');
+  expect(row).not.toHaveTextContent('All physically fitting tables are set to a larger minimum party size.');
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+});
+
+it('explains when every physically fitting table has a larger minimum', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    queue: [{ partyId: 'below-minimum', members: [queuedMember(), queuedMember()] }],
+    tables: [
+      { id: 'four-top', x: 100, y: 100, seats: 4, minPartySize: 3, status: 'empty' },
+      { id: 'two-top', x: 200, y: 100, seats: 2, minPartySize: 3, status: 'empty' },
+      { id: 'one-top', x: 300, y: 100, seats: 1, status: 'empty' },
+    ],
+    chairs: [
+      ...Array.from({ length: 4 }, (_, index) => ({
+        id: `four-chair-${index}`, tableId: 'four-top', x: index + 1, y: 100,
+      })),
+      ...Array.from({ length: 2 }, (_, index) => ({
+        id: `two-chair-${index}`, tableId: 'two-top', x: index + 1, y: 200,
+      })),
+      { id: 'one-chair', tableId: 'one-top', x: 1, y: 300 },
+    ],
+  });
+  render(<StatsPanel />);
+
+  const row = within(screen.getByRole('list', { name: 'Queue patience' })).getByRole('listitem');
+  expect(row).toHaveTextContent('All physically fitting tables are set to a larger minimum party size.');
+  expect(row).not.toHaveTextContent('No placed table can physically fit this party.');
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+});
+
+it('does not imply immediate seating when a fitting table is occupied', () => {
+  mockUseGameState.mockReturnValue({
+    ...baseState,
+    queue: [{ partyId: 'waiting', members: [queuedMember(), queuedMember()] }],
+    tables: [{ id: 'occupied-four-top', x: 100, y: 100, seats: 4, minPartySize: 2, status: 'occupied' }],
+    chairs: Array.from({ length: 4 }, (_, index) => ({
+      id: `chair-${index}`, tableId: 'occupied-four-top', x: index + 1, y: 100,
+    })),
+  });
+  render(<StatsPanel />);
+
+  const row = within(screen.getByRole('list', { name: 'Queue patience' })).getByRole('listitem');
+  expect(row).toHaveTextContent('Party 1: 2 guests');
+  expect(row).not.toHaveTextContent(/can sit now|will be seated|seated immediately/i);
+  expect(row).not.toHaveTextContent('No placed table can physically fit this party.');
+  expect(row).not.toHaveTextContent('All physically fitting tables are set to a larger minimum party size.');
+  expect(mockUseDispatch).not.toHaveBeenCalled();
+});
+
 it('offers opaque per-party priority controls and disables the first and career-gated actions', () => {
   mockUseGameState.mockReturnValue({
     ...baseState,
