@@ -158,3 +158,18 @@ describe('legacy cookbook rejection at the v11 persistence boundary', () => {
     expect(() => hydrateState(raw, createInitialState())).toThrow(/Invalid cookbook/);
   });
 });
+
+describe('cookbook catalogue save-version boundary', () => {
+  it('classifies a prior v12 nine-recipe save as incompatible, not invalid', () => {
+    const raw = createInitialState();
+    raw.version = 12;
+    delete raw.cookbook.entries['shoestring-fries'];
+    const serialized = JSON.stringify(raw);
+    localStorage.setItem('restaurant-sim-save', serialized);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(loadStateResult()).toEqual({ state: null, reason: 'incompatible' });
+    expect(() => hydrateState(raw, createInitialState())).toThrow(/incompatible/i);
+    expect(localStorage.getItem('restaurant-sim-save')).toBe(serialized);
+  });
+});
