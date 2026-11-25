@@ -2270,3 +2270,66 @@ describe('MenuPanel featured dish', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 });
+
+describe('MenuPanel estimated base cook work', () => {
+  it('groups unrounded accepted dish probability and resolved prep time by equipment', () => {
+    const base = createInitialState();
+    const menu = withOwnedAuthoredDishes(base, [
+      { id: 'toast', cookbookId: 'toast', price: 12, quality: 1 },
+      { id: 'cheese-toast', cookbookId: 'cheese-toast', price: 14, quality: 1 },
+      { id: 'fries', cookbookId: 'fries', price: 10, quality: 1 },
+    ]);
+    const toastEntry = menu.cookbook.entries.toast;
+    const state = {
+      ...menu,
+      cookbook: {
+        ...menu.cookbook,
+        entries: {
+          ...menu.cookbook.entries,
+          toast: { ...toastEntry, paidPortions: 15, perk: 'speed' },
+        },
+      },
+    };
+    const analysis = getMenuAnalysis(state);
+    const toasterMinutes = (
+      analysis.demandProbabilities.dishes.get('toast') * 51
+      + analysis.demandProbabilities.dishes.get('cheese-toast') * 90
+    ) * 100 / 60;
+    const roundedToasterMinutes = (
+      analysis.demand.dishes.get('toast') / 100 * 51
+      + analysis.demand.dishes.get('cheese-toast') / 100 * 90
+    ) * 100 / 60;
+    const fryerMinutes = analysis.demandProbabilities.dishes.get('fries') * 105 * 100 / 60;
+    const dispatch = vi.fn();
+    useGameState.mockReturnValue(state);
+    useDispatch.mockReturnValue(dispatch);
+    render(<MenuPanel />);
+
+    const region = screen.getByRole('region', {
+      name: 'Estimated base cook minutes per 100 walk-ins',
+    });
+    expect(region).toHaveTextContent(`Toaster: ${toasterMinutes.toFixed(1)} minutes`);
+    expect(region).toHaveTextContent(`Fryer: ${fryerMinutes.toFixed(1)} minutes`);
+    expect(toasterMinutes.toFixed(1)).not.toBe(roundedToasterMinutes.toFixed(1));
+    expect(region).not.toHaveTextContent('Water:');
+    expect(region).toHaveTextContent(/not actual waits/);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('reports zero dish cook work when the menu has only drinks', () => {
+    const state = {
+      ...createInitialState(),
+      dishes: [],
+      unlockedDrinkIds: ['water'],
+    };
+    useGameState.mockReturnValue(state);
+    useDispatch.mockReturnValue(vi.fn());
+    render(<MenuPanel />);
+
+    const region = screen.getByRole('region', {
+      name: 'Estimated base cook minutes per 100 walk-ins',
+    });
+    expect(region).toHaveTextContent('No dish cook work: 0.0 minutes');
+    expect(region).not.toHaveTextContent('Water:');
+  });
+});

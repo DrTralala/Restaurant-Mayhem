@@ -148,6 +148,23 @@ export default function MenuPanel({ readOnly = false }) {
 
   const analysis = getMenuAnalysis(state);
   const { affordability, demand, hasAvailableMenu: hasWalkInMenu } = analysis;
+  const cookMinutesByEquipment = new Map();
+  for (const rawDish of state.dishes || []) {
+    const dish = getResolvedDish(state, rawDish.id);
+    if (!dish) continue;
+    const acceptedProbability = analysis.demandProbabilities.dishes.get(dish.id) ?? 0;
+    const minutes = acceptedProbability * dish.prepTime * 100 / 60;
+    cookMinutesByEquipment.set(
+      dish.requiredEquipmentId,
+      (cookMinutesByEquipment.get(dish.requiredEquipmentId) ?? 0) + minutes,
+    );
+  }
+  const cookWorkByEquipment = [...cookMinutesByEquipment].map(([equipmentId, minutes]) => ({
+    equipmentId,
+    equipmentName: EQUIPMENT.find(equipment => equipment.id === equipmentId)?.name
+      ?? equipmentId ?? 'Unassigned equipment',
+    minutes,
+  }));
 
   return (
     <div style={{ ...TYPOGRAPHY.body, color: '#ccc' }}>
@@ -233,6 +250,24 @@ export default function MenuPanel({ readOnly = false }) {
         <p>Can afford any order, including drink-only: {formatCoverage(affordability.anyOrderShare)}</p>
         <p style={TYPOGRAPHY.secondary}>Price-only coverage for new walk-in guest budgets at current reputation, not existing guests or booked contracts. These overlapping percentages are not additive and do not predict purchases or service capacity. Item demand weights every possible budget and guest preference; item percentages overlap and are not additive.</p>
         <p style={TYPOGRAPHY.secondary}>Above-reference dish prices reduce expected walk-in demand because some guests decline them even when their budget can afford the dish.</p>
+      </section>
+
+      <section aria-label="Estimated base cook minutes per 100 walk-ins">
+        <h4 style={TYPOGRAPHY.subheading}>Estimated base cook minutes per 100 walk-ins</h4>
+        {cookWorkByEquipment.length === 0 ? (
+          <p>No dish cook work: 0.0 minutes</p>
+        ) : (
+          <ul>
+            {cookWorkByEquipment.map(({ equipmentId, equipmentName, minutes }) => (
+              <li key={equipmentId}>{equipmentName}: {minutes.toFixed(1)} minutes</li>
+            ))}
+          </ul>
+        )}
+        <p style={TYPOGRAPHY.secondary}>
+          Uses unrounded accepted walk-in dish probabilities and resolved base cook seconds.
+          Drink-only orders add zero dish cook work. This is an estimate, not actual waits or
+          guaranteed sales; cooking speed and booked contract work are excluded.
+        </p>
       </section>
 
       {state.dishes.length === 0 && (
