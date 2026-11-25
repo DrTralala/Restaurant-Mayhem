@@ -12,6 +12,30 @@ const menu = withOwnedAuthoredDishes({
 });
 
 describe('MenuPricePreview', () => {
+  it('shows the $12 Q2 Toast reference-price draft and its real menu forecast', () => {
+    const q2Toast = withOwnedAuthoredDishes({
+      dishes: [{ id: 'toast', cookbookId: 'toast', name: 'Toast', price: 14, quality: 2 }],
+      unlockedDrinkIds: ['water'],
+      drinkOverrides: { water: { price: 8, quality: 3 } },
+      restaurant: { reputation: 3 },
+    });
+    const current = getMenuAnalysis(q2Toast);
+    const presentation = createMenuPricePreviewPresentation({
+      state: q2Toast, kind: 'dish', id: 'toast', name: 'Toast', price: 12,
+      currentGrossPer100: current.expectedGrossPer100,
+      currentAffordabilityByTier: current.affordabilityByTier,
+    });
+    render(<MenuPricePreview presentation={presentation} />);
+
+    const preview = screen.getByRole('group', { name: 'Price preview for Toast' });
+    expect(within(preview).getByText('Toast · Draft price: $12')).toBeInTheDocument();
+    expect(within(preview).getByText('Reference value $12.96 · Allowed price $9–$16'))
+      .toBeInTheDocument();
+    expect(within(preview).getByLabelText(
+      'Draft expected whole-menu gross per 100 hypothetical walk-in guests',
+    )).toHaveTextContent(presentation.draftAmount);
+  });
+
   it('shows the item price and current-versus-draft whole-menu gross with caveats', () => {
     const currentGrossPer100 = 456.789;
     const currentAffordabilityByTier = getMenuAnalysis(menu).affordabilityByTier;

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import MenuPriceInput, { parseMenuPriceDraft } from './MenuPriceInput';
 
@@ -67,6 +67,44 @@ describe('MenuPriceInput', () => {
 
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit).toHaveBeenCalledWith(9);
+  });
+
+  it('keeps a suggested price local through its click and commits it only on a later blur', () => {
+    const presentation = price => ({
+      accessibleName: 'Price preview for Toast',
+      itemLine: `Toast · Draft price: $${price}`,
+      description: 'Expected walk-in gross forecast.',
+      currentLabel: 'Current expected gross',
+      currentAmount: '$100.00',
+      draftLabel: 'Draft expected gross',
+      draftAmount: '$120.00',
+      affordabilityHeading: 'Budget fit',
+      affordabilityRows: [],
+      affordabilityCaveat: 'Budget fit is not a purchase forecast.',
+      caveat: 'Not profit.',
+    });
+    const { input, onCommit } = setup({
+      price: 14, label: 'Toast price', minPrice: 9, maxPrice: 16,
+      suggestedPrice: 12, getPreviewPresentation: presentation,
+    });
+    const field = input();
+    field.focus();
+    fireEvent.change(field, { target: { value: '15' } });
+    const suggestion = screen.getByRole('button', { name: 'Preview Toast at $12' });
+    const mouseDown = createEvent.mouseDown(suggestion);
+    fireEvent(suggestion, mouseDown);
+    if (!mouseDown.defaultPrevented) suggestion.focus();
+    fireEvent.click(suggestion);
+
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue(12);
+    expect(screen.getByRole('group', { name: 'Price preview for Toast' }))
+      .toHaveTextContent('Toast · Draft price: $12');
+    expect(onCommit).not.toHaveBeenCalled();
+
+    fireEvent.blur(field);
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(onCommit).toHaveBeenCalledWith(12);
   });
 
   it('commits exactly once on Enter and ignores the following blur', () => {

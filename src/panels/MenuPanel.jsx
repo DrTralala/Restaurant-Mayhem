@@ -191,6 +191,10 @@ export default function MenuPanel({ readOnly = false }) {
          .map(({ rawDish, dish }) => {
         const pricing = getDishPricing(dish.cookbookId, dish.quality);
         const refusal = getMenuRefusal(state, dish.id);
+        const suggestedPrice = refusal && pricing && !blocked
+          && dish.price > pricing.referenceValue
+          ? Math.min(pricing.maxPrice, Math.floor(pricing.referenceValue))
+          : null;
         const suspended = isMenuItemSuspended(state, 'dish', dish.id);
         const hasCompatibleStation = (state.kitchenStations || []).some(station =>
           isDishCompatibleWithStation(state, dish, station));
@@ -287,15 +291,17 @@ export default function MenuPanel({ readOnly = false }) {
             minPrice={pricing.minPrice}
             maxPrice={pricing.maxPrice}
             pricingKey={`${dish.cookbookId}:${dish.quality}:${pricing.referenceValue}`}
+            suggestedPrice={suggestedPrice}
             onCommit={price => mutate({ type: 'UPDATE_DISH', id: dish.id, changes: { price } })}
             getPreviewPresentation={price => createMenuPricePreviewPresentation({
               state, kind: 'dish', id: dish.id, name: dish.name, price,
               currentGrossPer100: analysis.expectedGrossPer100,
               currentAffordabilityByTier: analysis.affordabilityByTier,
             })}
-            renderControlRow={priceInput => (
+            renderControlRow={(priceInput, priceSuggestion) => (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {priceInput}
+                {priceSuggestion}
                 <button
                   aria-label={`Upgrade ${dish.name} quality ($${MENU_QUALITY_COST})`}
                   onClick={() => mutate({ type: 'UPGRADE_DISH_QUALITY', id: dish.id })}

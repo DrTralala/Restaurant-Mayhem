@@ -12,10 +12,11 @@ export function parseMenuPriceDraft(draft, { minPrice = 1, maxPrice = 100 } = {}
 
 export default function MenuPriceInput({
   price, label, disabled = false, minPrice = 1, maxPrice = 100, pricingKey = '',
-  onCommit, getPreviewPresentation, renderControlRow,
+  suggestedPrice = null, onCommit, getPreviewPresentation, renderControlRow,
 }) {
   const [draft, setDraft] = useState(() => String(price));
   const [previewActive, setPreviewActive] = useState(false);
+  const inputRef = useRef(null);
   const dirty = useRef(false);
   const basePrice = useRef(price);
   const editContext = JSON.stringify([minPrice, maxPrice, pricingKey]);
@@ -66,8 +67,16 @@ export default function MenuPriceInput({
   }, [showPreview, activePresentation]);
 
   const previewPresentation = showPreview ? activePresentation : lastPresentation.current;
+  const validSuggestion = Number.isInteger(suggestedPrice)
+    && suggestedPrice >= minPrice
+    && suggestedPrice <= maxPrice
+    && suggestedPrice < price
+    && !disabled
+    ? suggestedPrice
+    : null;
   const input = (
     <input
+      ref={inputRef}
       type="number" value={draft} min={minPrice} max={maxPrice} step={1}
       aria-label={label}
       disabled={disabled}
@@ -99,10 +108,31 @@ export default function MenuPriceInput({
       title="Edit price"
     />
   );
+  const suggestionButton = validSuggestion === null ? null : (
+    <button
+      type="button"
+      aria-label={`Preview ${label.replace(/ price$/i, '')} at $${validSuggestion}`}
+      onMouseDown={event => event.preventDefault()}
+      onClick={() => {
+        if (disabled || basePrice.current !== price || baseEditContext.current !== editContext) return;
+        dirty.current = true;
+        setDraft(String(validSuggestion));
+        setPreviewActive(true);
+        inputRef.current?.focus();
+      }}
+      style={{ ...TYPOGRAPHY.control, background: '#333', color: '#ccc', border: '1px solid #555',
+        padding: '4px 10px', borderRadius: 4, cursor: 'pointer' }}
+    >
+      Preview reference price (${validSuggestion})
+    </button>
+  );
+  const controls = typeof renderControlRow === 'function'
+    ? renderControlRow(input, suggestionButton)
+    : <>{input}{suggestionButton}</>;
 
   return (
     <>
-      {typeof renderControlRow === 'function' ? renderControlRow(input) : input}
+      {controls}
       {previewPresentation && (
         <div style={{ width: '100%', maxWidth: '100%', marginTop: 8 }}>
           <MenuPricePreview presentation={previewPresentation} inactive={!showPreview} />

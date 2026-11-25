@@ -1,5 +1,5 @@
 import { useReducer } from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import MenuPanel from './MenuPanel';
 import { useDispatch, useGameState, gameReducer } from '../state/GameContext';
@@ -1128,6 +1128,19 @@ describe('MenuPanel drinks', () => {
       restaurant: { funds: 200, reputation: 3 },
     });
 
+    const q2ToastState = (price = 14, observed = true) => {
+      const state = updateCookbookDishSettings(pricedMenu(), 'toast', {
+        price, quality: 2,
+      });
+      if (observed) {
+        state.menuRefusals = {
+          day: 1,
+          dishes: [{ key: 'toast', count: 2, lastPrice: 14 }],
+        };
+      }
+      return state;
+    };
+
     beforeEach(() => {
       useGameState.mockReturnValue(pricedMenu());
     });
@@ -1202,6 +1215,81 @@ describe('MenuPanel drinks', () => {
       expect(actions).toEqual([
         { type: 'UPDATE_DISH', id: 'toast', changes: { price: 14 } },
       ]);
+    });
+
+    it('previews the Q2 Toast reference price as a local draft with keyboard commit and cancel', () => {
+      const initial = q2ToastState();
+      const refusal = initial.menuRefusals.dishes[0];
+      const actions = [];
+      useGameState.mockImplementation(() => statefulHarness.current.state);
+      useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+      render(<StatefulMenuPanel initial={initial} actions={actions} />);
+
+      const price = screen.getByLabelText('Toast price');
+      const suggestion = screen.getByRole('button', { name: 'Preview Toast at $12' });
+      fireEvent.click(suggestion);
+
+      expect(price).toHaveValue(12);
+      expect(price).toHaveFocus();
+      expect(screen.getByRole('group', { name: 'Price preview for Toast' }))
+        .toHaveTextContent('Toast · Draft price: $12');
+      expect(actions).toEqual([]);
+      expect(statefulHarness.current.state.dishes.find(dish => dish.id === 'toast').price)
+        .toBe(14);
+      expect(statefulHarness.current.state.menuRefusals.dishes[0]).toEqual(refusal);
+
+      fireEvent.keyDown(price, { key: 'Escape' });
+      expect(price).toHaveValue(14);
+      expect(actions).toEqual([]);
+
+      fireEvent.click(suggestion);
+      expect(price).toHaveValue(12);
+      fireEvent.keyDown(price, { key: 'Enter' });
+
+      expect(actions).toEqual([
+        { type: 'UPDATE_DISH', id: 'toast', changes: { price: 12 } },
+      ]);
+      expect(statefulHarness.current.state.dishes.find(dish => dish.id === 'toast').price)
+        .toBe(12);
+      expect(statefulHarness.current.state.menuRefusals.dishes[0]).toEqual(refusal);
+    });
+
+    it.each([
+      ['without a current-day refusal', q2ToastState(14, false), false],
+      ['at or below reference value', q2ToastState(12), false],
+      ['while price changes are locked', q2ToastState(14), true],
+    ])('does not offer a reference-price preview %s', (_reason, state, readOnly) => {
+      useGameState.mockReturnValue(state);
+      const dispatch = vi.fn();
+      useDispatch.mockReturnValue(dispatch);
+      render(<MenuPanel readOnly={readOnly} />);
+
+      expect(screen.queryByRole('button', { name: 'Preview Toast at $12' }))
+        .not.toBeInTheDocument();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('does not commit an existing draft when clicking the reference-price preview action', () => {
+      const initial = q2ToastState();
+      const actions = [];
+      useGameState.mockImplementation(() => statefulHarness.current.state);
+      useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+      render(<StatefulMenuPanel initial={initial} actions={actions} />);
+
+      const price = screen.getByLabelText('Toast price');
+      fireEvent.change(price, { target: { value: '15' } });
+      const suggestion = screen.getByRole('button', { name: 'Preview Toast at $12' });
+      price.focus();
+      const mouseDown = createEvent.mouseDown(suggestion);
+      fireEvent(suggestion, mouseDown);
+      if (!mouseDown.defaultPrevented) suggestion.focus();
+      fireEvent.click(suggestion);
+
+      expect(actions).toEqual([]);
+      expect(price).toHaveFocus();
+      expect(price).toHaveValue(12);
+      expect(statefulHarness.current.state.dishes.find(dish => dish.id === 'toast').price)
+        .toBe(14);
     });
 
     it('keeps all three menu kinds as local drafts and commits each once on Enter', () => {
