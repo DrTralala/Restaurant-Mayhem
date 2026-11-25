@@ -1,6 +1,7 @@
 import { useDispatch, useGameState } from '../state/GameContext';
 import { TYPOGRAPHY } from '../typography';
 import { isCareerDecisionPending } from '../simulation/careerRun';
+import { normaliseCustomerQueue } from '../simulation/customerQueue';
 import { physicalTableCapacity } from '../simulation/tableFit';
 
 const holdRowStyle = {
@@ -27,6 +28,7 @@ export default function TableSeatingHolds() {
   const tables = Array.isArray(state?.tables) ? state.tables : [];
   const seatingPolicy = state?.restaurant?.seatingPolicy === 'best-fit' ? 'best-fit' : 'automatic';
   const chairs = Array.isArray(state?.chairs) ? state.chairs : [];
+  const queuedParties = normaliseCustomerQueue(state?.queue);
   const actionTables = tables.filter(table => isValidTableId(table?.id)
     && hasUniqueReducerMatch(tables, table.id));
 
@@ -71,6 +73,10 @@ export default function TableSeatingHolds() {
             const physicalCapacity = physicalTableCapacity(table, chairs);
             const minPartySize = Number.isSafeInteger(table.minPartySize)
               && table.minPartySize >= 2 ? table.minPartySize : 1;
+            const excludedPartyCount = queuedParties.filter(party => {
+              const size = party.members.length;
+              return size > 0 && size <= physicalCapacity && size < minPartySize;
+            }).length;
             const minimumExceedsCapacity = minPartySize > physicalCapacity;
             const minimumOptions = Array.from(
               { length: Math.max(0, physicalCapacity - 1) },
@@ -114,6 +120,15 @@ export default function TableSeatingHolds() {
                         </option>
                       ))}
                     </select>
+                    {excludedPartyCount > 0 && (
+                      <p
+                        role="status"
+                        style={{ ...TYPOGRAPHY.secondary, marginTop: 6 }}
+                      >
+                        {excludedPartyCount} queued {excludedPartyCount === 1 ? 'party fits' : 'parties fit'}
+                        {' '}this table but {excludedPartyCount === 1 ? 'falls' : 'fall'} below its minimum.
+                      </p>
+                    )}
                     {minimumExceedsCapacity && (
                       <p
                         id={minimumWarningId}

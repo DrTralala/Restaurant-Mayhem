@@ -17,6 +17,11 @@ beforeEach(() => {
   mockUseDispatch.mockClear();
 });
 
+const queuedParty = (id, size) => ({
+  partyId: id,
+  members: Array.from({ length: size }, (_value, index) => ({ id: `${id}-${index}` })),
+});
+
 it('shows current table status and permits holding empty or releasing a stale occupied hold', () => {
   mockUseGameState.mockReturnValue({
     tables: [
@@ -220,6 +225,34 @@ it('shows a stale minimum and chair-shortfall warning while allowing reset to An
   expect(mockUseDispatch).toHaveBeenCalledWith({
     type: 'SET_TABLE_MIN_PARTY_SIZE', id: 't1', minPartySize: 1,
   });
+});
+
+it('counts only queued parties that fit the table and fall below its minimum', () => {
+  mockUseGameState.mockReturnValue({
+    tables: [{ id: 't1', seats: 4, status: 'empty', minPartySize: 3, x: 100, y: 100 }],
+    chairs: Array.from({ length: 4 }, (_value, index) => ({
+      id: `ch${index}`, tableId: 't1', x: 100, y: 80 + index * 20,
+    })),
+    queue: [queuedParty('pair-a', 2), queuedParty('pair-b', 2), queuedParty('large', 5)],
+  });
+  render(<TableSeatingHolds />);
+
+  expect(screen.getByText('2 queued parties fit this table but fall below its minimum.'))
+    .toBeInTheDocument();
+});
+
+it('hides the excluded-party notice when no queued party fits below the minimum', () => {
+  mockUseGameState.mockReturnValue({
+    tables: [{ id: 't1', seats: 4, status: 'empty', minPartySize: 3, x: 100, y: 100 }],
+    chairs: Array.from({ length: 4 }, (_value, index) => ({
+      id: `ch${index}`, tableId: 't1', x: 100, y: 80 + index * 20,
+    })),
+    queue: [queuedParty('eligible', 3), queuedParty('large', 5)],
+  });
+  render(<TableSeatingHolds />);
+
+  expect(screen.queryByText(/queued parties fit this table but fall below its minimum/))
+    .not.toBeInTheDocument();
 });
 
 it('does not show a minimum selector for high-top counter children', () => {
