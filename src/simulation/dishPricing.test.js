@@ -9,6 +9,7 @@ const recipeBasePrices = [
   ['baked-eggs', 15],
   ['baked-potato', 22],
   ['fries', 10],
+  ['shoestring-fries', 8],
   ['fried-chicken', 20],
   ['gazpacho', 16],
   ['fish-bisque', 20],

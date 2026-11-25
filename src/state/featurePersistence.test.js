@@ -4,7 +4,9 @@ import { hydrateState, loadState, loadStateResult, saveState } from './persisten
 import { SAVE_VERSION } from './saveVersion';
 import { validateSavedState } from './saveValidation';
 import { acceptServiceContract } from '../simulation/serviceContracts';
-import { createDishOrderSnapshot, getResolvedDish } from '../simulation/cookbook';
+import {
+  createDishOrderSnapshot, getResolvedDish, reconcileCookbookDiscoveries, reduceCookbookAction,
+} from '../simulation/cookbook';
 import { continueCareerAsSandbox, evaluateCareerRun } from '../simulation/careerRun';
 import { getResolvedDrink } from '../data/drinks';
 import { getStaffTaskDuration } from '../simulation/staffPerformance';
@@ -146,6 +148,36 @@ describe('strict feature persistence', () => {
       cookbookId: 'fish-bisque', name: 'House Fish Bisque', base: 'Fish', method: 'Blended',
       requiredEquipmentId: 'eq4', price: 27, quality: 3, prepTime: 135, popularity: 78, masteryPerk: 'appeal',
     });
+  });
+
+  it('round-trips purchased Shoestring Fries with a distinct menu identity and canonical service stats', () => {
+    let raw = createInitialState();
+    raw.restaurant.funds = 100;
+    raw.equipment = raw.equipment.map(item => item.id === 'eq3' ? { ...item, owned: true } : item);
+    raw.cookbook.entries.fries = { ...raw.cookbook.entries.fries,
+      discovered: true, owned: true, paidPortions: 3 };
+    raw.cookbook = reconcileCookbookDiscoveries(raw);
+    raw = reduceCookbookAction(raw, { type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'shoestring-fries' });
+    raw = reduceCookbookAction(raw, { type: 'ADD_COOKBOOK_DISH', cookbookId: 'shoestring-fries' });
+    expect(raw.restaurant.funds).toBe(0);
+
+    expect(saveState(raw)).toBe(true);
+    const loaded = loadState();
+    expect(loaded.cookbook.entries['shoestring-fries']).toMatchObject({
+      discovered: true, owned: true, paidPortions: 0,
+      menuSettings: { name: 'Shoestring Fries', price: 8, quality: 1 },
+    });
+    expect(loaded.dishes.find(dish => dish.cookbookId === 'shoestring-fries'))
+      .toMatchObject({ id: 'cookbook:shoestring-fries', name: 'Shoestring Fries', price: 8 });
+    expect(loaded.dishes.find(dish => dish.cookbookId === 'fries')).toBeUndefined();
+
+    const hydrated = hydrateState(loaded, createInitialState());
+    expect(getResolvedDish(hydrated, 'cookbook:shoestring-fries')).toMatchObject({
+      cookbookId: 'shoestring-fries', name: 'Shoestring Fries', base: 'Potato', method: 'Fried',
+      requiredEquipmentId: 'eq3', price: 8, quality: 1, prepTime: 70, popularity: 45,
+    });
+    expect(getResolvedDish(hydrated, 'cookbook:fries')).toBeNull();
+    expect(hydrated.restaurant.funds).toBe(0);
   });
 
   it('rejects a current-version save with a missing recipe entry instead of auto-filling it', () => {

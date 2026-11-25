@@ -11,13 +11,14 @@ describe('authored catalogue', () => {
       ['baked-eggs', 175, 15],
       ['baked-potato', 250, 22],
       ['fries', 100, 10],
+      ['shoestring-fries', 100, 8],
       ['fried-chicken', 250, 20],
       ['gazpacho', 125, 16],
       ['fish-bisque', 225, 20],
     ]);
   });
 
-  it('provides the nine deterministic equipment and discovery choices', () => {
+  it('provides the ten deterministic equipment and discovery choices', () => {
     expect(COOKBOOK_RECIPES.map(({ id, base, method, requiredEquipmentId, prepTime, popularity, price }) =>
       [id, base, method, requiredEquipmentId, prepTime, popularity, price])).toEqual([
       ['toast', 'Bread', 'Toasted', 'eq1', 60, 50, 12],
@@ -26,6 +27,7 @@ describe('authored catalogue', () => {
       ['baked-eggs', 'Eggs', 'Baked', 'eq2', 120, 60, 15],
       ['baked-potato', 'Potato', 'Baked', 'eq2', 210, 82, 22],
       ['fries', 'Potato', 'Fried', 'eq3', 105, 55, 10],
+      ['shoestring-fries', 'Potato', 'Fried', 'eq3', 70, 45, 8],
       ['fried-chicken', 'Chicken', 'Fried', 'eq3', 165, 78, 20],
       ['gazpacho', 'Vegetables', 'Blended', 'eq4', 75, 55, 16],
       ['fish-bisque', 'Fish', 'Blended', 'eq4', 135, 68, 20],
@@ -36,6 +38,12 @@ describe('authored catalogue', () => {
       price: 20, quality: 1, cuisine: 'generic', requirements: [
         { type: 'equipment', equipmentId: 'eq4' },
         { type: 'paidPortions', cookbookId: 'gazpacho', count: 5 },
+      ] });
+    expect(getCookbookRecipe('shoestring-fries')).toMatchObject({ name: 'Shoestring Fries',
+      base: 'Potato', method: 'Fried', requiredEquipmentId: 'eq3', prepTime: 70, popularity: 45,
+      price: 8, purchaseCost: 100, quality: 1, cuisine: 'generic', requirements: [
+        { type: 'equipment', equipmentId: 'eq3' },
+        { type: 'paidPortions', cookbookId: 'fries', count: 3 },
       ] });
     expect(getCookbookRecipe('baked-eggs')).toMatchObject({ name: 'Baked Eggs', base: 'Eggs',
       method: 'Baked', requiredEquipmentId: 'eq2', prepTime: 120, popularity: 60,

@@ -57,9 +57,9 @@ describe('CookbookPanel', () => {
     useDispatch.mockReturnValue(dispatch);
   });
 
-  it('shows all nine named recipes, numeric locked requirements and starter progress', () => {
+  it('shows all ten named recipes, numeric locked requirements and starter progress', () => {
     render(<CookbookPanel onClose={vi.fn()} />);
-    expect(screen.getAllByRole('article')).toHaveLength(9);
+    expect(screen.getAllByRole('article')).toHaveLength(10);
     const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
     expect(toast.getByText('On menu')).toBeInTheDocument();
     expect(toast.getByText('Paid portions: 0/15')).toBeInTheDocument();
@@ -231,6 +231,29 @@ describe('CookbookPanel', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'fish-bisque' });
   });
 
+  it('gates Shoestring Fries on Fryer ownership and three paid Crispy Fries portions', () => {
+    state.cookbook.entries.fries = { ...state.cookbook.entries.fries,
+      discovered: true, owned: true, paidPortions: 3 };
+    state.cookbook = reconcileCookbookDiscoveries(state);
+    const view = render(<CookbookPanel onClose={vi.fn()} />);
+
+    const shoestring = () => within(screen.getByRole('article', { name: 'Shoestring Fries recipe' }));
+    expect(shoestring().getByText('Locked — meet the discovery requirements below')).toBeInTheDocument();
+    expect(shoestring().getByText('Own Fryer: 0/1')).toBeInTheDocument();
+    expect(shoestring().getByText('Crispy Fries paid portions: 3/3')).toBeInTheDocument();
+    expect(shoestring().getByRole('button', { name: 'Add Shoestring Fries to menu' })).toBeDisabled();
+
+    state.equipment = state.equipment.map(item => item.id === 'eq3' ? { ...item, owned: true } : item);
+    state.restaurant.funds = 100;
+    state.cookbook = reconcileCookbookDiscoveries(state);
+    view.rerender(<CookbookPanel onClose={vi.fn()} />);
+    expect(shoestring().getByText('Discovered')).toBeInTheDocument();
+    expect(shoestring().getByRole('button', { name: 'Buy recipe — $100' })).toBeEnabled();
+    expect(shoestring().getByRole('button', { name: 'Add Shoestring Fries to menu' })).toBeDisabled();
+    fireEvent.click(shoestring().getByRole('button', { name: 'Buy recipe — $100' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'BUY_COOKBOOK_RECIPE', cookbookId: 'shoestring-fries' });
+  });
+
   it('offers the Gazpacho mastery preview once 15 paid portions are recorded', () => {
     state.equipment = state.equipment.map(equipment =>
       equipment.id === 'eq4' ? { ...equipment, owned: true } : equipment);
@@ -323,7 +346,7 @@ describe('CookbookPanel', () => {
     expect(all).toHaveAttribute('aria-pressed', 'true');
     expect(ready).toHaveAttribute('aria-pressed', 'false');
     expect(within(group).getByText('1 recipes have ready actions.')).toBeInTheDocument();
-    expect(screen.getAllByRole('article')).toHaveLength(9);
+    expect(screen.getAllByRole('article')).toHaveLength(10);
     fireEvent.click(ready);
     expect(all).toHaveAttribute('aria-pressed', 'false');
     expect(ready).toHaveAttribute('aria-pressed', 'true');
@@ -332,7 +355,7 @@ describe('CookbookPanel', () => {
     fireEvent.click(all);
     expect(all).toHaveAttribute('aria-pressed', 'true');
     expect(ready).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getAllByRole('article')).toHaveLength(9);
+    expect(screen.getAllByRole('article')).toHaveLength(10);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -390,8 +413,8 @@ describe('CookbookPanel', () => {
   it('computes each recipe status exactly once per render', () => {
     getCookbookEntryStatus.mockClear();
     render(<CookbookPanel onClose={vi.fn()} />);
-    expect(getCookbookEntryStatus).toHaveBeenCalledTimes(9);
-    expect(new Set(getCookbookEntryStatus.mock.calls.map(([, cookbookId]) => cookbookId)).size).toBe(9);
+    expect(getCookbookEntryStatus).toHaveBeenCalledTimes(10);
+    expect(new Set(getCookbookEntryStatus.mock.calls.map(([, cookbookId]) => cookbookId)).size).toBe(10);
   });
 
   it('shows the empty ready message when no recipe has a ready action', () => {
@@ -441,7 +464,7 @@ describe('CookbookPanel', () => {
     ]);
     expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
       'Toasted Bread recipe', 'Cheese Toast recipe', 'Roast Vegetables recipe', 'Baked Eggs recipe', 'Baked Potato recipe',
-      'Crispy Fries recipe', 'Fried Chicken recipe', 'Gazpacho recipe', 'Fish Bisque recipe',
+      'Crispy Fries recipe', 'Shoestring Fries recipe', 'Fried Chicken recipe', 'Gazpacho recipe', 'Fish Bisque recipe',
     ]);
 
     fireEvent.change(equipment, { target: { value: 'eq1' } });
@@ -474,8 +497,12 @@ describe('CookbookPanel', () => {
     expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
       'Toasted Bread recipe', 'Cheese Toast recipe',
     ]);
+    fireEvent.change(equipment, { target: { value: 'eq3' } });
+    expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
+      'Crispy Fries recipe', 'Shoestring Fries recipe', 'Fried Chicken recipe',
+    ]);
     fireEvent.change(equipment, { target: { value: 'all' } });
-    expect(screen.getAllByRole('article')).toHaveLength(9);
+    expect(screen.getAllByRole('article')).toHaveLength(10);
     expect(dispatch).not.toHaveBeenCalled();
   });
 

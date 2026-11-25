@@ -161,7 +161,8 @@ describe('cookbook discovery and mastery', () => {
 
   it.each([
     ['toast', 0], ['cheese-toast', 75], ['roast-vegetables', 150], ['baked-eggs', 175],
-    ['baked-potato', 250], ['fries', 100], ['fried-chicken', 250], ['gazpacho', 125], ['fish-bisque', 225],
+    ['baked-potato', 250], ['fries', 100], ['shoestring-fries', 100], ['fried-chicken', 250],
+    ['gazpacho', 125], ['fish-bisque', 225],
   ])('uses the canonical purchase cost for %s', (cookbookId, purchaseCost) => {
     const state = fixture();
     state.cookbook = {
@@ -170,7 +171,8 @@ describe('cookbook discovery and mastery', () => {
         [cookbookId]: { ...state.cookbook.entries[cookbookId], discovered: true } },
     };
     const recipe = { toast: 'eq1', 'cheese-toast': 'eq1', 'roast-vegetables': 'eq2', 'baked-eggs': 'eq2',
-      'baked-potato': 'eq2', fries: 'eq3', 'fried-chicken': 'eq3', gazpacho: 'eq4', 'fish-bisque': 'eq4' }[cookbookId];
+      'baked-potato': 'eq2', fries: 'eq3', 'shoestring-fries': 'eq3', 'fried-chicken': 'eq3',
+      gazpacho: 'eq4', 'fish-bisque': 'eq4' }[cookbookId];
     state.equipment = [...state.equipment, ...['eq1', 'eq2', 'eq3', 'eq4']
       .filter(id => id === recipe && !state.equipment.some(item => item.id === id))
       .map(id => ({ id, owned: true }))];
@@ -263,7 +265,7 @@ describe('Blender recipe', () => {
   it('constructs schema 3 with undiscovered default Oven and Blender recipe entries', () => {
     const cookbook = createCookbookState(3);
     expect(cookbook).toMatchObject({ schemaVersion: 3, lastAppliedPaidVisitSequence: 3 });
-    expect(Object.keys(cookbook.entries)).toHaveLength(9);
+    expect(Object.keys(cookbook.entries)).toHaveLength(10);
     expect(cookbook.entries.gazpacho).toEqual({ discovered: false, owned: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Gazpacho', price: 16, quality: 1 } });
     expect(cookbook.entries['fish-bisque']).toEqual({ discovered: false, owned: false, paidPortions: 0, perk: null,
