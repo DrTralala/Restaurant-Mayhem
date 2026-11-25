@@ -82,6 +82,8 @@ describe('migrateLegacyCookbook', () => {
       menuSettings: { name: 'Fish Bisque', price: 20, quality: 1 } });
     expect(migrated.cookbook.entries['baked-eggs']).toEqual({ discovered: false, owned: false, paidPortions: 0, perk: null,
       menuSettings: { name: 'Baked Eggs', price: 15, quality: 1 } });
+    expect(migrated.cookbook.entries['cinnamon-toast']).toEqual({ discovered: false, owned: false,
+      paidPortions: 0, perk: null, menuSettings: { name: 'Cinnamon Toast', price: 18, quality: 1 } });
     expect(raw.cookbook.schemaVersion).toBe(1);
     expect(raw.cookbook.entries).not.toHaveProperty('gazpacho');
     expect(migrated.other).toBe(raw.other);
@@ -124,7 +126,7 @@ describe('migrateLegacyCookbook', () => {
   });
 });
 
-describe('legacy cookbook rejection at the v11 persistence boundary', () => {
+describe('legacy cookbook rejection at the previous-version persistence boundary', () => {
   it('rejects a previous-version save without modifying or deleting it', () => {
     const raw = legacySave({ eq4Owned: true });
     const serialized = JSON.stringify(raw);
@@ -160,10 +162,10 @@ describe('legacy cookbook rejection at the v11 persistence boundary', () => {
 });
 
 describe('cookbook catalogue save-version boundary', () => {
-  it('classifies a prior v12 nine-recipe save as incompatible, not invalid', () => {
+  it('classifies a prior v13 ten-recipe save as incompatible, not invalid', () => {
     const raw = createInitialState();
-    raw.version = 12;
-    delete raw.cookbook.entries['shoestring-fries'];
+    raw.version = 13;
+    delete raw.cookbook.entries['cinnamon-toast'];
     const serialized = JSON.stringify(raw);
     localStorage.setItem('restaurant-sim-save', serialized);
     vi.spyOn(console, 'warn').mockImplementation(() => {});

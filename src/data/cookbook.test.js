@@ -7,6 +7,7 @@ describe('authored catalogue', () => {
     expect(COOKBOOK_RECIPES.map(({ id, purchaseCost, price }) => [id, purchaseCost, price])).toEqual([
       ['toast', 0, 12],
       ['cheese-toast', 75, 14],
+      ['cinnamon-toast', 150, 18],
       ['roast-vegetables', 150, 18],
       ['baked-eggs', 175, 15],
       ['baked-potato', 250, 22],
@@ -18,11 +19,12 @@ describe('authored catalogue', () => {
     ]);
   });
 
-  it('provides the ten deterministic equipment and discovery choices', () => {
+  it('provides the eleven deterministic equipment and discovery choices', () => {
     expect(COOKBOOK_RECIPES.map(({ id, base, method, requiredEquipmentId, prepTime, popularity, price }) =>
       [id, base, method, requiredEquipmentId, prepTime, popularity, price])).toEqual([
       ['toast', 'Bread', 'Toasted', 'eq1', 60, 50, 12],
       ['cheese-toast', 'Cheese', 'Toasted', 'eq1', 90, 65, 14],
+      ['cinnamon-toast', 'Bread', 'Toasted', 'eq1', 120, 80, 18],
       ['roast-vegetables', 'Vegetables', 'Roasted', 'eq2', 150, 70, 18],
       ['baked-eggs', 'Eggs', 'Baked', 'eq2', 120, 60, 15],
       ['baked-potato', 'Potato', 'Baked', 'eq2', 210, 82, 22],
@@ -44,6 +46,11 @@ describe('authored catalogue', () => {
       price: 8, purchaseCost: 100, quality: 1, cuisine: 'generic', requirements: [
         { type: 'equipment', equipmentId: 'eq3' },
         { type: 'paidPortions', cookbookId: 'fries', count: 3 },
+      ] });
+    expect(getCookbookRecipe('cinnamon-toast')).toMatchObject({ name: 'Cinnamon Toast', base: 'Bread',
+      method: 'Toasted', requiredEquipmentId: 'eq1', prepTime: 120, popularity: 80,
+      price: 18, purchaseCost: 150, quality: 1, cuisine: 'generic', requirements: [
+        { type: 'paidPortions', cookbookId: 'cheese-toast', count: 3 },
       ] });
     expect(getCookbookRecipe('baked-eggs')).toMatchObject({ name: 'Baked Eggs', base: 'Eggs',
       method: 'Baked', requiredEquipmentId: 'eq2', prepTime: 120, popularity: 60,

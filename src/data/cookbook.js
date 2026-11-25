@@ -8,6 +8,8 @@ export const COOKBOOK_RECIPES = Object.freeze([
     prepTime: 60, popularity: 50, price: 12, purchaseCost: 0, requirements: [] },
   { id: 'cheese-toast', name: 'Cheese Toast', base: 'Cheese', method: 'Toasted', requiredEquipmentId: 'eq1',
     prepTime: 90, popularity: 65, price: 14, purchaseCost: 75, requirements: [portions('toast', 3)] },
+  { id: 'cinnamon-toast', name: 'Cinnamon Toast', base: 'Bread', method: 'Toasted', requiredEquipmentId: 'eq1',
+    prepTime: 120, popularity: 80, price: 18, purchaseCost: 150, requirements: [portions('cheese-toast', 3)] },
   { id: 'roast-vegetables', name: 'Roast Vegetables', base: 'Vegetables', method: 'Roasted', requiredEquipmentId: 'eq2',
     prepTime: 150, popularity: 70, price: 18, purchaseCost: 150, requirements: [equipment('eq2')] },
   { id: 'baked-eggs', name: 'Baked Eggs', base: 'Eggs', method: 'Baked', requiredEquipmentId: 'eq2',

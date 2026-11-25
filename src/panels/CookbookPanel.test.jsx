@@ -57,9 +57,9 @@ describe('CookbookPanel', () => {
     useDispatch.mockReturnValue(dispatch);
   });
 
-  it('shows all ten named recipes, numeric locked requirements and starter progress', () => {
+  it('shows all eleven named recipes, numeric locked requirements and starter progress', () => {
     render(<CookbookPanel onClose={vi.fn()} />);
-    expect(screen.getAllByRole('article')).toHaveLength(10);
+    expect(screen.getAllByRole('article')).toHaveLength(11);
     const toast = within(screen.getByRole('article', { name: 'Toasted Bread recipe' }));
     expect(toast.getByText('On menu')).toBeInTheDocument();
     expect(toast.getByText('Paid portions: 0/15')).toBeInTheDocument();
@@ -68,6 +68,9 @@ describe('CookbookPanel', () => {
     const cheese = within(screen.getByRole('article', { name: 'Cheese Toast recipe' }));
     expect(cheese.getByText('Toasted Bread paid portions: 0/3')).toBeInTheDocument();
     expect(cheese.getByRole('button', { name: 'Add Cheese Toast to menu' })).toBeDisabled();
+    const cinnamon = within(screen.getByRole('article', { name: 'Cinnamon Toast recipe' }));
+    expect(cinnamon.getByText('Cheese Toast paid portions: 0/3')).toBeInTheDocument();
+    expect(cinnamon.getByRole('button', { name: 'Add Cinnamon Toast to menu' })).toBeDisabled();
     const potato = within(screen.getByRole('article', { name: 'Baked Potato recipe' }));
     expect(potato.getByText('Own Oven: 0/1')).toBeInTheDocument();
     expect(potato.getByText('Roast Vegetables paid portions: 0/5')).toBeInTheDocument();
@@ -346,7 +349,7 @@ describe('CookbookPanel', () => {
     expect(all).toHaveAttribute('aria-pressed', 'true');
     expect(ready).toHaveAttribute('aria-pressed', 'false');
     expect(within(group).getByText('1 recipes have ready actions.')).toBeInTheDocument();
-    expect(screen.getAllByRole('article')).toHaveLength(10);
+    expect(screen.getAllByRole('article')).toHaveLength(11);
     fireEvent.click(ready);
     expect(all).toHaveAttribute('aria-pressed', 'false');
     expect(ready).toHaveAttribute('aria-pressed', 'true');
@@ -355,7 +358,7 @@ describe('CookbookPanel', () => {
     fireEvent.click(all);
     expect(all).toHaveAttribute('aria-pressed', 'true');
     expect(ready).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getAllByRole('article')).toHaveLength(10);
+    expect(screen.getAllByRole('article')).toHaveLength(11);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -413,8 +416,8 @@ describe('CookbookPanel', () => {
   it('computes each recipe status exactly once per render', () => {
     getCookbookEntryStatus.mockClear();
     render(<CookbookPanel onClose={vi.fn()} />);
-    expect(getCookbookEntryStatus).toHaveBeenCalledTimes(10);
-    expect(new Set(getCookbookEntryStatus.mock.calls.map(([, cookbookId]) => cookbookId)).size).toBe(10);
+    expect(getCookbookEntryStatus).toHaveBeenCalledTimes(11);
+    expect(new Set(getCookbookEntryStatus.mock.calls.map(([, cookbookId]) => cookbookId)).size).toBe(11);
   });
 
   it('shows the empty ready message when no recipe has a ready action', () => {
@@ -463,13 +466,13 @@ describe('CookbookPanel', () => {
       'All equipment', 'Toaster', 'Oven', 'Fryer', 'Blender',
     ]);
     expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
-      'Toasted Bread recipe', 'Cheese Toast recipe', 'Roast Vegetables recipe', 'Baked Eggs recipe', 'Baked Potato recipe',
+      'Toasted Bread recipe', 'Cheese Toast recipe', 'Cinnamon Toast recipe', 'Roast Vegetables recipe', 'Baked Eggs recipe', 'Baked Potato recipe',
       'Crispy Fries recipe', 'Shoestring Fries recipe', 'Fried Chicken recipe', 'Gazpacho recipe', 'Fish Bisque recipe',
     ]);
 
     fireEvent.change(equipment, { target: { value: 'eq1' } });
     expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
-      'Toasted Bread recipe', 'Cheese Toast recipe',
+      'Toasted Bread recipe', 'Cheese Toast recipe', 'Cinnamon Toast recipe',
     ]);
     fireEvent.change(equipment, { target: { value: 'eq2' } });
     expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
@@ -495,14 +498,14 @@ describe('CookbookPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'All' }));
     expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
-      'Toasted Bread recipe', 'Cheese Toast recipe',
+      'Toasted Bread recipe', 'Cheese Toast recipe', 'Cinnamon Toast recipe',
     ]);
     fireEvent.change(equipment, { target: { value: 'eq3' } });
     expect(screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))).toEqual([
       'Crispy Fries recipe', 'Shoestring Fries recipe', 'Fried Chicken recipe',
     ]);
     fireEvent.change(equipment, { target: { value: 'all' } });
-    expect(screen.getAllByRole('article')).toHaveLength(10);
+    expect(screen.getAllByRole('article')).toHaveLength(11);
     expect(dispatch).not.toHaveBeenCalled();
   });
 

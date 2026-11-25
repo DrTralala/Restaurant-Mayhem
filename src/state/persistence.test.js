@@ -1983,15 +1983,15 @@ describe('queue slot lease persistence across both transports', () => {
   });
 });
 
-describe('version thirteen lifecycle save validation', () => {
+describe('version fourteen lifecycle save validation', () => {
   function currentSave(overrides = {}) {
     const fresh = createInitialState();
     return { ...fresh, ...overrides, version: SAVE_VERSION };
   }
 
   it('increments the shared save version exactly once from the previous format', () => {
-    expect(SAVE_VERSION).toBe(13);
-    expect(createInitialState().version).toBe(13);
+    expect(SAVE_VERSION).toBe(14);
+    expect(createInitialState().version).toBe(14);
   });
 
   it('rejects an old autosave without deleting the evidence', () => {
@@ -2002,7 +2002,7 @@ describe('version thirteen lifecycle save validation', () => {
     expect(localStorage.getItem('restaurant-sim-save')).toBe(old);
   });
 
-  it.each([12, 14])('classifies a root version mismatch (%s) as incompatible without changing storage', version => {
+  it.each([13, 15])('classifies a root version mismatch (%s) as incompatible without changing storage', version => {
     const serialized = JSON.stringify({ ...createInitialState(), version });
     localStorage.setItem('restaurant-sim-save', serialized);
 

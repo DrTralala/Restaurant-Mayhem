@@ -5,6 +5,7 @@ import { clampDishPrice, getDishPricing, getDishValueAcceptance } from './dishPr
 const recipeBasePrices = [
   ['toast', 12],
   ['cheese-toast', 14],
+  ['cinnamon-toast', 18],
   ['roast-vegetables', 18],
   ['baked-eggs', 15],
   ['baked-potato', 22],
@@ -16,7 +17,7 @@ const recipeBasePrices = [
 ];
 
 describe('canonical cookbook dish pricing', () => {
-  it.each(recipeBasePrices)('derives all ten quality bounds for %s', (cookbookId, basePrice) => {
+  it.each(recipeBasePrices)('derives all eleven quality bounds for %s', (cookbookId, basePrice) => {
     let previousMaximum = 0;
     for (let quality = 1; quality <= 10; quality += 1) {
       const numerator = basePrice * (100 + 8 * (quality - 1));

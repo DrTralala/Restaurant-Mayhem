@@ -105,6 +105,28 @@ it('Baked Eggs/Roast Vegetables at Q1 reference prices exposes rusher and influe
     .toBeGreaterThan(60 * resolved['roast-vegetables'].price / resolved['roast-vegetables'].prepTime);
 });
 
+it('Cinnamon Toast reverses its matched-price choice-weight niche against Cheese Toast', () => {
+  const state = canonicalState('eq1', ['cheese-toast', 'cinnamon-toast']);
+  expect(state.cookbook.entries['cinnamon-toast']).toBeDefined();
+  const matchedPrice = 14;
+  for (const cookbookId of ['cheese-toast', 'cinnamon-toast']) {
+    state.cookbook.entries[cookbookId].menuSettings.price = matchedPrice;
+  }
+  state.dishes = state.dishes.map(dish => ({ ...dish,
+    ...(dish.cookbookId === 'cheese-toast' || dish.cookbookId === 'cinnamon-toast' ? { price: matchedPrice } : {}),
+  }));
+  validateCookbookState(state);
+
+  const cheese = getResolvedDish(state, 'cookbook:cheese-toast');
+  const cinnamon = getResolvedDish(state, 'cookbook:cinnamon-toast');
+  expect(cinnamon).toMatchObject({ price: cheese.price, quality: cheese.quality, prepTime: 120, popularity: 80 });
+  expect(cinnamon.prepTime).toBeGreaterThan(cheese.prepTime);
+  expect(basketWeight(state, 'cinnamon-toast', 'influencer'))
+    .toBeGreaterThan(basketWeight(state, 'cheese-toast', 'influencer'));
+  expect(basketWeight(state, 'cinnamon-toast', 'rusher'))
+    .toBeLessThan(basketWeight(state, 'cheese-toast', 'rusher'));
+});
+
 it('Baked Eggs alone is affordable among canonical Oven recipes at budgets $15–17', () => {
   const state = canonicalState('eq2', ['baked-eggs', 'roast-vegetables', 'baked-potato']);
   for (const spendingBudget of [15, 16, 17]) {
