@@ -144,6 +144,40 @@ describe('offers and immutable acceptance', () => {
     expect(state.chairs.length).toBeGreaterThanOrEqual(2);
     expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain('no_suitable_table');
   });
+
+  it('advises on table minimums separately from physical fit and clears the advice when reset', () => {
+    const initial = createInitialState();
+    const table = { ...initial.tables.find(candidate => candidate.id === 't3'), minPartySize: 3 };
+    const state = {
+      ...initial,
+      tables: [table],
+      chairs: initial.chairs.filter(chair => chair.tableId === table.id),
+    };
+
+    const restricted = getServiceContractOffer(state, 'office-lunch');
+    expect(restricted.canAccept).toBe(true);
+    expect(restricted.warnings).toEqual(['below_minimum_party_size']);
+    expect(restricted.belowMinimumPartySizes).toEqual([2]);
+
+    const { minPartySize: _minPartySize, ...unrestrictedTable } = table;
+    const unrestricted = getServiceContractOffer({ ...state, tables: [unrestrictedTable] }, 'office-lunch');
+    expect(unrestricted.warnings).toEqual([]);
+    expect(unrestricted.belowMinimumPartySizes).toEqual([]);
+  });
+
+  it('keeps minimum advice out when the layout is physically undersized', () => {
+    const initial = createInitialState();
+    const table = { ...initial.tables.find(candidate => candidate.id === 't3'), seats: 1, minPartySize: 3 };
+    const state = {
+      ...initial,
+      tables: [table],
+      chairs: initial.chairs.filter(chair => chair.tableId === table.id).slice(0, 1),
+    };
+
+    const offer = getServiceContractOffer(state, 'office-lunch');
+    expect(offer.warnings).toEqual(['no_suitable_table']);
+    expect(offer.belowMinimumPartySizes).toEqual([]);
+  });
 });
 
 describe('kitchen-aware readiness advice', () => {

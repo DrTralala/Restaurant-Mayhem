@@ -40,6 +40,54 @@ function waitingParties(count, patience = 9000) {
 }
 
 describe('real scheduled logical admission', () => {
+  it('seats same-sized walk-in and booked parties alike under a table minimum', () => {
+    const fresh = createInitialState();
+    const acceptedState = accepted('office-lunch', fresh);
+    const booking = bookingFor(acceptedState);
+    const table = { ...fresh.tables.find(candidate => candidate.id === 't3'), minPartySize: 3 };
+    const chairs = fresh.chairs.filter(chair => chair.tableId === table.id);
+    const due = {
+      ...acceptedState,
+      restaurant: { ...acceptedState.restaurant, gameTime: booking.arrivalAt },
+      tables: [table],
+      chairs,
+    };
+    const booked = customers.admitScheduledServiceParty(due, booking);
+    expect(booked.admitted).toBe(true);
+
+    const walkInParty = { partyId: 'walk-in-pair', members: Array.from({ length: 2 }, (_, index) => ({
+      id: `walk-in-${index + 1}`, partyId: 'walk-in-pair', partyType: 'couple', partySize: 2,
+      archetype: 'regular', state: 'queued', queuePatience: 10000, queuePatienceMax: 10000,
+      patience: 10000, patienceMax: 10000, happiness: 80,
+    })) };
+    const walkIn = { ...due, serviceContracts: fresh.serviceContracts, queue: [walkInParty] };
+    const layoutFor = state => ({ ...state, staff: [], tables: [table], chairs });
+    const resultSummary = state => ({
+      waitingPartySizes: state.queue.map(party => party.members.length),
+      seatedPartySizes: [...new Set(state.customers.map(customer => customer.partyId))]
+        .map(partyId => state.customers.filter(customer => customer.partyId === partyId).length),
+      tableStatus: state.tables[0].status,
+    });
+
+    const bookedBlocked = prepareSelfSeating(layoutFor(booked.state));
+    const walkInBlocked = prepareSelfSeating(layoutFor(walkIn));
+    expect(resultSummary(bookedBlocked)).toEqual(resultSummary(walkInBlocked));
+    expect(resultSummary(bookedBlocked)).toEqual({
+      waitingPartySizes: [2], seatedPartySizes: [], tableStatus: 'empty',
+    });
+
+    const { minPartySize: _minPartySize, ...unrestrictedTable } = table;
+    const clearMinimum = state => prepareSelfSeating({
+      ...state, tables: [unrestrictedTable], chairs,
+    });
+    const bookedCleared = clearMinimum(bookedBlocked);
+    const walkInCleared = clearMinimum(walkInBlocked);
+    expect(resultSummary(bookedCleared)).toEqual(resultSummary(walkInCleared));
+    expect(resultSummary(bookedCleared)).toEqual({
+      waitingPartySizes: [], seatedPartySizes: [2], tableStatus: 'reserved',
+    });
+  });
+
   it('uses best-fit seating for a scheduled contract party after it joins the shared queue', () => {
     const fresh = createInitialState();
     const acceptedState = accepted('office-lunch', fresh);

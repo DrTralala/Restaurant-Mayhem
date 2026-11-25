@@ -33,6 +33,7 @@ const warningLabels = {
   no_preparable_affordable_dish: 'No affordable dish has a compatible kitchen station with owned equipment.',
   some_unpreparable_affordable_dishes: 'Some affordable dishes lack a compatible kitchen station with owned equipment. Guests may still order them.',
   no_suitable_table: 'No placed table has enough associated chairs for the largest party.',
+  below_minimum_party_size: 'Current table minimums exclude parties that physically fit:',
   no_cook: 'No cook is employed.', no_waiter: 'No waiter is employed.',
   no_staffed_checkout: 'No checkout has an assigned waiter.',
   no_scheduled_cook: 'Under current schedules, no cook is scheduled to Work at one or more arrivals.',
@@ -254,7 +255,8 @@ export default function ServiceContractsPanel() {
     </section>}
 
     <h4 ref={offersHeadingRef} tabIndex={-1} style={{ ...TYPOGRAPHY.control, color: '#bbb', margin: '16px 0 10px' }}>Contract offers</h4>
-    {offers.map(({ template, preview, terms, canAccept, blockedReason, warnings, unpreparableDishes, tier, preparationExpectations }) => <section key={template.id}
+    {offers.map(({ template, preview, terms, canAccept, blockedReason, warnings, unpreparableDishes,
+      belowMinimumPartySizes, tier, preparationExpectations }) => <section key={template.id}
       aria-label={`${template.title} offer`} style={cardStyle}>
       <h4 ref={node => {
         if (node) offerHeadingRefs.current.set(template.id, node);
@@ -288,6 +290,9 @@ export default function ServiceContractsPanel() {
       </details>
       {warnings.length > 0 && <div style={{ ...secondaryStyle, borderLeft: '2px solid #f0a500', paddingLeft: 10 }}><strong>Check before accepting:</strong>
         <ul style={{ paddingLeft: 20 }}>{warnings.map(warning => <li key={warning}>{warningLabels[warning]}</li>)}</ul>
+        {belowMinimumPartySizes.length > 0 && <ul style={{ paddingLeft: 20 }}>
+          {belowMinimumPartySizes.map(size => <li key={size}>{size} {size === 1 ? 'guest' : 'guests'}</li>)}
+        </ul>}
         {unpreparableDishes.length > 0 && <>
           <ul style={{ paddingLeft: 20 }}>{unpreparableDishes.map(dish => <li key={dish.id}>
             {dish.name} — {dish.requiredEquipmentId == null ? 'needs a kitchen station.'

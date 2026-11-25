@@ -73,6 +73,29 @@ describe('ServiceContractsPanel', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'ACCEPT_SERVICE_CONTRACT', templateId: 'office-lunch' });
   });
 
+  it('distinguishes a minimum conflict from physical shortage and never blocks acceptance', () => {
+    const table = { ...state.tables.find(candidate => candidate.id === 't3'), minPartySize: 3 };
+    state = { ...state, tables: [table], chairs: state.chairs.filter(chair => chair.tableId === table.id) };
+    const { rerender } = render(<ServiceContractsPanel />);
+    const card = () => screen.getByRole('region', { name: 'Office lunch offer' });
+
+    expect(within(card()).getByText(/table minimums exclude parties that physically fit/i)).toBeVisible();
+    expect(within(card()).getByText('2 guests')).toBeVisible();
+    expect(within(card()).queryByText(/No placed table has enough associated chairs/)).not.toBeInTheDocument();
+
+    const { minPartySize: _minPartySize, ...unrestrictedTable } = table;
+    state = { ...state, tables: [unrestrictedTable] };
+    rerender(<ServiceContractsPanel />);
+    expect(within(card()).queryByText(/table minimums exclude parties/i)).not.toBeInTheDocument();
+    expect(within(card()).queryByText('2 guests')).not.toBeInTheDocument();
+
+    fireEvent.click(within(card()).getByRole('button', { name: 'Review Office lunch' }));
+    const accept = within(card()).getByRole('button', { name: 'Accept and start preparation' });
+    expect(accept).toBeEnabled();
+    fireEvent.click(accept);
+    expect(dispatch).toHaveBeenCalledWith({ type: 'ACCEPT_SERVICE_CONTRACT', templateId: 'office-lunch' });
+  });
+
   it('updates partial equipment advice during review after a compatible station is placed', () => {
     state = withOwnedAuthoredDishes(state, [
       { ...state.dishes[0], cookbookId: 'toast' },

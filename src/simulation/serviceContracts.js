@@ -7,7 +7,7 @@ import { clampReputation } from './balance';
 import { getServiceContractTerms, getServiceContractSettlement } from './serviceContractFinance';
 import { getResolvedDish } from './cookbook';
 import { isDishCompatibleWithStation } from './cookingBatches';
-import { physicalTableCapacity } from './tableFit';
+import { getPartySizeFit } from './tableFit';
 
 const nonnegative = value => Number.isFinite(value) && value >= 0;
 const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
@@ -44,10 +44,14 @@ function readinessAdvice(state, template, preview) {
   if (!affordableDishes.length) warnings.push('no_affordable_dish');
   else if (unpreparableDishes.length) warnings.push(unpreparableDishes.length === affordableDishes.length
     ? 'no_preparable_affordable_dish' : 'some_unpreparable_affordable_dishes');
-  const largestParty = Math.max(...template.parties.map(party => party.size));
-  if (!(state.tables || []).some(table => physicalTableCapacity(table, state.chairs) >= largestParty)) {
+  const partySizes = [...new Set(template.parties.map(party => party.size))];
+  const fitBySize = new Map(partySizes.map(size => [size, getPartySizeFit(state, size)]));
+  const largestParty = Math.max(...partySizes);
+  if (fitBySize.get(largestParty) === 'no-fit') {
     warnings.push('no_suitable_table');
   }
+  const belowMinimumPartySizes = partySizes.filter(size => fitBySize.get(size) === 'below-minimum');
+  if (belowMinimumPartySizes.length > 0) warnings.push('below_minimum_party_size');
   const staff = state.staff || [];
   if (!staff.some(person => person.role === 'cook')) warnings.push('no_cook');
   if (!staff.some(person => person.role === 'waiter')) warnings.push('no_waiter');
@@ -68,7 +72,7 @@ function readinessAdvice(state, template, preview) {
   if (uncovered(staff.filter(person => person.role === 'cook'))) warnings.push('no_scheduled_cook');
   if (uncovered(staff.filter(person => person.role === 'waiter'))) warnings.push('no_scheduled_waiter');
   if (uncovered(assignedCheckout)) warnings.push('no_scheduled_checkout');
-  return { warnings, unpreparableDishes };
+  return { warnings, unpreparableDishes, belowMinimumPartySizes };
 }
 
 export function getServiceContractOffer(state, templateId) {
@@ -88,7 +92,8 @@ export function getServiceContractOffer(state, templateId) {
   else if (branch.lastAcceptedDayByTemplate[templateId] === day) blockedReason = 'used_today';
   return { template, terms: getServiceContractTerms(templateId, SERVICE_CONTRACT_RULES_VERSION),
     canAccept: blockedReason === null, blockedReason,
-    ...(preview ? readinessAdvice(state, template, preview) : { warnings: [], unpreparableDishes: [] }), preview };
+    ...(preview ? readinessAdvice(state, template, preview)
+      : { warnings: [], unpreparableDishes: [], belowMinimumPartySizes: [] }), preview };
 }
 
 function createRoster(template, instanceId, serviceStartAt) {
