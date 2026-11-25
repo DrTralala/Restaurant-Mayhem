@@ -16,6 +16,7 @@ export function createInitialState() {
     serviceContracts: createServiceContractsState(),
     paidVisitSequence: 0,
     menuSales: { day: 1, dishes: [], drinks: [] },
+    menuRefusals: { day: 1, dishes: [] },
     careerRun: null,
     restaurant: {
       name: 'My Restaurant',

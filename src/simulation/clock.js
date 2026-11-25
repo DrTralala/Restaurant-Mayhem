@@ -57,7 +57,10 @@ export function advanceClock(state, dt) {
     dailyHistory: dailyHistory.length <= 30 ? dailyHistory : dailyHistory.slice(-30),
     notifications,
     ...(crossedMidnights > 0
-      ? { menuSales: { day: newDay, dishes: [], drinks: [] } }
+      ? {
+          menuSales: { day: newDay, dishes: [], drinks: [] },
+          menuRefusals: { day: newDay, dishes: [] },
+        }
       : {}),
   };
 }

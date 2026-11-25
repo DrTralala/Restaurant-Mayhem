@@ -59,6 +59,7 @@ describe('service item orders', () => {
       expect.objectContaining({ kind: 'dish', menuItemId: 'toast', customerId: 'c1' }),
       expect.objectContaining({ kind: 'drink', menuItemId: 'water', customerId: 'c1' }),
     ]);
+    expect(result.declinedDish).toBeUndefined();
     expect(result.customer).toMatchObject({
       foodOrderedAt: 42,
       foodPatienceBudget: expect.any(Number),
@@ -85,6 +86,7 @@ describe('service item orders', () => {
       dishId: null, drinkId: null, orderSubtotal: null,
     });
     expect(result.serviceItems).toEqual(expensiveState.serviceItems);
+    expect(result).not.toHaveProperty('declinedDish');
     expect(result.customer).toMatchObject({
       foodOrderedAt: null, foodPatienceBudget: null, foodDeadlineAt: null,
       foodOutcome: null, foodCancelledAt: null, cancelledServiceItemIds: [],
@@ -113,7 +115,23 @@ describe('service item orders', () => {
     expect(result.customer).not.toHaveProperty('dishOrderSnapshot');
     expect(result.customer).not.toHaveProperty('tipAmount');
     expect(result.serviceItems).toEqual(state.serviceItems);
+    expect(result.declinedDish).toEqual({ dishId: 'starter-toast', price: 15 });
     expect(rolls).toEqual([]);
+  });
+
+  it('does not carry a declined dish out of a contract order', () => {
+    const initial = createInitialState();
+    const state = reduceCookbookAction(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price: 15 },
+    });
+    const result = createCustomerOrder(state, {
+      id: 'contract-customer', partyId: 'p1', tableId: 't1', state: 'seated',
+      archetype: 'regular', spendingTier: 'budget', spendingBudget: 18,
+      serviceContractId: 'contract-1',
+    }, () => 0.9);
+
+    expect(result.customer).toMatchObject({ menuOutcome: 'ordered', dishId: 'starter-toast' });
+    expect(result).not.toHaveProperty('declinedDish');
   });
 
   it('does not start a food timer for a valid drinks-only order', () => {

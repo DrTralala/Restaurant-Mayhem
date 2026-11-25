@@ -250,7 +250,12 @@ export function chooseAffordableBasket(state, customer, random = Math.random) {
   const acceptance = contractBypass ? 1
     : getDishValueAcceptance(basket?.dish, profiledCustomer?.spendingTier);
   if (acceptance < 1 && boundedRoll(random) >= acceptance) {
-    return { customer: profiledCustomer, basket: null, menuOutcome: 'poor_value' };
+    return {
+      customer: profiledCustomer,
+      basket: null,
+      menuOutcome: 'poor_value',
+      declinedDish: { dishId: basket.dish.id, price: basket.dish.price },
+    };
   }
   return { customer: profiledCustomer, basket, menuOutcome: 'ordered' };
 }

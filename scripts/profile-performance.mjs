@@ -556,11 +556,16 @@ function gameplayDigest(projection) {
 }
 
 export function gameplayProjection(snapshot, state) {
-  // menuSales is observational session telemetry for the menu panel, not
-  // gameplay authority. An absent highTopCounters branch and an empty one also
-  // describe the same world; populated counter records remain in the projection.
+  // Root menu sales/refusals are observational panel telemetry, and root
+  // version is save-schema metadata. An absent highTopCounters branch and an
+  // empty one also describe the same world; populated records remain projected.
   // All other snapshot fields, monetary facts and identities still participate.
-  const { menuSales: _menuSales, ...gameplaySnapshot } = snapshot;
+  const {
+    menuSales: _menuSales,
+    menuRefusals: _menuRefusals,
+    version: _version,
+    ...gameplaySnapshot
+  } = snapshot;
   if (Array.isArray(gameplaySnapshot.highTopCounters)
     && gameplaySnapshot.highTopCounters.length === 0) {
     delete gameplaySnapshot.highTopCounters;

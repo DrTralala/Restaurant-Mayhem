@@ -207,6 +207,10 @@ describe('advanceClock', () => {
         dishes: [{ key: 'starter-toast', count: 4 }],
         drinks: [{ key: 'water', count: 2 }],
       },
+      menuRefusals: {
+        day: 1,
+        dishes: [{ key: 'starter-toast', count: 3, lastPrice: 18 }],
+      },
     };
 
     const result = advanceClock(state, 1);
@@ -216,6 +220,7 @@ describe('advanceClock', () => {
       { day: 1, revenue: 200, payroll: 100, profit: 100 },
     ]);
     expect(result.menuSales).toEqual({ day: 2, dishes: [], drinks: [] });
+    expect(result.menuRefusals).toEqual({ day: 2, dishes: [] });
   });
 
   it('resets menu sales to the final day across multiple midnight crossings', () => {
@@ -229,6 +234,10 @@ describe('advanceClock', () => {
         dishes: [{ key: 'starter-toast', count: 7 }],
         drinks: [],
       },
+      menuRefusals: {
+        day: 4,
+        dishes: [{ key: 'starter-toast', count: 2, lastPrice: 19 }],
+      },
     };
 
     const result = advanceClock(state, 86401);
@@ -239,6 +248,7 @@ describe('advanceClock', () => {
       { day: 5, revenue: 0, payroll: 100, profit: -100 },
     ]);
     expect(result.menuSales).toEqual({ day: 6, dishes: [], drinks: [] });
+    expect(result.menuRefusals).toEqual({ day: 6, dishes: [] });
   });
 
   it('preserves current menu sales when no midnight is crossed', () => {
@@ -247,12 +257,17 @@ describe('advanceClock', () => {
       dishes: [{ key: 'starter-toast', count: 4 }],
       drinks: [{ key: 'water', count: 2 }],
     };
+    const menuRefusals = {
+      day: 1,
+      dishes: [{ key: 'starter-toast', count: 3, lastPrice: 18 }],
+    };
     const state = {
       restaurant: { funds: 1000, dailyRevenue: 75, gameTime: 100, day: 1 },
       staff: [{ salary: 100 }],
       dailyHistory: [],
       notifications: [],
       menuSales,
+      menuRefusals,
     };
 
     const result = advanceClock(state, 50);
@@ -261,6 +276,7 @@ describe('advanceClock', () => {
     expect(result.dailyHistory).toEqual([]);
     expect(result.menuSales).toEqual(menuSales);
     expect(result.menuSales).toBe(menuSales);
+    expect(result.menuRefusals).toBe(menuRefusals);
   });
 
   it('deducts valid payroll once for each crossed midnight', () => {

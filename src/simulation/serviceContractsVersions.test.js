@@ -206,6 +206,7 @@ describe('service contract v1/v2 save compatibility', () => {
     const raw = createCareerInitialState({ scenarioId: 'opening-week', runId: 'legacy-cutoff' });
     raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 640800 };
     raw.menuSales = { day: 8, dishes: [], drinks: [] };
+    raw.menuRefusals = { day: 8, dishes: [] };
     raw.serviceContracts = legacyState().serviceContracts;
     const active = raw.serviceContracts.active;
     Object.assign(active, { acceptedDay: 8, acceptedAt: 636300, serviceStartAt: 637200, deadlineAt: 640800 });

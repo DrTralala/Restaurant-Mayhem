@@ -16,7 +16,7 @@ import { STAFF_WELLBEING_CONSTANTS } from './staffWellbeing';
 import * as foodPatienceDomain from './foodPatience';
 import * as wellbeingDomain from './staffWellbeing';
 import { findPreparationTarget } from './preparationPosition';
-import { createDishOrderSnapshot, getResolvedDish } from './cookbook';
+import { createDishOrderSnapshot, getResolvedDish, reduceCookbookAction } from './cookbook';
 
 const emptyState = {
   restaurant: { funds: 500, gameTime: 100, day: 1, openHour: 10, closeHour: 22, totalServed: 0, reputation: 2.0 },
@@ -1565,6 +1565,82 @@ describe('runTick', () => {
     expect(result.staff[0]).toMatchObject({ task: null, carryingServiceItemIds: [] });
     expect(result.staff[1]).toMatchObject({ carryingServiceItemIds: ['i1'] });
     expect(result.serviceItems).toEqual([item]);
+  });
+
+  function committedOrderTickState({ price = 15, guests, skill = 3 }) {
+    const initial = createInitialState();
+    const priced = reduceCookbookAction(initial, {
+      type: 'UPDATE_DISH', id: 'starter-toast', changes: { price },
+    });
+    const now = priced.restaurant.gameTime;
+    const customerIds = guests.map(guest => guest.id);
+    return {
+      ...priced,
+      tables: priced.tables.map(table => table.id === 't1'
+        ? { ...table, status: 'occupied' } : table),
+      customers: guests.map(guest => ({
+        partyId: 'p1', partySize: guests.length, state: 'seated', tableId: 't1',
+        spendingTier: 'budget', spendingBudget: 18, archetype: 'regular',
+        patience: 100, happiness: 80, dishId: null, drinkId: null,
+        ...guest,
+      })),
+      staff: [{
+        ...priced.staff.find(worker => worker.id === 'starter-waiter'),
+        skill, x: 180, y: 220,
+        task: {
+          type: 'take_order', customerId: customerIds[0],
+          ...(guests.length > 1 ? { customerIds, partyId: 'p1' } : {}),
+          tableId: 't1', startedAt: now - 60,
+          accumulatedWork: 60, lastProgressAt: now,
+        },
+      }],
+      unlockedDrinkIds: [],
+      serviceItems: [],
+      pendingPartyReviews: [],
+      partyReviewHistory: [],
+    };
+  }
+
+  it('records each poor-value guest once through the committed staff tick', () => {
+    const state = committedOrderTickState({
+      skill: 10,
+      guests: [{ id: 'c1', spendingBudget: 18 }, { id: 'c2', spendingBudget: 18 }],
+    });
+    vi.spyOn(Math, 'random').mockReturnValue(0.9);
+
+    const first = runTick(state, { gameDt: 0, movementDt: 0 });
+    const repeated = runTick(first, { gameDt: 0, movementDt: 0 });
+
+    expect(first.customers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'c1', menuOutcome: 'poor_value' }),
+      expect.objectContaining({ id: 'c2', menuOutcome: 'poor_value' }),
+    ]));
+    expect(first.menuRefusals).toEqual({
+      day: 1, dishes: [{ key: 'starter-toast', count: 2, lastPrice: 15 }],
+    });
+    expect(first.serviceItems).toEqual([]);
+    expect(first.completedCustomers).toEqual([]);
+    expect(first.restaurant.totalServed).toBe(0);
+    expect(first.restaurant.funds).toBe(state.restaurant.funds);
+    expect(first.restaurant.dailyRevenue).toBe(state.restaurant.dailyRevenue);
+    expect(repeated.menuRefusals).toEqual(first.menuRefusals);
+  });
+
+  it.each([
+    ['affordable walk-in', 12, 18, undefined, 'ordered'],
+    ['unaffordable walk-in', 15, 6, undefined, 'unaffordable'],
+    ['contract bypass', 15, 18, 'contract-1', 'ordered'],
+  ])('does not record a refusal for %s order', (_label, price, budget, serviceContractId, menuOutcome) => {
+    const state = committedOrderTickState({
+      price,
+      guests: [{ id: 'c1', spendingBudget: budget, serviceContractId }],
+    });
+    vi.spyOn(Math, 'random').mockReturnValue(0.9);
+
+    const result = runTick(state, { gameDt: 0, movementDt: 0 });
+
+    expect(result.customers[0].menuOutcome).toBe(menuOutcome);
+    expect(result.menuRefusals).toEqual({ day: 1, dishes: [] });
   });
 
   function runServiceJourney(orderRoll) {

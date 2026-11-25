@@ -254,6 +254,41 @@ function validateMenuSales(state) {
   }
 }
 
+function validateMenuRefusals(state) {
+  if (state.version !== SAVE_VERSION) return;
+  if (!has(state, 'menuRefusals')) {
+    fail('menuRefusals', `is required in version ${SAVE_VERSION} saves`);
+  }
+  const refusals = state.menuRefusals;
+  validateObject(refusals, 'menuRefusals');
+  if (Object.keys(refusals).length !== 2 || !['day', 'dishes'].every(key => has(refusals, key))) {
+    fail('menuRefusals', 'must contain exactly day and dishes');
+  }
+  validateFinite(refusals.day, 'menuRefusals.day', { minimum: 1, integer: true });
+  if (refusals.day !== state.restaurant?.day) {
+    fail('menuRefusals.day', 'must match the current restaurant day');
+  }
+  validateArray(refusals.dishes, 'menuRefusals.dishes');
+  const dishIds = new Set((Array.isArray(state.dishes) ? state.dishes : [])
+    .map(dish => dish?.id));
+  const seen = new Set();
+  refusals.dishes.forEach((record, index) => {
+    const path = `menuRefusals.dishes[${index}]`;
+    validateObject(record, path);
+    if (Object.keys(record).length !== 3
+      || !['key', 'count', 'lastPrice'].every(key => has(record, key))) {
+      fail(path, 'must contain exactly key, count and lastPrice');
+    }
+    validateId(record.key, `${path}.key`);
+    validateFinite(record.count, `${path}.count`, { minimum: 1, integer: true });
+    if (!Number.isSafeInteger(record.count)) fail(`${path}.count`, 'must be a safe integer');
+    validateFinite(record.lastPrice, `${path}.lastPrice`, { minimum: 1, maximum: 100, integer: true });
+    if (!dishIds.has(record.key)) fail(`${path}.key`, 'must name a current dish');
+    if (seen.has(record.key)) fail('menuRefusals.dishes', `contains duplicate key ${record.key}`);
+    seen.add(record.key);
+  });
+}
+
 function validateRecordCollection(state, key) {
   if (!has(state, key)) return [];
   validateArray(state[key], key);
@@ -298,6 +333,7 @@ function validateVersionedShape(state) {
     validateArray(state[key], key);
   }
   if (!has(state, 'menuSales')) fail('menuSales', `is required in version ${SAVE_VERSION} saves`);
+  if (!has(state, 'menuRefusals')) fail('menuRefusals', `is required in version ${SAVE_VERSION} saves`);
 
   const idCollections = [
     'tables', 'chairs', 'doors', 'cashierStations', 'kitchenStations', 'washStations',
@@ -1557,6 +1593,7 @@ export function validateSavedState(state) {
   }
   validateVersionedShape(state);
   validateMenuSales(state);
+  validateMenuRefusals(state);
   validatePartyReviewRecords(state);
   if (state.version === SAVE_VERSION) validateSavedNavigationGeometry(state);
   validateRestaurant(state);

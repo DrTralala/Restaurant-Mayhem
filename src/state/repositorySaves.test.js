@@ -37,6 +37,7 @@ describe('repository saves client', () => {
     };
     await saveRepositoryState(state, fetchImpl);
     expect(body).not.toHaveProperty('movementCoordinator');
+    expect(body.menuRefusals).toEqual(initial.menuRefusals);
     const restored = hydrateState(body, createInitialState());
     expect(restored.movementCoordinator.plans instanceof Map).toBe(true);
     expect(restored.movementCoordinator.plans.size).toBe(0);

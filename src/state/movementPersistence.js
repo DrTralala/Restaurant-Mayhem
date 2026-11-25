@@ -8,6 +8,7 @@ import {
 import { hydrateSeatResidency } from '../simulation/movement/seatedDeparture';
 import { getDoors, getRestaurantWorld } from '../simulation/world';
 import { getCarriedServiceItemIds, withCarriedServiceItemIds } from '../simulation/staffInventory';
+import { normaliseMenuRefusals } from '../simulation/menuRefusals';
 import { getAmenityGeometry } from '../data/staffAmenities';
 import { clearNavigationGoal } from '../simulation/movement/navigationGoal';
 import { validateHighTopCounters } from './highTopCounterValidation';
@@ -138,6 +139,9 @@ export function movementSaveSnapshot(state) {
   const workspace = createNavigationWorkspace(state);
   return {
     ...domain,
+    ...(Object.hasOwn(state, 'menuRefusals')
+      ? { menuRefusals: normaliseMenuRefusals(state.menuRefusals, state) }
+      : {}),
     ...(Array.isArray(state.staff) ? { staff: state.staff.map(worker =>
       withoutSeatingTransition(canonicalStaff(worker))) } : {}),
     ...(Array.isArray(state.queue) ? { queue: state.queue.map(party => Array.isArray(party.members)

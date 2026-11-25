@@ -262,6 +262,7 @@ describe('affordable weighted menu selection', () => {
     });
 
     expect(result).toMatchObject({ basket: null, menuOutcome: 'poor_value' });
+    expect(result.declinedDish).toEqual({ dishId: 'starter-toast', price: 15 });
     expect(rolls).toEqual([]);
     expect(getDishValueAcceptance(state.dishes[0], 'budget')).toBeCloseTo(0.64);
   });
@@ -313,10 +314,13 @@ describe('affordable weighted menu selection', () => {
     }, [0, 0]);
 
     expect(reference.result.menuOutcome).toBe('ordered');
+    expect(reference.result.declinedDish).toBeUndefined();
     expect(reference.calls).toBe(2);
     expect(drinks.result.menuOutcome).toBe('ordered');
+    expect(drinks.result.declinedDish).toBeUndefined();
     expect(drinks.calls).toBe(2);
     expect(contract.result.menuOutcome).toBe('ordered');
+    expect(contract.result.declinedDish).toBeUndefined();
     expect(contract.calls).toBe(2);
 
     const unaffordableContract = chooseWithCount({
@@ -329,6 +333,7 @@ describe('affordable weighted menu selection', () => {
       serviceContractId: 'contract-1',
     }, []);
     expect(unaffordableContract.result).toMatchObject({ basket: null, menuOutcome: 'unaffordable' });
+    expect(unaffordableContract.result.declinedDish).toBeUndefined();
     expect(unaffordableContract.calls).toBe(0);
   });
 

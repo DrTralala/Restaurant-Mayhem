@@ -163,6 +163,44 @@ describe('profile-performance comparison', () => {
     }, state)).not.toEqual(missing);
   });
 
+  it('ignores root observational telemetry and save version but compares gameplay facts', () => {
+    const state = {};
+    const snapshot = {
+      version: 4,
+      restaurant: { funds: 600, totalServed: 3 },
+      customers: [{ id: 'customer-1', outcome: 'served' }],
+      menuSales: { day: 1, dishes: [], drinks: [] },
+      menuRefusals: { day: 1, dishes: [] },
+      cookbook: { schemaVersion: 3, lastAppliedPaidVisitSequence: 3, entries: [] },
+      notifications: [],
+    };
+    const baseline = gameplayProjection(snapshot, state);
+    const changedMetadata = gameplayProjection({
+      ...snapshot,
+      version: 5,
+      menuSales: { day: 2, dishes: [{ key: 'toast', count: 2 }], drinks: [] },
+      menuRefusals: { day: 2, dishes: [{ key: 'toast', count: 1 }] },
+    }, state);
+
+    expect(changedMetadata).toEqual(baseline);
+    expect(gameplayProjection({
+      ...snapshot,
+      restaurant: { ...snapshot.restaurant, funds: 601 },
+    }, state)).not.toEqual(baseline);
+    expect(gameplayProjection({
+      ...snapshot,
+      restaurant: { ...snapshot.restaurant, totalServed: 4 },
+    }, state)).not.toEqual(baseline);
+    expect(gameplayProjection({
+      ...snapshot,
+      customers: [{ id: 'customer-1', outcome: 'refused' }],
+    }, state)).not.toEqual(baseline);
+    expect(gameplayProjection({
+      ...snapshot,
+      cookbook: { ...snapshot.cookbook, schemaVersion: 4 },
+    }, state)).not.toEqual(baseline);
+  });
+
   it('equates an absent high-top collection with an empty one but compares placed counters', () => {
     const snapshot = { restaurant: { funds: 600 }, notifications: [] };
     const state = {};

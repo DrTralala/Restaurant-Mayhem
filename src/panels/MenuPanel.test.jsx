@@ -1132,6 +1132,78 @@ describe('MenuPanel drinks', () => {
       useGameState.mockReturnValue(pricedMenu());
     });
 
+    it('shows poor-value refusal observations only for affected dishes with singular and plural copy', () => {
+      const state = pricedMenu();
+      state.menuRefusals = {
+        day: 1,
+        dishes: [{ key: 'toast', count: 1, lastPrice: 18 }],
+      };
+      useGameState.mockReturnValue(state);
+      const view = render(<MenuPanel />);
+
+      const toastCard = () => within(screen.getByRole('article', { name: 'Toast menu item' }));
+      const toastedBreadCard = () => within(screen.getByRole('article', {
+        name: 'Toasted Bread menu item',
+      }));
+      expect(toastCard().getByText(
+        '1 guest declined for poor value today · last declined at $18.',
+      )).toBeInTheDocument();
+      expect(toastedBreadCard().queryByText(/declined for poor value today/))
+        .not.toBeInTheDocument();
+
+      useGameState.mockReturnValue({
+        ...state,
+        menuRefusals: {
+          ...state.menuRefusals,
+          dishes: [{ key: 'toast', count: 3, lastPrice: 22 }],
+        },
+      });
+      view.rerender(<MenuPanel />);
+
+      expect(toastCard().getByText(
+        '3 guests declined for poor value today · last declined at $22.',
+      )).toBeInTheDocument();
+      expect(toastedBreadCard().queryByText(/declined for poor value today/))
+        .not.toBeInTheDocument();
+    });
+
+    it('keeps the observed refusal price through price preview, cancellation and commit', () => {
+      const initial = pricedMenu();
+      const refusal = { key: 'toast', count: 1, lastPrice: 18 };
+      initial.menuRefusals = { day: 1, dishes: [refusal] };
+      const actions = [];
+      useGameState.mockImplementation(() => statefulHarness.current.state);
+      useDispatch.mockImplementation(() => statefulHarness.current.dispatch);
+      render(<StatefulMenuPanel initial={initial} actions={actions} />);
+
+      const toastCard = () => within(screen.getByRole('article', { name: 'Toast menu item' }));
+      const refusalLine = () => toastCard().getByText(
+        '1 guest declined for poor value today · last declined at $18.',
+      );
+      const price = screen.getByLabelText('Toast price');
+      expect(refusalLine()).toBeInTheDocument();
+
+      fireEvent.change(price, { target: { value: '24' } });
+      expect(screen.getByRole('group', { name: 'Price preview for Toast' }))
+        .toHaveTextContent('Draft price: $24');
+      expect(refusalLine()).toBeInTheDocument();
+      fireEvent.keyDown(price, { key: 'Escape' });
+      expect(price).toHaveValue(12);
+      expect(refusalLine()).toBeInTheDocument();
+      expect(statefulHarness.current.state.menuRefusals.dishes).toEqual([refusal]);
+
+      fireEvent.change(price, { target: { value: '14' } });
+      fireEvent.keyDown(price, { key: 'Enter' });
+
+      expect(statefulHarness.current.state.dishes.find(dish => dish.id === 'toast').price)
+        .toBe(14);
+      expect(statefulHarness.current.state.menuRefusals.dishes).toEqual([refusal]);
+      expect(refusalLine()).toBeInTheDocument();
+      expect(actions).toEqual([
+        { type: 'UPDATE_DISH', id: 'toast', changes: { price: 14 } },
+      ]);
+    });
+
     it('keeps all three menu kinds as local drafts and commits each once on Enter', () => {
       const dispatch = vi.fn();
       useDispatch.mockReturnValue(dispatch);

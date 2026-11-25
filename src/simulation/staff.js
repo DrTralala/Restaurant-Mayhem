@@ -36,6 +36,7 @@ import { selectSinkTransfer } from './sinkTransfers';
 import { releaseStaffWork } from './staffTaskLifecycle';
 import { getScheduledDuty, validateStaffSchedule } from './staffSchedules';
 import { startCustomerConsumption } from './consumption';
+import { recordMenuRefusal } from './menuRefusals';
 import { getWashStationCapacity, getWashStationOccupancy, hasWashStationCapacity } from './dishwashing';
 import { getCarriedServiceItemIds, getStaffCarryCapacity, withCarriedServiceItemIds } from './staffInventory';
 import { isStaffTaskRoleAllowed } from './taskRoles';
@@ -1445,6 +1446,7 @@ function resolveTakeOrderTask({ state, staff, customers, queue, tables, serviceI
 
   let updatedCustomers = [...customers];
   let nextServiceItems = serviceItems;
+  let nextMenuRefusals = state.menuRefusals;
   let nextPendingPartyReviews = pendingPartyReviews;
   let nextPartyReviewHistory = partyReviewHistory;
   let nextRestaurant = restaurant;
@@ -1456,6 +1458,12 @@ function resolveTakeOrderTask({ state, staff, customers, queue, tables, serviceI
       current,
     );
     nextServiceItems = ordered.serviceItems;
+    if (ordered.declinedDish) {
+      nextMenuRefusals = recordMenuRefusal({
+        ...state,
+        menuRefusals: nextMenuRefusals,
+      }, ordered.declinedDish);
+    }
     updatedCustomers = updatedCustomers.map(candidate => candidate.id === current.id
       ? ordered.customer : candidate);
     nextPendingPartyReviews = recordPartyOrderOutcome(
@@ -1492,6 +1500,7 @@ function resolveTakeOrderTask({ state, staff, customers, queue, tables, serviceI
     queue,
     tables,
     serviceItems: nextServiceItems,
+    ...(nextMenuRefusals !== undefined ? { menuRefusals: nextMenuRefusals } : {}),
     customers: updatedCustomers,
     pendingPartyReviews: nextPendingPartyReviews,
     partyReviewHistory: nextPartyReviewHistory,
@@ -3729,6 +3738,9 @@ export function resolveStaffAfterMovement(state, gameDt, statuses = new Map()) {
       if (resolved.queue) queue = resolved.queue;
       if (resolved.tables) tables = resolved.tables;
       if (resolved.serviceItems) serviceItems = resolved.serviceItems;
+      if (Object.hasOwn(resolved, 'menuRefusals')) {
+        state = { ...state, menuRefusals: resolved.menuRefusals };
+      }
       if (resolved.cookingBatches) cookingBatches = resolved.cookingBatches;
       if (resolved.completedCustomers) completedCustomers = resolved.completedCustomers;
       if (resolved.pendingPartyReviews) pendingPartyReviews = resolved.pendingPartyReviews;

@@ -37,12 +37,69 @@ function orderFixture() {
   return raw;
 }
 
-describe('strict v11 feature persistence', () => {
+describe('strict feature persistence', () => {
   it('starts a new sandbox with an empty day-1 sales branch', () => {
     const fresh = createInitialState();
     expect(fresh.menuSales).toEqual({
       day: fresh.restaurant.day, dishes: [], drinks: [],
     });
+    expect(fresh.menuRefusals).toEqual({ day: fresh.restaurant.day, dishes: [] });
+  });
+
+  it('round-trips current-day poor-value refusal counts and the last declined price', () => {
+    const raw = createInitialState();
+    raw.menuRefusals = {
+      day: raw.restaurant.day,
+      dishes: [{ key: raw.dishes[0].id, count: 2, lastPrice: 18 }],
+    };
+
+    expect(saveState(raw)).toBe(true);
+    const loaded = loadState();
+    expect(loaded.menuRefusals).toEqual(raw.menuRefusals);
+    expect(hydrateState(loaded, createInitialState()).menuRefusals).toEqual(raw.menuRefusals);
+  });
+
+  it('saves only refusals for the current day and dishes still on the menu', () => {
+    const raw = createInitialState();
+    raw.menuRefusals = {
+      day: raw.restaurant.day,
+      dishes: [
+        { key: raw.dishes[0].id, count: 2, lastPrice: 18 },
+        { key: 'removed-dish', count: 1, lastPrice: 12 },
+      ],
+    };
+
+    expect(saveState(raw)).toBe(true);
+    expect(loadState().menuRefusals).toEqual({
+      day: raw.restaurant.day,
+      dishes: [{ key: raw.dishes[0].id, count: 2, lastPrice: 18 }],
+    });
+  });
+
+  it('stores an empty refusal branch when the state has rolled into a new day', () => {
+    const raw = createInitialState();
+    raw.restaurant = { ...raw.restaurant, day: 2, gameTime: 86400 };
+    raw.menuSales = { day: 2, dishes: [], drinks: [] };
+    raw.menuRefusals = {
+      day: 1,
+      dishes: [{ key: raw.dishes[0].id, count: 2, lastPrice: 18 }],
+    };
+
+    expect(saveState(raw)).toBe(true);
+    expect(loadState().menuRefusals).toEqual({ day: 2, dishes: [] });
+  });
+
+  it('rejects invalid current-day refusal records before load normalisation', () => {
+    const raw = createInitialState();
+    raw.menuRefusals = {
+      day: raw.restaurant.day,
+      dishes: [{ key: raw.dishes[0].id, count: 1.5, lastPrice: 18 }],
+    };
+
+    expect(() => validateSavedState(raw)).toThrow(/menuRefusals/);
+    localStorage.setItem('restaurant-sim-save', JSON.stringify(raw));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(loadStateResult()).toEqual({ state: null, reason: 'invalid' });
   });
 
   it('round-trips the existing cashier assignedStaffId without adding a preference field', () => {
@@ -385,6 +442,7 @@ describe('strict v11 feature persistence', () => {
     let raw = createCareerInitialState({ scenarioId: 'opening-week', runId: 'run' });
     raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 634650, reputation: 2 };
     raw.menuSales = { day: 8, dishes: [], drinks: [] };
+    raw.menuRefusals = { day: 8, dishes: [] };
     raw = acceptServiceContract(raw, { templateId: 'office-lunch' });
     // Office lasts 900 prep + 5250 service: its deadline coincides with Opening Week.
     expect(raw.serviceContracts.active.deadlineAt).toBe(640800);
@@ -415,6 +473,7 @@ describe('strict v11 feature persistence', () => {
     let raw = createCareerInitialState({ scenarioId: 'opening-week', runId: 'run' });
     raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 639900 };
     raw.menuSales = { day: 8, dishes: [], drinks: [] };
+    raw.menuRefusals = { day: 8, dishes: [] };
     raw = acceptServiceContract(raw, { templateId: 'office-lunch' });
     raw.restaurant.gameTime = 640800;
     const hydrated = hydrateState(raw, createInitialState());
@@ -426,6 +485,7 @@ describe('strict v11 feature persistence', () => {
     const raw = createCareerInitialState({ scenarioId: 'opening-week', runId: 'run' });
     raw.restaurant = { ...raw.restaurant, day: 8, gameTime: 640800 };
     raw.menuSales = { day: 8, dishes: [], drinks: [] };
+    raw.menuRefusals = { day: 8, dishes: [] };
     raw.careerRun = evaluateCareerRun(raw.careerRun, raw.restaurant);
     const frozen = raw.careerRun.result;
     raw.careerRun = continueCareerAsSandbox(raw.careerRun);

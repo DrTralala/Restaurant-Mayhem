@@ -1,6 +1,6 @@
 import { getDrink } from '../data/drinks';
+import { getCurrentMenuDay } from './menuDay';
 
-const SECONDS_PER_DAY = 86400;
 const MAX_COUNT = Number.MAX_SAFE_INTEGER;
 
 const has = (record, key) => record !== null && typeof record === 'object'
@@ -8,14 +8,6 @@ const has = (record, key) => record !== null && typeof record === 'object'
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isKey = value => typeof value === 'string' && value.length > 0;
 const isCount = value => Number.isSafeInteger(value) && value >= 0;
-
-function getCurrentDay(state) {
-  const day = state?.restaurant?.day;
-  if (Number.isSafeInteger(day) && day >= 1) return day;
-  const gameTime = state?.restaurant?.gameTime;
-  if (Number.isFinite(gameTime) && gameTime >= 0) return Math.floor(gameTime / SECONDS_PER_DAY) + 1;
-  return 1;
-}
 
 function currentDishIds(state) {
   return new Set((Array.isArray(state?.dishes) ? state.dishes : [])
@@ -57,7 +49,7 @@ function normaliseRecords(value, isValidKey) {
  * counts. Gross metadata is separately normalised as complete, legacy or partial.
  */
 export function normaliseMenuSales(value, state) {
-  const day = getCurrentDay(state);
+  const day = getCurrentMenuDay(state);
   if (!isRecord(value) || !has(value, 'day') || value.day !== day) {
     return { day, dishes: [], drinks: [] };
   }

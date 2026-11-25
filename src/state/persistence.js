@@ -31,6 +31,7 @@ import { normaliseCookbookState } from '../simulation/cookbook';
 import { hydrateServiceContractsState, settleServiceContracts } from '../simulation/serviceContracts';
 import { evaluateCareerRun, normaliseCareerRun } from '../simulation/careerRun';
 import { normaliseMenuSales } from '../simulation/menuSales';
+import { normaliseMenuRefusals } from '../simulation/menuRefusals';
 import { calculateRevenue } from '../simulation/revenue';
 
 // Boolean outcome lets the provider report unsaved progress without turning a
@@ -77,7 +78,11 @@ export function loadStateResult() {
     validateSavedServiceItemInventory(saved);
     validateSavedState(saved);
     return {
-      state: { ...saved, menuSales: normaliseMenuSales(saved.menuSales, saved) },
+      state: {
+        ...saved,
+        menuSales: normaliseMenuSales(saved.menuSales, saved),
+        menuRefusals: normaliseMenuRefusals(saved.menuRefusals, saved),
+      },
       reason: null,
     };
   } catch (error) {
@@ -403,7 +408,11 @@ export function hydrateState(saved, fresh) {
   validateSavedState(saved);
   validateSavedNavigationGeometry(saved);
   validateSavedServiceItemInventory(saved);
-  saved = { ...saved, menuSales: normaliseMenuSales(saved.menuSales, saved) };
+  saved = {
+    ...saved,
+    menuSales: normaliseMenuSales(saved.menuSales, saved),
+    menuRefusals: normaliseMenuRefusals(saved.menuRefusals, saved),
+  };
   const savedRestaurantForSales = saved.restaurant && typeof saved.restaurant === 'object'
     && !Array.isArray(saved.restaurant) ? saved.restaurant : {};
   const freshRestaurantForSales = fresh?.restaurant && typeof fresh.restaurant === 'object'
@@ -411,6 +420,11 @@ export function hydrateState(saved, fresh) {
   saved = {
     ...saved,
     menuSales: normaliseMenuSales(saved.menuSales, {
+      dishes: Array.isArray(saved.dishes) ? saved.dishes
+        : Array.isArray(fresh?.dishes) ? fresh.dishes : [],
+      restaurant: { ...freshRestaurantForSales, ...savedRestaurantForSales },
+    }),
+    menuRefusals: normaliseMenuRefusals(saved.menuRefusals, {
       dishes: Array.isArray(saved.dishes) ? saved.dishes
         : Array.isArray(fresh?.dishes) ? fresh.dishes : [],
       restaurant: { ...freshRestaurantForSales, ...savedRestaurantForSales },

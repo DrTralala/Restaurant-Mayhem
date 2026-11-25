@@ -12,6 +12,7 @@ import {
   isMenuItemSuspended,
 } from '../simulation/menuEconomy';
 import { getMenuSalesCount, getMenuSalesGross } from '../simulation/menuSales';
+import { getMenuRefusal } from '../simulation/menuRefusals';
 import { getCookbookEntryStatus, getResolvedDish } from '../simulation/cookbook';
 import { isDishCompatibleWithStation } from '../simulation/cookingBatches';
 import { TYPOGRAPHY } from '../typography';
@@ -189,6 +190,7 @@ export default function MenuPanel({ readOnly = false }) {
          .filter(entry => entry.dish)
          .map(({ rawDish, dish }) => {
         const pricing = getDishPricing(dish.cookbookId, dish.quality);
+        const refusal = getMenuRefusal(state, dish.id);
         const suspended = isMenuItemSuspended(state, 'dish', dish.id);
         const hasCompatibleStation = (state.kitchenStations || []).some(station =>
           isDishCompatibleWithStation(state, dish, station));
@@ -273,6 +275,11 @@ export default function MenuPanel({ readOnly = false }) {
           <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 8 }}>
             <span>Popularity: {dish.popularity}%</span>
           </div>
+          {refusal && (
+            <div style={{ ...TYPOGRAPHY.secondary, marginBottom: 4 }}>
+              {`${refusal.count} guest${refusal.count === 1 ? '' : 's'} declined for poor value today · last declined at $${refusal.lastPrice}.`}
+            </div>
+          )}
           <MenuPriceInput
             price={dish.price}
             label={`${dish.name} price`}

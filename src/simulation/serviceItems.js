@@ -164,7 +164,9 @@ export function createCustomerOrder(state, customer, random = Math.random) {
   if (customer?.foodOutcome === 'cancelled' || customer?.foodOutcome === 'delivered') {
     return { customer, serviceItems: state.serviceItems || [] };
   }
-  const { customer: profiledCustomer, basket, menuOutcome } = chooseAffordableBasket(state, customer, random);
+  const { customer: profiledCustomer, basket, menuOutcome, declinedDish } = chooseAffordableBasket(
+    state, customer, random,
+  );
   let serviceItems = [...(state.serviceItems || [])];
   const initialLength = serviceItems.length;
   if (!basket) {
@@ -188,6 +190,7 @@ export function createCustomerOrder(state, customer, random = Math.random) {
         cancelledServiceItemIds: [],
       },
       serviceItems,
+      ...(declinedDish ? { declinedDish } : {}),
     };
   }
 

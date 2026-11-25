@@ -191,6 +191,7 @@ function savedRecoveryState(fresh) {
       ...fresh.restaurant, funds: 87.06, gameTime: 168306, day: 2, totalServed: 119,
     },
     menuSales: { day: 2, dishes: [], drinks: [] },
+    menuRefusals: { day: 2, dishes: [] },
     tables: [table],
     chairs: [chair],
     doors: [
@@ -1982,15 +1983,15 @@ describe('queue slot lease persistence across both transports', () => {
   });
 });
 
-describe('version eleven lifecycle save validation', () => {
+describe('version twelve lifecycle save validation', () => {
   function currentSave(overrides = {}) {
     const fresh = createInitialState();
     return { ...fresh, ...overrides, version: SAVE_VERSION };
   }
 
   it('increments the shared save version exactly once from the previous format', () => {
-    expect(SAVE_VERSION).toBe(11);
-    expect(createInitialState().version).toBe(11);
+    expect(SAVE_VERSION).toBe(12);
+    expect(createInitialState().version).toBe(12);
   });
 
   it('rejects an old autosave without deleting the evidence', () => {
@@ -2001,7 +2002,7 @@ describe('version eleven lifecycle save validation', () => {
     expect(localStorage.getItem('restaurant-sim-save')).toBe(old);
   });
 
-  it.each([10, 12])('classifies a root version mismatch (%s) as incompatible without changing storage', version => {
+  it.each([11, 13])('classifies a root version mismatch (%s) as incompatible without changing storage', version => {
     const serialized = JSON.stringify({ ...createInitialState(), version });
     localStorage.setItem('restaurant-sim-save', serialized);
 
