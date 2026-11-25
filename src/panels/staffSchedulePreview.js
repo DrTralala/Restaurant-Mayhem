@@ -28,19 +28,29 @@ export function getNextScheduledDutyChange(worker, gameTime) {
   return null;
 }
 
-export function getScheduledRoleCounts(staffList, gameTime) {
-  if (!Number.isFinite(gameTime)) return null;
-
-  const counts = { cook: 0, waiter: 0, janitor: 0 };
-  if (!Array.isArray(staffList)) return counts;
-
-  for (const worker of staffList) {
-    const role = worker?.role;
-    if (!Object.hasOwn(counts, role)) continue;
-
-    const schedule = getNormalisedStaffSchedule(worker);
-    if (getScheduledDuty(schedule, gameTime) === 'work') counts[role] += 1;
+export function createScheduledRoleCounter(staffList) {
+  const scheduledStaff = [];
+  if (Array.isArray(staffList)) {
+    for (const worker of staffList) {
+      const role = worker?.role;
+      if (!['cook', 'waiter', 'janitor'].includes(role)) continue;
+      scheduledStaff.push({ role, schedule: getNormalisedStaffSchedule(worker) });
+    }
   }
 
-  return counts;
+  return gameTime => {
+    if (!Number.isFinite(gameTime)) return null;
+
+    const counts = { cook: 0, waiter: 0, janitor: 0 };
+    for (const { role, schedule } of scheduledStaff) {
+      if (getScheduledDuty(schedule, gameTime) === 'work') counts[role] += 1;
+    }
+
+    return counts;
+  };
+}
+
+export function getScheduledRoleCounts(staffList, gameTime) {
+  if (!Number.isFinite(gameTime)) return null;
+  return createScheduledRoleCounter(staffList)(gameTime);
 }

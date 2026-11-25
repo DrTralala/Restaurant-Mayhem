@@ -101,4 +101,39 @@ describe('getRushSchedulePreview', () => {
       random.mockRestore();
     }
   });
+
+  it('merges adjacent open half-hours only when their missing roles match', () => {
+    const cookSchedule = Array(48).fill('work');
+    cookSchedule[14] = 'rest';
+    cookSchedule[15] = 'rest';
+    const waiterSchedule = Array(48).fill('work');
+    waiterSchedule[12] = 'rest';
+    waiterSchedule[13] = 'rest';
+
+    const [breakfast] = getRushSchedulePreview({ openHour: 0, closeHour: 0 }, [
+      { role: 'cook', effectiveDuty: 'work', schedule: cookSchedule },
+      { role: 'waiter', effectiveDuty: 'work', schedule: waiterSchedule },
+    ]);
+
+    expect(breakfast.roleCounts).toEqual({ cook: 0, waiter: 1, janitor: 0 });
+    expect(breakfast.staffingGaps).toEqual([
+      { startHour: 6, endHour: 7, missingRoles: ['waiter'] },
+      { startHour: 7, endHour: 8, missingRoles: ['cook'] },
+    ]);
+  });
+
+  it('excludes closed half-hour slots from the staffing gaps', () => {
+    const [breakfast, lunch] = getRushSchedulePreview({ openHour: 6.5, closeHour: 7.5 }, [
+      { role: 'cook', schedule: Array(48).fill('work') },
+      { role: 'waiter', schedule: Array(48).fill('rest') },
+    ]);
+
+    expect(breakfast.openHours).toBe(1);
+    expect(breakfast.staffingGaps).toEqual([
+      { startHour: 6.5, endHour: 7.5, missingRoles: ['waiter'] },
+    ]);
+    expect(breakfast.roleCounts).toEqual({ cook: 1, waiter: 0, janitor: 0 });
+    expect(lunch.roleCounts).toBeNull();
+    expect(lunch.staffingGaps).toEqual([]);
+  });
 });

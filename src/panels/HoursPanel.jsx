@@ -1,7 +1,6 @@
 import { useDispatch, useGameState } from '../state/GameContext';
 import { formatOperatingHour } from '../simulation/clock';
 import { getRushSchedulePreview } from './rushSchedulePreview';
-import { getScheduledRoleCounts } from './staffSchedulePreview';
 import { TYPOGRAPHY } from '../typography';
 
 const HOUR_OPTIONS = Array.from({ length: 48 }, (_, index) => index / 2);
@@ -17,7 +16,10 @@ export default function HoursPanel() {
   const dispatch = useDispatch();
   const { openHour, closeHour } = state.restaurant;
   const paused = state.restaurant.walkInsPaused === true;
-  const rushPreview = getRushSchedulePreview(state.restaurant);
+  const rushPreview = getRushSchedulePreview(
+    state.restaurant,
+    Array.isArray(state.staff) ? state.staff : [],
+  );
   const selectStyle = {
     ...TYPOGRAPHY.control,
     width: '100%',
@@ -124,9 +126,7 @@ export default function HoursPanel() {
         >
           {rushPreview.map(period => {
             const duration = period.endHour - period.startHour;
-            const roleCounts = period.peakOpen
-              ? getScheduledRoleCounts(state.staff, period.peakHour * 3600)
-              : null;
+            const roleCounts = period.roleCounts;
             const coverage = period.openHours === 0
               ? 'Closed throughout'
               : period.openHours === duration ? 'Open throughout' : 'Partly open';
@@ -162,6 +162,29 @@ export default function HoursPanel() {
                 <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#ddd', marginTop: 4 }}>
                   {coverage}
                 </span>
+                <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#888', marginTop: 8 }}>
+                  Staffing gaps
+                </span>
+                {period.openHours === 0 ? (
+                  <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#888', marginTop: 4 }}>
+                    No open half-hour intervals.
+                  </span>
+                ) : period.staffingGaps.length > 0 ? (
+                  <ul
+                    aria-label={`${period.name} staffing gaps`}
+                    style={{ listStyle: 'none', margin: '4px 0 0', padding: 0 }}
+                  >
+                    {period.staffingGaps.map(gap => (
+                      <li key={`${gap.startHour}-${gap.endHour}-${gap.missingRoles.join('-')}`}>
+                        {`${formatOperatingHour(gap.startHour)}–${formatOperatingHour(gap.endHour)}: No scheduled ${gap.missingRoles.join(' or ')}`}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span style={{ ...TYPOGRAPHY.secondary, display: 'block', color: '#ddd', marginTop: 4 }}>
+                    No cook or waiter staffing gaps in open half-hour intervals.
+                  </span>
+                )}
               </li>
             );
           })}

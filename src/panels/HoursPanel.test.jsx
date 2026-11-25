@@ -113,9 +113,9 @@ describe('HoursPanel', () => {
     expect(screen.queryByText('Accepting walk-ins during opening hours')).not.toBeInTheDocument();
   });
 
-  const rushRows = () => within(
-    screen.getByRole('list', { name: 'Rush-period coverage' }),
-  ).getAllByRole('listitem');
+  const rushRows = () => Array.from(
+    screen.getByRole('list', { name: 'Rush-period coverage' }).children,
+  );
 
   it('shows saved Scheduled Work counts at all three canonical peaks without adding controls', () => {
     mockState.restaurant = { openHour: 0, closeHour: 0 };
@@ -137,6 +137,30 @@ describe('HoursPanel', () => {
     expect(screen.getAllByRole('combobox')).toHaveLength(2);
     expect(screen.getAllByRole('option')).toHaveLength(96);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('shows merged staffing gap intervals alongside the existing peak view', () => {
+    mockState.restaurant = { openHour: 0, closeHour: 0 };
+    const cookSchedule = Array(48).fill('work');
+    cookSchedule[14] = 'rest';
+    cookSchedule[15] = 'rest';
+    const waiterSchedule = Array(48).fill('work');
+    waiterSchedule[12] = 'rest';
+    waiterSchedule[13] = 'rest';
+    mockState.staff = [
+      { role: 'cook', effectiveDuty: 'work', schedule: cookSchedule },
+      { role: 'waiter', effectiveDuty: 'work', schedule: waiterSchedule },
+    ];
+
+    render(<HoursPanel />);
+
+    const breakfast = within(rushRows()[0]);
+    const gaps = within(breakfast.getByRole('list', { name: 'Breakfast staffing gaps' }));
+    expect(gaps.getByText('6:00 AM–7:00 AM: No scheduled waiter')).toBeInTheDocument();
+    expect(gaps.getByText('7:00 AM–8:00 AM: No scheduled cook')).toBeInTheDocument();
+    expect(breakfast.getByText(
+      'Scheduled Work at peak: Cooks 0 · Waiters 1 · Janitors 0',
+    )).toBeInTheDocument();
   });
 
   it('shows zero counts for an empty roster when the peak is open', () => {
