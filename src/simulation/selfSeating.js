@@ -22,6 +22,7 @@ import {
   isDoorRoleForFlow,
 } from './world';
 import { getQueueVisibleMembers, normaliseCustomerQueue } from './customerQueue';
+import { physicalTableCapacity } from './tableFit';
 
 const CHAIR_SPACING = 16;
 const ARRIVAL_TOLERANCE = 2;
@@ -428,8 +429,7 @@ function planForParty(state, party) {
     // Wiping and dish collection can finish in either order; admission needs both.
     if ((state.serviceItems || []).some(item => item.tableId === table.id
       && item.state === 'dirty_at_table')) continue;
-    const chairCount = (state.chairs || []).filter(chair => chair.tableId === table.id).length;
-    if ((table.seats || chairCount) < partySize) continue;
+    if (physicalTableCapacity(table, state.chairs) < partySize) continue;
     const chairs = availableChairsForTable(state, table);
     if (chairs.length < partySize) continue;
     // An unavailable approach to one chair must not hide other usable seats.

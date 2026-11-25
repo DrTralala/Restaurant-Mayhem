@@ -7,6 +7,7 @@ import { clampReputation } from './balance';
 import { getServiceContractTerms, getServiceContractSettlement } from './serviceContractFinance';
 import { getResolvedDish } from './cookbook';
 import { isDishCompatibleWithStation } from './cookingBatches';
+import { physicalTableCapacity } from './tableFit';
 
 const nonnegative = value => Number.isFinite(value) && value >= 0;
 const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
@@ -44,9 +45,7 @@ function readinessAdvice(state, template, preview) {
   else if (unpreparableDishes.length) warnings.push(unpreparableDishes.length === affordableDishes.length
     ? 'no_preparable_affordable_dish' : 'some_unpreparable_affordable_dishes');
   const largestParty = Math.max(...template.parties.map(party => party.size));
-  if (!(state.tables || []).some(table => Number.isFinite(table.x) && Number.isFinite(table.y)
-    && (state.chairs || []).filter(chair => chair.tableId === table.id
-      && Number.isFinite(chair.x) && Number.isFinite(chair.y)).length >= largestParty)) {
+  if (!(state.tables || []).some(table => physicalTableCapacity(table, state.chairs) >= largestParty)) {
     warnings.push('no_suitable_table');
   }
   const staff = state.staff || [];

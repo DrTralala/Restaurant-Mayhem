@@ -131,6 +131,19 @@ describe('offers and immutable acceptance', () => {
     expect(accept(state, 'family-service').restaurant.funds).toBe(-470);
     expect(accept(state, 'family-service').serviceContracts.active).toMatchObject({ target: 4, reward: 120 });
   });
+
+  it('caps physical readiness by the table seat rating', () => {
+    const initial = createInitialState();
+    const table = { ...initial.tables[0], seats: 1 };
+    const state = {
+      ...initial,
+      tables: [table],
+      chairs: initial.chairs.filter(chair => chair.tableId === table.id),
+    };
+
+    expect(state.chairs.length).toBeGreaterThanOrEqual(2);
+    expect(getServiceContractOffer(state, 'office-lunch').warnings).toContain('no_suitable_table');
+  });
 });
 
 describe('kitchen-aware readiness advice', () => {
