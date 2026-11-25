@@ -571,7 +571,12 @@ describe('walk-in pause', () => {
     };
     const state = {
       ...baseState,
-      restaurant: { ...baseState.restaurant, walkInsPaused: true, gameTime: booking.arrivalAt },
+      restaurant: {
+        ...baseState.restaurant,
+        walkInsPaused: true,
+        walkInsPausedUntil: booking.arrivalAt + 30 * 60,
+        gameTime: booking.arrivalAt,
+      },
     };
     const random = vi.spyOn(Math, 'random');
 

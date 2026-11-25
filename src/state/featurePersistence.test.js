@@ -12,6 +12,7 @@ import { findPreparationTarget } from '../simulation/preparationPosition';
 import { resolveStaffAfterMovement } from '../simulation/staff';
 import { buildAffordableBaskets } from '../simulation/menuEconomy';
 import { prioritiseQueuedParty } from '../simulation/queuePriority';
+import { runTick } from '../simulation/gameLoop';
 
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 function orderFixture() {
@@ -669,6 +670,41 @@ describe('strict feature persistence', () => {
     const hydrated = hydrateState(createInitialState(), createInitialState());
     expect(hydrated.restaurant.walkInsPaused).not.toBe(true);
     expect(createInitialState().restaurant).not.toHaveProperty('walkInsPaused');
+  });
+
+  it('round-trips the timed walk-in pause expiry through a midnight save', () => {
+    const raw = createInitialState();
+    raw.restaurant = {
+      ...raw.restaurant,
+      gameTime: 86_399,
+      day: 1,
+      walkInsPaused: true,
+      walkInsPausedUntil: 87_399,
+    };
+
+    expect(saveState(raw)).toBe(true);
+    const loaded = loadState();
+    expect(loaded.restaurant).toMatchObject({ walkInsPaused: true, walkInsPausedUntil: 87_399 });
+    const hydrated = hydrateState(loaded, createInitialState());
+    expect(hydrated.restaurant).toMatchObject({ walkInsPaused: true, walkInsPausedUntil: 87_399 });
+
+    const afterRemainingGameTime = runTick(hydrated, { gameDt: 1_001, movementDt: 0 });
+    expect(afterRemainingGameTime.restaurant).toMatchObject({ gameTime: 87_400, day: 2, walkInsPaused: false });
+    expect(afterRemainingGameTime.restaurant).not.toHaveProperty('walkInsPausedUntil');
+  });
+
+  it.each([null, -1, 'later', Infinity])('rejects an invalid walk-in pause expiry %s', value => {
+    const raw = createInitialState();
+    raw.restaurant = { ...raw.restaurant, walkInsPaused: true, walkInsPausedUntil: value };
+
+    expect(() => validateSavedState(raw)).toThrow(/walkInsPausedUntil/);
+  });
+
+  it('rejects an expiry without a timed pause flag', () => {
+    const raw = createInitialState();
+    raw.restaurant = { ...raw.restaurant, walkInsPaused: false, walkInsPausedUntil: 100 };
+
+    expect(() => validateSavedState(raw)).toThrow(/requires walkInsPaused to be true/);
   });
 
   it('round-trips optional table admission holds in v11 and treats absence as false', () => {

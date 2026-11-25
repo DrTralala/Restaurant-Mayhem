@@ -97,6 +97,32 @@ describe('HoursPanel', () => {
     expect(dispatch).toHaveBeenLastCalledWith({ type: 'SET_WALK_INS_PAUSED', paused: false });
   });
 
+  it('offers a timed pause and shows its absolute expiry across midnight', () => {
+    mockState.restaurant = {
+      openHour: 10,
+      closeHour: 22,
+      gameTime: 23 * 3600 + 55 * 60,
+      day: 5,
+      walkInsPaused: true,
+      walkInsPausedUntil: 24 * 3600 + 10 * 60,
+    };
+
+    render(<HoursPanel />);
+
+    expect(screen.getByText('Paused until 12:10 AM on Day 6')).toBeInTheDocument();
+    expect(screen.getByText(
+      'The 30-minute pause follows the game clock through midnight. Resume early, or keep it paused manually.',
+    )).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep paused manually' }));
+    expect(dispatch).toHaveBeenLastCalledWith({
+      type: 'SET_WALK_INS_PAUSED', paused: true, mode: 'manual',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Pause for 30 game minutes' }));
+    expect(dispatch).toHaveBeenLastCalledWith({
+      type: 'SET_WALK_INS_PAUSED', paused: true, mode: 'timed',
+    });
+  });
+
   it('shows the walk-in status and continuity copy in both states', () => {
     const { rerender } = render(<HoursPanel />);
 

@@ -1,5 +1,5 @@
 import { useDispatch, useGameState } from '../state/GameContext';
-import { formatOperatingHour } from '../simulation/clock';
+import { formatOperatingHour, secondsToGameTime } from '../simulation/clock';
 import { getRushSchedulePreview } from './rushSchedulePreview';
 import { TYPOGRAPHY } from '../typography';
 
@@ -16,6 +16,14 @@ export default function HoursPanel() {
   const dispatch = useDispatch();
   const { openHour, closeHour } = state.restaurant;
   const paused = state.restaurant.walkInsPaused === true;
+  const pauseExpiry = Number.isFinite(state.restaurant.walkInsPausedUntil)
+    ? state.restaurant.walkInsPausedUntil : null;
+  const currentGameTime = Number.isFinite(state.restaurant.gameTime)
+    ? state.restaurant.gameTime : 0;
+  const pauseExpiryDay = pauseExpiry == null
+    ? null
+    : (Number.isInteger(state.restaurant.day) ? state.restaurant.day : 1)
+      + Math.max(0, Math.floor(pauseExpiry / 86400) - Math.floor(currentGameTime / 86400));
   const rushPreview = getRushSchedulePreview(
     state.restaurant,
     Array.isArray(state.staff) ? state.staff : [],
@@ -96,11 +104,18 @@ export default function HoursPanel() {
 
       <h3 style={{ ...TYPOGRAPHY.heading, color: '#f0a500', margin: '20px 0 6px' }}>Walk-in arrivals</h3>
       <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '0 0 10px' }}>
-        {paused ? 'Paused' : 'Accepting walk-ins during opening hours'}
+        {paused
+          ? pauseExpiry == null ? 'Paused' : `Paused until ${secondsToGameTime(pauseExpiry)} on Day ${pauseExpiryDay}`
+          : 'Accepting walk-ins during opening hours'}
       </p>
       <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '0 0 12px' }}>
         {'Only new walk-ins are paused. Queued and seated guests continue service; booked contract guests still arrive during opening hours.'}
       </p>
+      {paused && pauseExpiry != null && (
+        <p style={{ ...TYPOGRAPHY.secondary, color: '#888', margin: '0 0 12px' }}>
+          The 30-minute pause follows the game clock through midnight. Resume early, or keep it paused manually.
+        </p>
+      )}
       <button
         type="button"
         aria-pressed={paused}
@@ -116,6 +131,40 @@ export default function HoursPanel() {
         }}
       >
         {paused ? 'Resume walk-ins' : 'Pause walk-ins'}
+      </button>
+      {paused && pauseExpiry != null && (
+        <button
+          type="button"
+          onClick={() => dispatch({ type: 'SET_WALK_INS_PAUSED', paused: true, mode: 'manual' })}
+          style={{
+            ...TYPOGRAPHY.control,
+            marginLeft: 8,
+            padding: '9px 14px',
+            color: '#ddd',
+            background: '#16213e',
+            border: '1px solid #0f3460',
+            borderRadius: 4,
+            cursor: 'pointer',
+          }}
+        >
+          Keep paused manually
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => dispatch({ type: 'SET_WALK_INS_PAUSED', paused: true, mode: 'timed' })}
+        style={{
+          ...TYPOGRAPHY.control,
+          marginLeft: 8,
+          padding: '9px 14px',
+          color: '#ddd',
+          background: '#16213e',
+          border: '1px solid #0f3460',
+          borderRadius: 4,
+          cursor: 'pointer',
+        }}
+      >
+        Pause for 30 game minutes
       </button>
 
       <section aria-label="Rush periods">

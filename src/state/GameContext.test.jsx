@@ -153,6 +153,33 @@ describe('GameProvider walk-in pause action', () => {
     paused.dispatch({ type: 'SET_WALK_INS_PAUSED', paused: true });
     expect(paused.state).toBe(pausedBefore);
   });
+
+  it('starts a timed pause from the absolute game clock and resumes early', () => {
+    const game = renderReducer({ restaurant: { gameTime: 86_300 } });
+
+    game.dispatch({ type: 'SET_WALK_INS_PAUSED', paused: true, mode: 'timed' });
+
+    expect(game.state.restaurant).toMatchObject({
+      walkInsPaused: true,
+      walkInsPausedUntil: 88_100,
+    });
+
+    game.dispatch({ type: 'SET_WALK_INS_PAUSED', paused: false });
+
+    expect(game.state.restaurant.walkInsPaused).toBe(false);
+    expect(game.state.restaurant).not.toHaveProperty('walkInsPausedUntil');
+  });
+
+  it('lets an indefinite manual pause override a timed pause', () => {
+    const game = renderReducer({
+      restaurant: { gameTime: 100, walkInsPaused: true, walkInsPausedUntil: 1_900 },
+    });
+
+    game.dispatch({ type: 'SET_WALK_INS_PAUSED', paused: true });
+
+    expect(game.state.restaurant.walkInsPaused).toBe(true);
+    expect(game.state.restaurant).not.toHaveProperty('walkInsPausedUntil');
+  });
 });
 
 describe('GameProvider cashier assignment action', () => {

@@ -31,7 +31,7 @@ import {
 } from '../simulation/placement';
 import { getRestaurantWorld } from '../simulation/world';
 import { allocateStaffPositions } from '../simulation/navigation/staffAllocation';
-import { normaliseOperatingHour } from '../simulation/clock';
+import { normaliseOperatingHour, WALK_IN_PAUSE_DURATION_SECONDS } from '../simulation/clock';
 import { normaliseMenuSales } from '../simulation/menuSales';
 import { prepareStaffHire } from '../simulation/staffHiring';
 import {
@@ -578,11 +578,35 @@ function reduceGameAction(state, action) {
     }
     case 'SET_WALK_INS_PAUSED': {
       if (typeof action.paused !== 'boolean') return state;
-      const paused = state.restaurant.walkInsPaused === true;
-      if (paused === action.paused) return state;
+      const mode = action.mode ?? 'manual';
+      if (mode !== 'manual' && mode !== 'timed') return state;
+      if (mode === 'timed' && action.paused !== true) return state;
+
+      if (action.paused === false) {
+        if (state.restaurant.walkInsPaused !== true
+          && !Object.hasOwn(state.restaurant, 'walkInsPausedUntil')) return state;
+        const { walkInsPausedUntil: _expiry, ...restaurant } = state.restaurant;
+        return { ...state, restaurant: { ...restaurant, walkInsPaused: false } };
+      }
+
+      if (mode === 'timed') {
+        const gameTime = Number.isFinite(state.restaurant.gameTime)
+          ? state.restaurant.gameTime : 0;
+        const walkInsPausedUntil = gameTime + WALK_IN_PAUSE_DURATION_SECONDS;
+        if (state.restaurant.walkInsPaused === true
+          && state.restaurant.walkInsPausedUntil === walkInsPausedUntil) return state;
+        return {
+          ...state,
+          restaurant: { ...state.restaurant, walkInsPaused: true, walkInsPausedUntil },
+        };
+      }
+
+      if (state.restaurant.walkInsPaused === true
+        && !Object.hasOwn(state.restaurant, 'walkInsPausedUntil')) return state;
+      const { walkInsPausedUntil: _expiry, ...restaurant } = state.restaurant;
       return {
         ...state,
-        restaurant: { ...state.restaurant, walkInsPaused: action.paused },
+        restaurant: { ...restaurant, walkInsPaused: true },
       };
     }
     case 'SET_SEATING_POLICY': {

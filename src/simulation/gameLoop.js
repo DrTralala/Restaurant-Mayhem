@@ -1,4 +1,4 @@
-import { advanceClock } from './clock';
+import { advanceClock, expireTimedWalkInPause } from './clock';
 import {
   admitScheduledServiceParty,
   getCustomerMovementEntries,
@@ -83,6 +83,8 @@ function nextChronologicalBoundary(state, fromTime, toTime) {
   const candidates = [
     wellbeingDomain.getNextStaffWellbeingBoundary(state, fromTime, toTime),
     getNextFoodDeadline(state, fromTime, toTime),
+    state?.restaurant?.walkInsPaused === true
+      ? state.restaurant.walkInsPausedUntil : null,
   ].filter(value => Number.isFinite(value) && value > fromTime + TIME_EPSILON);
   const contractBoundary = getNextServiceContractBoundary(state, fromTime, toTime);
   if (contractBoundary !== null) candidates.push(contractBoundary);
@@ -118,11 +120,26 @@ function repairContractEntry(state) {
   return next;
 }
 
-function runTickSegment(state, fromTime, toTime, movementDt, totalGameDt, isFinalSegment) {
+function getWalkInArrivalDuration(state, fromTime, toTime) {
+  const duration = Math.max(0, toTime - fromTime);
+  if (state.restaurant.walkInsPaused !== true) return duration;
+  const expiresAt = state.restaurant.walkInsPausedUntil;
+  if (!Number.isFinite(expiresAt)) return 0;
+  return Math.max(0, toTime - Math.max(fromTime, expiresAt));
+}
+
+function runTickSegment(
+  state, fromTime, toTime, movementDt, isFinalSegment,
+  walkInArrivalDt, skipZeroTimedWalkInSpawn,
+) {
   const gameDt = Math.max(0, toTime - fromTime);
   let s = navigationPhase('clock', () => advanceClock(state, gameDt));
   const now = s.restaurant.gameTime;
   const careerTerminal = s.careerRun?.status === 'active' && now >= s.careerRun.deadlineAt;
+
+  // Expiry precedes the arrival gates, so a pause ending at this timestamp
+  // cannot block a walk-in that becomes eligible afterwards in this tick.
+  s = expireTimedWalkInPause(s, now);
 
   // Food cancellation is the first domain transition at every timestamp. The
   // customer and kitchen modules retain defensive idempotent calls, but this
@@ -130,7 +147,9 @@ function runTickSegment(state, fromTime, toTime, movementDt, totalGameDt, isFina
   s = navigationPhase('food-patience', () => foodPatienceDomain.expireFoodPatience(s, now));
   if (!careerTerminal) {
     s = navigationPhase('contract-arrivals', () => advanceServiceContractArrivals(s, now, { admitParty: admitScheduledServiceParty }));
-    if (isFinalSegment) s = navigationPhase('spawn', () => spawnCustomers(s, totalGameDt));
+    if (isFinalSegment && !skipZeroTimedWalkInSpawn) {
+      s = navigationPhase('spawn', () => spawnCustomers(s, walkInArrivalDt));
+    }
   }
   s = navigationPhase('customers-prepare', () => prepareCustomersForMovement(s, gameDt));
   s = navigationPhase('dirt', () => updateDirt(s, gameDt));
@@ -180,9 +199,16 @@ function runTickInternal(state, timing) {
   // boundary or leave an active career stranded just short of its deadline.
   const timeEpsilon = state.serviceContracts?.active || state.careerRun?.status === 'active' ? 0 : TIME_EPSILON;
   let currentState = repairContractEntry(state);
+  const walkInArrivalDt = getWalkInArrivalDuration(state, startTime, startTime + gameDt);
+  const skipZeroTimedWalkInSpawn = state.restaurant.walkInsPaused === true
+    && Number.isFinite(state.restaurant.walkInsPausedUntil)
+    && walkInArrivalDt === 0;
 
   if (gameDt <= timeEpsilon) {
-    return runTickSegment(currentState, startTime, startTime, movementDt, 0, true);
+    return runTickSegment(
+      currentState, startTime, startTime, movementDt, true,
+      walkInArrivalDt, skipZeroTimedWalkInSpawn,
+    );
   }
 
   const endTime = startTime + gameDt;
@@ -204,8 +230,9 @@ function runTickInternal(state, timing) {
       currentTime,
       segmentEnd,
       segmentMovementDt,
-      gameDt,
       segmentEnd >= endTime - timeEpsilon,
+      walkInArrivalDt,
+      skipZeroTimedWalkInSpawn,
     );
     currentTime = segmentEnd;
     guard += 1;
@@ -220,8 +247,9 @@ function runTickInternal(state, timing) {
       currentTime,
       endTime,
       Math.max(0, movementDt - movedTime),
-      gameDt,
       true,
+      walkInArrivalDt,
+      skipZeroTimedWalkInSpawn,
     );
   }
   return currentState;

@@ -457,6 +457,10 @@ function validateRestaurant(state) {
   validateOptionalFinite(restaurant, 'dailyRevenue', 'restaurant');
   validateOptionalFinite(restaurant, 'reputation', 'restaurant');
   validateOptionalBoolean(restaurant, 'walkInsPaused', 'restaurant');
+  validateOptionalFinite(restaurant, 'walkInsPausedUntil', 'restaurant', { minimum: 0 });
+  if (has(restaurant, 'walkInsPausedUntil') && restaurant.walkInsPaused !== true) {
+    fail('restaurant.walkInsPausedUntil', 'requires walkInsPaused to be true');
+  }
   validateOptionalEnum(restaurant, 'seatingPolicy', 'restaurant', SEATING_POLICIES);
   validateSuspendedMenuIds(restaurant, 'suspendedDishIds');
   validateSuspendedMenuIds(restaurant, 'suspendedDrinkIds');

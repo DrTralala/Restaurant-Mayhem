@@ -17,6 +17,7 @@ import * as foodPatienceDomain from './foodPatience';
 import * as wellbeingDomain from './staffWellbeing';
 import { findPreparationTarget } from './preparationPosition';
 import { createDishOrderSnapshot, getResolvedDish, reduceCookbookAction } from './cookbook';
+import { gameReducer } from '../state/GameContext';
 
 const emptyState = {
   restaurant: { funds: 500, gameTime: 100, day: 1, openHour: 10, closeHour: 22, totalServed: 0, reputation: 2.0 },
@@ -269,6 +270,108 @@ describe('runTick', () => {
   it('advances only by the supplied game-time duration', () => {
     const result = runTick(emptyState, { gameDt: 2, movementDt: 1 / 30 });
     expect(result.restaurant.gameTime).toBe(102);
+  });
+
+  it('expires a timed walk-in pause on the game clock before arrivals across midnight', () => {
+    const initial = isolatedRunState();
+    const startTime = 23 * 3600 + 45 * 60;
+    const state = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant,
+        gameTime: startTime,
+        day: 1,
+        openHour: 0,
+        closeHour: 0,
+        walkInsPaused: true,
+        walkInsPausedUntil: startTime + 30 * 60,
+      },
+    };
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const atExpiry = runTick(state, { gameDt: 30 * 60, movementDt: 0 });
+
+    expect(atExpiry.restaurant).toMatchObject({
+      gameTime: startTime + 30 * 60,
+      day: 2,
+      walkInsPaused: false,
+    });
+    expect(atExpiry.restaurant).not.toHaveProperty('walkInsPausedUntil');
+    expect(atExpiry.queue).toHaveLength(0);
+
+    const afterExpiry = runTick(atExpiry, { gameDt: 1, movementDt: 0 });
+    expect(afterExpiry.queue.length).toBeGreaterThan(0);
+  });
+
+  it('gates a crossing tick using only its post-expiry game time', () => {
+    const initial = isolatedRunState();
+    const startTime = 23 * 3600 + 45 * 60;
+    const state = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant,
+        gameTime: startTime,
+        day: 1,
+        openHour: 0,
+        closeHour: 0,
+        walkInsPaused: true,
+        walkInsPausedUntil: startTime + 30 * 60,
+      },
+    };
+    const spawn = vi.spyOn(customerDomain, 'spawnCustomers');
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const afterExpiry = runTick(state, { gameDt: 30 * 60 + 1, movementDt: 0 });
+
+    expect(afterExpiry.restaurant.walkInsPaused).toBe(false);
+    expect(afterExpiry.restaurant.day).toBe(2);
+    expect(afterExpiry.queue.length).toBeGreaterThan(0);
+    expect(spawn).toHaveBeenCalledWith(expect.any(Object), 1);
+  });
+
+  it('keeps normal closing hours in force when a timed pause expires', () => {
+    const initial = isolatedRunState();
+    const startTime = 21 * 3600 + 30 * 60;
+    const state = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant,
+        gameTime: startTime,
+        day: 1,
+        openHour: 10,
+        closeHour: 22,
+        walkInsPaused: true,
+        walkInsPausedUntil: startTime + 30 * 60,
+      },
+    };
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    const afterExpiry = runTick(state, { gameDt: 30 * 60 + 1, movementDt: 0 });
+
+    expect(afterExpiry.restaurant.walkInsPaused).toBe(false);
+    expect(afterExpiry.queue).toHaveLength(0);
+  });
+
+  it('keeps a manual pause indefinite after overriding a timed pause', () => {
+    const initial = isolatedRunState();
+    const state = {
+      ...initial,
+      restaurant: {
+        ...initial.restaurant,
+        gameTime: 100,
+        openHour: 0,
+        closeHour: 0,
+        walkInsPaused: true,
+        walkInsPausedUntil: 1_900,
+      },
+    };
+    const manual = gameReducer(state, { type: 'SET_WALK_INS_PAUSED', paused: true });
+
+    const afterDeadline = runTick(manual, { gameDt: 1_801, movementDt: 0 });
+
+    expect(afterDeadline.restaurant.walkInsPaused).toBe(true);
+    expect(afterDeadline.restaurant).not.toHaveProperty('walkInsPausedUntil');
+    expect(afterDeadline.queue).toHaveLength(0);
   });
 
   it('preserves notification identity when a runTick earns no milestone notification', () => {

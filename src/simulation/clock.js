@@ -1,6 +1,8 @@
 const SECONDS_PER_DAY = 86400;
 const HOURS_PER_DAY = 24;
 
+export const WALK_IN_PAUSE_DURATION_SECONDS = 30 * 60;
+
 export const DEFAULT_OPERATING_HOURS = Object.freeze({
   openHour: 0,
   closeHour: 0,
@@ -62,6 +64,20 @@ export function advanceClock(state, dt) {
           menuRefusals: { day: newDay, dishes: [] },
         }
       : {}),
+  };
+}
+
+export function expireTimedWalkInPause(state, gameTime = state?.restaurant?.gameTime) {
+  const restaurant = state?.restaurant;
+  if (restaurant?.walkInsPaused !== true
+    || !Number.isFinite(restaurant.walkInsPausedUntil)
+    || !Number.isFinite(gameTime)
+    || gameTime < restaurant.walkInsPausedUntil) return state;
+
+  const { walkInsPausedUntil: _expiredAt, ...withoutExpiry } = restaurant;
+  return {
+    ...state,
+    restaurant: { ...withoutExpiry, walkInsPaused: false },
   };
 }
 
