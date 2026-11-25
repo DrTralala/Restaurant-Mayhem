@@ -175,6 +175,24 @@ describe('affordable weighted menu selection', () => {
     expect(result.basket.drink.id).toBe('water');
   });
 
+  it('keeps the kind roll before the basket roll at the dish-kind boundary', () => {
+    const rolls = [0.75, 0];
+    let randomCalls = 0;
+    const result = chooseAffordableBasket(menuState, {
+      id: 'booked-guest', archetype: 'regular', spendingTier: 'value', spendingBudget: 45,
+      serviceContractId: 'sc-1',
+    }, () => {
+      randomCalls += 1;
+      return rolls.shift();
+    });
+
+    expect(result.basket).toMatchObject({
+      kind: 'dish_drink', dish: { id: 'cheap' }, drink: { id: 'water' },
+    });
+    expect(randomCalls).toBe(2);
+    expect(rolls).toEqual([]);
+  });
+
   it.each([
     [0.5, 'dish'],
     [0.85, 'dish_drink'],
@@ -595,10 +613,11 @@ const REFERENCE_ARCHETYPES = Object.freeze([
   'regular', 'regular', 'regular', 'foodie', 'rusher', 'influencer',
 ]);
 
-function referenceMenuDemand(state) {
+function referenceMenuDemand(state, { includeGross = false } = {}) {
   const tierMix = getSpendingTierProbabilities(state?.restaurant?.reputation);
   const totals = new Map();
   const add = (key, probability) => totals.set(key, (totals.get(key) || 0) + probability);
+  let expectedGross = 0;
   for (const [tier, [minimum, maximum]] of Object.entries(SPENDING_TIER_RANGES)) {
     const rangeSize = maximum - minimum + 1;
     for (let budget = minimum; budget <= maximum; budget += 1) {
@@ -627,6 +646,7 @@ function referenceMenuDemand(state) {
             const acceptance = !basket.dish || basket.dish.price <= referenceValue
               ? 1 : (referenceValue / basket.dish.price) ** sensitivity;
             const acceptedProbability = probability * acceptance;
+            expectedGross += acceptedProbability * basket.price;
             if (basket.dish) add(`dish:${basket.dish.id}`, acceptedProbability);
             if (basket.drink) add(`drink:${basket.drink.id}`, acceptedProbability);
           });
@@ -640,7 +660,8 @@ function referenceMenuDemand(state) {
       key.slice(prefix.length + 1),
       Math.round(Math.min(1, Math.max(0, probability)) * 100),
     ]));
-  return { dishes: rounded('dish'), drinks: rounded('drink') };
+  const demand = { dishes: rounded('dish'), drinks: rounded('drink') };
+  return includeGross ? { demand, expectedGrossPer100: expectedGross * 100 } : demand;
 }
 
 const competingMenuState = reputation => withOwnedAuthoredDishes({
@@ -722,7 +743,11 @@ describe('batch menu demand', () => {
 
   it.each([1, 3, 5])('matches the exhaustive reference at reputation %s', reputation => {
     const state = competingMenuState(reputation);
-    expect(estimateMenuDemand(state)).toEqual(referenceMenuDemand(state));
+    const analysis = getMenuAnalysis(state);
+    const reference = referenceMenuDemand(state, { includeGross: true });
+
+    expect(analysis.demand).toEqual(reference.demand);
+    expect(analysis.expectedGrossPer100).toBeCloseTo(reference.expectedGrossPer100, 10);
   });
 
   it('matches the reference for exact tier boundary prices', () => {

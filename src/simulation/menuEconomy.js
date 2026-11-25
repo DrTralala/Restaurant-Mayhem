@@ -211,8 +211,18 @@ export function getBasketWeight(basket, customer) {
 
 function chooseByWeight(entries, getWeight, roll) {
   if (!entries.length) return null;
+  const { weights, total } = getWeightDistribution(entries, getWeight);
+  return chooseByWeights(entries, weights, total, roll);
+}
+
+function getWeightDistribution(entries, getWeight) {
   const weights = entries.map(entry => Math.max(0, Number(getWeight(entry)) || 0));
   const total = weights.reduce((sum, weight) => sum + weight, 0);
+  return { weights, total };
+}
+
+function chooseByWeights(entries, weights, total, roll) {
+  if (!entries.length) return null;
   if (total <= 0) return entries[0];
   let target = clamp01(Number(roll)) * total;
   for (let index = 0; index < entries.length; index += 1) {
@@ -220,6 +230,19 @@ function chooseByWeight(entries, getWeight, roll) {
     target -= weights[index];
   }
   return entries.at(-1);
+}
+
+function groupBasketsByKind(baskets) {
+  const groups = new Map();
+  for (const basket of baskets) {
+    if (!groups.has(basket.kind)) groups.set(basket.kind, []);
+    groups.get(basket.kind).push(basket);
+  }
+  return groups;
+}
+
+function getBasketWeightDistribution(baskets, customer) {
+  return getWeightDistribution(baskets, basket => getBasketWeight(basket, customer));
 }
 
 export function chooseAffordableBasket(state, customer, random = Math.random) {
@@ -232,19 +255,17 @@ export function chooseAffordableBasket(state, customer, random = Math.random) {
   if (!baskets.length) {
     return { customer: profiledCustomer, basket: null, menuOutcome: 'unaffordable' };
   }
+  const groups = groupBasketsByKind(baskets);
   const kinds = Object.keys(ORDER_KIND_WEIGHTS)
-    .filter(kind => baskets.some(basket => basket.kind === kind));
+    .filter(kind => groups.has(kind));
   const kind = chooseByWeight(
     kinds,
     candidate => ORDER_KIND_WEIGHTS[candidate],
     boundedRoll(random),
   );
-  const candidates = baskets.filter(basket => basket.kind === kind);
-  const basket = chooseByWeight(
-    candidates,
-    candidate => getBasketWeight(candidate, profiledCustomer),
-    boundedRoll(random),
-  );
+  const candidates = groups.get(kind);
+  const { weights, total } = getBasketWeightDistribution(candidates, profiledCustomer);
+  const basket = chooseByWeights(candidates, weights, total, boundedRoll(random));
   const contractBypass = typeof profiledCustomer?.serviceContractId === 'string'
     && profiledCustomer.serviceContractId.length > 0;
   const acceptance = contractBypass ? 1
@@ -275,19 +296,14 @@ function estimateDemandFromBaskets(state, baskets) {
     for (let spendingBudget = minimum; spendingBudget <= maximum; spendingBudget += 1) {
       const candidates = baskets.filter(basket => basket.price <= spendingBudget);
       if (!candidates.length) continue;
-      const groups = new Map();
-      for (const basket of candidates) {
-        if (!groups.has(basket.kind)) groups.set(basket.kind, []);
-        groups.get(basket.kind).push(basket);
-      }
-      const kindWeightTotal = [...groups.keys()]
-        .reduce((sum, kind) => sum + ORDER_KIND_WEIGHTS[kind], 0);
+      const groups = groupBasketsByKind(candidates);
+      let kindWeightTotal = 0;
+      for (const kind of groups.keys()) kindWeightTotal += ORDER_KIND_WEIGHTS[kind];
       if (!(kindWeightTotal > 0)) continue;
       for (const [archetype, archetypeProbability] of Object.entries(WALK_IN_ARCHETYPE_MIX)) {
         const customer = { spendingTier, spendingBudget, archetype };
         for (const [kind, group] of groups) {
-          const weights = group.map(basket => getBasketWeight(basket, customer));
-          const basketWeightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+          const { weights, total: basketWeightTotal } = getBasketWeightDistribution(group, customer);
           if (!(basketWeightTotal > 0)) continue;
           group.forEach((basket, index) => {
             const probability = tierProbability / (maximum - minimum + 1)
