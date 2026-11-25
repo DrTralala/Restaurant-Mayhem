@@ -15,6 +15,7 @@ import { getRecentFinanceSummary } from './recentFinanceSummary';
 import { getPartyReviewDayTrend } from './partyReviewTrend';
 import { isCareerDecisionPending } from '../simulation/careerRun';
 import { getPartySizeFit } from '../simulation/tableFit';
+import { getRushableDish } from '../simulation/dishRush';
 import TableSeatingHolds from './TableSeatingHolds';
 import { getTableLocatePoint } from '../canvas/tableLocatePoint';
 
@@ -113,6 +114,9 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
   const queuePatience = getQueuePatienceSummary(state);
   const foodDeadline = getFoodDeadlineSummary(state);
   const foodTriage = getFoodServiceTriage(state);
+  const rushedDish = state.restaurant?.rushedDishId == null
+    ? null
+    : getRushableDish(state, state.restaurant.rushedDishId);
   const foodTableId = foodDeadline.target?.tableId;
   const tableLocateDisabled = locateDisabled || isCareerDecisionPending(state)
     || typeof onLocateTable !== 'function' || !getTableLocatePoint(state.tables, foodTableId);
@@ -448,6 +452,33 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
 
       <section aria-label="Pending-food timing" style={{ marginTop: 16 }}>
         <h4 style={{ ...TYPOGRAPHY.subheading, marginBottom: 8 }}>Pending-food timing</h4>
+        {rushedDish && (
+          <section aria-label="Current dish rush" style={{ ...TYPOGRAPHY.secondary,
+            display: 'grid', gap: 8, marginBottom: 12,
+          }}>
+            <h5 style={{ ...TYPOGRAPHY.secondary, margin: '0 0 2px' }}>Current rush</h5>
+            <div role="status" style={statBox}>
+              Current rush: {formatFoodTarget({
+                customerId: rushedDish.customerId,
+                dishId: rushedDish.menuItemId,
+              })} (service item {rushedDish.id}).
+            </div>
+            <button
+              type="button"
+              aria-label="Cancel current dish rush"
+              disabled={careerDecisionPending}
+              onClick={() => {
+                if (careerDecisionPending || !rushedDish) return;
+                dispatch({ type: 'SET_RUSH_DISH', serviceItemId: null });
+              }}
+              style={{ ...TYPOGRAPHY.control, justifySelf: 'start',
+                cursor: careerDecisionPending ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Cancel rush
+            </button>
+          </section>
+        )}
         {foodDeadline.pendingCount === 0 ? (
           <p style={TYPOGRAPHY.secondary}>No recorded pending food orders.</p>
         ) : (
@@ -530,6 +561,24 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
                         Locate {order.customerId == null ? 'table' : `guest ${order.customerId}`}
                       </button>
                     )}
+                    {order.rushableDishId != null && (
+                      <button
+                        type="button"
+                        aria-label={`Rush dish for ${customerLabel}`}
+                        disabled={careerDecisionPending}
+                        onClick={() => {
+                          if (careerDecisionPending || order.rushableDishId == null) return;
+                          dispatch({
+                            type: 'SET_RUSH_DISH', serviceItemId: order.rushableDishId,
+                          });
+                        }}
+                        style={{ ...TYPOGRAPHY.control, marginTop: 8, padding: '6px 8px',
+                          cursor: careerDecisionPending ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        Rush dish
+                      </button>
+                    )}
                   </li>
                 );
               })}
@@ -540,6 +589,11 @@ export default function StatsPanel({ onLocateTable, locateDisabled = false, loca
             <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
               Known deadlines are listed first; an unknown deadline is not a lower-urgency claim.
               Food-service stages are food-only and are not a delivery ETA.
+            </p>
+            <p style={{ ...TYPOGRAPHY.secondary, color: '#888', marginTop: 8 }}>
+              Rushing prioritises an eligible dish in the next compatible batch. It may delay
+              another dish, does not speed preparation or guarantee delivery, and does not
+              interrupt active work.
             </p>
           </div>
         )}

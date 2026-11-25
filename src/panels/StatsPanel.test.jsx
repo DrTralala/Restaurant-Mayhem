@@ -38,6 +38,30 @@ const baseState = {
   serviceItems: [],
 };
 
+function rushPanelState(orderCount = 2, rushedDishId = null) {
+  return {
+    ...baseState,
+    restaurant: {
+      ...baseState.restaurant,
+      ...(rushedDishId == null ? {} : { rushedDishId }),
+    },
+    customers: Array.from({ length: orderCount }, (_, index) => ({
+      id: `rush-guest-${index + 1}`,
+      dishId: `rush-dish-${index + 1}`,
+      foodOutcome: 'pending',
+      foodDeadlineAt: 100 + index,
+      foodPatienceBudget: 30,
+    })),
+    serviceItems: Array.from({ length: orderCount }, (_, index) => ({
+      id: `rush-ticket-${index + 1}`,
+      customerId: `rush-guest-${index + 1}`,
+      kind: 'dish',
+      menuItemId: `rush-dish-${index + 1}`,
+      state: 'ordered',
+    })),
+  };
+}
+
 const PENDING_FOOD_CAVEAT = 'Based on recorded customer timers, not a delivery ETA. '
   + 'Delivered or cancelled outcomes are excluded; service-item reconciliation occurs in the simulation.';
 
@@ -1512,6 +1536,74 @@ it('shows the pending-food timing section with no recorded candidates', () => {
   expect(within(section).getByText('No recorded pending food orders.')).toBeInTheDocument();
   expect(within(section).queryByText(/Known timers:/)).not.toBeInTheDocument();
   expect(within(section).getByText(PENDING_FOOD_CAVEAT)).toBeInTheDocument();
+});
+
+describe('dish rush controls in food triage', () => {
+  it('marks and replaces a rush target from eligible pending-dish rows', () => {
+    mockUseGameState.mockReturnValue(rushPanelState());
+    render(<StatsPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rush dish for guest rush-guest-1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rush dish for guest rush-guest-2' }));
+
+    expect(mockUseDispatch.mock.calls).toEqual([
+      [{ type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-1' }],
+      [{ type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-2' }],
+    ]);
+  });
+
+  it('shows and cancels the current target even when it is outside the five displayed deadlines', () => {
+    mockUseGameState.mockReturnValue(rushPanelState(6, 'rush-ticket-6'));
+    render(<StatsPanel />);
+
+    const currentRush = screen.getByRole('region', { name: 'Current dish rush' });
+    expect(within(currentRush).getByRole('status')).toHaveTextContent(
+      'Current rush: Guest rush-guest-6 · Dish rush-dish-6 (service item rush-ticket-6).',
+    );
+    expect(within(screen.getByRole('region', { name: 'Pending-food timing' }))
+      .getByText(/Rushing prioritises an eligible dish in the next compatible batch/))
+      .toHaveTextContent(/may delay another dish/);
+    expect(within(currentRush).getByRole('button', { name: 'Cancel current dish rush' }))
+      .toBeEnabled();
+    const list = screen.getByRole('list', { name: 'Pending food orders' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+    expect(within(list).queryByText(/rush-guest-6/)).not.toBeInTheDocument();
+
+    fireEvent.click(within(currentRush).getByRole('button', { name: 'Cancel current dish rush' }));
+    expect(mockUseDispatch).toHaveBeenCalledWith({
+      type: 'SET_RUSH_DISH', serviceItemId: null,
+    });
+  });
+
+  it('disables mark and cancel controls while a career decision is pending', () => {
+    mockUseGameState.mockReturnValue({
+      ...rushPanelState(1, 'rush-ticket-1'),
+      careerRun: { needsDecision: true },
+    });
+    render(<StatsPanel />);
+
+    const mark = screen.getByRole('button', { name: 'Rush dish for guest rush-guest-1' });
+    const cancel = screen.getByRole('button', { name: 'Cancel current dish rush' });
+    expect(mark).toBeDisabled();
+    expect(cancel).toBeDisabled();
+
+    mark.disabled = false;
+    cancel.disabled = false;
+    fireEvent.click(mark);
+    fireEvent.click(cancel);
+    expect(mockUseDispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not offer rush controls for a dish that has already left the ordered stage', () => {
+    const state = rushPanelState(1);
+    state.serviceItems = state.serviceItems.map(item => ({ ...item, state: 'preparing' }));
+    mockUseGameState.mockReturnValue(state);
+    render(<StatsPanel />);
+
+    const row = within(screen.getByRole('list', { name: 'Pending food orders' }))
+      .getByRole('listitem');
+    expect(within(row).queryByRole('button', { name: /Rush dish/ })).not.toBeInTheDocument();
+  });
 });
 
 it('shows ordered-dish blockers as overlapping structural counts and updates immutably', () => {

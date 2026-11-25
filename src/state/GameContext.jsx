@@ -165,6 +165,12 @@ function setRushedDish(state, serviceItemId) {
   return { ...state, restaurant: { ...restaurant, rushedDishId: dish.id } };
 }
 
+function reconcileRushedDish(state) {
+  const serviceItemId = state?.restaurant?.rushedDishId;
+  if (serviceItemId == null || getRushableDish(state, serviceItemId)) return state;
+  return setRushedDish(state, null);
+}
+
 function clearRemovedDishPolicies(state, candidate, dishId) {
   const removed = (state.dishes || []).some(dish => dish.id === dishId)
     && !(candidate.dishes || []).some(dish => dish.id === dishId);
@@ -1134,7 +1140,9 @@ export function gameReducer(state, action) {
   if (action.type === 'CONTINUE_CAREER_AS_SANDBOX') {
     if (!state.careerRun || action.expectedRunId !== state.careerRun.runId) return state;
     const careerRun = continueCareerAsSandbox(state.careerRun);
-    return careerRun === state.careerRun ? state : { ...state, careerRun };
+    return careerRun === state.careerRun
+      ? state
+      : reconcileRushedDish({ ...state, careerRun });
   }
   if (isCareerDecisionPending(state) && action.type !== 'LOAD_STATE') return state;
   if (state.navigationFault && action.type === 'TOGGLE_PAUSE') return state;
@@ -1142,6 +1150,7 @@ export function gameReducer(state, action) {
   if (action.type === 'REMOVE_DISH' && candidate !== state) {
     candidate = clearRemovedDishPolicies(state, candidate, action.id);
   }
+  candidate = reconcileRushedDish(candidate);
   if (candidate === state || action.type === 'TICK' || action.type === 'LOAD_STATE'
     || action.type === 'PRIORITISE_QUEUE_PARTY'
     || action.type === 'SET_TABLE_ADMISSION_HOLD'

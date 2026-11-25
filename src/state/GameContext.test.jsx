@@ -10,6 +10,7 @@ import { getFixtureSaleExpectation, getSaleSelection } from './fixtureSales';
 import SettingsMenu from '../components/SettingsMenu';
 import { SAVE_VERSION } from './saveVersion';
 import { withOwnedAuthoredDishes } from '../simulation/menuTestFixtures';
+import { expireFoodPatience } from '../simulation/foodPatience';
 
 function StaffNameHarness() {
   const state = useGameState();
@@ -541,6 +542,51 @@ describe('gameReducer rushed dish action', () => {
     expect(gameReducer(state, {
       type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-a',
     })).toBe(state);
+  });
+
+  it('clears an expired rush target at the simulation tick boundary without retargeting another guest', () => {
+    const startingState = rushableState();
+    const initial = {
+      ...startingState,
+      customers: startingState.customers.map((customer, index) => index === 1
+        ? { ...customer, foodDeadlineAt: 300 }
+        : customer),
+    };
+    const selected = gameReducer(initial, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-a',
+    });
+    const expired = expireFoodPatience(selected, 200);
+
+    expect(expired.restaurant.rushedDishId).toBe('rush-ticket-a');
+    expect(expired.customers[0].foodOutcome).toBe('cancelled');
+    expect(expired.customers[1].foodOutcome).toBe('pending');
+
+    const reconciled = gameReducer(selected, { type: 'TICK', nextState: expired });
+
+    expect(reconciled.restaurant).not.toHaveProperty('rushedDishId');
+    expect(reconciled.customers).toEqual(expired.customers);
+    expect(reconciled.serviceItems).toEqual(expired.serviceItems);
+    expect(reconciled.serviceItems.some(item => item.id === 'rush-ticket-b')).toBe(true);
+  });
+
+  it('reconciles a non-tick state replacement without cancelling food or selecting a different ticket', () => {
+    const initial = rushableState();
+    const selected = gameReducer(initial, {
+      type: 'SET_RUSH_DISH', serviceItemId: 'rush-ticket-a',
+    });
+    const changed = {
+      ...selected,
+      serviceItems: selected.serviceItems.map(item => item.id === 'rush-ticket-a'
+        ? { ...item, state: 'preparing' }
+        : item),
+    };
+
+    const reconciled = gameReducer(selected, { type: 'LOAD_STATE', state: changed });
+
+    expect(reconciled.restaurant).not.toHaveProperty('rushedDishId');
+    expect(reconciled.customers[0].foodOutcome).toBe('pending');
+    expect(reconciled.serviceItems[0]).toMatchObject({ id: 'rush-ticket-a', state: 'preparing' });
+    expect(reconciled.serviceItems[1]).toMatchObject({ id: 'rush-ticket-b', state: 'ordered' });
   });
 });
 
